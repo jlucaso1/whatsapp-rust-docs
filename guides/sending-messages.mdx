@@ -1,0 +1,365 @@
+---
+title: Sending Messages
+description: Learn how to send text messages, reactions, quoted replies, and edit messages in whatsapp-rust
+---
+
+## Overview
+
+This guide covers sending messages, including text, reactions, quotes, and message editing operations using the whatsapp-rust library.
+
+## Sending Text Messages
+
+### Simple Text Message
+
+Use the `conversation` field for plain text messages:
+
+```rust
+use waproto::whatsapp as wa;
+use wacore_binary::jid::Jid;
+
+let to: Jid = "1234567890@s.whatsapp.net".parse()?;
+
+let message = wa::Message {
+    conversation: Some("Hello, WhatsApp!".to_string()),
+    ..Default::default()
+};
+
+let message_id = client.send_message(to, message).await?;
+println!("Message sent with ID: {}", message_id);
+```
+
+### Extended Text Message
+
+For messages with formatting, links, or context (replies/quotes):
+
+```rust
+use waproto::whatsapp::message::ExtendedTextMessage;
+
+let message = wa::Message {
+    extended_text_message: Some(Box::new(ExtendedTextMessage {
+        text: Some("Check out this link: https://example.com".to_string()),
+        matched_text: Some("https://example.com".to_string()),
+        title: Some("Example Site".to_string()),
+        description: Some("A sample website".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(to, message).await?;
+```
+
+## Quoted Replies
+
+### Replying to a Message
+
+Use `build_quote_context` to create a reply:
+
+```rust
+use wacore::proto_helpers::{build_quote_context, MessageExt};
+
+// Assume you received the original message
+let original_message: wa::Message = /* ... */;
+let original_message_id = "3EB0ABC123";
+let original_sender = "1234567890@s.whatsapp.net";
+
+// Build quote context
+let context = build_quote_context(
+    original_message_id,
+    original_sender,
+    &original_message,
+);
+
+// Create reply message
+let reply = wa::Message {
+    extended_text_message: Some(Box::new(ExtendedTextMessage {
+        text: Some("This is my reply".to_string()),
+        context_info: Some(Box::new(context)),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(to, reply).await?;
+```
+
+### Setting Context on Media Messages
+
+You can add quote context to any message type using `set_context_info`:
+
+```rust
+use waproto::whatsapp::message::ImageMessage;
+
+let mut reply = wa::Message {
+    image_message: Some(Box::new(ImageMessage {
+        url: Some("https://mmg.whatsapp.net/...".to_string()),
+        mimetype: Some("image/jpeg".to_string()),
+        caption: Some("Here's an image reply".to_string()),
+        // ... other image fields
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+// Build and set context
+let context = build_quote_context(
+    original_message_id,
+    original_sender,
+    &original_message,
+);
+
+reply.set_context_info(context);
+
+let message_id = client.send_message(to, reply).await?;
+```
+
+## Reactions
+
+### Sending a Reaction
+
+Reactions are sent using `ReactionMessage`:
+
+```rust
+use waproto::whatsapp::message::ReactionMessage;
+
+let reaction = wa::Message {
+    reaction_message: Some(Box::new(ReactionMessage {
+        key: Some(wa::MessageKey {
+            remote_jid: Some(chat_jid.to_string()),
+            from_me: Some(false),
+            id: Some(message_id_to_react_to.to_string()),
+            participant: Some(sender_jid.to_string()),
+        }),
+        text: Some("👍".to_string()),
+        sender_timestamp_ms: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64
+        ),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(chat_jid, reaction).await?;
+```
+
+### Removing a Reaction
+
+Send an empty reaction text to remove:
+
+```rust
+let remove_reaction = wa::Message {
+    reaction_message: Some(Box::new(ReactionMessage {
+        key: Some(wa::MessageKey {
+            remote_jid: Some(chat_jid.to_string()),
+            from_me: Some(false),
+            id: Some(message_id_to_react_to.to_string()),
+            participant: Some(sender_jid.to_string()),
+        }),
+        text: Some("".to_string()),  // Empty to remove
+        sender_timestamp_ms: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64
+        ),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+```
+
+## Editing Messages
+
+You can edit text messages using `EditedMessage`:
+
+```rust
+use waproto::whatsapp::message::FutureProofMessage;
+
+let edited = wa::Message {
+    edited_message: Some(Box::new(FutureProofMessage {
+        message: Some(Box::new(wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(chat_jid.to_string()),
+                    from_me: Some(true),
+                    id: Some(original_message_id.to_string()),
+                    participant: None,
+                }),
+                r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
+                edited_message: Some(Box::new(wa::Message {
+                    conversation: Some("This is the edited text".to_string()),
+                    ..Default::default()
+                })),
+                timestamp_ms: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })),
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(chat_jid, edited).await?;
+```
+
+<Note>
+Message editing only works for text messages (conversation or extended_text_message) sent by you within the last 15 minutes.
+</Note>
+
+## Deleting Messages (Revoke)
+
+### Delete Your Own Message
+
+```rust
+use whatsapp_rust::send::RevokeType;
+
+client.revoke_message(
+    chat_jid,
+    message_id,
+    RevokeType::Sender,
+).await?;
+```
+
+See `\1`
+
+### Admin Delete (Group Only)
+
+Group admins can delete messages from other participants:
+
+```rust
+let original_sender: Jid = "1234567890@s.whatsapp.net".parse()?;
+
+client.revoke_message(
+    group_jid,
+    message_id,
+    RevokeType::Admin { original_sender },
+).await?;
+```
+
+<Warning>
+Admin revoke only works in group chats. The `original_sender` must match the JID format (LID or phone number) of the message being deleted.
+</Warning>
+
+## Send Options
+
+### Adding Extra Stanza Nodes
+
+For advanced use cases, you can include custom XML nodes:
+
+```rust
+use whatsapp_rust::send::SendOptions;
+use wacore_binary::builder::NodeBuilder;
+
+let options = SendOptions {
+    extra_stanza_nodes: vec![
+        NodeBuilder::new("custom")
+            .attr("key", "value")
+            .build(),
+    ],
+};
+
+let message_id = client.send_message_with_options(
+    to,
+    message,
+    options,
+).await?;
+```
+
+See `\1`
+
+## Message Preparation Helpers
+
+### Preparing Messages for Quoting
+
+The `prepare_for_quote` method strips nested context info:
+
+```rust
+use wacore::proto_helpers::MessageExt;
+
+let quoted_message = original_message.prepare_for_quote();
+
+let context = wa::ContextInfo {
+    stanza_id: Some(message_id.clone()),
+    participant: Some(sender_jid.to_string()),
+    quoted_message: Some(quoted_message),
+    ..Default::default()
+};
+```
+
+This ensures:
+- Nested mentions are stripped
+- Quote chains are broken (except for bot messages)
+- Content fields (text, caption, media) are preserved
+
+See `\1`
+
+## Error Handling
+
+```rust
+use anyhow::Result;
+
+async fn send_safe_message(
+    client: &Client,
+    to: Jid,
+    text: &str,
+) -> Result<String> {
+    let message = wa::Message {
+        conversation: Some(text.to_string()),
+        ..Default::default()
+    };
+
+    match client.send_message(to.clone(), message).await {
+        Ok(id) => {
+            println!("✅ Message sent: {}", id);
+            Ok(id)
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to send: {:?}", e);
+            Err(e)
+        }
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+
+### Use the Right Message Type
+
+- **Simple text**: Use `conversation`
+- **Links/formatting**: Use `extended_text_message`
+- **Replies**: Use `extended_text_message` with `context_info`
+- **Media**: Use specific media message types with optional captions
+
+### Handle Message IDs
+
+```rust
+// Store message ID for later operations
+let message_id = client.send_message(to, message).await?;
+
+// Use it for reactions, edits, or deletes
+client.revoke_message(to, &message_id, RevokeType::Sender).await?;
+```
+
+### Quote Context Best Practices
+
+- Always use `prepare_for_quote()` to avoid nested quote chains
+- Use `build_quote_context_with_info` for special message types (newsletters, status)
+- Preserve original media fields when quoting media messages
+
+</Steps>
+
+## Next Steps
+
+- [Receiving Messages](/guides/receiving-messages) - Handle incoming messages and events
+- [Media Handling](/guides/media-handling) - Upload and download media
+- [Group Management](/guides/group-management) - Work with group chats

@@ -1,0 +1,307 @@
+---
+title: Chatstate
+description: Typing indicators and chat state notifications
+---
+
+The `Chatstate` trait provides methods for sending typing indicators and recording notifications to recipients.
+
+## Access
+
+Access chatstate operations through the client:
+
+```rust
+let chatstate = client.chatstate();
+```
+
+## Methods
+
+### send
+
+Send a chat state update to a recipient.
+
+```rust
+pub async fn send(
+    &self,
+    to: &Jid,
+    state: ChatStateType,
+) -> Result<(), ClientError>
+```
+
+**Parameters:**
+- `to` - Recipient JID (user or group)
+- `state: ChatStateType` - Type of chat state to send
+
+**Returns:**
+- `Result<(), ClientError>` - Success or client error
+
+**Example:**
+```rust
+use whatsapp_rust::features::chatstate::ChatStateType;
+
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Send typing indicator
+client.chatstate().send(&recipient, ChatStateType::Composing).await?;
+
+// Send recording indicator
+client.chatstate().send(&recipient, ChatStateType::Recording).await?;
+
+// Send paused (stopped typing)
+client.chatstate().send(&recipient, ChatStateType::Paused).await?;
+```
+
+### send_composing
+
+Convenience method to send typing indicator.
+
+```rust
+pub async fn send_composing(&self, to: &Jid) -> Result<(), ClientError>
+```
+
+**Example:**
+```rust
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chatstate().send_composing(&recipient).await?;
+```
+
+### send_recording
+
+Convenience method to send audio recording indicator.
+
+```rust
+pub async fn send_recording(&self, to: &Jid) -> Result<(), ClientError>
+```
+
+**Example:**
+```rust
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chatstate().send_recording(&recipient).await?;
+println!("Showing 'recording audio' indicator");
+```
+
+### send_paused
+
+Convenience method to send paused/stopped typing indicator.
+
+```rust
+pub async fn send_paused(&self, to: &Jid) -> Result<(), ClientError>
+```
+
+**Example:**
+```rust
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chatstate().send_paused(&recipient).await?;
+println!("Cleared typing indicator");
+```
+
+## ChatStateType Enum
+
+```rust
+pub enum ChatStateType {
+    Composing,  // Typing text
+    Recording,  // Recording audio
+    Paused,     // Stopped typing/recording
+}
+```
+
+**Methods:**
+- `as_str()` - Returns `"composing"`, `"recording"`, or `"paused"`
+
+**String conversion:**
+```rust
+use whatsapp_rust::features::chatstate::ChatStateType;
+
+let state = ChatStateType::Composing;
+assert_eq!(state.as_str(), "composing");
+assert_eq!(state.to_string(), "composing");
+
+// Parse from string
+let parsed = ChatStateType::try_from("recording")?;
+assert_eq!(parsed, ChatStateType::Recording);
+```
+
+## Wire Format
+
+### Composing (Typing)
+
+```xml
+<chatstate to="15551234567@s.whatsapp.net">
+  <composing/>
+</chatstate>
+```
+
+### Recording (Voice)
+
+```xml
+<chatstate to="15551234567@s.whatsapp.net">
+  <composing media="audio"/>
+</chatstate>
+```
+
+Note: Recording uses `<composing media="audio">` rather than a separate tag.
+
+### Paused (Stopped)
+
+```xml
+<chatstate to="15551234567@s.whatsapp.net">
+  <paused/>
+</chatstate>
+```
+
+## Usage Patterns
+
+### Typing Indicator Lifecycle
+
+```rust
+use whatsapp_rust::features::chatstate::ChatStateType;
+
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// User starts typing
+client.chatstate().send_composing(&recipient).await?;
+
+// User is typing... (you may want to throttle these)
+std::thread::sleep(std::time::Duration::from_secs(2));
+
+// User stopped typing (optional, will auto-clear)
+client.chatstate().send_paused(&recipient).await?;
+
+// Send the actual message
+client.send_text(&recipient, "Hello!").await?;
+```
+
+### Recording Audio
+
+```rust
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Start recording
+client.chatstate().send_recording(&recipient).await?;
+
+// Record audio...
+let audio_data = record_audio();
+
+// Stop indicator (optional)
+client.chatstate().send_paused(&recipient).await?;
+
+// Send audio message
+client.send_audio(&recipient, audio_data).await?;
+```
+
+### Throttling
+
+To avoid spamming chat state updates:
+
+```rust
+use std::time::{Duration, Instant};
+
+struct ChatStateThrottler {
+    last_sent: Option<Instant>,
+    interval: Duration,
+}
+
+impl ChatStateThrottler {
+    fn new() -> Self {
+        Self {
+            last_sent: None,
+            interval: Duration::from_secs(3),
+        }
+    }
+    
+    fn should_send(&mut self) -> bool {
+        if let Some(last) = self.last_sent {
+            if last.elapsed() < self.interval {
+                return false;
+            }
+        }
+        self.last_sent = Some(Instant::now());
+        true
+    }
+}
+
+// Usage
+let mut throttler = ChatStateThrottler::new();
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// In your typing event handler
+if throttler.should_send() {
+    client.chatstate().send_composing(&recipient).await?;
+}
+```
+
+## Group Chats
+
+Chat state indicators work in group chats as well:
+
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Show typing in group
+client.chatstate().send_composing(&group_jid).await?;
+
+// Send message
+client.send_text(&group_jid, "Hello everyone!").await?;
+```
+
+## Error Handling
+
+All methods return `Result<(), ClientError>`. Common errors:
+
+- **Not connected**: Client not connected to WhatsApp
+- **Invalid JID**: Malformed recipient JID
+- **Network errors**: Connection issues
+
+```rust
+use whatsapp_rust::client::ClientError;
+
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+match client.chatstate().send_composing(&recipient).await {
+    Ok(_) => println!("Sent typing indicator"),
+    Err(ClientError::NotConnected) => {
+        eprintln!("Not connected to WhatsApp");
+    }
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
+## Best Practices
+
+1. **Throttle updates**: Don't send chat state updates more than once every 2-3 seconds
+2. **Clear on send**: Send `Paused` before sending the actual message
+3. **Auto-timeout**: Consider auto-clearing typing indicators after 10-15 seconds of inactivity
+4. **Don't spam**: Only send when state actually changes
+5. **Groups**: Be mindful that all group members will see the indicator
+
+## Complete Example
+
+```rust
+use whatsapp_rust::features::chatstate::ChatStateType;
+use std::time::Duration;
+
+let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Simulate user typing
+println!("User starts typing...");
+client.chatstate().send_composing(&recipient).await?;
+
+// Simulate typing delay
+tokio::time::sleep(Duration::from_secs(2)).await;
+
+// User still typing (throttled)
+println!("Still typing...");
+
+// User finishes and sends message
+client.chatstate().send_paused(&recipient).await?;
+client.send_text(&recipient, "Hello there!").await?;
+println!("Message sent");
+
+// Or simulate voice recording
+println!("\nUser starts recording...");
+client.chatstate().send_recording(&recipient).await?;
+
+tokio::time::sleep(Duration::from_secs(3)).await;
+
+client.chatstate().send_paused(&recipient).await?;
+println!("Recording stopped (would send audio here)");
+```

@@ -1,0 +1,552 @@
+---
+title: "Bot"
+description: "High-level builder for creating WhatsApp bots with event handlers"
+---
+
+The `Bot` provides a simplified, ergonomic API for building WhatsApp bots. It handles client setup, event routing, and background sync tasks automatically.
+
+## Overview
+
+Use the Bot builder pattern to:
+- Configure storage backend
+- Set up transport and HTTP client
+- Register event handlers
+- Configure device properties and versions
+- Enable pair code authentication
+- Skip history sync for bot use cases
+
+<Tip>
+The Bot is the **recommended way** to use whatsapp-rust. It provides sensible defaults and handles boilerplate setup.
+</Tip>
+
+## Basic Usage
+
+```rust
+use whatsapp_rust::Bot;
+use whatsapp_rust::types::events::Event;
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .on_event(|event, client| async move {
+        match event {
+            Event::Message(msg) => {
+                println!("Message from {}: {:?}", msg.info.source.sender, msg.message);
+            }
+            Event::Connected(_) => {
+                println!("Connected to WhatsApp!");
+            }
+            _ => {}
+        }
+    })
+    .build()
+    .await?;
+
+let mut bot_handle = bot.run().await?;
+bot_handle.await?;
+```
+
+---
+
+## Builder Methods
+
+### builder
+
+```rust
+pub fn builder() -> BotBuilder
+```
+
+Creates a new bot builder.
+
+### with_backend
+
+```rust
+pub fn with_backend(self, backend: Arc<dyn Backend>) -> Self
+```
+
+Sets the storage backend (required).
+
+<ParamField path="backend" type="Arc<dyn Backend>" required>
+  Backend implementation providing storage operations
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::store::SqliteStore;
+
+let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+let bot = Bot::builder()
+    .with_backend(backend)
+    // ...
+```
+
+<Tip>
+For multi-account scenarios, use `SqliteStore::new_for_device(path, device_id)` to create isolated storage per account.
+</Tip>
+
+### with_transport_factory
+
+```rust
+pub fn with_transport_factory<F>(self, factory: F) -> Self
+where
+    F: TransportFactory + 'static
+```
+
+Sets the transport factory for creating WebSocket connections (required).
+
+<ParamField path="factory" type="F: TransportFactory" required>
+  Transport factory implementation
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+
+let bot = Bot::builder()
+    .with_transport_factory(TokioWebSocketTransportFactory::new())
+    // ...
+```
+
+### with_http_client
+
+```rust
+pub fn with_http_client<C>(self, client: C) -> Self
+where
+    C: HttpClient + 'static
+```
+
+Sets the HTTP client for media operations and version fetching (required).
+
+<ParamField path="client" type="C: HttpClient" required>
+  HTTP client implementation
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+
+let bot = Bot::builder()
+    .with_http_client(UreqHttpClient::new())
+    // ...
+```
+
+---
+
+## Event Handling
+
+### on_event
+
+```rust
+pub fn on_event<F, Fut>(self, handler: F) -> Self
+where
+    F: Fn(Event, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Registers an async event handler.
+
+<ParamField path="handler" type="F" required>
+  Async function that receives events and client Arc
+</ParamField>
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+Bot::builder()
+    .on_event(|event, client| async move {
+        match event {
+            Event::Message(msg) => {
+                // Reply to messages
+                let reply = wa::Message {
+                    conversation: Some("Hello back!".to_string()),
+                    ..Default::default()
+                };
+                let _ = client.send_message(msg.info.source.chat, reply).await;
+            }
+            Event::Connected(_) => {
+                println!("Bot online!");
+            }
+            _ => {}
+        }
+    })
+    // ...
+```
+
+See [Events Reference](/concepts/events) for all event types.
+
+### with_enc_handler
+
+```rust
+pub fn with_enc_handler<H>(self, enc_type: impl Into<String>, handler: H) -> Self
+where
+    H: EncHandler + 'static
+```
+
+Registers a custom handler for specific encrypted message types.
+
+<ParamField path="enc_type" type="String" required>
+  Encrypted message type (e.g., "frskmsg", "skmsg")
+</ParamField>
+
+<ParamField path="handler" type="H: EncHandler" required>
+  Handler implementation
+</ParamField>
+
+---
+
+## Configuration
+
+### with_version
+
+```rust
+pub fn with_version(self, version: (u32, u32, u32)) -> Self
+```
+
+Overrides the WhatsApp version used by the client.
+
+<ParamField path="version" type="(u32, u32, u32)" required>
+  Tuple of (primary, secondary, tertiary) version numbers
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_version((2, 3000, 1027868167))
+    // ...
+```
+
+<Note>
+By default, the client automatically fetches the latest version. Only use this if you need to pin a specific version.
+</Note>
+
+### with_device_props
+
+```rust
+pub fn with_device_props(
+    self,
+    os_name: Option<String>,
+    version: Option<wa::device_props::AppVersion>,
+    platform_type: Option<wa::device_props::PlatformType>
+) -> Self
+```
+
+Overrides device properties sent to WhatsApp servers.
+
+<ParamField path="os_name" type="Option<String>">
+  Operating system name (e.g., "macOS", "Windows", "Linux")
+</ParamField>
+
+<ParamField path="version" type="Option<AppVersion>">
+  App version struct
+</ParamField>
+
+<ParamField path="platform_type" type="Option<PlatformType>">
+  Platform type (determines device name shown on phone)
+</ParamField>
+
+**Example:**
+```rust
+use waproto::whatsapp::device_props::{AppVersion, PlatformType};
+
+Bot::builder()
+    .with_device_props(
+        Some("macOS".to_string()),
+        Some(AppVersion {
+            primary: Some(2),
+            secondary: Some(0),
+            tertiary: Some(0),
+            ..Default::default()
+        }),
+        Some(PlatformType::Chrome),
+    )
+    // ...
+```
+
+<Tip>
+The `platform_type` determines what device name is shown on the phone's "Linked Devices" list. Common values: `Chrome`, `Firefox`, `Safari`, `Desktop`.
+</Tip>
+
+---
+
+## Authentication
+
+### with_pair_code
+
+```rust
+pub fn with_pair_code(self, options: PairCodeOptions) -> Self
+```
+
+Configures pair code authentication to run automatically after connecting.
+
+<ParamField path="options" type="PairCodeOptions" required>
+  Configuration for pair code authentication
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+use whatsapp_rust::types::events::Event;
+
+Bot::builder()
+    .with_pair_code(PairCodeOptions {
+        phone_number: "15551234567".to_string(),
+        show_push_notification: true,
+        custom_code: None,
+        platform_id: PlatformId::Chrome,
+        platform_display: "Chrome (Linux)".to_string(),
+    })
+    .on_event(|event, _client| async move {
+        match event {
+            Event::PairingCode { code, timeout } => {
+                println!("Enter this code on your phone: {}", code);
+                println!("Expires in: {} seconds", timeout);
+            }
+            _ => {}
+        }
+    })
+    // ...
+```
+
+<Note>
+Pair code runs concurrently with QR code pairing - whichever completes first wins.
+</Note>
+
+---
+
+## History Sync
+
+### skip_history_sync
+
+```rust
+pub fn skip_history_sync(self) -> Self
+```
+
+Skips processing of history sync notifications from the phone.
+
+When enabled:
+- Acknowledges history sync notifications (so phone considers them delivered)
+- Does not download or process historical data
+- Emits debug log for each skipped notification
+- Useful for bot use cases where message history is not needed
+
+**Example:**
+```rust
+Bot::builder()
+    .skip_history_sync()
+    // ...
+```
+
+<Tip>
+For bots that only need to respond to new messages, enabling this can significantly reduce startup time and bandwidth usage.
+</Tip>
+
+---
+
+## Building and Running
+
+### build
+
+```rust
+pub async fn build(self) -> Result<Bot>
+```
+
+Builds the bot with the configured options.
+
+**Errors:**
+- Missing required fields (backend, transport_factory, http_client)
+- Backend initialization failures
+
+### client
+
+```rust
+pub fn client(&self) -> Arc<Client>
+```
+
+Returns the underlying Client Arc.
+
+**Example:**
+```rust
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .build()
+    .await?;
+
+let client = bot.client();
+let jid = client.get_pn().await;
+```
+
+### run
+
+```rust
+pub async fn run(&mut self) -> Result<task::JoinHandle<()>>
+```
+
+Starts the bot's connection loop and background workers.
+
+Returns a JoinHandle for the main client task.
+
+**Example:**
+```rust
+let mut bot = Bot::builder()
+    // ... configuration
+    .build()
+    .await?;
+
+let handle = bot.run().await?;
+
+// Wait for bot to finish (runs until disconnect)
+handle.await?;
+```
+
+<Warning>
+You must call `.await?` on the returned handle to keep the bot running. If you drop the handle, the bot will continue running in the background.
+</Warning>
+
+---
+
+## Message Context
+
+When handling message events, you get a `MessageContext` helper:
+
+```rust
+pub struct MessageContext {
+    pub message: Box<wa::Message>,
+    pub info: MessageInfo,
+    pub client: Arc<Client>,
+}
+```
+
+### send_message
+
+```rust
+pub async fn send_message(&self, message: wa::Message) -> Result<String, anyhow::Error>
+```
+
+Sends a message to the same chat.
+
+### build_quote_context
+
+```rust
+pub fn build_quote_context(&self) -> wa::ContextInfo
+```
+
+Builds a quote context for replying to this message.
+
+Handles:
+- Correct stanza_id/participant for groups and newsletters
+- Stripping nested mentions
+- Preserving bot quote chains
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+.on_event(|event, _client| async move {
+    if let Event::Message(ctx) = event {
+        let reply = wa::Message {
+            conversation: Some("Quoted reply!".to_string()),
+            context_info: Some(ctx.build_quote_context()),
+            ..Default::default()
+        };
+        let _ = ctx.send_message(reply).await;
+    }
+})
+```
+
+### edit_message
+
+```rust
+pub async fn edit_message(
+    &self,
+    original_message_id: impl Into<String>,
+    new_message: wa::Message
+) -> Result<String, anyhow::Error>
+```
+
+Edits a message in the same chat.
+
+### revoke_message
+
+```rust
+pub async fn revoke_message(
+    &self,
+    message_id: String,
+    revoke_type: RevokeType
+) -> Result<(), anyhow::Error>
+```
+
+Deletes a message in the same chat.
+
+---
+
+## Complete Example
+
+```rust
+use whatsapp_rust::Bot;
+use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust::types::events::Event;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use waproto::whatsapp as wa;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Set up storage
+    let backend = Arc::new(SqliteStore::new("bot.db").await?);
+
+    // Build bot
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .skip_history_sync() // Bot only needs new messages
+        .on_event(|event, client| async move {
+            match event {
+                Event::Message(ctx) => {
+                    // Echo messages back
+                    if let Some(text) = &ctx.message.conversation {
+                        let reply = wa::Message {
+                            conversation: Some(format!("You said: {}", text)),
+                            ..Default::default()
+                        };
+                        let _ = ctx.send_message(reply).await;
+                    }
+                }
+                Event::Connected(_) => {
+                    println!("Bot is now online!");
+                    // Set status
+                    let _ = client.presence().set_available().await;
+                }
+                Event::QRCode(qr) => {
+                    println!("Scan this QR code:");
+                    for line in qr.lines() {
+                        println!("{}", line);
+                    }
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .await?;
+
+    // Run bot
+    let handle = bot.run().await?;
+    handle.await?;
+
+    Ok(())
+}
+```
+
+---
+
+## See Also
+
+- [Client](/api/client) - Lower-level client API
+- [Events](/concepts/events) - All event types
+- [Sending Messages](/guides/sending-messages) - Sending messages
+- [Storage](/concepts/storage) - Storage and multi-account patterns

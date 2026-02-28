@@ -1,0 +1,448 @@
+---
+title: 'Signal Protocol Implementation'
+description: 'Deep dive into end-to-end encryption, Double Ratchet algorithm, and Signal Protocol in whatsapp-rust'
+---
+
+## Overview
+
+whatsapp-rust implements the Signal Protocol for end-to-end encryption of both one-on-one and group messages. The implementation is based on Signal's libsignal library, adapted for WhatsApp's specific protocol requirements.
+
+<Warning>
+  The Signal Protocol implementation handles cryptographic primitives. Any modifications to this code require expert-level understanding of cryptographic protocols to avoid security vulnerabilities.
+</Warning>
+
+## Architecture
+
+The Signal Protocol implementation is split across two main locations:
+
+- **`wacore/libsignal/`** - Platform-agnostic Signal Protocol core (Rust port of libsignal)
+- **`src/store/signal*.rs`** - WhatsApp-specific storage integration with Diesel/SQLite
+
+### Key Components
+
+```
+wacore/libsignal/src/
+├── protocol/
+│   ├── session_cipher.rs      # Encryption/decryption for 1:1 messages
+│   ├── group_cipher.rs        # Encryption/decryption for group messages
+│   ├── ratchet.rs            # Double Ratchet implementation
+│   ├── sender_keys.rs        # Sender Key protocol for groups
+│   └── state/                # Session state management
+└── crypto/
+    ├── aes_cbc.rs            # AES-256-CBC for message content
+    ├── aes_gcm.rs            # AES-GCM for media encryption
+    └── hash.rs               # HKDF and HMAC primitives
+```
+
+## Double Ratchet Protocol
+
+The Double Ratchet algorithm provides forward secrecy and post-compromise security for 1:1 messages.
+
+### Session Initialization
+
+Two participants initialize a session using Diffie-Hellman key exchange:
+
+```rust
+// Alice initiates the session (sender)
+pub fn initialize_alice_session<R: Rng + CryptoRng>(
+    parameters: &AliceSignalProtocolParameters,
+    csprng: &mut R,
+) -> Result<SessionState>
+
+// Bob receives the session (recipient)
+pub fn initialize_bob_session(
+    parameters: &BobSignalProtocolParameters
+) -> Result<SessionState>
+```
+
+**Key Derivation:**
+
+1. Compute shared secrets from ephemeral key exchanges
+2. Derive root key and chain key using HKDF-SHA256:
+   ```
+   HKDF(discontinuity_bytes || DH1 || DH2 || DH3 [|| DH4])
+   → (RootKey[32], ChainKey[32], PQRKey[32])
+   ```
+3. Initialize sender and receiver chains
+
+Location: `wacore/libsignal/src/protocol/ratchet.rs:41-172`
+
+### Message Encryption
+
+Each message advances the sender chain and derives ephemeral message keys:
+
+```rust
+// From wacore/libsignal/src/protocol/session_cipher.rs:65-183
+pub async fn message_encrypt(
+    ptext: &[u8],
+    remote_address: &ProtocolAddress,
+    session_store: &mut dyn SessionStore,
+    identity_store: &mut dyn IdentityKeyStore,
+) -> Result<CiphertextMessage>
+```
+
+**Process:**
+
+1. Load current session state
+2. Get sender chain key and derive message keys:
+   ```rust
+   let (message_keys_gen, next_chain_key) = chain_key.step_with_message_keys();
+   let message_keys = message_keys_gen.generate_keys();
+   // message_keys contains: cipher_key, mac_key, iv
+   ```
+3. Encrypt plaintext with AES-256-CBC:
+   ```rust
+   aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(), 
+                            message_keys.iv(), &mut buf)
+   ```
+4. Create SignalMessage with MAC for authentication
+5. Advance chain key and save session state
+
+**Message Format:**
+
+- **SignalMessage**: Standard encrypted message
+- **PreKeySignalMessage**: Includes prekey bundle for session establishment
+
+### Message Decryption
+
+Decryption handles out-of-order delivery and tries multiple session states:
+
+```rust
+// From wacore/libsignal/src/protocol/session_cipher.rs:292-363
+pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
+    ciphertext: &SignalMessage,
+    remote_address: &ProtocolAddress,
+    session_store: &mut dyn SessionStore,
+    identity_store: &mut dyn IdentityKeyStore,
+    csprng: &mut R,
+) -> Result<Vec<u8>>
+```
+
+**Process:**
+
+1. Try current session state first
+2. If MAC verification fails, try previous (archived) sessions
+3. Derive/retrieve message keys for the counter
+4. Verify MAC:
+   ```rust
+   ciphertext.verify_mac(&their_identity_key, &local_identity_key, 
+                         message_keys.mac_key())
+   ```
+5. Decrypt with AES-256-CBC
+6. Promote successful session to current if needed
+
+<Note>
+  The implementation optimizes memory by using take/restore patterns to avoid cloning session states during decryption attempts (see `session_cipher.rs:495-619`).
+</Note>
+
+### Chain Key Ratcheting
+
+Message keys are derived from chain keys, which advance with each message:
+
+```rust
+pub struct ChainKey {
+    key: [u8; 32],
+    index: u32,
+}
+
+impl ChainKey {
+    pub fn step_with_message_keys(self) -> (MessageKeyGenerator, ChainKey) {
+        let message_key_gen = MessageKeyGenerator::new(self.key, self.index);
+        let next_chain_key = self.next_chain_key();
+        (message_key_gen, next_chain_key)
+    }
+}
+```
+
+Location: `wacore/libsignal/src/protocol/ratchet/keys.rs`
+
+### Forward Jumps
+
+The protocol tolerates out-of-order messages up to a limit:
+
+```rust
+const MAX_FORWARD_JUMPS: usize = 25000;
+
+if jump > MAX_FORWARD_JUMPS {
+    return Err(SignalProtocolError::InvalidMessage(
+        original_message_type,
+        "message from too far into the future",
+    ));
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:832-847`
+
+## Sender Keys (Group Encryption)
+
+Groups use the Sender Key protocol for efficient multi-recipient encryption.
+
+### Sender Key Distribution
+
+Each participant generates and distributes a sender key:
+
+```rust
+// From wacore/libsignal/src/protocol/group_cipher.rs:283-336
+pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
+    sender_key_name: &SenderKeyName,
+    sender_key_store: &mut dyn SenderKeyStore,
+    csprng: &mut R,
+) -> Result<SenderKeyDistributionMessage>
+```
+
+**Structure:**
+
+- **Chain ID**: Random 31-bit identifier for this sender key session
+- **Iteration**: Message counter (starts at 0)
+- **Chain Key**: 32-byte seed for deriving message keys
+- **Signing Key**: Ed25519 public key for message authentication
+
+### Group Encryption
+
+Messages are encrypted with the sender's current chain key:
+
+```rust
+// From wacore/libsignal/src/protocol/group_cipher.rs:53-116
+pub async fn group_encrypt<R: Rng + CryptoRng>(
+    sender_key_store: &mut dyn SenderKeyStore,
+    sender_key_name: &SenderKeyName,
+    plaintext: &[u8],
+    csprng: &mut R,
+) -> Result<SenderKeyMessage>
+```
+
+**Process:**
+
+1. Load sender key state for the group
+2. Derive message keys from current chain key
+3. Encrypt with AES-256-CBC
+4. Sign message with Ed25519 private key
+5. Advance chain key
+
+### Group Decryption
+
+Recipients decrypt using the sender's distributed key:
+
+```rust
+// From wacore/libsignal/src/protocol/group_cipher.rs:162-250
+pub async fn group_decrypt(
+    skm_bytes: &[u8],
+    sender_key_store: &mut dyn SenderKeyStore,
+    sender_key_name: &SenderKeyName,
+) -> Result<Vec<u8>>
+```
+
+**Process:**
+
+1. Parse SenderKeyMessage
+2. Look up sender key state by chain ID
+3. Verify Ed25519 signature
+4. Derive message keys for iteration (handling out-of-order)
+5. Decrypt with AES-256-CBC
+
+<Warning>
+  Group decryption maintains up to MAX_FORWARD_JUMPS (25000) cached message keys per sender. This prevents resource exhaustion attacks but limits tolerance for extreme out-of-order delivery.
+</Warning>
+
+## Cryptographic Primitives
+
+### AES-256-CBC (Message Content)
+
+Used for encrypting message bodies in both 1:1 and group messages:
+
+```rust
+pub fn aes_256_cbc_encrypt_into(
+    plaintext: &[u8],
+    key: &[u8],      // 32 bytes
+    iv: &[u8],       // 16 bytes
+    output: &mut Vec<u8>,
+) -> Result<()>
+```
+
+Location: `wacore/libsignal/src/crypto/aes_cbc.rs`
+
+### Thread-Local Buffers
+
+The implementation uses thread-local buffers to reduce allocations:
+
+```rust
+thread_local! {
+    static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = ...;
+    static DECRYPTION_BUFFER: RefCell<EncryptionBuffer> = ...;
+}
+
+// Usage in session_cipher.rs:99-111
+let ctext = ENCRYPTION_BUFFER.with(|buffer| {
+    let mut buf_wrapper = buffer.borrow_mut();
+    let buf = buf_wrapper.get_buffer();
+    aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(), 
+                            message_keys.iv(), buf)?;
+    let result = std::mem::take(buf);
+    buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
+    Ok::<Vec<u8>, SignalProtocolError>(result)
+})?;
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:14-54`
+
+### HKDF-SHA256
+
+Used for key derivation in session initialization:
+
+```rust
+pub fn derive_keys(secret_input: &[u8]) -> (RootKey, ChainKey, InitialPQRKey) {
+    let mut secrets = [0; 96];
+    hkdf::Hkdf::<sha2::Sha256>::new(None, secret_input)
+        .expand(b"WhisperText", &mut secrets)
+        .expect("valid length");
+    // Split into RootKey[32], ChainKey[32], PQRKey[32]
+}
+```
+
+Location: `wacore/libsignal/src/protocol/ratchet.rs:18-39`
+
+## Storage Integration
+
+whatsapp-rust integrates Signal Protocol storage with SQLite via Diesel:
+
+```
+src/store/
+├── signal_identity.rs      # Identity key storage
+├── signal_prekey.rs        # PreKey storage
+├── signal_session.rs       # Session state storage
+└── signal_sender_key.rs    # Sender key storage
+```
+
+Each storage trait from `wacore/libsignal/src/protocol/storage/traits.rs` is implemented using SQL queries:
+
+```rust
+#[async_trait]
+impl SessionStore for SqliteStore {
+    async fn load_session(
+        &mut self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<SessionRecord>> {
+        // SQL: SELECT record FROM signal_sessions 
+        //      WHERE our_jid = ? AND their_jid = ?
+    }
+}
+```
+
+## Security Considerations
+
+### Identity Key Trust
+
+The implementation verifies identity keys before encryption/decryption:
+
+```rust
+if !identity_store
+    .is_trusted_identity(remote_address, &their_identity_key, 
+                         Direction::Sending)
+    .await?
+{
+    return Err(SignalProtocolError::UntrustedIdentity(
+        remote_address.clone(),
+    ));
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:160-172`
+
+### Duplicate Message Detection
+
+The protocol detects and rejects duplicate messages:
+
+```rust
+if chain_index > counter {
+    return match state.get_message_keys(their_ephemeral, counter)? {
+        Some(keys) => Ok(keys),
+        None => Err(SignalProtocolError::DuplicatedMessage(chain_index, counter)),
+    };
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:822-827`
+
+### Session State Corruption
+
+Detailed logging helps diagnose crypto failures:
+
+```rust
+fn create_decryption_failure_log(
+    remote_address: &ProtocolAddress,
+    errs: &[SignalProtocolError],
+    record: &SessionRecord,
+    ciphertext: &SignalMessage,
+) -> Result<String>
+```
+
+This generates comprehensive error logs showing:
+- All attempted session states
+- Receiver chain information
+- Message metadata (sender ratchet key, counter)
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
+
+## Performance Optimizations
+
+### Take/Restore Pattern
+
+Avoids cloning session states during decryption attempts:
+
+```rust
+// Take ownership instead of cloning
+if let Some(mut current_state) = record.take_session_state() {
+    let result = decrypt_message_with_state(&mut current_state, ...);
+    match result {
+        Ok(ptext) => {
+            record.set_session_state(current_state);
+            return Ok(ptext);
+        }
+        Err(e) => {
+            record.set_session_state(current_state);  // Restore
+        }
+    }
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:495-564`
+
+### Buffer Reuse
+
+Thread-local buffers eliminate per-message allocations:
+
+```rust
+struct EncryptionBuffer {
+    buffer: Vec<u8>,
+    usage_count: usize,
+}
+
+const INITIAL_CAPACITY: usize = 1024;
+const MAX_CAPACITY: usize = 16 * 1024;
+const SHRINK_THRESHOLD: usize = 100;
+
+fn get_buffer(&mut self) -> &mut Vec<u8> {
+    self.usage_count += 1;
+    if self.usage_count.is_multiple_of(SHRINK_THRESHOLD) {
+        if self.buffer.capacity() > MAX_CAPACITY {
+            self.buffer = Vec::with_capacity(INITIAL_CAPACITY);
+        }
+    }
+    &mut self.buffer
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`
+
+## Related Components
+
+- [Binary Protocol](/advanced/binary-protocol) - How encrypted messages are serialized
+- [State Management](/advanced/state-management) - How session state is persisted
+- [WebSocket Handling](/advanced/websocket-handling) - Transport layer for encrypted messages
+
+## References
+
+- [Signal Protocol Specification](https://signal.org/docs/)
+- [libsignal Repository](https://github.com/signalapp/libsignal)
+- Source: `wacore/libsignal/src/protocol/`
+- Storage: `src/store/signal*.rs`

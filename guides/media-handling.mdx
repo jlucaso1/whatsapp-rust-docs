@@ -1,0 +1,487 @@
+---
+title: Media Handling
+description: Learn how to upload and download media with encryption in whatsapp-rust
+---
+
+## Overview
+
+This guide covers uploading and downloading media (images, videos, audio, documents, stickers) with automatic encryption and decryption.
+
+## Downloading Media
+
+### From Message Objects
+
+Download media directly from message types that implement `Downloadable`:
+
+```rust
+use wacore::download::Downloadable;
+use whatsapp_rust::client::Client;
+
+match event {
+    Event::Message(message, info) => {
+        // Image
+        if let Some(img) = &message.image_message {
+            let data = client.download(img.as_ref()).await?;
+            std::fs::write("image.jpg", data)?;
+        }
+        
+        // Video
+        if let Some(video) = &message.video_message {
+            let data = client.download(video.as_ref()).await?;
+            std::fs::write("video.mp4", data)?;
+        }
+        
+        // Audio
+        if let Some(audio) = &message.audio_message {
+            let data = client.download(audio.as_ref()).await?;
+            let ext = if audio.ptt() { "ogg" } else { "mp3" };
+            std::fs::write(format!("audio.{}", ext), data)?;
+        }
+        
+        // Document
+        if let Some(doc) = &message.document_message {
+            let data = client.download(doc.as_ref()).await?;
+            let filename = doc.file_name.as_deref().unwrap_or("document");
+            std::fs::write(filename, data)?;
+        }
+        
+        // Sticker
+        if let Some(sticker) = &message.sticker_message {
+            let data = client.download(sticker.as_ref()).await?;
+            std::fs::write("sticker.webp", data)?;
+        }
+    }
+    _ => {}
+}
+```
+
+See `\1`
+
+### Streaming Download
+
+For large files, use streaming to avoid memory overhead:
+
+```rust
+use std::fs::File;
+
+if let Some(video) = &message.video_message {
+    let file = File::create("video.mp4")?;
+    let file = client.download_to_writer(video.as_ref(), file).await?;
+    println!("Video downloaded with constant memory usage!");
+}
+```
+
+See `\1`
+
+<Note>
+Streaming downloads use ~40KB of memory regardless of file size (8KB buffer + decryption state). The entire HTTP download, decryption, and file write happen in a single blocking thread for optimal performance.
+</Note>
+
+### From Raw Parameters
+
+Download media when you have the raw encryption parameters:
+
+```rust
+use wacore::download::MediaType;
+
+let data = client.download_from_params(
+    "/v/t62.1234-5/...",          // direct_path
+    &media_key,                    // media_key (32 bytes)
+    &file_sha256,                  // file_sha256
+    &file_enc_sha256,              // file_enc_sha256
+    12345,                         // file_length
+    MediaType::Image,              // media_type
+).await?;
+
+std::fs::write("downloaded.jpg", data)?;
+```
+
+See `\1`
+
+### Streaming from Raw Parameters
+
+```rust
+let file = File::create("large_video.mp4")?;
+let file = client.download_from_params_to_writer(
+    direct_path,
+    &media_key,
+    &file_sha256,
+    &file_enc_sha256,
+    file_length,
+    MediaType::Video,
+    file,
+).await?;
+```
+
+See `\1`
+
+## Uploading Media
+
+### Basic Upload
+
+```rust
+use wacore::download::MediaType;
+use whatsapp_rust::upload::UploadResponse;
+
+// Read file data
+let data = std::fs::read("photo.jpg")?;
+
+// Upload with automatic encryption
+let upload: UploadResponse = client.upload(data, MediaType::Image).await?;
+
+println!("URL: {}", upload.url);
+println!("Direct path: {}", upload.direct_path);
+println!("File SHA256: {:?}", upload.file_sha256);
+```
+
+See `\1`
+
+### Using Upload Response in Messages
+
+```rust
+use waproto::whatsapp as wa;
+
+let upload = client.upload(image_data, MediaType::Image).await?;
+
+let message = wa::Message {
+    image_message: Some(Box::new(wa::message::ImageMessage {
+        url: Some(upload.url),
+        direct_path: Some(upload.direct_path),
+        media_key: Some(upload.media_key),
+        file_sha256: Some(upload.file_sha256),
+        file_enc_sha256: Some(upload.file_enc_sha256),
+        file_length: Some(upload.file_length),
+        mimetype: Some("image/jpeg".to_string()),
+        caption: Some("Check out this image!".to_string()),
+        width: Some(1920),
+        height: Some(1080),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(to, message).await?;
+```
+
+## Media Types
+
+### Available Media Types
+
+```rust
+pub enum MediaType {
+    Image,
+    Video,
+    Audio,
+    Document,
+    Sticker,
+    Thumbnail,
+    PTT,  // Push-to-Talk (voice messages)
+}
+```
+
+### Media Type Properties
+
+```rust
+use wacore::download::MediaType;
+
+// Get MMS type for upload URLs
+let mms_type = MediaType::Image.mms_type();
+// Returns: "image", "video", "audio", "document"
+
+// Get HKDF info for encryption
+let info = MediaType::Video.hkdf_info();
+// Returns: b"WhatsApp Video Keys"
+```
+
+## Encryption Details
+
+### Upload Encryption
+
+Media is automatically encrypted before upload:
+
+1. Generate random 32-byte `media_key`
+2. Derive encryption keys using HKDF-SHA256:
+   - IV: 16 bytes
+   - Cipher key: 32 bytes
+   - MAC key: 32 bytes
+3. Encrypt with AES-256-CBC
+4. Append HMAC-SHA256 MAC (10 bytes)
+5. Compute SHA256 hashes of plaintext and ciphertext
+
+```rust
+// Encryption happens automatically in upload()
+let data = std::fs::read("file.pdf")?;
+let upload = client.upload(data, MediaType::Document).await?;
+
+// The UploadResponse contains all encryption metadata
+assert_eq!(upload.media_key.len(), 32);
+assert_eq!(upload.file_sha256.len(), 32);
+assert_eq!(upload.file_enc_sha256.len(), 32);
+```
+
+### Download Decryption
+
+Decryption is automatic when downloading:
+
+1. Fetch encrypted data from WhatsApp CDN
+2. Verify MAC (last 10 bytes)
+3. Decrypt with AES-256-CBC
+4. Verify plaintext SHA256
+5. Return decrypted data
+
+```rust
+// Decryption happens automatically in download()
+let data = client.download(image_message.as_ref()).await?;
+// `data` is already decrypted and verified
+```
+
+<Warning>
+Never skip SHA256 verification! The library automatically verifies both encrypted and decrypted hashes to ensure data integrity.
+</Warning>
+
+## Error Handling
+
+### Download Errors
+
+```rust
+use anyhow::Result;
+
+async fn safe_download(
+    client: &Client,
+    downloadable: &dyn Downloadable,
+) -> Result<Vec<u8>> {
+    match client.download(downloadable).await {
+        Ok(data) => {
+            println!("✅ Downloaded {} bytes", data.len());
+            Ok(data)
+        }
+        Err(e) => {
+            if e.to_string().contains("invalid mac") {
+                eprintln!("❌ Media corrupted (MAC mismatch)");
+            } else if e.to_string().contains("status") {
+                eprintln!("❌ Download failed (HTTP error)");
+            } else {
+                eprintln!("❌ Download error: {:?}", e);
+            }
+            Err(e)
+        }
+    }
+}
+```
+
+### Upload Errors
+
+```rust
+async fn safe_upload(
+    client: &Client,
+    data: Vec<u8>,
+    media_type: MediaType,
+) -> Result<UploadResponse> {
+    match client.upload(data, media_type).await {
+        Ok(upload) => {
+            println!("✅ Uploaded to: {}", upload.url);
+            Ok(upload)
+        }
+        Err(e) => {
+            eprintln!("❌ Upload failed: {:?}", e);
+            Err(e)
+        }
+    }
+}
+```
+
+## Advanced Usage
+
+### Custom Media Processing
+
+```rust
+use image::DynamicImage;
+
+// Download and process image
+if let Some(img) = &message.image_message {
+    let data = client.download(img.as_ref()).await?;
+    
+    // Load with image crate
+    let image = image::load_from_memory(&data)?;
+    
+    // Resize
+    let thumbnail = image.resize(200, 200, image::imageops::FilterType::Lanczos3);
+    
+    // Save
+    thumbnail.save("thumbnail.jpg")?;
+}
+```
+
+### Streaming with Progress
+
+```rust
+use std::io::{Write, Seek};
+use std::sync::{Arc, Mutex};
+
+struct ProgressWriter<W> {
+    inner: W,
+    total: Arc<Mutex<usize>>,
+}
+
+impl<W: Write> Write for ProgressWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        *self.total.lock().unwrap() += n;
+        println!("Downloaded {} bytes", *self.total.lock().unwrap());
+        Ok(n)
+    }
+    
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<W: Seek> Seek for ProgressWriter<W> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+let file = File::create("video.mp4")?;
+let progress_writer = ProgressWriter {
+    inner: file,
+    total: Arc::new(Mutex::new(0)),
+};
+
+let _file = client.download_to_writer(video.as_ref(), progress_writer).await?;
+```
+
+### Retry Logic
+
+```rust
+use tokio::time::{sleep, Duration};
+
+async fn download_with_retry(
+    client: &Client,
+    downloadable: &dyn Downloadable,
+    max_retries: u32,
+) -> Result<Vec<u8>> {
+    let mut attempt = 0;
+    loop {
+        match client.download(downloadable).await {
+            Ok(data) => return Ok(data),
+            Err(e) if attempt < max_retries => {
+                attempt += 1;
+                eprintln!("Retry {}/{}: {:?}", attempt, max_retries, e);
+                sleep(Duration::from_secs(2u64.pow(attempt))).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+```
+
+## Media Connection
+
+### Automatic Refresh
+
+The client automatically manages media connection tokens:
+
+```rust
+// Automatically refreshed when expired
+let upload = client.upload(data, MediaType::Image).await?;
+let download = client.download(downloadable).await?;
+
+// No manual token management needed!
+```
+
+### Manual Refresh
+
+For advanced use cases:
+
+```rust
+// Force refresh media connection
+let media_conn = client.refresh_media_conn(true).await?;
+
+println!("Auth token: {}", media_conn.auth);
+println!("Hosts: {:?}", media_conn.hosts);
+```
+
+## Best Practices
+
+<Steps>
+
+### Use Streaming for Large Files
+
+```rust
+// ❌ Bad: Loads entire file into memory
+let data = client.download(video.as_ref()).await?;
+std::fs::write("video.mp4", data)?;
+
+// ✅ Good: Constant memory usage
+let file = File::create("video.mp4")?;
+let _file = client.download_to_writer(video.as_ref(), file).await?;
+```
+
+### Verify Media Type
+
+Check `mimetype` before processing:
+
+```rust
+if let Some(img) = &message.image_message {
+    if let Some(mimetype) = &img.mimetype {
+        match mimetype.as_str() {
+            "image/jpeg" | "image/png" => {
+                // Process image
+            }
+            _ => {
+                eprintln!("Unsupported image type: {}", mimetype);
+            }
+        }
+    }
+}
+```
+
+### Handle Missing Fields
+
+Media messages may have optional fields:
+
+```rust
+if let Some(doc) = &message.document_message {
+    let filename = doc.file_name.as_deref().unwrap_or("unknown");
+    let mimetype = doc.mimetype.as_deref().unwrap_or("application/octet-stream");
+    let size = doc.file_length.unwrap_or(0);
+    
+    println!("Document: {} ({}, {} bytes)", filename, mimetype, size);
+}
+```
+
+### Set Proper Dimensions
+
+For images and videos, include dimensions:
+
+```rust
+use image::GenericImageView;
+
+let img = image::open("photo.jpg")?;
+let (width, height) = img.dimensions();
+
+let message = wa::Message {
+    image_message: Some(Box::new(wa::message::ImageMessage {
+        url: Some(upload.url),
+        direct_path: Some(upload.direct_path),
+        media_key: Some(upload.media_key),
+        file_sha256: Some(upload.file_sha256),
+        file_enc_sha256: Some(upload.file_enc_sha256),
+        file_length: Some(upload.file_length),
+        mimetype: Some("image/jpeg".to_string()),
+        width: Some(width),
+        height: Some(height),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+```
+
+</Steps>
+
+## Next Steps
+
+- [Sending Messages](/guides/sending-messages) - Send media with captions and quotes
+- [Receiving Messages](/guides/receiving-messages) - Handle incoming media
+- [Custom Backends](/guides/custom-backends) - Implement custom HTTP clients for media operations

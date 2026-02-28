@@ -1,0 +1,411 @@
+---
+title: Architecture
+description: Understanding the whatsapp-rust project structure, modules, and workspace layout
+---
+
+## Overview
+
+WhatsApp-Rust is a high-performance, async Rust library for the WhatsApp Web API. The project follows a modular, layered architecture that separates protocol concerns from runtime concerns, enabling platform-agnostic core logic with pluggable backends.
+
+## Workspace Structure
+
+The project is organized as a Cargo workspace with multiple crates:
+
+```
+whatsapp-rust/
+├── src/                          # Main client library
+├── wacore/                       # Platform-agnostic core
+│   ├── binary/                   # WhatsApp binary protocol
+│   ├── libsignal/                # Signal Protocol implementation
+│   ├── appstate/                 # App state management
+│   ├── noise/                    # Noise Protocol handshake
+│   └── derive/                   # Derive macros
+├── waproto/                      # Protocol Buffers definitions
+├── storages/sqlite-storage/      # SQLite backend
+├── transports/tokio-transport/   # Tokio WebSocket transport
+└── http_clients/ureq-client/     # HTTP client for media
+```
+
+## Three Main Crates
+
+### wacore - Platform-Agnostic Core
+
+**Location:** `wacore/`
+
+**Purpose:** Contains core logic for the WhatsApp binary protocol, cryptography primitives, IQ protocol types, and state management traits.
+
+**Key Features:**
+- **No runtime dependencies** on Tokio or specific databases
+- Pure protocol implementation
+- Cryptographic operations (Signal Protocol, Noise Protocol)
+- Type-safe protocol node builders
+
+**Key Modules:**
+```rust
+wacore/
+├── binary/           // Binary protocol encoding/decoding
+├── libsignal/        // E2E encryption
+├── noise/            // Noise Protocol handshake
+├── appstate/         // App state sync protocol
+├── iq/               // Type-safe IQ protocol types
+├── protocol.rs       // ProtocolNode trait
+├── types/
+│   ├── events.rs     // Event definitions
+│   └── message.rs    // Message types
+└── store/
+    ├── traits.rs     // Storage trait definitions
+    └── device.rs     // Device state model
+```
+
+### waproto - Protocol Buffers
+
+**Location:** `waproto/`
+
+**Purpose:** Houses WhatsApp's Protocol Buffers definitions compiled to Rust structs.
+
+**Build Process:**
+```rust
+// build.rs uses prost to compile .proto files
+prost_build::compile_protos(&["src/whatsapp.proto"], &["src/"])?;
+```
+
+**Generated Types:**
+- `Message` - All message types
+- `WebMessageInfo` - Message metadata
+- `HistorySync` - Chat history
+- `SyncActionValue` - App state mutations
+
+### whatsapp-rust - Main Client
+
+**Location:** `src/`
+
+**Purpose:** Integrates `wacore` with the Tokio runtime, provides high-level client API, and manages storage.
+
+**Key Features:**
+- Asynchronous operations with Tokio
+- SQLite persistence (pluggable)
+- Event bus system
+- Feature modules (groups, media, etc.)
+
+## Key Components
+
+### Client
+
+**Location:** `src/client.rs`
+
+**Purpose:** Orchestrates connection lifecycle, event bus, and high-level operations.
+
+```rust
+pub struct Client {
+    pub(crate) core: wacore::client::CoreClient,
+    pub(crate) persistence_manager: Arc<PersistenceManager>,
+    pub(crate) media_conn: Arc<RwLock<Option<MediaConn>>>,
+    pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
+    // ... connection state, caches, locks
+}
+```
+
+**Responsibilities:**
+- Connection management
+- Request/response routing
+- Event dispatching
+- Session management
+
+### PersistenceManager
+
+**Location:** `src/store/persistence_manager.rs`
+
+**Purpose:** Manages all state changes and persistence.
+
+```rust
+pub struct PersistenceManager {
+    device: Arc<RwLock<Device>>,
+    backend: Arc<dyn Backend>,
+    dirty: Arc<AtomicBool>,
+    save_notify: Arc<Notify>,
+}
+```
+
+**Critical Pattern:**
+- Never modify `Device` state directly
+- Use `DeviceCommand` + `process_command()`
+- For read-only: `get_device_snapshot()`
+
+### Signal Protocol
+
+**Location:** `wacore/libsignal/` & `src/store/signal*.rs`
+
+**Purpose:** End-to-end encryption via Signal Protocol implementation.
+
+**Features:**
+- Double Ratchet algorithm
+- Pre-key bundles
+- Session management
+- Sender keys for groups
+
+### Socket & Handshake
+
+**Location:** `src/socket/`, `src/handshake.rs`
+
+**Purpose:** WebSocket connection and Noise Protocol handshake.
+
+**Flow:**
+1. WebSocket connection
+2. Noise handshake (XX pattern)
+3. Encrypted frame exchange
+
+## Module Interactions
+
+```mermaid
+graph TB
+    A[Client API] --> B[Client]
+    B --> C[NoiseSocket]
+    B --> D[PersistenceManager]
+    B --> E[Event Bus]
+    C --> F[Transport]
+    D --> G[Backend Storage]
+    D --> H[Device State]
+    B --> I[Signal Protocol]
+    I --> G
+    B --> J[wacore]
+    J --> K[Protocol Types]
+    J --> L[Crypto]
+```
+
+## Layer Responsibilities
+
+### wacore Layer (Platform-Agnostic)
+
+- Protocol logic
+- State traits
+- Cryptographic helpers
+- Data models
+
+**Example: IQ Protocol**
+```rust
+// wacore/src/iq/groups.rs
+pub struct GroupQueryIq {
+    group_jid: Jid,
+}
+
+impl IqSpec for GroupQueryIq {
+    type Response = GroupInfoResponse;
+    fn build_iq(&self) -> InfoQuery<'static> { /* ... */ }
+    fn parse_response(&self, response: &Node) -> Result<Self::Response> { /* ... */ }
+}
+```
+
+### whatsapp-rust Layer (Runtime)
+
+- Runtime orchestration
+- Storage integration
+- User-facing API
+
+**Example: Feature API**
+```rust
+// src/features/groups.rs
+impl Client {
+    pub async fn get_group_info(&self, jid: &Jid) -> Result<GroupInfoResponse> {
+        self.execute(GroupQueryIq::new(jid)).await
+    }
+}
+```
+
+## Protocol Entry Points
+
+### Incoming Messages
+
+**Flow:** `src/message.rs` → Signal decryption → Event dispatch
+
+```rust
+// src/message.rs
+pub async fn handle_message(client: &Arc<Client>, node: &Node) {
+    // 1. Extract encrypted message
+    // 2. Decrypt via Signal Protocol
+    // 3. Dispatch Event::Message
+}
+```
+
+### Outgoing Messages
+
+**Flow:** `src/send.rs` → Signal encryption → Socket send
+
+```rust
+// src/send.rs
+pub async fn send_message(client: &Arc<Client>, msg: &Message) {
+    // 1. Encrypt via Signal Protocol
+    // 2. Build protocol node
+    // 3. Send via NoiseSocket
+}
+```
+
+### Socket Communication
+
+**Flow:** `src/socket/` → Noise framing → Transport
+
+```rust
+// src/socket/mod.rs
+impl NoiseSocket {
+    pub async fn send_node(&self, node: Node) -> Result<()> {
+        // 1. Marshal to binary
+        // 2. Encrypt with Noise
+        // 3. Frame and send
+    }
+}
+```
+
+## Concurrency Patterns
+
+### Per-Chat Message Queues
+
+Prevents race conditions where a later message is processed before the PreKey message:
+
+```rust
+pub(crate) message_queues: Cache<String, mpsc::Sender<Arc<Node>>>,
+```
+
+### Per-Device Session Locks
+
+Prevents concurrent Signal protocol operations on the same session:
+
+```rust
+pub(crate) session_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+```
+
+### Background Saver
+
+Periodic persistence with dirty flag optimization:
+
+```rust
+impl PersistenceManager {
+    pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
+        tokio::spawn(async move {
+            loop {
+                // Wait for notification or interval
+                self.save_to_disk().await;
+            }
+        });
+    }
+}
+```
+
+## Feature Organization
+
+**Location:** `src/features/`
+
+```
+features/
+├── mod.rs              // Feature exports
+├── groups.rs           // Group management
+├── presence.rs         // Presence updates
+├── media.rs            // Media upload/download
+└── contacts.rs         // Contact operations
+```
+
+**Pattern:**
+```rust
+impl Client {
+    /// High-level feature method
+    pub async fn create_group(&self, subject: &str, participants: &[Jid]) -> Result<Jid> {
+        // Use wacore IqSpec for protocol
+        let spec = CreateGroupIq::new(subject, participants)?;
+        self.execute(spec).await
+    }
+}
+```
+
+## State Management Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Client
+    participant PM as PersistenceManager
+    participant Device
+    participant Backend
+    
+    User->>Client: Operation
+    Client->>PM: process_command(DeviceCommand)
+    PM->>Device: modify_device()
+    PM->>PM: Set dirty flag
+    PM->>PM: Notify saver
+    Note over PM: Background task
+    PM->>Backend: save()
+    Backend->>Backend: Persist to disk
+```
+
+## Best Practices
+
+### State Management
+
+<CodeGroup>
+```rust ✅ Correct
+// Use DeviceCommand for state changes
+client.persistence_manager
+    .process_command(DeviceCommand::SetPushName(name))
+    .await;
+```
+
+```rust ❌ Wrong
+// Never modify Device directly
+let mut device = client.device.write().await;
+device.push_name = name; // DON'T DO THIS
+```
+</CodeGroup>
+
+### Async Operations
+
+<CodeGroup>
+```rust ✅ Correct
+// Wrap blocking I/O in spawn_blocking
+let result = tokio::task::spawn_blocking(move || {
+    // Heavy crypto or blocking HTTP
+    expensive_operation()
+}).await?;
+```
+
+```rust ❌ Wrong
+// Never block the async runtime
+let result = expensive_operation(); // Stalls all tasks
+```
+</CodeGroup>
+
+### Error Handling
+
+```rust
+use thiserror::Error;
+use anyhow::Result;
+
+#[derive(Debug, Error)]
+pub enum SocketError {
+    #[error("connection closed")]
+    Closed,
+    #[error("encryption failed: {0}")]
+    Encryption(String),
+}
+
+// Use anyhow::Result for functions with multiple error types
+pub async fn complex_operation() -> Result<()> {
+    // Automatically converts errors with ?
+    socket_operation()?;
+    storage_operation()?;
+    Ok(())
+}
+```
+
+## Related Sections
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/concepts/authentication">
+    Learn about QR code and pair code flows
+  </Card>
+  <Card title="Events" icon="bolt" href="/concepts/events">
+    Understand the event system and handlers
+  </Card>
+  <Card title="Storage" icon="database" href="/concepts/storage">
+    Explore storage backends and state management
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="/quickstart">
+    Build your first WhatsApp bot
+  </Card>
+</CardGroup>

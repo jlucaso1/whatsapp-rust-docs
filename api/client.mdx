@@ -1,0 +1,597 @@
+---
+title: "Client"
+description: "Core client for WhatsApp connectivity and protocol operations"
+---
+
+The `Client` struct is the core of whatsapp-rust, managing connections, encryption, state, and all protocol-level operations.
+
+## Overview
+
+The Client handles:
+- WebSocket connection lifecycle and automatic reconnection
+- Noise Protocol handshake and encryption
+- Signal Protocol E2E encryption for messages
+- App state synchronization
+- Device state persistence
+- Event dispatching
+
+<Note>
+Most users should use the [`Bot`](/api/bot) builder instead of creating a Client directly. The Bot provides a simplified API with sensible defaults.
+</Note>
+
+## Creating a Client
+
+```rust
+use whatsapp_rust::Client;
+use std::sync::Arc;
+
+let (client, sync_receiver) = Client::new(
+    persistence_manager,
+    transport_factory,
+    http_client,
+    None, // version override
+).await;
+```
+
+<ParamField path="persistence_manager" type="Arc<PersistenceManager>" required>
+  State manager for device credentials, sessions, and app state
+</ParamField>
+
+<ParamField path="transport_factory" type="Arc<dyn TransportFactory>" required>
+  Factory for creating WebSocket connections
+</ParamField>
+
+<ParamField path="http_client" type="Arc<dyn HttpClient>" required>
+  HTTP client for media operations and version fetching
+</ParamField>
+
+<ParamField path="override_version" type="Option<(u32, u32, u32)>">
+  Optional WhatsApp version override (primary, secondary, tertiary)
+</ParamField>
+
+<ParamField path="Returns" type="(Arc<Client>, mpsc::Receiver<MajorSyncTask>)">
+  Returns the client Arc and a receiver for history/app state sync tasks
+</ParamField>
+
+---
+
+## Connection Management
+
+### run
+
+```rust
+pub async fn run(self: &Arc<Self>)
+```
+
+Main event loop that manages connection lifecycle with automatic reconnection.
+
+Runs indefinitely until:
+- `disconnect()` is called
+- Auto-reconnect is disabled and connection fails
+- Client receives a logout/removal event (516 stream error)
+
+**Example:**
+```rust
+let client_clone = client.clone();
+tokio::spawn(async move {
+    client_clone.run().await;
+});
+```
+
+### connect
+
+```rust
+pub async fn connect(self: &Arc<Self>) -> Result<(), anyhow::Error>
+```
+
+Establishes WebSocket connection and performs Noise Protocol handshake.
+
+**Errors:**
+- `ClientError::AlreadyConnected` - Already connected
+- Connection/handshake failures
+
+### disconnect
+
+```rust
+pub async fn disconnect(self: &Arc<Self>)
+```
+
+Disconnects gracefully and disables auto-reconnect.
+
+### wait_for_socket
+
+```rust
+pub async fn wait_for_socket(
+    &self,
+    timeout: std::time::Duration
+) -> Result<(), anyhow::Error>
+```
+
+Waits for the Noise socket to be ready (before login). Useful for pair code flows.
+
+<ParamField path="timeout" type="Duration" required>
+  Maximum time to wait
+</ParamField>
+
+<ParamField path="Returns" type="Result<(), anyhow::Error>">
+  Ok if socket ready, Err on timeout
+</ParamField>
+
+### wait_for_connected
+
+```rust
+pub async fn wait_for_connected(
+    &self,
+    timeout: std::time::Duration
+) -> Result<(), anyhow::Error>
+```
+
+Waits for full connection and authentication to complete.
+
+---
+
+## Connection State
+
+### is_connected
+
+```rust
+pub fn is_connected(&self) -> bool
+```
+
+Returns `true` if the Noise socket is established.
+
+### is_logged_in
+
+```rust
+pub fn is_logged_in(&self) -> bool
+```
+
+Returns `true` if authenticated with WhatsApp servers.
+
+---
+
+## Messaging
+
+### send_message
+
+```rust
+pub async fn send_message(
+    &self,
+    to: Jid,
+    message: wa::Message
+) -> Result<String, anyhow::Error>
+```
+
+Sends an encrypted message to a chat.
+
+<ParamField path="to" type="Jid" required>
+  Recipient JID (user@s.whatsapp.net or group@g.us)
+</ParamField>
+
+<ParamField path="message" type="wa::Message" required>
+  Protobuf message content
+</ParamField>
+
+<ParamField path="Returns" type="Result<String, anyhow::Error>">
+  Message ID on success
+</ParamField>
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    conversation: Some("Hello!".to_string()),
+    ..Default::default()
+};
+
+let msg_id = client.send_message(jid, message).await?;
+```
+
+### send_message_with_options
+
+```rust
+pub async fn send_message_with_options(
+    &self,
+    to: Jid,
+    message: wa::Message,
+    options: SendOptions
+) -> Result<String, anyhow::Error>
+```
+
+Sends a message with advanced options like custom ID, edit attributes, or extra attributes.
+
+<ParamField path="options" type="SendOptions" required>
+  Configuration for message sending behavior
+</ParamField>
+
+See `src/send.rs:SendOptions` for available options.
+
+### edit_message
+
+```rust
+pub async fn edit_message(
+    &self,
+    to: Jid,
+    original_id: impl Into<String>,
+    new_content: wa::Message
+) -> Result<String, anyhow::Error>
+```
+
+Edits a previously sent message.
+
+<ParamField path="original_id" type="String" required>
+  ID of the message to edit
+</ParamField>
+
+<ParamField path="new_content" type="wa::Message" required>
+  New message content
+</ParamField>
+
+### revoke_message
+
+```rust
+pub async fn revoke_message(
+    &self,
+    chat: Jid,
+    message_id: String,
+    revoke_type: RevokeType
+) -> Result<(), anyhow::Error>
+```
+
+Deletes a message for everyone or just for yourself.
+
+<ParamField path="revoke_type" type="RevokeType" required>
+  `RevokeType::Everyone` or `RevokeType::Me`
+</ParamField>
+
+---
+
+## Feature APIs
+
+The Client provides namespaced access to feature-specific operations:
+
+### blocking
+
+```rust
+pub fn blocking(&self) -> Blocking<'_>
+```
+
+Access blocking operations.
+
+**Methods:**
+- `block(jid: &Jid)` - Block a contact
+- `unblock(jid: &Jid)` - Unblock a contact
+- `get_blocklist()` - Get all blocked contacts
+- `is_blocked(jid: &Jid)` - Check if contact is blocked
+
+**Example:**
+```rust
+client.blocking().block(&jid).await?;
+let blocked = client.blocking().get_blocklist().await?;
+```
+
+### groups
+
+```rust
+pub fn groups(&self) -> Groups<'_>
+```
+
+Access group management operations.
+
+**Methods:**
+- `query_info(jid: &Jid)` - Get cached group info
+- `get_metadata(jid: &Jid)` - Fetch group metadata from server
+- `get_participating()` - List all groups you're in
+- `create_group(options: GroupCreateOptions)` - Create a new group
+- `set_subject(jid: &Jid, subject: GroupSubject)` - Change group name
+- `set_description(jid: &Jid, desc: Option<GroupDescription>, prev: Option<String>)` - Change description
+- `leave(jid: &Jid)` - Leave a group
+- `add_participants(jid: &Jid, participants: &[Jid])` - Add members
+- `remove_participants(jid: &Jid, participants: &[Jid])` - Remove members
+- `promote_participants(jid: &Jid, participants: &[Jid])` - Make members admins
+- `demote_participants(jid: &Jid, participants: &[Jid])` - Remove admin status
+- `get_invite_link(jid: &Jid, reset: bool)` - Get/reset invite link
+
+**Example:**
+```rust
+use whatsapp_rust::features::{GroupCreateOptions, GroupSubject};
+
+let options = GroupCreateOptions::new(
+    GroupSubject::new("My Group")?,
+    vec![participant_jid],
+);
+let result = client.groups().create_group(options).await?;
+```
+
+### presence
+
+```rust
+pub fn presence(&self) -> Presence<'_>
+```
+
+Access presence operations.
+
+**Methods:**
+- `set(status: PresenceStatus)` - Set presence status
+- `set_available()` - Set status to available/online
+- `set_unavailable()` - Set status to unavailable/offline
+- `subscribe(jid: &Jid)` - Subscribe to contact's presence updates
+
+**Example:**
+```rust
+client.presence().set_available().await?;
+client.presence().subscribe(&jid).await?;
+```
+
+### contacts
+
+```rust
+pub fn contacts(&self) -> Contacts<'_>
+```
+
+Access contact operations.
+
+**Methods:**
+- `get_user_info(jids: &[Jid])` - Get profile info for users
+- `get_profile_picture(jid: &Jid)` - Get profile picture URL
+- `is_on_whatsapp(phones: &[String])` - Check phone numbers
+
+### tc_token
+
+```rust
+pub fn tc_token(&self) -> TcToken<'_>
+```
+
+Access trust/privacy token operations.
+
+**Methods:**
+- `request_tokens(jids: &[Jid])` - Request tokens for contacts
+- `prune_expired()` - Remove expired tokens
+
+---
+
+## Device State
+
+### get_push_name
+
+```rust
+pub async fn get_push_name(&self) -> String
+```
+
+Returns the current push name (display name).
+
+### get_pn
+
+```rust
+pub async fn get_pn(&self) -> Option<Jid>
+```
+
+Returns the phone number JID.
+
+### get_lid
+
+```rust
+pub async fn get_lid(&self) -> Option<Jid>
+```
+
+Returns the LID (Linked Identity).
+
+### persistence_manager
+
+```rust
+pub fn persistence_manager(&self) -> Arc<PersistenceManager>
+```
+
+Access to the persistence manager for multi-account scenarios.
+
+---
+
+## History Sync
+
+### set_skip_history_sync
+
+```rust
+pub fn set_skip_history_sync(&self, enabled: bool)
+```
+
+Enable or disable skipping of history sync notifications at runtime.
+
+### skip_history_sync_enabled
+
+```rust
+pub fn skip_history_sync_enabled(&self) -> bool
+```
+
+Returns `true` if history sync is currently being skipped.
+
+---
+
+## App State
+
+### fetch_props
+
+```rust
+pub async fn fetch_props(&self) -> Result<(), IqError>
+```
+
+Fetches account properties from WhatsApp servers.
+
+### fetch_privacy_settings
+
+```rust
+pub async fn fetch_privacy_settings(&self) -> Result<PrivacySettingsResponse, IqError>
+```
+
+Fetches privacy settings (last seen, profile photo, about, etc.).
+
+### clean_dirty_bits
+
+```rust
+pub async fn clean_dirty_bits(
+    &self,
+    type_: &str,
+    timestamp: Option<&str>
+) -> Result<(), IqError>
+```
+
+Cleans app state dirty bits for a specific type.
+
+---
+
+## Protocol Operations
+
+### send_node
+
+```rust
+pub async fn send_node(&self, node: Node) -> Result<(), ClientError>
+```
+
+Sends a raw protocol node (advanced usage).
+
+<ParamField path="node" type="Node" required>
+  Binary protocol node to send
+</ParamField>
+
+**Errors:**
+- `ClientError::NotConnected` - Not connected
+- `ClientError::EncryptSend` - Encryption/send failure
+
+### register_handler
+
+```rust
+pub fn register_handler(&self, handler: Arc<dyn EventHandler>)
+```
+
+Registers an event handler for protocol events.
+
+<ParamField path="handler" type="Arc<dyn EventHandler>" required>
+  Handler implementing the EventHandler trait
+</ParamField>
+
+**Example:**
+```rust
+use wacore::types::events::{Event, EventHandler};
+
+struct MyHandler;
+
+impl EventHandler for MyHandler {
+    fn handle_event(&self, event: &Event) {
+        match event {
+            Event::Message(msg) => println!("New message: {:?}", msg),
+            Event::Connected(_) => println!("Connected!"),
+            _ => {}
+        }
+    }
+}
+
+client.register_handler(Arc::new(MyHandler));
+```
+
+### register_chatstate_handler
+
+```rust
+pub async fn register_chatstate_handler(
+    &self,
+    handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>
+)
+```
+
+Registers a handler for chat state events (typing indicators).
+
+---
+
+## Spam Reporting
+
+### send_spam_report
+
+```rust
+pub async fn send_spam_report(
+    &self,
+    request: SpamReportRequest
+) -> Result<SpamReportResult, IqError>
+```
+
+Send a spam report to WhatsApp for messages or groups.
+
+<ParamField path="request" type="SpamReportRequest" required>
+  The spam report request containing:
+  - `message_id` - ID of the message being reported
+  - `message_timestamp` - Timestamp of the message
+  - `spam_flow` - Context where report was initiated (MessageMenu, GroupInfoReport, etc.)
+  - `from_jid` - Optional sender JID
+  - `group_jid` - Optional group JID for group spam
+  - `participant_jid` - Optional participant JID in group context
+  - `raw_message` - Optional raw message bytes
+  - `media_type` - Optional media type if reporting media
+</ParamField>
+
+**Returns:** `SpamReportResult` indicating success or failure
+
+**Example:**
+
+```rust
+use whatsapp_rust::{SpamReportRequest, SpamFlow};
+
+// Report a spam message
+let result = client.send_spam_report(SpamReportRequest {
+    message_id: "MESSAGE_ID".to_string(),
+    message_timestamp: 1234567890,
+    from_jid: Some(sender_jid),
+    spam_flow: SpamFlow::MessageMenu,
+    ..Default::default()
+}).await?;
+```
+
+**SpamFlow variants:**
+- `MessageMenu` - Reported from message context menu
+- `GroupInfoReport` - Reported from group info screen
+- `GroupSpamBannerReport` - Reported from group spam banner
+- `ContactInfo` - Reported from contact info screen
+
+---
+
+## Passive Mode
+
+### set_passive
+
+```rust
+pub async fn set_passive(&self, passive: bool) -> Result<(), IqError>
+```
+
+Sets passive mode. When `false` (active), the server starts sending offline messages.
+
+---
+
+## Prekeys
+
+### send_digest_key_bundle
+
+```rust
+pub async fn send_digest_key_bundle(&self) -> Result<(), IqError>
+```
+
+Sends Signal Protocol prekey bundle digest to the server.
+
+---
+
+## Error Types
+
+```rust
+pub enum ClientError {
+    NotConnected,
+    Socket(SocketError),
+    EncryptSend(EncryptSendError),
+    AlreadyConnected,
+    NotLoggedIn,
+}
+```
+
+---
+
+## See Also
+
+- [Bot](/api/bot) - High-level builder with event handlers
+- [Events](/concepts/events) - Event system and types
+- [Sending Messages](/guides/sending-messages) - Sending and receiving messages
+- [Group Management](/guides/group-management) - Working with groups

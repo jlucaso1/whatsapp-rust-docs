@@ -1,0 +1,360 @@
+---
+title: Blocking
+description: Block and unblock contacts, manage blocklist
+---
+
+The `Blocking` trait provides methods for blocking and unblocking contacts, as well as retrieving and checking the blocklist.
+
+## Access
+
+Access blocking operations through the client:
+
+```rust
+let blocking = client.blocking();
+```
+
+## Methods
+
+### block
+
+Block a contact.
+
+```rust
+pub async fn block(&self, jid: &Jid) -> Result<(), IqError>
+```
+
+**Parameters:**
+- `jid` - Contact JID to block
+
+**Effects:**
+- Contact will not be able to message you
+- Contact will not see your presence updates
+- Contact will not see your profile picture (depending on privacy settings)
+
+**Example:**
+```rust
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.blocking().block(&contact).await?;
+println!("Blocked {}", contact);
+```
+
+### unblock
+
+Unblock a previously blocked contact.
+
+```rust
+pub async fn unblock(&self, jid: &Jid) -> Result<(), IqError>
+```
+
+**Parameters:**
+- `jid` - Contact JID to unblock
+
+**Example:**
+```rust
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.blocking().unblock(&contact).await?;
+println!("Unblocked {}", contact);
+```
+
+### get_blocklist
+
+Retrieve the full list of blocked contacts.
+
+```rust
+pub async fn get_blocklist(&self) -> Result<Vec<BlocklistEntry>, anyhow::Error>
+```
+
+**Returns:**
+- `Vec<BlocklistEntry>` - All blocked contacts
+
+**BlocklistEntry fields:**
+- `jid: Jid` - Blocked contact JID
+- `timestamp: Option<u64>` - Unix timestamp when blocked (if available)
+
+**Example:**
+```rust
+let blocklist = client.blocking().get_blocklist().await?;
+
+println!("Blocked contacts: {}", blocklist.len());
+
+for entry in blocklist {
+    println!("  JID: {}", entry.jid);
+    
+    if let Some(ts) = entry.timestamp {
+        println!("    Blocked at: {}", ts);
+    }
+}
+```
+
+### is_blocked
+
+Check if a specific contact is blocked.
+
+```rust
+pub async fn is_blocked(&self, jid: &Jid) -> Result<bool, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Contact JID to check
+
+**Returns:**
+- `bool` - `true` if blocked, `false` otherwise
+
+**Behavior:**
+- Compares only the user part of the JID (ignores device ID)
+- Blocking applies to the entire user account, not individual devices
+
+**Example:**
+```rust
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+if client.blocking().is_blocked(&contact).await? {
+    println!("{} is blocked", contact);
+} else {
+    println!("{} is not blocked", contact);
+}
+```
+
+## BlocklistEntry Type
+
+```rust
+pub struct BlocklistEntry {
+    pub jid: Jid,
+    pub timestamp: Option<u64>,
+}
+```
+
+**Fields:**
+- `jid` - The blocked contact's JID
+- `timestamp` - Unix timestamp (seconds since epoch) when the contact was blocked
+
+The timestamp may be `None` if the server doesn't provide it.
+
+## Error Types
+
+### IqError
+
+Returned by `block()` and `unblock()` operations:
+
+```rust
+pub enum IqError {
+    // Network/protocol errors
+    Timeout,
+    InvalidResponse,
+    // ... other variants
+}
+```
+
+### anyhow::Error
+
+Returned by `get_blocklist()` and `is_blocked()` for general errors.
+
+## Wire Format
+
+### Block Request
+
+```xml
+<iq xmlns="blocklist" type="set" to="s.whatsapp.net" id="...">
+  <item action="block" jid="15551234567@s.whatsapp.net"/>
+</iq>
+```
+
+### Unblock Request
+
+```xml
+<iq xmlns="blocklist" type="set" to="s.whatsapp.net" id="...">
+  <item action="unblock" jid="15551234567@s.whatsapp.net"/>
+</iq>
+```
+
+### Get Blocklist Request
+
+```xml
+<iq xmlns="blocklist" type="get" to="s.whatsapp.net" id="..."/>
+```
+
+### Blocklist Response
+
+```xml
+<iq from="s.whatsapp.net" id="..." type="result">
+  <list>
+    <item jid="15551111111@s.whatsapp.net" t="1640000000"/>
+    <item jid="15552222222@s.whatsapp.net" t="1640000100"/>
+  </list>
+</iq>
+```
+
+Or direct items without `<list>` wrapper:
+
+```xml
+<iq from="s.whatsapp.net" id="..." type="result">
+  <item jid="15551111111@s.whatsapp.net" t="1640000000"/>
+  <item jid="15552222222@s.whatsapp.net" t="1640000100"/>
+</iq>
+```
+
+## Usage Examples
+
+### Block a Contact
+
+```rust
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+match client.blocking().block(&contact).await {
+    Ok(_) => println!("Successfully blocked {}", contact),
+    Err(e) => eprintln!("Failed to block: {}", e),
+}
+```
+
+### Unblock a Contact
+
+```rust
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+match client.blocking().unblock(&contact).await {
+    Ok(_) => println!("Successfully unblocked {}", contact),
+    Err(e) => eprintln!("Failed to unblock: {}", e),
+}
+```
+
+### Check Before Blocking
+
+```rust
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+if !client.blocking().is_blocked(&contact).await? {
+    client.blocking().block(&contact).await?;
+    println!("Contact blocked");
+} else {
+    println!("Contact already blocked");
+}
+```
+
+### List All Blocked Contacts
+
+```rust
+let blocklist = client.blocking().get_blocklist().await?;
+
+if blocklist.is_empty() {
+    println!("No blocked contacts");
+} else {
+    println!("Blocked contacts:");
+    for entry in blocklist {
+        print!("  - {}", entry.jid);
+        if let Some(ts) = entry.timestamp {
+            println!(" (blocked: {})", ts);
+        } else {
+            println!();
+        }
+    }
+}
+```
+
+### Conditional Block/Unblock
+
+```rust
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+let should_block = true; // Your logic here
+
+if should_block {
+    if !client.blocking().is_blocked(&contact).await? {
+        client.blocking().block(&contact).await?;
+        println!("Blocked {}", contact);
+    }
+} else {
+    if client.blocking().is_blocked(&contact).await? {
+        client.blocking().unblock(&contact).await?;
+        println!("Unblocked {}", contact);
+    }
+}
+```
+
+### Batch Block Multiple Contacts
+
+```rust
+let contacts_to_block = vec![
+    "15551111111@s.whatsapp.net".parse()?,
+    "15552222222@s.whatsapp.net".parse()?,
+    "15553333333@s.whatsapp.net".parse()?,
+];
+
+for contact in contacts_to_block {
+    match client.blocking().block(&contact).await {
+        Ok(_) => println!("Blocked {}", contact),
+        Err(e) => eprintln!("Failed to block {}: {}", contact, e),
+    }
+}
+```
+
+## Error Handling
+
+```rust
+use whatsapp_rust::request::IqError;
+
+let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+match client.blocking().block(&contact).await {
+    Ok(_) => println!("Blocked successfully"),
+    Err(IqError::Timeout) => {
+        eprintln!("Request timed out");
+    }
+    Err(IqError::InvalidResponse) => {
+        eprintln!("Invalid response from server");
+    }
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
+## Device ID Handling
+
+The `is_blocked()` method compares only the user part of JIDs, ignoring device IDs:
+
+```rust
+let jid1: Jid = "15551234567.0@s.whatsapp.net".parse()?;  // Device 0
+let jid2: Jid = "15551234567.1@s.whatsapp.net".parse()?;  // Device 1
+
+// Block device 0
+client.blocking().block(&jid1).await?;
+
+// Check if device 1 is blocked (will return true)
+assert!(client.blocking().is_blocked(&jid2).await?);
+
+// Blocking applies to the user account, not specific devices
+```
+
+## Complete Example
+
+```rust
+use whatsapp_rust::features::blocking::BlocklistEntry;
+
+async fn manage_blocklist(client: &Client) -> anyhow::Result<()> {
+    // Get current blocklist
+    let blocklist = client.blocking().get_blocklist().await?;
+    println!("Current blocklist: {} contacts", blocklist.len());
+    
+    // Block a new contact
+    let spam_contact: Jid = "15559999999@s.whatsapp.net".parse()?;
+    
+    if !client.blocking().is_blocked(&spam_contact).await? {
+        client.blocking().block(&spam_contact).await?;
+        println!("Blocked spam contact");
+    }
+    
+    // Unblock an old contact
+    let old_friend: Jid = "15551234567@s.whatsapp.net".parse()?;
+    
+    if client.blocking().is_blocked(&old_friend).await? {
+        client.blocking().unblock(&old_friend).await?;
+        println!("Unblocked old friend");
+    }
+    
+    // Print updated blocklist
+    let updated_blocklist = client.blocking().get_blocklist().await?;
+    println!("\nUpdated blocklist:");
+    for entry in updated_blocklist {
+        println!("  - {}", entry.jid);
+    }
+    
+    Ok(())
+}
+```

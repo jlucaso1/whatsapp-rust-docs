@@ -1,0 +1,371 @@
+---
+title: "receipt"
+description: "Send read receipts, delivery receipts, and played receipts"
+---
+
+## mark_as_read
+
+Send read receipts for one or more messages.
+
+Read receipts inform the sender that you've read their message(s). For group messages, you must pass the original sender's JID as the `sender` parameter.
+
+```rust
+pub async fn mark_as_read(
+    &self,
+    chat: &Jid,
+    sender: Option<&Jid>,
+    message_ids: Vec<String>,
+) -> Result<(), anyhow::Error>
+```
+
+<ParamField path="chat" type="&Jid" required>
+  Chat JID where the messages were received. Can be:
+  - Direct message: `15551234567@s.whatsapp.net`
+  - Group: `120363040237990503@g.us`
+</ParamField>
+
+<ParamField path="sender" type="Option<&Jid>" required>
+  Message sender JID. Required for group messages, `None` for direct messages.
+  
+  - For DMs: Pass `None`
+  - For groups: Pass the JID of the user who sent the message(s)
+</ParamField>
+
+<ParamField path="message_ids" type="Vec<String>" required>
+  List of message IDs to mark as read. Can be a single ID or multiple IDs.
+  
+  If empty, this function returns immediately without sending anything.
+</ParamField>
+
+### Example: Mark DM as Read
+
+```rust
+use wacore_binary::jid::Jid;
+
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.mark_as_read(
+    &chat_jid,
+    None, // No sender for DMs
+    vec!["MESSAGE_ID_123".to_string()]
+).await?;
+```
+
+### Example: Mark Group Message as Read
+
+```rust
+let group_jid: Jid = "120363040237990503@g.us".parse()?;
+let sender_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.mark_as_read(
+    &group_jid,
+    Some(&sender_jid), // Must specify sender in groups
+    vec!["MESSAGE_ID_456".to_string()]
+).await?;
+```
+
+### Example: Mark Multiple Messages as Read
+
+```rust
+let message_ids = vec![
+    "MSG_1".to_string(),
+    "MSG_2".to_string(),
+    "MSG_3".to_string(),
+];
+
+client.mark_as_read(&chat_jid, None, message_ids).await?;
+```
+
+<Note>
+  Read receipts are **not sent automatically** by the library. You must explicitly call `mark_as_read()` when you want to notify the sender that messages have been read.
+</Note>
+
+---
+
+## send_delivery_receipt (Internal)
+
+Sends a delivery receipt to the sender of a message.
+
+This is an internal method called automatically by the library when messages are received. You typically don't need to call this directly.
+
+```rust
+pub(crate) async fn send_delivery_receipt(
+    &self,
+    info: &MessageInfo
+)
+```
+
+<ParamField path="info" type="&MessageInfo" required>
+  Message metadata containing:
+  - `id` - Message ID
+  - `source.chat` - Chat JID
+  - `source.sender` - Sender JID
+  - `source.is_from_me` - Whether this is your own message
+  - `source.is_group` - Whether this is a group message
+</ParamField>
+
+### Behavior
+
+Delivery receipts are automatically sent for all incoming messages **except**:
+
+- Your own messages (`is_from_me = true`)
+- Messages without an ID
+- Status broadcast messages (`status@broadcast`)
+
+For group messages, the receipt includes a `participant` attribute identifying the sender.
+
+<Note>
+  Delivery receipts (type=`"delivery"`) are sent automatically. This is different from read receipts (type=`"read"`), which you send manually with `mark_as_read()`.
+</Note>
+
+---
+
+## Receipt Types
+
+WhatsApp supports multiple receipt types:
+
+```rust
+pub enum ReceiptType {
+    Delivered,      // Message delivered to device
+    Sender,         // Sender receipt
+    Retry,          // Decryption retry request
+    Read,           // Message read by recipient
+    ReadSelf,       // Message read on another device
+    Played,         // Media played by recipient
+    PlayedSelf,     // Media played on another device
+    ServerError,    // Server error
+    Inactive,       // Inactive participant
+    PeerMsg,        // Peer message
+    HistorySync,    // History sync
+    Other(String),  // Unknown receipt type
+}
+```
+
+<ParamField path="Delivered" type="variant">
+  Delivery receipt (type=`""`). Confirms message was delivered to the recipient's device. Sent automatically by the library.
+</ParamField>
+
+<ParamField path="Read" type="variant">
+  Read receipt (type=`"read"`). Confirms message was read by the recipient. Sent manually via `mark_as_read()`.
+</ParamField>
+
+<ParamField path="ReadSelf" type="variant">
+  Read receipt from your own device (type=`"read-self"`). Received when you read a message on another device.
+</ParamField>
+
+<ParamField path="Played" type="variant">
+  Played receipt (type=`"played"`). Confirms media (audio/video) was played by the recipient.
+</ParamField>
+
+<ParamField path="PlayedSelf" type="variant">
+  Played receipt from your own device (type=`"played-self"`). Received when you play media on another device.
+</ParamField>
+
+<ParamField path="Retry" type="variant">
+  Retry receipt (type=`"retry"`). Recipient failed to decrypt the message and is requesting a retry. Automatically handled by the library.
+</ParamField>
+
+<ParamField path="Sender" type="variant">
+  Sender receipt (type=`"sender"`). Acknowledges message was sent.
+</ParamField>
+
+<ParamField path="ServerError" type="variant">
+  Server error receipt (type=`"server-error"`). Message delivery failed on server.
+</ParamField>
+
+---
+
+## Receipt Events
+
+You can listen for receipt events to track message delivery and read status:
+
+```rust
+use whatsapp_rust::types::events::Event;
+
+let mut events = client.subscribe();
+
+while let Some(event) = events.recv().await {
+    match event {
+        Event::Receipt(receipt) => {
+            println!("Receipt type: {:?}", receipt.r#type);
+            println!("From: {}", receipt.source.sender);
+            println!("Message IDs: {:?}", receipt.message_ids);
+            
+            match receipt.r#type {
+                ReceiptType::Delivered => {
+                    println!("Message delivered");
+                }
+                ReceiptType::Read => {
+                    println!("Message read");
+                }
+                ReceiptType::Played => {
+                    println!("Media played");
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+```
+
+### Receipt Event Structure
+
+```rust
+pub struct Receipt {
+    pub message_ids: Vec<String>,
+    pub source: MessageSource,
+    pub timestamp: DateTime<Utc>,
+    pub r#type: ReceiptType,
+    pub message_sender: Jid,
+}
+```
+
+<ParamField path="message_ids" type="Vec<String>">
+  List of message IDs this receipt applies to. Usually contains a single ID, but can have multiple.
+</ParamField>
+
+<ParamField path="source" type="MessageSource">
+  Source information:
+  - `chat` - Chat JID where the receipt originated
+  - `sender` - JID of the user who sent the receipt
+  - `is_group` - Whether this is from a group
+</ParamField>
+
+<ParamField path="timestamp" type="DateTime<Utc>">
+  When the receipt was received (local time)
+</ParamField>
+
+<ParamField path="r#type" type="ReceiptType">
+  Type of receipt (Delivered, Read, Played, etc.)
+</ParamField>
+
+<ParamField path="message_sender" type="Jid">
+  JID of the user who sent the receipt (same as `source.sender`)
+</ParamField>
+
+---
+
+## Message Tracking Example
+
+Track message delivery and read status:
+
+```rust
+use std::collections::HashMap;
+use whatsapp_rust::types::events::{Event, ReceiptType};
+
+#[derive(Default)]
+struct MessageTracker {
+    delivered: HashMap<String, bool>,
+    read: HashMap<String, bool>,
+}
+
+impl MessageTracker {
+    fn track_receipt(&mut self, receipt: &Receipt) {
+        for msg_id in &receipt.message_ids {
+            match receipt.r#type {
+                ReceiptType::Delivered => {
+                    self.delivered.insert(msg_id.clone(), true);
+                }
+                ReceiptType::Read => {
+                    self.read.insert(msg_id.clone(), true);
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    fn is_delivered(&self, msg_id: &str) -> bool {
+        self.delivered.get(msg_id).copied().unwrap_or(false)
+    }
+    
+    fn is_read(&self, msg_id: &str) -> bool {
+        self.read.get(msg_id).copied().unwrap_or(false)
+    }
+}
+
+let mut tracker = MessageTracker::default();
+let mut events = client.subscribe();
+
+while let Some(event) = events.recv().await {
+    if let Event::Receipt(receipt) = event {
+        tracker.track_receipt(&receipt);
+    }
+}
+```
+
+---
+
+## Played Receipts (Media)
+
+For media messages (audio, video), you can send played receipts to indicate the media was played:
+
+<Warning>
+  The library does not currently expose a public API for sending played receipts. This feature may be added in a future version.
+</Warning>
+
+Played receipts follow the same pattern as read receipts but use `type="played"`:
+
+```xml
+<receipt id="MESSAGE_ID" to="CHAT_JID" type="played" participant="SENDER_JID" />
+```
+
+You can listen for incoming played receipts via the `Event::Receipt` event with `ReceiptType::Played`.
+
+---
+
+## Best Practices
+
+### Read Receipt Privacy
+
+<Tip>
+  Respect user privacy settings. If you're building a client, consider adding a setting to disable read receipts.
+</Tip>
+
+```rust
+struct Settings {
+    send_read_receipts: bool,
+}
+
+if settings.send_read_receipts {
+    client.mark_as_read(&chat_jid, sender, message_ids).await?;
+}
+```
+
+### Batching Multiple Receipts
+
+Send read receipts for multiple messages at once to reduce network overhead:
+
+```rust
+let mut pending_receipts: Vec<String> = Vec::new();
+
+// Collect message IDs
+pending_receipts.push(msg_id_1);
+pending_receipts.push(msg_id_2);
+pending_receipts.push(msg_id_3);
+
+// Send batch
+if !pending_receipts.is_empty() {
+    client.mark_as_read(&chat_jid, None, pending_receipts).await?;
+}
+```
+
+### Group Message Receipts
+
+Always include the sender JID for group messages:
+
+```rust
+if message_info.source.is_group {
+    client.mark_as_read(
+        &message_info.source.chat,
+        Some(&message_info.source.sender), // Required for groups
+        vec![message_info.id.clone()]
+    ).await?;
+} else {
+    client.mark_as_read(
+        &message_info.source.chat,
+        None, // No sender for DMs
+        vec![message_info.id.clone()]
+    ).await?;
+}
+```

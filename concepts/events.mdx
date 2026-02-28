@@ -1,0 +1,1001 @@
+---
+title: Events
+description: Event system, event handlers, and Event enum types in whatsapp-rust
+---
+
+## Overview
+
+WhatsApp-Rust uses an event-driven architecture where the client emits events for all WhatsApp protocol interactions. Your application subscribes to these events to handle messages, connection changes, and notifications.
+
+## Event System Architecture
+
+### CoreEventBus
+
+**Location:** `wacore/src/types/events.rs`
+
+```rust
+#[derive(Default, Clone)]
+pub struct CoreEventBus {
+    handlers: Arc<RwLock<Vec<Arc<dyn EventHandler>>>>,
+}
+
+impl CoreEventBus {
+    pub fn dispatch(&self, event: &Event) {
+        for handler in self.handlers.read().expect("...").iter() {
+            handler.handle_event(event);
+        }
+    }
+
+    pub fn has_handlers(&self) -> bool {
+        !self.handlers.read().expect("...").is_empty()
+    }
+}
+```
+
+**Features:**
+- Thread-safe event dispatching
+- Multiple handlers supported
+- Clone-cheap with `Arc`
+
+### EventHandler Trait
+
+```rust
+pub trait EventHandler: Send + Sync {
+    fn handle_event(&self, event: &Event);
+}
+```
+
+**Implementation:**
+```rust
+struct MyHandler;
+
+impl EventHandler for MyHandler {
+    fn handle_event(&self, event: &Event) {
+        match event {
+            Event::Message(msg, info) => {
+                println!("Message from {}: {:?}", info.source.sender, msg);
+            }
+            _ => {}
+        }
+    }
+}
+
+client.core.event_bus.add_handler(Arc::new(MyHandler));
+```
+
+## Event Enum
+
+**Location:** `wacore/src/types/events.rs:292-351`
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub enum Event {
+    // Connection
+    Connected(Connected),
+    Disconnected(Disconnected),
+    StreamReplaced(StreamReplaced),
+    StreamError(StreamError),
+    ConnectFailure(ConnectFailure),
+    TemporaryBan(TemporaryBan),
+
+    // Pairing
+    PairingQrCode { code: String, timeout: Duration },
+    PairingCode { code: String, timeout: Duration },
+    PairSuccess(PairSuccess),
+    PairError(PairError),
+    QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
+    ClientOutdated(ClientOutdated),
+    LoggedOut(LoggedOut),
+
+    // Messages
+    Message(Box<wa::Message>, MessageInfo),
+    Receipt(Receipt),
+    UndecryptableMessage(UndecryptableMessage),
+    Notification(Node),
+
+    // Presence
+    ChatPresence(ChatPresenceUpdate),
+    Presence(PresenceUpdate),
+
+    // User Updates
+    PictureUpdate(PictureUpdate),
+    UserAboutUpdate(UserAboutUpdate),
+    PushNameUpdate(PushNameUpdate),
+    SelfPushNameUpdated(SelfPushNameUpdated),
+
+    // Group Updates
+    JoinedGroup(LazyConversation),
+    GroupInfoUpdate { jid: Jid, update: Box<wa::SyncActionValue> },
+
+    // Contact Updates
+    ContactUpdate(ContactUpdate),
+
+    // Chat State
+    PinUpdate(PinUpdate),
+    MuteUpdate(MuteUpdate),
+    ArchiveUpdate(ArchiveUpdate),
+    MarkChatAsReadUpdate(MarkChatAsReadUpdate),
+
+    // History Sync
+    HistorySync(HistorySync),
+    OfflineSyncPreview(OfflineSyncPreview),
+    OfflineSyncCompleted(OfflineSyncCompleted),
+
+    // Device Updates
+    DeviceListUpdate(DeviceListUpdate),
+    BusinessStatusUpdate(BusinessStatusUpdate),
+}
+```
+
+## Connection Events
+
+### Connected
+
+**Emitted:** After successful connection and authentication
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct Connected;
+
+Event::Connected(Connected)
+```
+
+**Usage:**
+```rust
+Event::Connected(_) => {
+    println!("✅ Connected to WhatsApp");
+    // Safe to send messages now
+}
+```
+
+### Disconnected
+
+**Emitted:** When connection is lost
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct Disconnected;
+
+Event::Disconnected(Disconnected)
+```
+
+**Behavior:** Client automatically attempts reconnection
+
+### ConnectFailure
+
+**Emitted:** When connection fails with a specific reason
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectFailure {
+    pub reason: ConnectFailureReason,
+    pub message: String,
+    pub raw: Option<Node>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize)]
+pub enum ConnectFailureReason {
+    Generic,                // 400
+    LoggedOut,              // 401
+    TempBanned,             // 402
+    MainDeviceGone,         // 403
+    UnknownLogout,          // 406
+    ClientOutdated,         // 405
+    BadUserAgent,           // 409
+    CatExpired,             // 413
+    CatInvalid,             // 414
+    NotFound,               // 415
+    ClientUnknown,          // 418
+    InternalServerError,    // 500
+    Experimental,           // 501
+    ServiceUnavailable,     // 503
+    Unknown(i32),
+}
+```
+
+**Helper methods:**
+```rust
+if reason.is_logged_out() {
+    // Clear session and re-pair
+}
+
+if reason.should_reconnect() {
+    // Retry connection
+}
+```
+
+### TemporaryBan
+
+**Emitted:** When account is temporarily banned
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct TemporaryBan {
+    pub code: TempBanReason,
+    pub expire: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum TempBanReason {
+    SentToTooManyPeople,        // 101
+    BlockedByUsers,             // 102
+    CreatedTooManyGroups,       // 103
+    SentTooManySameMessage,     // 104
+    BroadcastList,              // 106
+    Unknown(i32),
+}
+```
+
+**Usage:**
+```rust
+Event::TemporaryBan(ban) => {
+    eprintln!("Banned: {} (expires in {:?})", ban.code, ban.expire);
+}
+```
+
+### StreamReplaced
+
+**Emitted:** When another device connects with the same credentials
+
+```rust
+Event::StreamReplaced(_) => {
+    println!("⚠️ Another instance connected - disconnecting");
+}
+```
+
+## Pairing Events
+
+### PairingQrCode
+
+**Emitted:** For each QR code in rotation
+
+```rust
+Event::PairingQrCode {
+    code: String,           // ASCII art QR or data string
+    timeout: Duration,      // 60s first, 20s subsequent
+}
+```
+
+**Example:**
+```rust
+Event::PairingQrCode { code, timeout } => {
+    println!("Scan this QR (valid {}s):", timeout.as_secs());
+    println!("{}", code);
+}
+```
+
+### PairingCode
+
+**Emitted:** When pair code is generated
+
+```rust
+Event::PairingCode {
+    code: String,           // 8-character code
+    timeout: Duration,      // ~180 seconds
+}
+```
+
+**Example:**
+```rust
+Event::PairingCode { code, .. } => {
+    println!("Enter {} on your phone", code);
+}
+```
+
+### PairSuccess
+
+**Emitted:** When pairing completes successfully
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PairSuccess {
+    pub id: Jid,
+    pub lid: Jid,
+    pub business_name: String,
+    pub platform: String,
+}
+```
+
+**Example:**
+```rust
+Event::PairSuccess(info) => {
+    println!("✅ Paired as {}", info.id);
+    println!("LID: {}", info.lid);
+    println!("Name: {}", info.business_name);
+}
+```
+
+### PairError
+
+**Emitted:** When pairing fails
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PairError {
+    pub id: Jid,
+    pub lid: Jid,
+    pub business_name: String,
+    pub platform: String,
+    pub error: String,
+}
+```
+
+## Message Events
+
+### Message
+
+**Emitted:** For all incoming messages (text, media, etc.)
+
+```rust
+Event::Message(Box<wa::Message>, MessageInfo)
+```
+
+**MessageInfo structure:**
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageInfo {
+    pub id: MessageId,
+    pub source: MessageSource,
+    pub timestamp: DateTime<Utc>,
+    pub push_name: String,
+    pub is_group: bool,
+    pub category: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageSource {
+    pub sender: Jid,        // Who sent the message
+    pub chat: Jid,          // Where it was sent (group or DM)
+    pub is_from_me: bool,
+    pub is_bot: bool,
+}
+```
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+Event::Message(msg, info) => {
+    println!("From: {} in {}", info.source.sender, info.source.chat);
+
+    // Text message
+    if let Some(text) = &msg.conversation {
+        println!("Text: {}", text);
+    }
+
+    // Extended text (with link preview, quoted message, etc.)
+    if let Some(ext) = &msg.extended_text_message {
+        println!("Text: {}", ext.text.as_deref().unwrap_or(""));
+
+        if let Some(context) = &ext.context_info {
+            if let Some(quoted) = &context.quoted_message {
+                println!("Quoted: {:?}", quoted);
+            }
+        }
+    }
+
+    // Image message
+    if let Some(img) = &msg.image_message {
+        println!("Image: {} ({}x{})", 
+            img.caption.as_deref().unwrap_or(""),
+            img.width.unwrap_or(0),
+            img.height.unwrap_or(0)
+        );
+    }
+
+    // Video, audio, document, sticker, etc.
+    // See waproto::whatsapp::Message for all types
+}
+```
+
+### Receipt
+
+**Emitted:** For delivery/read/played receipts
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct Receipt {
+    pub source: MessageSource,
+    pub message_ids: Vec<MessageId>,
+    pub timestamp: DateTime<Utc>,
+    pub r#type: ReceiptType,
+    pub message_sender: Jid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ReceiptType {
+    Delivery,
+    Read,
+    ReadSelf,
+    Played,
+    Sender,
+    Retry,
+    ServerError,
+    Inactive,
+}
+```
+
+**Example:**
+```rust
+Event::Receipt(receipt) => {
+    match receipt.r#type {
+        ReceiptType::Read => {
+            println!("✓✓ Read by {}", receipt.source.sender);
+        }
+        ReceiptType::Delivery => {
+            println!("✓ Delivered to {}", receipt.source.sender);
+        }
+        _ => {}
+    }
+}
+```
+
+### UndecryptableMessage
+
+**Emitted:** When a message cannot be decrypted
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct UndecryptableMessage {
+    pub info: MessageInfo,
+    pub is_unavailable: bool,
+    pub unavailable_type: UnavailableType,
+    pub decrypt_fail_mode: DecryptFailMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum UnavailableType {
+    Unknown,
+    ViewOnce,       // View-once media already viewed
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum DecryptFailMode {
+    Show,           // Show placeholder in chat
+    Hide,           // Hide from chat
+}
+```
+
+**Example:**
+```rust
+Event::UndecryptableMessage(undec) => {
+    if matches!(undec.unavailable_type, UnavailableType::ViewOnce) {
+        println!("View-once message already consumed");
+    } else {
+        eprintln!("Failed to decrypt message from {}", undec.info.source.sender);
+    }
+}
+```
+
+## Presence Events
+
+### ChatPresence
+
+**Emitted:** For typing indicators and recording states
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatPresenceUpdate {
+    pub source: MessageSource,
+    pub state: ChatPresence,
+    pub media: ChatPresenceMedia,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ChatPresence {
+    Composing,
+    Paused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ChatPresenceMedia {
+    Text,
+    Audio,
+}
+```
+
+**Example:**
+```rust
+Event::ChatPresence(update) => {
+    match (update.state, update.media) {
+        (ChatPresence::Composing, ChatPresenceMedia::Text) => {
+            println!("{} is typing...", update.source.sender);
+        }
+        (ChatPresence::Composing, ChatPresenceMedia::Audio) => {
+            println!("{} is recording audio...", update.source.sender);
+        }
+        (ChatPresence::Paused, _) => {
+            println!("{} stopped typing", update.source.sender);
+        }
+    }
+}
+```
+
+### Presence
+
+**Emitted:** For online/offline status and last seen
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PresenceUpdate {
+    pub from: Jid,
+    pub unavailable: bool,
+    pub last_seen: Option<DateTime<Utc>>,
+}
+```
+
+**Example:**
+```rust
+Event::Presence(update) => {
+    if update.unavailable {
+        println!("{} is offline", update.from);
+        if let Some(last_seen) = update.last_seen {
+            println!("Last seen: {}", last_seen);
+        }
+    } else {
+        println!("{} is online", update.from);
+    }
+}
+```
+
+## User Update Events
+
+### PictureUpdate
+
+**Emitted:** When a user changes their profile picture
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PictureUpdate {
+    pub jid: Jid,
+    pub author: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub photo_change: Option<wa::PhotoChange>,
+}
+```
+
+### UserAboutUpdate
+
+**Emitted:** When a user changes their status/about
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct UserAboutUpdate {
+    pub jid: Jid,
+    pub status: String,
+    pub timestamp: DateTime<Utc>,
+}
+```
+
+### PushNameUpdate
+
+**Emitted:** When a contact changes their display name
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PushNameUpdate {
+    pub jid: Jid,
+    pub message: Box<MessageInfo>,
+    pub old_push_name: String,
+    pub new_push_name: String,
+}
+```
+
+### SelfPushNameUpdated
+
+**Emitted:** When your own push name is updated
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct SelfPushNameUpdated {
+    pub from_server: bool,
+    pub old_name: String,
+    pub new_name: String,
+}
+```
+
+## Group Events
+
+### JoinedGroup
+
+**Emitted:** When added to a group
+
+```rust
+Event::JoinedGroup(LazyConversation)
+```
+
+**LazyConversation:** Lazily-parsed group conversation data
+
+```rust
+Event::JoinedGroup(lazy_conv) => {
+    if let Some(conv) = lazy_conv.get() {
+        println!("Joined group: {}", conv.id);
+    }
+}
+```
+
+### GroupInfoUpdate
+
+**Emitted:** When group metadata changes (subject, participants, etc.)
+
+```rust
+Event::GroupInfoUpdate {
+    jid: Jid,
+    update: Box<wa::SyncActionValue>,
+}
+```
+
+**Example:**
+```rust
+Event::GroupInfoUpdate { jid, update } => {
+    if let Some(action) = &update.group_action {
+        println!("Group {} updated: {:?}", jid, action);
+    }
+}
+```
+
+## Chat State Events
+
+### PinUpdate
+
+**Emitted:** When a chat is pinned/unpinned
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PinUpdate {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::PinAction>,
+    pub from_full_sync: bool,
+}
+```
+
+### MuteUpdate
+
+**Emitted:** When a chat is muted/unmuted
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct MuteUpdate {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::MuteAction>,
+    pub from_full_sync: bool,
+}
+```
+
+### ArchiveUpdate
+
+**Emitted:** When a chat is archived/unarchived
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchiveUpdate {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::ArchiveChatAction>,
+    pub from_full_sync: bool,
+}
+```
+
+### MarkChatAsReadUpdate
+
+**Emitted:** When a chat is marked as read
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct MarkChatAsReadUpdate {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
+    pub from_full_sync: bool,
+}
+```
+
+## History Sync Events
+
+### HistorySync
+
+**Emitted:** For chat history synchronization
+
+```rust
+Event::HistorySync(HistorySync)
+```
+
+**HistorySync:** Protobuf message containing chat history
+
+### OfflineSyncPreview
+
+**Emitted:** Preview of pending offline sync data
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct OfflineSyncPreview {
+    pub total: i32,
+    pub app_data_changes: i32,
+    pub messages: i32,
+    pub notifications: i32,
+    pub receipts: i32,
+}
+```
+
+### OfflineSyncCompleted
+
+**Emitted:** When offline sync completes
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct OfflineSyncCompleted {
+    pub count: i32,
+}
+```
+
+## Device Events
+
+### DeviceListUpdate
+
+**Emitted:** When a user's device list changes
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceListUpdate {
+    pub user: Jid,
+    pub lid_user: Option<Jid>,
+    pub update_type: DeviceListUpdateType,
+    pub devices: Vec<DeviceNotificationInfo>,
+    pub key_index: Option<KeyIndexInfo>,
+    pub contact_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum DeviceListUpdateType {
+    Add,
+    Remove,
+    Update,
+}
+```
+
+### BusinessStatusUpdate
+
+**Emitted:** When a business account status changes
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct BusinessStatusUpdate {
+    pub jid: Jid,
+    pub update_type: BusinessUpdateType,
+    pub timestamp: i64,
+    pub target_jid: Option<Jid>,
+    pub hash: Option<String>,
+    pub verified_name: Option<String>,
+    pub product_ids: Vec<String>,
+    pub collection_ids: Vec<String>,
+    pub subscriptions: Vec<BusinessSubscription>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum BusinessUpdateType {
+    RemovedAsBusiness,
+    VerifiedNameChanged,
+    ProfileUpdated,
+    ProductsUpdated,
+    CollectionsUpdated,
+    SubscriptionsUpdated,
+    Unknown,
+}
+```
+
+## Event Handler Patterns
+
+### Bot Builder Pattern
+
+```rust
+use whatsapp_rust::bot::Bot;
+use wacore::types::events::Event;
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .on_event(|event, client| async move {
+        match event {
+            Event::Message(msg, info) => {
+                // Handle message
+            }
+            Event::Connected(_) => {
+                // Handle connection
+            }
+            _ => {}
+        }
+    })
+    .build()
+    .await?;
+```
+
+### Multiple Handlers
+
+```rust
+struct MessageHandler;
+impl EventHandler for MessageHandler {
+    fn handle_event(&self, event: &Event) {
+        if let Event::Message(msg, info) = event {
+            // Handle messages
+        }
+    }
+}
+
+struct ConnectionHandler;
+impl EventHandler for ConnectionHandler {
+    fn handle_event(&self, event: &Event) {
+        match event {
+            Event::Connected(_) => { /* ... */ }
+            Event::Disconnected(_) => { /* ... */ }
+            _ => {}
+        }
+    }
+}
+
+client.core.event_bus.add_handler(Arc::new(MessageHandler));
+client.core.event_bus.add_handler(Arc::new(ConnectionHandler));
+```
+
+### Async Event Handlers
+
+```rust
+use tokio::sync::mpsc;
+
+let (tx, mut rx) = mpsc::unbounded_channel();
+
+struct AsyncHandler {
+    tx: mpsc::UnboundedSender<Event>,
+}
+
+impl EventHandler for AsyncHandler {
+    fn handle_event(&self, event: &Event) {
+        let _ = self.tx.send(event.clone());
+    }
+}
+
+client.core.event_bus.add_handler(Arc::new(AsyncHandler { tx }));
+
+// Process events asynchronously
+tokio::spawn(async move {
+    while let Some(event) = rx.recv().await {
+        // Async processing
+    }
+});
+```
+
+## Performance Optimization
+
+### LazyConversation
+
+**Purpose:** Avoid parsing large protobuf messages unless needed
+
+```rust
+// wacore/src/types/events.rs:42-97
+pub struct LazyConversation {
+    raw_bytes: Bytes,                    // Zero-copy bytes
+    parsed: Arc<OnceLock<wa::Conversation>>,  // Parse once
+}
+
+impl LazyConversation {
+    pub fn get(&self) -> Option<&wa::Conversation> {
+        // Parse on first access
+        let conv = self.parsed.get_or_init(|| 
+            wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default()
+        );
+        if conv.id.is_empty() { None } else { Some(conv) }
+    }
+}
+```
+
+**Usage:**
+```rust
+Event::JoinedGroup(lazy_conv) => {
+    // No parsing cost unless you access it
+    if interested_in_group() {
+        if let Some(conv) = lazy_conv.get() {
+            // Parse happens here
+            process_group(conv);
+        }
+    }
+}
+```
+
+### SharedData
+
+**Purpose:** Cheap cloning of large event data
+
+```rust
+// wacore/src/types/events.rs:14-39
+pub struct SharedData<T>(pub Arc<T>);
+
+impl<T> std::ops::Deref for SharedData<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+```
+
+**Usage:**
+```rust
+let shared = SharedData::new(expensive_data);
+let clone1 = shared.clone(); // O(1) - just increments Arc counter
+let clone2 = shared.clone(); // O(1)
+```
+
+## Best Practices
+
+### Event Filtering
+
+```rust
+.on_event(|event, client| async move {
+    // Only handle events you care about
+    match event {
+        Event::Message(msg, info) if !info.source.is_from_me => {
+            // Only handle messages from others
+        }
+        Event::Message(msg, info) if info.is_group => {
+            // Only handle group messages
+        }
+        _ => {}
+    }
+})
+```
+
+### Error Handling
+
+```rust
+.on_event(|event, client| async move {
+    if let Err(e) = handle_event(event, client).await {
+        eprintln!("Event handler error: {}", e);
+    }
+})
+
+async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
+    match event {
+        Event::Message(msg, info) => {
+            process_message(msg, info, client).await?
+        }
+        _ => {}
+    }
+    Ok(())
+}
+```
+
+### Spawning Tasks
+
+```rust
+.on_event(|event, client| async move {
+    match event {
+        Event::Message(msg, info) => {
+            let client = client.clone();
+            let msg = msg.clone();
+            let info = info.clone();
+
+            tokio::spawn(async move {
+                // Process in background
+                process_message(&msg, &info, &client).await;
+            });
+        }
+        _ => {}
+    }
+})
+```
+
+## Related Sections
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the event bus system
+  </Card>
+  <Card title="Authentication" icon="key" href="/concepts/authentication">
+    Learn about pairing events
+  </Card>
+  <Card title="Sending messages" icon="message" href="/guides/sending-messages">
+    Sending and receiving messages
+  </Card>
+  <Card title="Client API" icon="code" href="/api/client">
+    Complete client API reference
+  </Card>
+</CardGroup>

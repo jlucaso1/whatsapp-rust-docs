@@ -1,0 +1,747 @@
+---
+title: "waproto"
+description: "Protocol Buffers definitions for WhatsApp messages"
+---
+
+## Overview
+
+`waproto` contains the Protocol Buffers definitions for all WhatsApp message types. It's auto-generated from `whatsapp.proto` using `prost` and provides strongly-typed Rust structs for working with WhatsApp's binary protocol.
+
+```toml
+[dependencies]
+waproto = "0.2.0"
+```
+
+## Structure
+
+```
+waproto/
+├── src/
+│   ├── lib.rs         # Module definition
+│   └── whatsapp.rs    # Generated protobuf code (15,020 lines)
+├── build.rs           # prost-build script
+└── whatsapp.proto     # Source protobuf definitions
+```
+
+## Usage
+
+All protobuf types are under the `waproto::whatsapp` module:
+
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    conversation: Some("Hello, World!".to_string()),
+    ..Default::default()
+};
+```
+
+## Key Message Types
+
+### Core Message Types
+
+#### Message
+
+The main message container used for all WhatsApp messages.
+
+```rust
+pub struct Message {
+    // Text message
+    pub conversation: Option<String>,
+    
+    // Media messages
+    pub image_message: Option<ImageMessage>,
+    pub video_message: Option<VideoMessage>,
+    pub audio_message: Option<AudioMessage>,
+    pub document_message: Option<DocumentMessage>,
+    pub sticker_message: Option<StickerMessage>,
+    
+    // Rich messages
+    pub extended_text_message: Option<ExtendedTextMessage>,
+    pub interactive_message: Option<InteractiveMessage>,
+    pub template_message: Option<TemplateMessage>,
+    pub buttons_message: Option<ButtonsMessage>,
+    pub list_message: Option<ListMessage>,
+    
+    // Group messages
+    pub sender_key_distribution_message: Option<SenderKeyDistributionMessage>,
+    
+    // System messages
+    pub protocol_message: Option<ProtocolMessage>,
+    pub ephemeral_message: Option<EphemeralMessage>,
+    pub view_once_message: Option<ViewOnceMessage>,
+    pub view_once_message_v2: Option<ViewOnceMessageV2>,
+    
+    // Reactions and interactions
+    pub reaction_message: Option<ReactionMessage>,
+    pub edit_message: Option<EditMessage>,
+    pub keep_in_chat_message: Option<KeepInChatMessage>,
+    
+    // AI/Bot messages
+    pub ai_rich_response_message: Option<AiRichResponseMessage>,
+    pub bot_feedback_message: Option<BotFeedbackMessage>,
+    
+    // Metadata
+    pub message_context_info: Option<MessageContextInfo>,
+    // ... and many more
+}
+```
+
+**Usage in main library:**
+
+```rust
+use waproto::whatsapp as wa;
+
+// Construct a text message
+let msg = wa::Message {
+    conversation: Some("Hello!".to_string()),
+    ..Default::default()
+};
+
+// Construct an image message
+let img = wa::Message {
+    image_message: Some(wa::ImageMessage {
+        url: Some(media_url),
+        media_key: Some(media_key.to_vec()),
+        file_sha256: Some(file_sha256.to_vec()),
+        file_enc_sha256: Some(file_enc_sha256.to_vec()),
+        caption: Some("Check this out!".to_string()),
+        ..Default::default()
+    }),
+    ..Default::default()
+};
+```
+
+#### MessageKey
+
+Identifies a specific message in a conversation.
+
+```rust
+pub struct MessageKey {
+    pub remote_jid: Option<String>,  // Chat JID
+    pub from_me: Option<bool>,       // Sent by me?
+    pub id: Option<String>,          // Message ID
+    pub participant: Option<String>, // Group participant JID
+}
+```
+
+### Media Messages
+
+#### ImageMessage
+
+```rust
+pub struct ImageMessage {
+    pub url: Option<String>,
+    pub mimetype: Option<String>,
+    pub caption: Option<String>,
+    pub file_sha256: Option<Vec<u8>>,
+    pub file_length: Option<u64>,
+    pub height: Option<u32>,
+    pub width: Option<u32>,
+    pub media_key: Option<Vec<u8>>,
+    pub file_enc_sha256: Option<Vec<u8>>,
+    pub jpeg_thumbnail: Option<Vec<u8>>,
+    pub context_info: Option<ContextInfo>,
+    // ...
+}
+```
+
+#### VideoMessage
+
+```rust
+pub struct VideoMessage {
+    pub url: Option<String>,
+    pub mimetype: Option<String>,
+    pub caption: Option<String>,
+    pub file_sha256: Option<Vec<u8>>,
+    pub file_length: Option<u64>,
+    pub seconds: Option<u32>,
+    pub media_key: Option<Vec<u8>>,
+    pub file_enc_sha256: Option<Vec<u8>>,
+    pub jpeg_thumbnail: Option<Vec<u8>>,
+    pub gif_playback: Option<bool>,
+    // ...
+}
+```
+
+#### AudioMessage
+
+```rust
+pub struct AudioMessage {
+    pub url: Option<String>,
+    pub mimetype: Option<String>,
+    pub file_sha256: Option<Vec<u8>>,
+    pub file_length: Option<u64>,
+    pub seconds: Option<u32>,
+    pub ptt: Option<bool>,  // Push-to-talk (voice note)
+    pub media_key: Option<Vec<u8>>,
+    pub file_enc_sha256: Option<Vec<u8>>,
+    // ...
+}
+```
+
+#### DocumentMessage
+
+```rust
+pub struct DocumentMessage {
+    pub url: Option<String>,
+    pub mimetype: Option<String>,
+    pub title: Option<String>,
+    pub file_sha256: Option<Vec<u8>>,
+    pub file_length: Option<u64>,
+    pub page_count: Option<u32>,
+    pub media_key: Option<Vec<u8>>,
+    pub file_enc_sha256: Option<Vec<u8>>,
+    pub file_name: Option<String>,
+    pub jpeg_thumbnail: Option<Vec<u8>>,
+    // ...
+}
+```
+
+#### StickerMessage
+
+```rust
+pub struct StickerMessage {
+    pub url: Option<String>,
+    pub file_sha256: Option<Vec<u8>>,
+    pub file_enc_sha256: Option<Vec<u8>>,
+    pub media_key: Option<Vec<u8>>,
+    pub mimetype: Option<String>,
+    pub height: Option<u32>,
+    pub width: Option<u32>,
+    pub is_animated: Option<bool>,
+    // ...
+}
+```
+
+### Rich Content Messages
+
+#### ExtendedTextMessage
+
+Text with formatting, links, and quoted messages.
+
+```rust
+pub struct ExtendedTextMessage {
+    pub text: Option<String>,
+    pub matched_text: Option<String>,
+    pub canonical_url: Option<String>,
+    pub description: Option<String>,
+    pub title: Option<String>,
+    pub thumbnail: Option<Vec<u8>>,
+    pub context_info: Option<ContextInfo>,
+    // ...
+}
+```
+
+#### InteractiveMessage
+
+Buttons, lists, and other interactive elements.
+
+```rust
+pub struct InteractiveMessage {
+    pub header: Option<interactive_message::Header>,
+    pub body: Option<interactive_message::Body>,
+    pub footer: Option<interactive_message::Footer>,
+    pub context_info: Option<ContextInfo>,
+    // One of:
+    pub native_flow_message: Option<InteractiveMessage>,
+    pub shop_storefront_message: Option<ShopMessage>,
+    // ...
+}
+```
+
+#### ButtonsMessage
+
+```rust
+pub struct ButtonsMessage {
+    pub content_text: Option<String>,
+    pub footer_text: Option<String>,
+    pub context_info: Option<ContextInfo>,
+    pub buttons: Vec<buttons_message::Button>,
+    pub header_type: Option<i32>,
+    // ...
+}
+```
+
+#### ListMessage
+
+```rust
+pub struct ListMessage {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub button_text: Option<String>,
+    pub list_type: Option<i32>,
+    pub sections: Vec<list_message::Section>,
+    pub context_info: Option<ContextInfo>,
+    // ...
+}
+```
+
+### Encryption Messages
+
+#### SenderKeyDistributionMessage
+
+Used for group message encryption.
+
+```rust
+pub struct SenderKeyDistributionMessage {
+    pub group_id: Option<String>,
+    pub axolotl_sender_key_distribution_message: Option<Vec<u8>>,
+}
+```
+
+#### PreKeySignalMessage
+
+Used for establishing 1:1 encryption.
+
+```rust
+pub struct PreKeySignalMessage {
+    // Signal Protocol encrypted message
+}
+```
+
+### System & Protocol Messages
+
+#### ProtocolMessage
+
+For protocol-level operations.
+
+```rust
+pub struct ProtocolMessage {
+    pub key: Option<MessageKey>,
+    pub r#type: Option<i32>,  // DELETE, REVOKE, etc.
+    pub ephemeral_expiration: Option<u32>,
+    pub ephemeral_setting_timestamp: Option<i64>,
+    // ...
+}
+```
+
+**Common types:**
+- `DELETE` - Delete message for everyone
+- `REVOKE` - Revoke sent message
+- `EPHEMERAL_SETTING` - Ephemeral message setting
+
+#### ReactionMessage
+
+```rust
+pub struct ReactionMessage {
+    pub key: Option<MessageKey>,
+    pub text: Option<String>,  // Emoji
+    pub group_by_key: Option<bool>,
+    pub sender_timestamp_ms: Option<i64>,
+    pub unread: Option<bool>,
+}
+```
+
+#### EditMessage
+
+```rust
+pub struct EditMessage {
+    pub key: Option<MessageKey>,
+    pub message: Option<Box<Message>>,  // New message content
+    pub timestamp_ms: Option<i64>,
+}
+```
+
+### AI & Bot Messages
+
+#### AiRichResponseMessage
+
+```rust
+pub struct AiRichResponseMessage {
+    pub r#type: Option<i32>,
+    pub sub_messages: Vec<AiRichResponseSubMessage>,
+    // ...
+}
+```
+
+#### BotFeedbackMessage
+
+```rust
+pub struct BotFeedbackMessage {
+    pub message_key: Option<MessageKey>,
+    pub kind: Option<i32>,  // Thumbs up/down
+    pub text: Option<String>,
+    // ...
+}
+```
+
+### Metadata & Context
+
+#### MessageContextInfo
+
+```rust
+pub struct MessageContextInfo {
+    pub device_list_metadata: Option<DeviceListMetadata>,
+    pub device_list_metadata_version: Option<i32>,
+    pub message_secret: Option<Vec<u8>>,
+    pub padding: Option<Vec<u8>>,
+    pub message_add_on_duration_in_secs: Option<u32>,
+    // ...
+}
+```
+
+#### ContextInfo
+
+Quoted messages, mentions, and forwarding info.
+
+```rust
+pub struct ContextInfo {
+    pub stanza_id: Option<String>,
+    pub participant: Option<String>,
+    pub quoted_message: Option<Box<Message>>,
+    pub remote_jid: Option<String>,
+    pub mentioned_jid: Vec<String>,
+    pub conversion_source: Option<String>,
+    pub forwarding_score: Option<u32>,
+    pub is_forwarded: Option<bool>,
+    // ...
+}
+```
+
+## Device & Identity Types
+
+### ADV Messages
+
+Account Device Verification messages.
+
+```rust
+pub struct AdvDeviceIdentity {
+    pub raw_id: Option<u32>,
+    pub timestamp: Option<u64>,
+    pub key_index: Option<u32>,
+    pub account_type: Option<i32>,
+    pub device_type: Option<i32>,
+}
+
+pub struct AdvSignedDeviceIdentity {
+    pub details: Option<Vec<u8>>,
+    pub account_signature_key: Option<Vec<u8>>,
+    pub account_signature: Option<Vec<u8>>,
+    pub device_signature: Option<Vec<u8>>,
+}
+
+pub struct AdvKeyIndexList {
+    pub raw_id: Option<u32>,
+    pub timestamp: Option<u64>,
+    pub current_index: Option<u32>,
+    pub valid_indexes: Vec<u32>,
+    pub account_type: Option<i32>,
+}
+```
+
+### Signal Protocol Structures
+
+```rust
+pub struct PreKeyRecordStructure {
+    pub id: Option<u32>,
+    pub public_key: Option<Vec<u8>>,
+    pub private_key: Option<Vec<u8>>,
+}
+
+pub struct SignedPreKeyRecordStructure {
+    pub id: Option<u32>,
+    pub public_key: Option<Vec<u8>>,
+    pub private_key: Option<Vec<u8>>,
+    pub signature: Option<Vec<u8>>,
+    pub timestamp: Option<u64>,
+}
+```
+
+## Handshake & Connection Types
+
+### HandshakeMessage
+
+Used during initial connection handshake.
+
+```rust
+pub struct HandshakeMessage {
+    pub client_hello: Option<ClientHello>,
+    pub server_hello: Option<ServerHello>,
+    pub client_finish: Option<ClientFinish>,
+}
+```
+
+### ClientPayload
+
+Device and client information during pairing.
+
+```rust
+pub struct ClientPayload {
+    pub username: Option<u64>,
+    pub passive: Option<bool>,
+    pub user_agent: Option<UserAgent>,
+    pub web_info: Option<WebInfo>,
+    pub push_name: Option<String>,
+    pub session_id: Option<i32>,
+    pub short_connect: Option<bool>,
+    pub connect_type: Option<i32>,
+    pub connect_reason: Option<i32>,
+    // ...
+}
+```
+
+## History Sync Types
+
+### HistorySyncNotification
+
+```rust
+pub struct HistorySyncNotification {
+    pub file_sha256: Option<Vec<u8>>,
+    pub file_length: Option<u64>,
+    pub media_key: Option<Vec<u8>>,
+    pub file_enc_sha256: Option<Vec<u8>>,
+    pub direct_path: Option<String>,
+    pub sync_type: Option<i32>,
+    pub chunk_order: Option<u32>,
+    pub original_message_id: Option<String>,
+}
+```
+
+### HistorySync
+
+```rust
+pub struct HistorySync {
+    pub sync_type: Option<i32>,
+    pub conversations: Vec<Conversation>,
+    pub status_v3_messages: Vec<WebMessageInfo>,
+    pub chunk_order: Option<u32>,
+    pub progress: Option<u32>,
+    // ...
+}
+```
+
+## Media Reference Types
+
+### ExternalBlobReference
+
+References to uploaded media files.
+
+```rust
+pub struct ExternalBlobReference {
+    pub media_key: Option<Vec<u8>>,
+    pub direct_path: Option<String>,
+    pub handle: Option<String>,
+    pub file_size_bytes: Option<u64>,
+    pub file_sha256: Option<Vec<u8>>,
+    pub file_enc_sha256: Option<Vec<u8>>,
+}
+```
+
+## App State Types
+
+### SyncActionValue
+
+App state synchronization actions.
+
+```rust
+pub struct SyncActionValue {
+    pub timestamp: Option<i64>,
+    // One of many action types:
+    pub contact_action: Option<ContactAction>,
+    pub mute_action: Option<MuteAction>,
+    pub pin_action: Option<PinAction>,
+    pub security_notification_setting: Option<SecurityNotificationSetting>,
+    pub push_name_setting: Option<PushNameSetting>,
+    pub archive_chat_action: Option<ArchiveChatAction>,
+    pub delete_chat_action: Option<DeleteChatAction>,
+    pub star_action: Option<StarAction>,
+    // ... and many more
+}
+```
+
+## Enums
+
+waproto includes many enum types (as i32 values with const definitions):
+
+```rust
+// Message types
+pub mod protocol_message {
+    pub enum Type {
+        Revoke = 0,
+        EphemeralSetting = 3,
+        EphemeralSyncResponse = 4,
+        HistorySyncNotification = 5,
+        AppStateSyncKeyShare = 6,
+        AppStateSyncKeyRequest = 7,
+        Delete = 8,
+        // ...
+    }
+}
+
+// Media types
+pub mod video_message {
+    pub enum Attribution {
+        None = 0,
+        Giphy = 1,
+        Tenor = 2,
+    }
+}
+```
+
+## Serde Support
+
+All generated types include `serde::Serialize` and `serde::Deserialize`:
+
+```rust
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Message {
+    // ...
+}
+```
+
+This allows JSON serialization for debugging:
+
+```rust
+let json = serde_json::to_string_pretty(&message)?;
+println!("Message: {}", json);
+```
+
+## Code Generation
+
+The protobuf code is auto-generated but checked into version control.
+
+**To regenerate:**
+
+```bash
+GENERATE_PROTO=1 cargo build -p waproto
+```
+
+This runs `build.rs` which uses `prost-build` to compile `whatsapp.proto` into `whatsapp.rs`.
+
+## Usage Examples
+
+### Constructing Messages
+
+```rust
+use waproto::whatsapp as wa;
+
+// Text message
+let text = wa::Message {
+    conversation: Some("Hello!".to_string()),
+    ..Default::default()
+};
+
+// Image with caption
+let image = wa::Message {
+    image_message: Some(wa::ImageMessage {
+        url: Some(media_url),
+        media_key: Some(media_key.to_vec()),
+        file_sha256: Some(file_sha256.to_vec()),
+        file_enc_sha256: Some(file_enc_sha256.to_vec()),
+        caption: Some("Nice photo!".to_string()),
+        jpeg_thumbnail: Some(thumbnail),
+        ..Default::default()
+    }),
+    ..Default::default()
+};
+
+// Quoted reply
+let reply = wa::Message {
+    extended_text_message: Some(wa::ExtendedTextMessage {
+        text: Some("Great question!".to_string()),
+        context_info: Some(wa::ContextInfo {
+            stanza_id: Some(original_message_id),
+            participant: Some(original_sender),
+            quoted_message: Some(Box::new(original_message)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }),
+    ..Default::default()
+};
+```
+
+### Pattern Matching
+
+```rust
+match &proto_msg {
+    wa::Message { conversation: Some(text), .. } => {
+        println!("Text: {}", text);
+    }
+    wa::Message { image_message: Some(img), .. } => {
+        println!("Image from: {}", img.url.as_ref().unwrap());
+    }
+    wa::Message { video_message: Some(vid), .. } => {
+        println!("Video: {} seconds", vid.seconds.unwrap_or(0));
+    }
+    _ => println!("Other message type"),
+}
+```
+
+### Media Downloads
+
+See [Media Handling](/guides/media-handling) for complete examples.
+
+```rust
+use waproto::whatsapp as wa;
+use wacore::download::{Downloadable, MediaType};
+
+if let Some(img) = &message.image_message {
+    let media_type = MediaType::Image;
+    let url = img.url.as_ref().unwrap();
+    let media_key = img.media_key.as_ref().unwrap();
+    
+    // Download and decrypt
+    let data = client.download_media(url, media_key, media_type).await?;
+}
+```
+
+## WhatsApp Version
+
+The protobuf definitions are based on:
+
+```rust
+// This file is @generated by prost-build.
+// WhatsApp Version: 2.3000.1031424117
+```
+
+This version is automatically included in the generated file header.
+
+## Relationship with wacore
+
+wacore provides utilities for working with waproto messages:
+
+- **`proto_helpers`** - Conversion between protobuf and internal types
+- **`download`** - `Downloadable` trait for media messages
+- **`upload`** - Media encryption for upload
+- **`messages`** - Message encryption/decryption
+- **`send`** - Message building and sending
+
+Example:
+
+```rust
+use wacore::proto_helpers;
+use waproto::whatsapp as wa;
+
+// Convert internal JID to protobuf MessageKey
+let key = proto_helpers::message_key(&jid, &message_id, from_me);
+
+// Build delete message
+let delete = wa::Message {
+    protocol_message: Some(wa::ProtocolMessage {
+        key: Some(key),
+        r#type: Some(wa::protocol_message::Type::Delete as i32),
+        ..Default::default()
+    }),
+    ..Default::default()
+};
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="wacore" icon="cube" href="/api/wacore">
+    Platform-agnostic protocol implementation
+  </Card>
+  <Card title="Sending Messages" icon="message" href="/guides/sending-messages">
+    Sending and receiving messages
+  </Card>
+  <Card title="Media Handling" icon="image" href="/guides/media-handling">
+    Working with media uploads and downloads
+  </Card>
+  <Card title="Signal Protocol" icon="shield" href="/advanced/signal-protocol">
+    End-to-end encryption details
+  </Card>
+</CardGroup>

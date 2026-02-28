@@ -1,0 +1,570 @@
+---
+title: HTTP Client Trait
+description: HTTP client abstraction and ureq implementation for media operations
+---
+
+## Overview
+
+The HTTP client abstraction provides a runtime-agnostic interface for making HTTP requests. It's primarily used for:
+
+- Media uploads to WhatsApp servers
+- Media downloads (with streaming support)
+- Fetching metadata and authentication tokens
+
+The client supports both buffered and streaming responses for efficient handling of large files.
+
+## HttpClient Trait
+
+```rust
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait HttpClient: Send + Sync {
+    /// Executes a given HTTP request and returns the response
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
+
+    /// Synchronous streaming variant. Returns a reader over the response body
+    /// instead of buffering it all in memory.
+    /// 
+    /// Must be called from a blocking context (e.g. inside `spawn_blocking`).
+    fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse>;
+}
+```
+
+### Methods
+
+#### execute
+
+Executes an HTTP request and buffers the entire response body.
+
+```rust
+async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
+```
+
+**Parameters:**
+- `request: HttpRequest` - The request to execute
+
+**Returns:**
+- `HttpResponse` with buffered body on success
+- `anyhow::Error` on failure
+
+**Example:**
+```rust
+let request = HttpRequest::get("https://api.example.com/data")
+    .with_header("Authorization", "Bearer token");
+
+let response = client.execute(request).await?;
+println!("Status: {}", response.status_code);
+println!("Body: {:?}", response.body);
+```
+
+#### execute_streaming
+
+Executes an HTTP request and returns a streaming reader over the response body.
+
+**Important:** This is a synchronous method that must be called from within `tokio::task::spawn_blocking`.
+
+```rust
+fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse>;
+```
+
+**Parameters:**
+- `request: HttpRequest` - The request to execute
+
+**Returns:**
+- `StreamingHttpResponse` with streaming body reader
+- `anyhow::Error` on failure or if streaming is not supported
+
+**Example:**
+```rust
+let http_client = Arc::new(UreqHttpClient::new());
+let request = HttpRequest::get("https://mmg.whatsapp.net/large-file.enc");
+
+// Must be called inside spawn_blocking
+let response = tokio::task::spawn_blocking(move || {
+    http_client.execute_streaming(request)
+}).await??;
+
+// Read in chunks
+let mut buffer = vec![0u8; 4096];
+while let Ok(n) = response.body.read(&mut buffer) {
+    if n == 0 { break; }
+    // Process chunk
+}
+```
+
+## Data Structures
+
+### HttpRequest
+
+Represents an HTTP request with headers and optional body.
+
+```rust
+pub struct HttpRequest {
+    pub url: String,
+    pub method: String,  // "GET" or "POST"
+    pub headers: HashMap<String, String>,
+    pub body: Option<Vec<u8>>,
+}
+```
+
+#### Constructors
+
+```rust
+// GET request
+let request = HttpRequest::get("https://example.com/data");
+
+// POST request
+let request = HttpRequest::post("https://example.com/upload");
+```
+
+#### Builder Methods
+
+```rust
+// Add header
+let request = HttpRequest::get("https://example.com/data")
+    .with_header("Authorization", "Bearer token")
+    .with_header("Content-Type", "application/json");
+
+// Add body (for POST)
+let body = b"{\"key\": \"value\"}";
+let request = HttpRequest::post("https://example.com/upload")
+    .with_body(body.to_vec());
+```
+
+### HttpResponse
+
+Represents an HTTP response with buffered body.
+
+```rust
+pub struct HttpResponse {
+    pub status_code: u16,
+    pub body: Vec<u8>,
+}
+```
+
+#### Methods
+
+```rust
+// Convert body to string
+let text = response.body_string()?;
+println!("Response text: {}", text);
+```
+
+### StreamingHttpResponse
+
+Represents an HTTP response with streaming body reader.
+
+```rust
+pub struct StreamingHttpResponse {
+    pub status_code: u16,
+    pub body: Box<dyn std::io::Read + Send>,
+}
+```
+
+**Usage:**
+```rust
+use std::io::Read;
+
+let mut buffer = vec![0u8; 8192];
+loop {
+    match response.body.read(&mut buffer) {
+        Ok(0) => break,  // EOF
+        Ok(n) => {
+            // Process n bytes from buffer
+            process_chunk(&buffer[..n]);
+        }
+        Err(e) => return Err(e.into()),
+    }
+}
+```
+
+## UreqHttpClient
+
+The default HTTP client implementation using the `ureq` crate for synchronous HTTP requests.
+
+### Features
+
+- **Blocking I/O** - Uses synchronous ureq, wrapped in `tokio::task::spawn_blocking`
+- **Streaming Support** - Implements efficient streaming downloads
+- **Simple API** - Minimal configuration required
+- **Thread-Safe** - Implements `Clone` for easy sharing
+
+### Creating a Client
+
+```rust
+use whatsapp_rust::http::UreqHttpClient;
+
+// Basic usage
+let client = UreqHttpClient::new();
+
+// Or use default
+let client = UreqHttpClient::default();
+```
+
+### Usage Examples
+
+#### Basic GET Request
+
+```rust
+use whatsapp_rust::http::UreqHttpClient;
+use wacore::net::HttpRequest;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = UreqHttpClient::new();
+    
+    let request = HttpRequest::get("https://api.example.com/data")
+        .with_header("User-Agent", "whatsapp-rust");
+    
+    let response = client.execute(request).await?;
+    
+    if response.status_code == 200 {
+        println!("Success! Body length: {}", response.body.len());
+    }
+    
+    Ok(())
+}
+```
+
+#### POST Request with Body
+
+```rust
+let client = UreqHttpClient::new();
+
+let body = serde_json::to_vec(&json!({
+    "key": "value",
+    "number": 42
+}))?;
+
+let request = HttpRequest::post("https://api.example.com/upload")
+    .with_header("Content-Type", "application/json")
+    .with_body(body);
+
+let response = client.execute(request).await?;
+```
+
+#### Streaming Download
+
+```rust
+use std::fs::File;
+use std::io::Write;
+
+let client = Arc::new(UreqHttpClient::new());
+let url = "https://mmg.whatsapp.net/file.enc";
+
+// Must use spawn_blocking for streaming
+let file_data = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+    let request = HttpRequest::get(url);
+    let response = client.execute_streaming(request)?;
+    
+    if response.status_code != 200 {
+        return Err(anyhow::anyhow!("HTTP {}", response.status_code));
+    }
+    
+    let mut buffer = vec![0u8; 65536];
+    let mut output = Vec::new();
+    let mut reader = response.body;
+    
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => output.extend_from_slice(&buffer[..n]),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    
+    Ok(output)
+}).await??;
+
+println!("Downloaded {} bytes", file_data.len());
+```
+
+### Internal Implementation
+
+The `execute` method wraps ureq calls in `spawn_blocking`:
+
+```rust
+#[async_trait]
+impl HttpClient for UreqHttpClient {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+        // ureq is blocking, so wrap in spawn_blocking
+        tokio::task::spawn_blocking(move || {
+            let response = match request.method.as_str() {
+                "GET" => {
+                    let mut req = ureq::get(&request.url);
+                    for (key, value) in &request.headers {
+                        req = req.header(key, value);
+                    }
+                    req.call()?
+                }
+                "POST" => {
+                    let mut req = ureq::post(&request.url);
+                    for (key, value) in &request.headers {
+                        req = req.header(key, value);
+                    }
+                    if let Some(body) = request.body {
+                        req.send(&body[..])?
+                    } else {
+                        req.send(&[])?
+                    }
+                }
+                method => {
+                    return Err(anyhow::anyhow!("Unsupported HTTP method: {}", method));
+                }
+            };
+
+            let status_code = response.status().as_u16();
+            let body_bytes = response.into_body().read_to_vec()?;
+
+            Ok(HttpResponse {
+                status_code,
+                body: body_bytes,
+            })
+        })
+        .await?
+    }
+}
+```
+
+The `execute_streaming` method is synchronous (no `spawn_blocking`) because it's called FROM within a blocking context:
+
+```rust
+fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse> {
+    let response = match request.method.as_str() {
+        "GET" => {
+            let mut req = ureq::get(&request.url);
+            for (key, value) in &request.headers {
+                req = req.header(key, value);
+            }
+            req.call()?
+        }
+        method => {
+            return Err(anyhow::anyhow!(
+                "Streaming only supports GET, got: {}",
+                method
+            ));
+        }
+    };
+
+    let status_code = response.status().as_u16();
+    let reader = response.into_body().into_reader();
+
+    Ok(StreamingHttpResponse {
+        status_code,
+        body: Box::new(reader),
+    })
+}
+```
+
+## Implementing Custom HTTP Clients
+
+You can implement custom HTTP clients for different runtimes or requirements.
+
+### Example: Reqwest Client (Async)
+
+```rust
+use async_trait::async_trait;
+use wacore::net::{HttpClient, HttpRequest, HttpResponse};
+
+#[derive(Clone)]
+pub struct ReqwestHttpClient {
+    client: reqwest::Client,
+}
+
+impl ReqwestHttpClient {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl HttpClient for ReqwestHttpClient {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+        let mut req = match request.method.as_str() {
+            "GET" => self.client.get(&request.url),
+            "POST" => self.client.post(&request.url),
+            method => return Err(anyhow::anyhow!("Unsupported method: {}", method)),
+        };
+        
+        // Add headers
+        for (key, value) in request.headers {
+            req = req.header(key, value);
+        }
+        
+        // Add body for POST
+        if let Some(body) = request.body {
+            req = req.body(body);
+        }
+        
+        let response = req.send().await?;
+        let status_code = response.status().as_u16();
+        let body = response.bytes().await?.to_vec();
+        
+        Ok(HttpResponse { status_code, body })
+    }
+    
+    // Note: Streaming not implemented for this example
+}
+```
+
+### Example: Mock Client for Testing
+
+```rust
+use async_trait::async_trait;
+use std::collections::HashMap;
+
+pub struct MockHttpClient {
+    responses: HashMap<String, HttpResponse>,
+}
+
+impl MockHttpClient {
+    pub fn new() -> Self {
+        Self {
+            responses: HashMap::new(),
+        }
+    }
+    
+    pub fn with_response(mut self, url: &str, response: HttpResponse) -> Self {
+        self.responses.insert(url.to_string(), response);
+        self
+    }
+}
+
+#[async_trait]
+impl HttpClient for MockHttpClient {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+        self.responses
+            .get(&request.url)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No mock response for {}", request.url))
+    }
+}
+
+// Usage in tests:
+let client = MockHttpClient::new()
+    .with_response(
+        "https://api.example.com/test",
+        HttpResponse {
+            status_code: 200,
+            body: b"test data".to_vec(),
+        },
+    );
+```
+
+## Usage with Client
+
+```rust
+use whatsapp_rust::Client;
+use whatsapp_rust::http::UreqHttpClient;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let http_client = Arc::new(UreqHttpClient::new());
+    
+    let mut client = Client::new();
+    client.set_http_client(http_client);
+    
+    // Now the client can download/upload media
+    client.connect().await?;
+    
+    Ok(())
+}
+```
+
+## Best Practices
+
+1. **Blocking Operations** - Always wrap blocking HTTP libraries in `tokio::task::spawn_blocking`
+2. **Streaming for Large Files** - Use `execute_streaming` for media downloads to avoid buffering
+3. **Error Handling** - Return descriptive errors with context
+4. **Timeouts** - Implement request timeouts for reliability
+5. **Retries** - Consider retry logic for transient failures
+6. **Connection Pooling** - Reuse connections when possible
+
+## Media Operations
+
+The HTTP client is primarily used for media operations in whatsapp-rust:
+
+### Media Upload Flow
+
+```rust
+// 1. Get media upload token
+let media_conn = client.refresh_media_conn().await?;
+
+// 2. Encrypt media
+let (encrypted, media_key, file_enc_sha256, file_sha256) = encrypt_media(&media_bytes)?;
+
+// 3. Upload to WhatsApp servers
+let request = HttpRequest::post(&media_conn.upload_url)
+    .with_header("Authorization", &media_conn.auth)
+    .with_header("Content-Type", "application/octet-stream")
+    .with_body(encrypted);
+
+let response = http_client.execute(request).await?;
+
+// 4. Parse response for direct_path and handle
+let upload_result = parse_upload_response(&response.body)?;
+```
+
+### Media Download Flow
+
+```rust
+// 1. Extract media info from message
+let media_info = extract_media_info(&message)?;
+
+// 2. Build download URL
+let url = format!("https://mmg.whatsapp.net{}", media_info.direct_path);
+
+// 3. Download with streaming (in spawn_blocking)
+let file_data = tokio::task::spawn_blocking(move || {
+    let request = HttpRequest::get(&url);
+    let response = http_client.execute_streaming(request)?;
+    
+    // Read and decrypt chunks
+    decrypt_media_stream(response.body, &media_key, &expected_sha256)
+}).await??;
+```
+
+## Testing
+
+### Unit Test Example
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[tokio::test]
+    async fn test_http_get() {
+        let client = UreqHttpClient::new();
+        
+        let request = HttpRequest::get("https://httpbin.org/get")
+            .with_header("User-Agent", "test");
+        
+        let response = client.execute(request).await.unwrap();
+        assert_eq!(response.status_code, 200);
+    }
+    
+    #[tokio::test]
+    async fn test_http_post() {
+        let client = UreqHttpClient::new();
+        
+        let body = b"test data";
+        let request = HttpRequest::post("https://httpbin.org/post")
+            .with_body(body.to_vec());
+        
+        let response = client.execute(request).await.unwrap();
+        assert_eq!(response.status_code, 200);
+    }
+}
+```
+
+## See Also
+
+- [Storage Traits](/api/store) - Storage backend abstraction
+- [Transport Trait](/api/transport) - Network transport abstraction
+- [Client API](/api/client) - Main client interface
+- [Media Handling](/guides/media-handling) - Guide to sending and receiving media

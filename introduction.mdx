@@ -1,0 +1,93 @@
+---
+title: Introduction
+description: A high-performance, async Rust library for the WhatsApp Web API
+---
+
+# whatsapp-rust
+
+A high-performance, async Rust library for the WhatsApp Web API. Inspired by [whatsmeow](https://github.com/tulir/whatsmeow) (Go) and [Baileys](https://github.com/WhiskeySockets/Baileys) (TypeScript).
+
+<Note>
+  This is an unofficial, open-source reimplementation. Using custom WhatsApp clients may violate Meta's Terms of Service and could result in account suspension. Use at your own risk.
+</Note>
+
+## Key features
+
+### Authentication
+
+- **QR code pairing** - Scan QR code from your phone to authenticate
+- **Pair code linking** - Link using phone number with 8-digit code
+- **Persistent sessions** - Automatic reconnection with session management
+
+### Messaging
+
+- **End-to-end encryption** - Full Signal Protocol implementation
+- **One-on-one and group chats** - Send and receive messages in any chat type
+- **Message editing and reactions** - Edit sent messages and add reactions
+- **Quoting/replying** - Reply to specific messages with context
+- **Delivery receipts** - Track delivery, read, and played status
+
+### Media handling
+
+- **Upload and download** - Support for images, videos, documents, GIFs, and audio
+- **Automatic encryption** - Transparent encryption/decryption for all media
+
+### Contacts and groups
+
+- **Phone number validation** - Check if phone numbers are on WhatsApp
+- **Profile information** - Fetch profile pictures and user info
+- **Group management** - Query metadata, participants, and manage groups
+- **Group listing** - List all groups you're participating in
+
+### Presence and chat state
+
+- **Online/offline status** - Set your presence status
+- **Typing indicators** - Show composing, recording, and paused states
+- **Contact management** - Block and unblock contacts
+
+### Architecture
+
+- **Modular design** - Pluggable storage, transport, and HTTP clients
+- **Runtime agnostic** - Works with Tokio, async-std, or WASM
+- **SQLite included** - Default storage backend, easily swappable
+
+## Getting started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add whatsapp-rust to your project with cargo
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first WhatsApp bot in minutes
+  </Card>
+  <Card title="Architecture" icon="folder-tree" href="/concepts/architecture">
+    Understand the modular architecture
+  </Card>
+  <Card title="Custom backends" icon="database" href="/guides/custom-backends">
+    Implement your own storage or transport layer
+  </Card>
+</CardGroup>
+
+## Project structure
+
+The library is organized into multiple crates for maximum flexibility:
+
+```
+whatsapp-rust/
+├── src/                    # Main client library
+├── wacore/                 # Platform-agnostic core (no_std compatible)
+│   ├── binary/             # WhatsApp binary protocol
+│   ├── libsignal/          # Signal Protocol implementation
+│   └── appstate/           # App state management
+├── waproto/                # Protocol Buffers definitions
+├── storages/sqlite-storage # SQLite backend
+├── transports/tokio-transport
+└── http_clients/ureq-client
+```
+
+## Acknowledgements
+
+This project would not be possible without the excellent work of:
+
+- [whatsmeow](https://github.com/tulir/whatsmeow) - Go implementation
+- [Baileys](https://github.com/WhiskeySockets/Baileys) - TypeScript implementation

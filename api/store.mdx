@@ -1,0 +1,507 @@
+---
+title: Storage Traits
+description: Storage backend traits and SQLite implementation for persistent state
+---
+
+## Overview
+
+whatsapp-rust uses a trait-based storage system to persist device state, cryptographic keys, and protocol metadata. The storage layer is split into four domain-specific traits:
+
+- **SignalStore** - Signal protocol cryptographic operations (identity keys, sessions, pre-keys, sender keys)
+- **AppSyncStore** - WhatsApp app state synchronization (sync keys, versions, mutation MACs)
+- **ProtocolStore** - WhatsApp protocol alignment (SKDM tracking, LID-PN mapping, device registry)
+- **DeviceStore** - Device persistence operations
+
+All four traits are combined into the `Backend` trait for convenience.
+
+## The Backend Trait
+
+Any type implementing all four domain traits automatically implements `Backend`:
+
+```rust
+pub trait Backend: SignalStore + AppSyncStore + ProtocolStore + DeviceStore + Send + Sync {}
+
+impl<T> Backend for T 
+where 
+    T: SignalStore + AppSyncStore + ProtocolStore + DeviceStore + Send + Sync
+{}
+```
+
+## SignalStore Trait
+
+Handles Signal protocol cryptographic storage for end-to-end encryption.
+
+### Identity Operations
+
+```rust
+/// Store an identity key for a remote address
+async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()>;
+
+/// Load an identity key for a remote address
+async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
+
+/// Delete an identity key
+async fn delete_identity(&self, address: &str) -> Result<()>;
+```
+
+### Session Operations
+
+```rust
+/// Get an encrypted session for an address
+async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>>;
+
+/// Store an encrypted session
+async fn put_session(&self, address: &str, session: &[u8]) -> Result<()>;
+
+/// Delete a session
+async fn delete_session(&self, address: &str) -> Result<()>;
+
+/// Check if a session exists (default implementation uses get_session)
+async fn has_session(&self, address: &str) -> Result<bool>;
+```
+
+### PreKey Operations
+
+```rust
+/// Store a pre-key
+async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()>;
+
+/// Load a pre-key by ID
+async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
+
+/// Remove a pre-key
+async fn remove_prekey(&self, id: u32) -> Result<()>;
+```
+
+### Signed PreKey Operations
+
+```rust
+/// Store a signed pre-key
+async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()>;
+
+/// Load a signed pre-key by ID
+async fn load_signed_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
+
+/// Load all signed pre-keys (returns id, record pairs)
+async fn load_all_signed_prekeys(&self) -> Result<Vec<(u32, Vec<u8>)>>;
+
+/// Remove a signed pre-key
+async fn remove_signed_prekey(&self, id: u32) -> Result<()>;
+```
+
+### Sender Key Operations
+
+For group messaging encryption:
+
+```rust
+/// Store a sender key for group messaging
+async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()>;
+
+/// Get a sender key
+async fn get_sender_key(&self, address: &str) -> Result<Option<Vec<u8>>>;
+
+/// Delete a sender key
+async fn delete_sender_key(&self, address: &str) -> Result<()>;
+```
+
+## AppSyncStore Trait
+
+Handles WhatsApp app state synchronization storage.
+
+### Sync Key Operations
+
+```rust
+/// Get an app state sync key by ID
+async fn get_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>>;
+
+/// Set an app state sync key
+async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
+```
+
+### Version Tracking
+
+```rust
+/// Get the app state version for a collection
+async fn get_version(&self, name: &str) -> Result<HashState>;
+
+/// Set the app state version for a collection
+async fn set_version(&self, name: &str, state: HashState) -> Result<()>;
+```
+
+### Mutation MAC Operations
+
+```rust
+/// Store mutation MACs for a version
+async fn put_mutation_macs(
+    &self,
+    name: &str,
+    version: u64,
+    mutations: &[AppStateMutationMAC],
+) -> Result<()>;
+
+/// Get a mutation MAC by index
+async fn get_mutation_mac(&self, name: &str, index_mac: &[u8]) -> Result<Option<Vec<u8>>>;
+
+/// Delete mutation MACs by their index MACs
+async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
+```
+
+## ProtocolStore Trait
+
+Handles WhatsApp protocol alignment and tracking.
+
+### SKDM Tracking
+
+Tracks which devices have received Sender Key Distribution Messages in groups:
+
+```rust
+/// Get device JIDs that have received SKDM for a group
+async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>>;
+
+/// Record devices that have received SKDM for a group
+async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()>;
+
+/// Clear SKDM recipients for a group (call when sender key is rotated)
+async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
+```
+
+### LID-PN Mapping
+
+Manages mappings between LID (Locally Indexed Device) and phone numbers:
+
+```rust
+/// Get a mapping by LID
+async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>>;
+
+/// Get a mapping by phone number (returns the most recent LID)
+async fn get_pn_mapping(&self, phone: &str) -> Result<Option<LidPnMappingEntry>>;
+
+/// Store or update a LID-PN mapping
+async fn put_lid_mapping(&self, entry: &LidPnMappingEntry) -> Result<()>;
+
+/// Get all LID-PN mappings (for cache warm-up)
+async fn get_all_lid_mappings(&self) -> Result<Vec<LidPnMappingEntry>>;
+```
+
+### Base Key Collision Detection
+
+```rust
+/// Save the base key for a session address during retry collision detection
+async fn save_base_key(&self, address: &str, message_id: &str, base_key: &[u8]) -> Result<()>;
+
+/// Check if the current session has the same base key as the saved one
+async fn has_same_base_key(
+    &self,
+    address: &str,
+    message_id: &str,
+    current_base_key: &[u8],
+) -> Result<bool>;
+
+/// Delete a base key entry
+async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()>;
+```
+
+### Device Registry
+
+```rust
+/// Update the device list for a user (called after usync responses)
+async fn update_device_list(&self, record: DeviceListRecord) -> Result<()>;
+
+/// Get all known devices for a user
+async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
+```
+
+### Sender Key Status
+
+Lazy deletion tracking for sender keys:
+
+```rust
+/// Mark a participant's sender key as needing regeneration for a group
+async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()>;
+
+/// Get participants that need fresh SKDM (marked for forget)
+/// Consumes the marks (deletes them after reading)
+async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>>;
+```
+
+### TcToken Storage
+
+Trusted contact privacy tokens:
+
+```rust
+/// Get a trusted contact token for a JID (stored under LID)
+async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>>;
+
+/// Store or update a trusted contact token for a JID
+async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()>;
+
+/// Delete a trusted contact token for a JID
+async fn delete_tc_token(&self, jid: &str) -> Result<()>;
+
+/// Get all JIDs that have stored tc tokens
+async fn get_all_tc_token_jids(&self) -> Result<Vec<String>>;
+
+/// Delete tc tokens with token_timestamp older than cutoff (returns count deleted)
+async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
+```
+
+## DeviceStore Trait
+
+Handles device data persistence:
+
+```rust
+/// Save device data
+async fn save(&self, device: &Device) -> Result<()>;
+
+/// Load device data
+async fn load(&self) -> Result<Option<Device>>;
+
+/// Check if a device exists
+async fn exists(&self) -> Result<bool>;
+
+/// Create a new device row and return its generated device_id
+async fn create(&self) -> Result<i32>;
+
+/// Create a snapshot of the database state
+/// Optional: label with name, save extra_content (e.g. failing message)
+async fn snapshot_db(&self, name: &str, extra_content: Option<&[u8]>) -> Result<()>;
+```
+
+## SqliteStore Implementation
+
+The default storage implementation using SQLite with Diesel ORM.
+
+### Creating a Store
+
+```rust
+use whatsapp_rust::store::SqliteStore;
+
+// Basic usage - creates/opens database at path
+let store = SqliteStore::new("whatsapp.db").await?;
+
+// With device_id for multi-device support
+let store = SqliteStore::new_for_device("whatsapp.db", 1).await?;
+
+// Using sqlite:// URL format
+let store = SqliteStore::new("sqlite://path/to/db.sqlite").await?;
+```
+
+### Features
+
+- **Connection pooling** - Uses Diesel r2d2 with pool size of 2
+- **WAL mode** - Write-Ahead Logging for better concurrency
+- **Automatic migrations** - Runs embedded migrations on startup
+- **Semaphore-based locking** - Prevents concurrent writes
+- **Retry logic** - Automatic retry with exponential backoff for locked database
+- **Multi-device support** - Single database can store multiple device sessions
+
+### Database Configuration
+
+SqliteStore automatically configures connections with:
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA busy_timeout = 30000;
+PRAGMA synchronous = NORMAL;
+PRAGMA cache_size = 512;
+PRAGMA temp_store = memory;
+PRAGMA foreign_keys = ON;
+```
+
+### Usage Example
+
+```rust
+use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust::store::Backend;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create store
+    let store = Arc::new(SqliteStore::new("whatsapp.db").await?);
+    
+    // Use with client
+    let mut client = Client::new();
+    client.set_store(store.clone());
+    
+    // Store implements all traits
+    // SignalStore
+    store.put_identity("address@s.whatsapp.net", [0u8; 32]).await?;
+    let identity = store.load_identity("address@s.whatsapp.net").await?;
+    
+    // AppSyncStore
+    let version = store.get_version("regular").await?;
+    
+    // ProtocolStore
+    let devices = store.get_skdm_recipients("group@g.us").await?;
+    
+    // DeviceStore
+    if store.exists().await? {
+        let device = store.load().await?;
+    }
+    
+    Ok(())
+}
+```
+
+## Implementing Custom Storage
+
+To implement a custom storage backend:
+
+1. Implement all four domain traits
+2. The `Backend` trait is automatically implemented
+3. All methods must be `async` and thread-safe (`Send + Sync`)
+
+### Example: Redis Store
+
+```rust
+use async_trait::async_trait;
+use redis::aio::ConnectionManager;
+use wacore::store::traits::*;
+use wacore::store::error::Result;
+
+pub struct RedisStore {
+    client: ConnectionManager,
+    device_id: i32,
+}
+
+impl RedisStore {
+    pub async fn new(redis_url: &str) -> Result<Self> {
+        let client = redis::Client::open(redis_url)
+            .map_err(|e| StoreError::Connection(e.to_string()))?;
+        let conn = client.get_connection_manager().await
+            .map_err(|e| StoreError::Connection(e.to_string()))?;
+        
+        Ok(Self {
+            client: conn,
+            device_id: 1,
+        })
+    }
+}
+
+#[async_trait]
+impl SignalStore for RedisStore {
+    async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
+        let mut conn = self.client.clone();
+        let key_name = format!("identity:{}:{}", self.device_id, address);
+        redis::cmd("SET")
+            .arg(key_name)
+            .arg(&key[..])
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+    
+    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        let mut conn = self.client.clone();
+        let key_name = format!("identity:{}:{}", self.device_id, address);
+        let result: Option<Vec<u8>> = redis::cmd("GET")
+            .arg(key_name)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(result)
+    }
+    
+    // Implement remaining SignalStore methods...
+}
+
+#[async_trait]
+impl AppSyncStore for RedisStore {
+    // Implement all AppSyncStore methods...
+}
+
+#[async_trait]
+impl ProtocolStore for RedisStore {
+    // Implement all ProtocolStore methods...
+}
+
+#[async_trait]
+impl DeviceStore for RedisStore {
+    // Implement all DeviceStore methods...
+}
+
+// Backend is automatically implemented!
+```
+
+### Best Practices
+
+1. **Thread Safety** - Use `Arc` for shared state, `Mutex` for mutable state
+2. **Error Handling** - Convert backend errors to `StoreError` variants
+3. **Transactions** - Use database transactions for atomic operations
+4. **Retries** - Implement retry logic for transient failures
+5. **Connection Pooling** - Reuse connections when possible
+6. **Blocking Operations** - Wrap blocking I/O in `tokio::task::spawn_blocking`
+
+## Data Structures
+
+### AppStateSyncKey
+
+```rust
+pub struct AppStateSyncKey {
+    pub key_data: Vec<u8>,
+    pub fingerprint: Vec<u8>,
+    pub timestamp: i64,
+}
+```
+
+### LidPnMappingEntry
+
+```rust
+pub struct LidPnMappingEntry {
+    pub lid: String,              // LID user part
+    pub phone_number: String,     // Phone number user part
+    pub created_at: i64,          // Unix timestamp
+    pub updated_at: i64,          // Unix timestamp
+    pub learning_source: String,  // e.g. "usync", "peer_pn_message"
+}
+```
+
+### TcTokenEntry
+
+```rust
+pub struct TcTokenEntry {
+    pub token: Vec<u8>,                    // Raw token bytes
+    pub token_timestamp: i64,              // When token was received
+    pub sender_timestamp: Option<i64>,     // When we sent our token
+}
+```
+
+### DeviceListRecord
+
+```rust
+pub struct DeviceListRecord {
+    pub user: String,               // User part of JID
+    pub devices: Vec<DeviceInfo>,   // Known devices
+    pub timestamp: i64,             // Last update timestamp
+    pub phash: Option<String>,      // Participant hash from usync
+}
+
+pub struct DeviceInfo {
+    pub device_id: u32,           // 0 = primary, 1+ = companions
+    pub key_index: Option<u32>,   // Key index if known
+}
+```
+
+## Error Handling
+
+All storage operations return `Result<T>` from `wacore::store::error`:
+
+```rust
+pub enum StoreError {
+    Connection(String),    // Connection failures
+    Database(String),      // Database operation errors
+    Migration(String),     // Migration errors
+    Serialization(String), // Serialization/deserialization errors
+    NotFound,             // Resource not found
+}
+
+pub type Result<T> = std::result::Result<T, StoreError>;
+```
+
+## See Also
+
+- [Transport Trait](/api/transport) - Network transport abstraction
+- [HTTP Client Trait](/api/http-client) - HTTP client abstraction
+- [Client API](/api/client) - Main client interface

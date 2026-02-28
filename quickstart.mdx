@@ -1,0 +1,341 @@
+---
+title: Quickstart
+description: Build your first WhatsApp bot in minutes
+---
+
+This guide will help you create a simple WhatsApp bot that responds to messages. You'll learn the core concepts and have a working bot by the end.
+
+## Basic example
+
+Here's a minimal bot that responds to "ping" messages:
+
+```rust src/main.rs
+use std::sync::Arc;
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use wacore::types::events::Event;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize storage backend
+    let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+
+    // Build the bot
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .on_event(|event, client| async move {
+            match event {
+                Event::PairingQrCode { code, .. } => {
+                    println!("Scan this QR code with WhatsApp:\n{}", code);
+                }
+                Event::Message(msg, info) => {
+                    println!("Message from {}: {:?}", info.source.sender, msg);
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .await?;
+
+    // Start the bot
+    bot.run().await?.await?;
+    Ok(())
+}
+```
+
+## Step-by-step breakdown
+
+<Steps>
+
+<Step title="Set up the storage backend">
+  The bot needs persistent storage for session data, keys, and state:
+
+  ```rust
+  let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+  ```
+
+  This creates a SQLite database file named `whatsapp.db` in your current directory. The session will persist across restarts.
+</Step>
+
+<Step title="Configure the bot builder">
+  The `Bot::builder()` pattern lets you configure all required components:
+
+  ```rust
+  let mut bot = Bot::builder()
+      .with_backend(backend)
+      .with_transport_factory(TokioWebSocketTransportFactory::new())
+      .with_http_client(UreqHttpClient::new())
+  ```
+
+  <Note>
+    All three components (backend, transport, HTTP client) are required. The builder will return an error if any are missing.
+  </Note>
+</Step>
+
+<Step title="Handle events">
+  Use `.on_event()` to handle incoming events from WhatsApp:
+
+  ```rust
+  .on_event(|event, client| async move {
+      match event {
+          Event::PairingQrCode { code, .. } => {
+              println!("QR Code:\n{}", code);
+          }
+          Event::Message(msg, info) => {
+              // Handle incoming message
+          }
+          Event::Connected(_) => {
+              println!("Connected successfully!");
+          }
+          _ => {}
+      }
+  })
+  ```
+
+  The event handler receives two parameters:
+  - `event`: The event type (QR code, message, connection status, etc.)
+  - `client`: An `Arc<Client>` you can use to send messages or call API methods
+</Step>
+
+<Step title="Build and run the bot">
+  Build the bot and start the event loop:
+
+  ```rust
+  .build()
+  .await?;
+
+  bot.run().await?.await?;
+  ```
+
+  The double `.await?` is intentional:
+  - First `.await?` starts the bot and returns a `JoinHandle`
+  - Second `.await?` waits for the bot to finish running
+</Step>
+
+</Steps>
+
+## Responding to messages
+
+Let's extend the bot to respond to "ping" with "pong":
+
+```rust
+use wacore::proto_helpers::MessageExt;
+use waproto::whatsapp as wa;
+
+.on_event(|event, client| async move {
+    match event {
+        Event::PairingQrCode { code, .. } => {
+            println!("QR Code:\n{}", code);
+        }
+        Event::Message(msg, info) => {
+            // Check if message is a text message saying "ping"
+            if let Some(text) = msg.text_content() {
+                if text == "ping" {
+                    // Create reply message
+                    let reply = wa::Message {
+                        conversation: Some("pong".to_string()),
+                        ..Default::default()
+                    };
+
+                    // Send the reply
+                    if let Err(e) = client.send_message(info.source.chat, reply).await {
+                        eprintln!("Failed to send reply: {}", e);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+})
+```
+
+### Key methods
+
+- `msg.text_content()` - Extract text from any message type (conversation, extended text, etc.)
+- `client.send_message()` - Send a message to a chat
+- `info.source.chat` - The JID (identifier) of the chat where the message came from
+- `info.source.sender` - The JID of the user who sent the message
+
+## Authentication methods
+
+### QR code pairing (default)
+
+The bot automatically generates QR codes when not authenticated. Scan with your phone to link:
+
+```rust
+Event::PairingQrCode { code, .. } => {
+    println!("Scan this QR code:\n{}", code);
+}
+```
+
+### Pair code (phone number)
+
+Alternatively, link using a phone number and 8-digit code:
+
+```rust
+use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(TokioWebSocketTransportFactory::new())
+    .with_http_client(UreqHttpClient::new())
+    .with_pair_code(PairCodeOptions {
+        phone_number: "15551234567".to_string(),
+        show_push_notification: true,
+        custom_code: None,
+        platform_id: PlatformId::Chrome,
+        platform_display: "Chrome (Linux)".to_string(),
+    })
+    .on_event(|event, client| async move {
+        match event {
+            Event::PairingCode { code, .. } => {
+                println!("Enter this code on your phone: {}", code);
+            }
+            _ => {}
+        }
+    })
+    .build()
+    .await?;
+```
+
+<Note>
+  Pair code and QR code authentication run concurrently. Whichever method completes first will be used.
+</Note>
+
+## Running the bot
+
+<Steps>
+
+<Step title="First run - Authentication">
+  On the first run, the bot will generate a QR code:
+
+  ```bash
+  cargo run
+  ```
+
+  Scan the QR code with WhatsApp on your phone:
+  1. Open WhatsApp on your phone
+  2. Go to Settings → Linked Devices
+  3. Tap "Link a Device"
+  4. Scan the QR code displayed in your terminal
+</Step>
+
+<Step title="Subsequent runs - Auto-login">
+  After pairing, the session is saved. The bot will automatically reconnect:
+
+  ```bash
+  cargo run
+  ```
+
+  You should see:
+  ```
+  Connected successfully!
+  ```
+</Step>
+
+<Step title="Test the bot">
+  Send "ping" to your bot from any WhatsApp chat. It should reply with "pong"!
+</Step>
+
+</Steps>
+
+## Complete example with logging
+
+Here's a production-ready example with proper logging:
+
+```rust src/main.rs
+use chrono::Local;
+use log::{error, info};
+use std::sync::Arc;
+use wacore::proto_helpers::MessageExt;
+use wacore::types::events::Event;
+use waproto::whatsapp as wa;
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Set up logging
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            use std::io::Write;
+            writeln!(
+                buf,
+                "{} [{}] - {}",
+                Local::now().format("%H:%M:%S"),
+                record.level(),
+                record.args()
+            )
+        })
+        .init();
+
+    // Initialize backend
+    let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+    info!("SQLite backend initialized");
+
+    // Build bot
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .on_event(|event, client| async move {
+            match event {
+                Event::PairingQrCode { code, .. } => {
+                    println!("\n{}", code);
+                }
+                Event::Message(msg, info) => {
+                    if let Some(text) = msg.text_content() {
+                        info!("Received: {} from {}", text, info.source.sender);
+
+                        if text == "ping" {
+                            let reply = wa::Message {
+                                conversation: Some("pong".to_string()),
+                                ..Default::default()
+                            };
+
+                            if let Err(e) = client.send_message(info.source.chat, reply).await {
+                                error!("Failed to send reply: {}", e);
+                            }
+                        }
+                    }
+                }
+                Event::Connected(_) => {
+                    info!("✅ Bot connected successfully!");
+                }
+                Event::LoggedOut(_) => {
+                    error!("❌ Bot was logged out");
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .await?;
+
+    info!("Starting bot...");
+    bot.run().await?.await?;
+    Ok(())
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Sending messages" icon="message" href="/guides/sending-messages">
+    Learn about different message types and how to send them
+  </Card>
+  <Card title="Media handling" icon="image" href="/guides/media-handling">
+    Upload and download images, videos, and documents
+  </Card>
+  <Card title="Group management" icon="users" href="/guides/group-management">
+    Create and manage WhatsApp groups
+  </Card>
+  <Card title="Client API reference" icon="code" href="/api/client">
+    Explore all available client methods
+  </Card>
+</CardGroup>

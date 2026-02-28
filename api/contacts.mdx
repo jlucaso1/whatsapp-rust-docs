@@ -1,0 +1,279 @@
+---
+title: Contacts
+description: Contact information and profile picture operations
+---
+
+The `Contacts` trait provides methods for checking WhatsApp registration status, fetching contact information, and retrieving profile pictures.
+
+## Access
+
+Access contact operations through the client:
+
+```rust
+let contacts = client.contacts();
+```
+
+## Methods
+
+### is_on_whatsapp
+
+Check if phone numbers are registered on WhatsApp.
+
+```rust
+pub async fn is_on_whatsapp(
+    &self,
+    phones: &[&str],
+) -> Result<Vec<IsOnWhatsAppResult>, anyhow::Error>
+```
+
+**Parameters:**
+- `phones` - Array of phone numbers (with or without `+` prefix)
+
+**Returns:**
+- `Vec<IsOnWhatsAppResult>` - Registration status for each number
+
+**IsOnWhatsAppResult fields:**
+- `jid: Jid` - WhatsApp JID for the number
+- `is_registered: bool` - Whether the number is on WhatsApp
+
+**Example:**
+```rust
+let phones = vec!["15551234567", "+15559876543"];
+let results = client.contacts().is_on_whatsapp(&phones).await?;
+
+for result in results {
+    if result.is_registered {
+        println!("{} is on WhatsApp", result.jid);
+    } else {
+        println!("{} is NOT on WhatsApp", result.jid);
+    }
+}
+```
+
+### get_info
+
+Get detailed contact information for phone numbers.
+
+```rust
+pub async fn get_info(
+    &self,
+    phones: &[&str],
+) -> Result<Vec<ContactInfo>, anyhow::Error>
+```
+
+**Parameters:**
+- `phones` - Array of phone numbers (with or without `+` prefix)
+
+**Returns:**
+- `Vec<ContactInfo>` - Detailed info for each registered number
+
+**ContactInfo fields:**
+- `jid: Jid` - WhatsApp JID
+- `lid: Option<Jid>` - LID (privacy identifier) if available
+- `is_registered: bool` - Whether on WhatsApp
+- `is_business: bool` - Whether this is a business account
+- `status: Option<String>` - Status message/about
+- `picture_id: Option<u64>` - Profile picture ID
+
+**Example:**
+```rust
+let phones = vec!["15551234567"];
+let contacts = client.contacts().get_info(&phones).await?;
+
+for contact in contacts {
+    println!("JID: {}", contact.jid);
+    println!("  Registered: {}", contact.is_registered);
+    println!("  Business: {}", contact.is_business);
+    
+    if let Some(status) = contact.status {
+        println!("  Status: {}", status);
+    }
+    
+    if let Some(lid) = contact.lid {
+        println!("  LID: {}", lid);
+    }
+    
+    if let Some(pic_id) = contact.picture_id {
+        println!("  Picture ID: {}", pic_id);
+    }
+}
+```
+
+### get_profile_picture
+
+Get the profile picture URL for a JID.
+
+```rust
+pub async fn get_profile_picture(
+    &self,
+    jid: &Jid,
+    preview: bool,
+) -> Result<Option<ProfilePicture>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Target JID (user, group, or newsletter)
+- `preview` - `true` for preview thumbnail, `false` for full-size image
+
+**Returns:**
+- `Option<ProfilePicture>` - Picture info or `None` if not available
+
+**ProfilePicture fields:**
+- `id: String` - Picture ID
+- `url: String` - Download URL
+- `direct_path: Option<String>` - Direct path for media download
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Get preview thumbnail
+if let Some(preview) = client.contacts().get_profile_picture(&jid, true).await? {
+    println!("Preview URL: {}", preview.url);
+    println!("Picture ID: {}", preview.id);
+}
+
+// Get full-size picture
+if let Some(full) = client.contacts().get_profile_picture(&jid, false).await? {
+    println!("Full URL: {}", full.url);
+    if let Some(path) = full.direct_path {
+        println!("Direct path: {}", path);
+    }
+}
+
+// Handle user with no profile picture
+let no_pic_jid: Jid = "15559999999@s.whatsapp.net".parse()?;
+if client.contacts().get_profile_picture(&no_pic_jid, true).await?.is_none() {
+    println!("User has no profile picture");
+}
+```
+
+**For groups:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+if let Some(pic) = client.contacts().get_profile_picture(&group_jid, true).await? {
+    println!("Group picture: {}", pic.url);
+}
+```
+
+### get_user_info
+
+Get user information by JID (more detailed than `get_info`).
+
+```rust
+pub async fn get_user_info(
+    &self,
+    jids: &[Jid],
+) -> Result<HashMap<Jid, UserInfo>, anyhow::Error>
+```
+
+**Parameters:**
+- `jids` - Array of JIDs to query
+
+**Returns:**
+- `HashMap<Jid, UserInfo>` - Map of JID to user info
+
+**UserInfo fields:**
+- `jid: Jid` - WhatsApp JID
+- `lid: Option<Jid>` - LID if available
+- `status: Option<String>` - Status message
+- `picture_id: Option<String>` - Profile picture ID (String format)
+- `is_business: bool` - Whether business account
+
+**Example:**
+```rust
+let jids = vec![
+    "15551234567@s.whatsapp.net".parse()?,
+    "15559876543@s.whatsapp.net".parse()?,
+];
+
+let user_info = client.contacts().get_user_info(&jids).await?;
+
+for (jid, info) in user_info {
+    println!("User: {}", jid);
+    println!("  Business: {}", info.is_business);
+    
+    if let Some(status) = info.status {
+        println!("  Status: {}", status);
+    }
+    
+    if let Some(pic_id) = info.picture_id {
+        println!("  Picture ID: {}", pic_id);
+    }
+}
+```
+
+## Type Differences
+
+### ContactInfo vs UserInfo
+
+Both types provide similar information but with different use cases:
+
+**ContactInfo** (from `get_info`):
+- Input: phone numbers
+- `picture_id: Option<u64>` - Numeric picture ID
+- Used for batch phone number lookups
+
+**UserInfo** (from `get_user_info`):
+- Input: JIDs
+- `picture_id: Option<String>` - String picture ID (may include non-numeric prefixes)
+- Used for detailed JID-based queries
+
+## Privacy & TC Tokens
+
+For user JIDs (not groups/newsletters), the library automatically includes TC tokens when fetching profile pictures. TC tokens are used for privacy-gated operations.
+
+The implementation automatically:
+- Looks up TC tokens for user JIDs
+- Includes tokens in profile picture requests
+- Skips tokens for groups and newsletters
+
+## Error Handling
+
+All methods return `Result<T, anyhow::Error>`. Common errors:
+
+- Invalid phone number format
+- Invalid JID format
+- Network errors
+- Rate limiting
+
+```rust
+match client.contacts().is_on_whatsapp(&["15551234567"]).await {
+    Ok(results) => {
+        for result in results {
+            println!("Registered: {}", result.is_registered);
+        }
+    }
+    Err(e) => eprintln!("Failed to check registration: {}", e),
+}
+```
+
+## Batch Operations
+
+All lookup methods support batch operations for efficiency:
+
+```rust
+// Check multiple numbers at once
+let phones = vec!["15551111111", "15552222222", "15553333333"];
+let results = client.contacts().is_on_whatsapp(&phones).await?;
+
+// Get info for multiple numbers
+let contacts = client.contacts().get_info(&phones).await?;
+
+// Get info for multiple JIDs
+let jids = vec![
+    "15551111111@s.whatsapp.net".parse()?,
+    "15552222222@s.whatsapp.net".parse()?,
+];
+let user_info = client.contacts().get_user_info(&jids).await?;
+```
+
+## Empty Input Handling
+
+Passing empty arrays returns empty results without making network requests:
+
+```rust
+let empty: Vec<&str> = vec![];
+let results = client.contacts().is_on_whatsapp(&empty).await?;
+assert!(results.is_empty());
+```

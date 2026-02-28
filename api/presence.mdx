@@ -1,0 +1,229 @@
+---
+title: Presence
+description: Online/offline status and presence subscription operations
+---
+
+The `Presence` trait provides methods for managing your online/offline status and subscribing to contact presence updates.
+
+## Access
+
+Access presence operations through the client:
+
+```rust
+let presence = client.presence();
+```
+
+## Methods
+
+### set
+
+Set your presence status (online or offline).
+
+```rust
+pub async fn set(&self, status: PresenceStatus) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `status: PresenceStatus` - Either `Available` (online) or `Unavailable` (offline)
+
+**Requirements:**
+- Push name must be set before sending presence
+- Returns error if push name is empty
+
+**Example:**
+```rust
+use whatsapp_rust::features::presence::PresenceStatus;
+
+// Set status to online
+client.presence().set(PresenceStatus::Available).await?;
+
+// Set status to offline
+client.presence().set(PresenceStatus::Unavailable).await?;
+```
+
+### set_available
+
+Convenience method to set status to available (online).
+
+```rust
+pub async fn set_available(&self) -> Result<(), anyhow::Error>
+```
+
+**Example:**
+```rust
+client.presence().set_available().await?;
+println!("Now online");
+```
+
+### set_unavailable
+
+Convenience method to set status to unavailable (offline).
+
+```rust
+pub async fn set_unavailable(&self) -> Result<(), anyhow::Error>
+```
+
+**Example:**
+```rust
+client.presence().set_unavailable().await?;
+println!("Now offline");
+```
+
+### subscribe
+
+Subscribe to a contact's presence updates.
+
+```rust
+pub async fn subscribe(&self, jid: &Jid) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Contact JID to subscribe to
+
+**Behavior:**
+- Sends a `<presence type="subscribe">` stanza
+- Automatically includes TC token if available for the contact
+- Used to receive notifications when the contact goes online/offline
+
+**Example:**
+```rust
+let contact_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.presence().subscribe(&contact_jid).await?;
+println!("Subscribed to {}'s presence", contact_jid);
+```
+
+## PresenceStatus Enum
+
+```rust
+pub enum PresenceStatus {
+    Available,    // Online
+    Unavailable,  // Offline
+}
+```
+
+**Methods:**
+- `as_str()` - Returns `"available"` or `"unavailable"`
+
+**Conversion:**
+```rust
+let status = PresenceStatus::Available;
+assert_eq!(status.as_str(), "available");
+```
+
+## Push Name Requirement
+
+WhatsApp requires a push name (display name) to be set before sending presence updates. This matches WhatsApp Web behavior.
+
+**Error example:**
+```rust
+// If push name not set
+match client.presence().set_available().await {
+    Ok(_) => println!("Presence set"),
+    Err(e) if e.to_string().contains("push name") => {
+        eprintln!("Cannot send presence without a push name set");
+    }
+    Err(e) => eprintln!("Other error: {}", e),
+}
+```
+
+The push name is typically set during the pairing/connection process from app state sync.
+
+## Wire Format
+
+### Setting Presence
+
+```xml
+<!-- Available (online) -->
+<presence type="available" name="YourPushName"/>
+
+<!-- Unavailable (offline) -->
+<presence type="unavailable" name="YourPushName"/>
+```
+
+### Subscribing to Presence
+
+```xml
+<!-- Without TC token -->
+<presence type="subscribe" to="15551234567@s.whatsapp.net"/>
+
+<!-- With TC token (privacy gating) -->
+<presence type="subscribe" to="15551234567@s.whatsapp.net">
+  <tctoken><!-- raw token bytes --></tctoken>
+</presence>
+```
+
+## TC Token Handling
+
+When subscribing to presence, the library automatically:
+- Looks up TC token for the target JID
+- Includes token as child node if available
+- Skips token if not found (non-error)
+
+This matches WhatsApp Web's privacy gating behavior.
+
+## Behavior Notes
+
+### Available (Online)
+
+When setting status to `Available`, the library automatically:
+1. Validates push name is set
+2. Sends unified session (internal protocol requirement)
+3. Broadcasts presence stanza with push name
+
+### Unavailable (Offline)
+
+When setting status to `Unavailable`:
+1. Validates push name is set
+2. Broadcasts unavailable presence
+
+Note: This marks you as offline but doesn't disconnect the client.
+
+## Error Handling
+
+All methods return `Result<(), anyhow::Error>`. Common errors:
+
+- **Push name not set**: "Cannot send presence without a push name set"
+- **Not connected**: Connection-related errors
+- **Network errors**: Timeout, connection lost, etc.
+
+```rust
+match client.presence().set_available().await {
+    Ok(_) => println!("Successfully set to online"),
+    Err(e) if e.to_string().contains("push name") => {
+        eprintln!("Need to set push name first");
+    }
+    Err(e) if e.to_string().contains("not connected") => {
+        eprintln!("Client not connected");
+    }
+    Err(e) => eprintln!("Unexpected error: {}", e),
+}
+```
+
+## Complete Example
+
+```rust
+use whatsapp_rust::features::presence::PresenceStatus;
+
+// Set yourself online
+client.presence().set_available().await?;
+
+// Subscribe to contacts' presence
+let contacts = vec![
+    "15551111111@s.whatsapp.net".parse()?,
+    "15552222222@s.whatsapp.net".parse()?,
+];
+
+for contact in contacts {
+    client.presence().subscribe(&contact).await?;
+    println!("Subscribed to {}", contact);
+}
+
+// Do work while online...
+
+// Set yourself offline when done
+client.presence().set_unavailable().await?;
+```
+
+## Receiving Presence Updates
+
+After subscribing to a contact's presence, you'll receive presence events through the event handler. See the [Events](/concepts/events) documentation for details on handling incoming presence updates.

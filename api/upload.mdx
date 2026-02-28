@@ -1,0 +1,376 @@
+---
+title: "upload"
+description: "Upload and encrypt media for sending in messages"
+---
+
+## upload
+
+Upload media to WhatsApp's CDN with automatic encryption.
+
+```rust
+pub async fn upload(
+    &self,
+    data: Vec<u8>,
+    media_type: MediaType
+) -> Result<UploadResponse, anyhow::Error>
+```
+
+<ParamField path="data" type="Vec<u8>" required>
+  Raw media bytes to upload. The data is automatically encrypted using AES-256-CBC before uploading.
+</ParamField>
+
+<ParamField path="media_type" type="MediaType" required>
+  Type of media being uploaded. Determines the CDN endpoint and encryption keys:
+  - `MediaType::Image` - Images and stickers
+  - `MediaType::Video` - Video files
+  - `MediaType::Audio` - Audio files and voice notes
+  - `MediaType::Document` - Documents and other files
+  - `MediaType::Sticker` - Sticker images
+  - `MediaType::LinkThumbnail` - Link preview thumbnails
+</ParamField>
+
+<ResponseField name="UploadResponse" type="struct">
+  Contains all metadata needed to include the media in a message:
+  
+  ```rust
+  pub struct UploadResponse {
+      pub url: String,
+      pub direct_path: String,
+      pub media_key: Vec<u8>,
+      pub file_enc_sha256: Vec<u8>,
+      pub file_sha256: Vec<u8>,
+      pub file_length: u64,
+  }
+  ```
+  
+  <ParamField path="url" type="String">
+    Full CDN URL where the encrypted file was uploaded
+  </ParamField>
+  
+  <ParamField path="direct_path" type="String">
+    CDN path component (e.g., `/v/t62.7118-24/12345_67890`). Used for downloads.
+  </ParamField>
+  
+  <ParamField path="media_key" type="Vec<u8>">
+    32-byte encryption key. Required for the recipient to decrypt the media.
+  </ParamField>
+  
+  <ParamField path="file_enc_sha256" type="Vec<u8>">
+    SHA-256 hash of the encrypted file. Used for integrity verification during download.
+  </ParamField>
+  
+  <ParamField path="file_sha256" type="Vec<u8>">
+    SHA-256 hash of the original (decrypted) file. Used for final validation after decryption.
+  </ParamField>
+  
+  <ParamField path="file_length" type="u64">
+    Original file size in bytes (before encryption)
+  </ParamField>
+</ResponseField>
+
+### Example: Upload and Send Image
+
+```rust
+use wacore::download::MediaType;
+use waproto::whatsapp as wa;
+use std::fs;
+
+// Read image file
+let image_bytes = fs::read("photo.jpg")?;
+
+// Upload image to WhatsApp CDN
+let upload = client.upload(image_bytes, MediaType::Image).await?;
+
+// Create image message with upload metadata
+let message = wa::Message {
+    image_message: Some(Box::new(wa::message::ImageMessage {
+        url: Some(upload.url),
+        direct_path: Some(upload.direct_path),
+        media_key: Some(upload.media_key),
+        file_enc_sha256: Some(upload.file_enc_sha256),
+        file_sha256: Some(upload.file_sha256),
+        file_length: Some(upload.file_length),
+        caption: Some("Check out this photo!".to_string()),
+        mimetype: Some("image/jpeg".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+// Send the message
+let message_id = client.send_message(chat_jid, message).await?;
+println!("Image sent: {}", message_id);
+```
+
+### Example: Upload Video with Progress
+
+```rust
+use wacore::download::MediaType;
+use std::fs;
+
+let video_bytes = fs::read("video.mp4")?;
+println!("Uploading {} bytes...", video_bytes.len());
+
+let upload = client.upload(video_bytes, MediaType::Video).await?;
+println!("Upload complete!");
+println!("  URL: {}", upload.url);
+println!("  Path: {}", upload.direct_path);
+
+// Use upload metadata in VideoMessage...
+```
+
+### Example: Upload Document
+
+```rust
+use wacore::download::MediaType;
+use waproto::whatsapp as wa;
+use std::fs;
+use std::path::Path;
+
+let doc_path = Path::new("report.pdf");
+let doc_bytes = fs::read(doc_path)?;
+let filename = doc_path.file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("document.pdf");
+
+let upload = client.upload(doc_bytes, MediaType::Document).await?;
+
+let message = wa::Message {
+    document_message: Some(Box::new(wa::message::DocumentMessage {
+        url: Some(upload.url),
+        direct_path: Some(upload.direct_path),
+        media_key: Some(upload.media_key),
+        file_enc_sha256: Some(upload.file_enc_sha256),
+        file_sha256: Some(upload.file_sha256),
+        file_length: Some(upload.file_length),
+        file_name: Some(filename.to_string()),
+        mimetype: Some("application/pdf".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(chat_jid, message).await?;
+```
+
+### Example: Upload Audio (Voice Note)
+
+```rust
+use wacore::download::MediaType;
+use waproto::whatsapp as wa;
+
+let audio_bytes = fs::read("voice.ogg")?;
+let upload = client.upload(audio_bytes, MediaType::Audio).await?;
+
+let message = wa::Message {
+    audio_message: Some(Box::new(wa::message::AudioMessage {
+        url: Some(upload.url),
+        direct_path: Some(upload.direct_path),
+        media_key: Some(upload.media_key),
+        file_enc_sha256: Some(upload.file_enc_sha256),
+        file_sha256: Some(upload.file_sha256),
+        file_length: Some(upload.file_length),
+        mimetype: Some("audio/ogg; codecs=opus".to_string()),
+        ptt: Some(true), // Mark as Push-To-Talk (voice note)
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(chat_jid, message).await?;
+```
+
+---
+
+## Media Encryption
+
+All media uploaded to WhatsApp is end-to-end encrypted before transmission:
+
+### Encryption Process
+
+1. **Generate keys**: Create random 32-byte `media_key`
+2. **Derive keys**: Use HKDF-SHA256 with media type info string to derive:
+   - 16-byte IV (initialization vector)
+   - 32-byte cipher key
+   - 32-byte MAC key
+3. **Encrypt**: Apply AES-256-CBC with PKCS7 padding
+4. **Compute MAC**: HMAC-SHA256 over IV + ciphertext, append first 10 bytes
+5. **Upload**: POST encrypted bytes to WhatsApp CDN
+6. **Return metadata**: `media_key`, hashes, and CDN path for message
+
+### Key Derivation
+
+Each media type uses a specific HKDF info string:
+
+```rust
+MediaType::Image      → "WhatsApp Image Keys"
+MediaType::Video      → "WhatsApp Video Keys"
+MediaType::Audio      → "WhatsApp Audio Keys"
+MediaType::Document   → "WhatsApp Document Keys"
+MediaType::Sticker    → "WhatsApp Image Keys"
+MediaType::LinkThumbnail → "WhatsApp Link Thumbnail Keys"
+```
+
+The `media_key` is shared with recipients through the encrypted message, allowing them to decrypt the media.
+
+### Encryption vs Decryption
+
+The encryption process is the inverse of download decryption:
+
+| Upload (Encryption) | Download (Decryption) |
+|---------------------|----------------------|
+| Generate `media_key` | Receive `media_key` in message |
+| Derive IV, cipher key, MAC key | Derive same keys from `media_key` |
+| Encrypt with AES-256-CBC | Decrypt with AES-256-CBC |
+| Append HMAC-SHA256 (10 bytes) | Verify HMAC-SHA256 |
+| Upload to CDN | Download from CDN |
+
+---
+
+## MediaType
+
+Specifies the type of media for encryption and CDN routing.
+
+```rust
+pub enum MediaType {
+    Image,
+    Video,
+    Audio,
+    Document,
+    History,
+    AppState,
+    Sticker,
+    StickerPack,
+    LinkThumbnail,
+}
+```
+
+<ParamField path="Image" type="variant">
+  JPEG, PNG, or other image formats. Uses `"image"` MMS endpoint and `"WhatsApp Image Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="Video" type="variant">
+  MP4 or other video formats. Uses `"video"` MMS endpoint and `"WhatsApp Video Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="Audio" type="variant">
+  Audio files and voice notes. Uses `"audio"` MMS endpoint and `"WhatsApp Audio Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="Document" type="variant">
+  PDF, DOCX, ZIP, and other document formats. Uses `"document"` MMS endpoint and `"WhatsApp Document Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="Sticker" type="variant">
+  Sticker images (WebP format). Uses `"image"` MMS endpoint and `"WhatsApp Image Keys"` for HKDF (same as images).
+</ParamField>
+
+<ParamField path="History" type="variant">
+  History sync data. Uses `"md-msg-hist"` MMS endpoint and `"WhatsApp History Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="AppState" type="variant">
+  App state sync data. Uses `"md-app-state"` MMS endpoint and `"WhatsApp App State Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="StickerPack" type="variant">
+  Sticker pack metadata. Uses `"sticker-pack"` MMS endpoint.
+</ParamField>
+
+<ParamField path="LinkThumbnail" type="variant">
+  Link preview thumbnails. Uses `"thumbnail-link"` MMS endpoint.
+</ParamField>
+
+---
+
+## Upload Endpoint
+
+The upload endpoint is constructed as:
+
+```
+https://{media_host}/mms/{mms_type}/{token}?auth={auth}&token={token}
+```
+
+Where:
+- `{media_host}` - CDN hostname from media connection
+- `{mms_type}` - Media type endpoint (e.g., `"image"`, `"video"`, `"document"`)
+- `{token}` - Base64url-encoded `file_enc_sha256`
+- `{auth}` - Media connection auth token
+
+The request uses:
+- **Method**: `POST`
+- **Content-Type**: `application/octet-stream`
+- **Origin**: `https://web.whatsapp.com`
+- **Body**: Encrypted media bytes
+
+<Note>
+  The upload automatically handles media connection refresh. If the connection is expired, it's renewed before uploading.
+</Note>
+
+---
+
+## Error Handling
+
+### Common Upload Errors
+
+<ParamField path="HTTP 4xx/5xx" type="error">
+  CDN returned error status. The response body may contain error details.
+  
+  ```rust
+  match client.upload(data, media_type).await {
+      Err(e) if e.to_string().contains("Upload failed") => {
+          eprintln!("CDN error: {}", e);
+          // Retry or use fallback
+      }
+      Err(e) => eprintln!("Other error: {}", e),
+      Ok(upload) => { /* Success */ }
+  }
+  ```
+</ParamField>
+
+<ParamField path="No media hosts" type="error">
+  Media connection has no available CDN hosts.
+  
+  ```rust
+  Err(anyhow!("No media hosts"))
+  ```
+</ParamField>
+
+<ParamField path="Encryption failure" type="error">
+  Failed to encrypt media (rare, usually indicates invalid input).
+  
+  ```rust
+  match client.upload(data, media_type).await {
+      Err(e) if e.to_string().contains("encrypt") => {
+          eprintln!("Encryption error: {}", e);
+      }
+      _ => {}
+  }
+  ```
+</ParamField>
+
+### Example: Upload with Retry
+
+```rust
+use std::time::Duration;
+use tokio::time::sleep;
+
+let mut attempts = 0;
+let max_attempts = 3;
+
+let upload = loop {
+    attempts += 1;
+    
+    match client.upload(data.clone(), MediaType::Image).await {
+        Ok(upload) => break upload,
+        Err(e) if attempts < max_attempts => {
+            eprintln!("Upload attempt {} failed: {}", attempts, e);
+            sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        Err(e) => return Err(e),
+    }
+};
+
+println!("Upload succeeded after {} attempt(s)", attempts);
+```

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "WhatsApp Rust",
+  "theme": "aspen",
+  "colors": {
+    "primary": "#25D366",
+    "light": "#DCF8C6",
+    "dark": "#075E54"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/jlucaso1/whatsapp-rust"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/jlucaso1/whatsapp-rust"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/authentication",
+              "concepts/events",
+              "concepts/storage"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/sending-messages",
+              "guides/receiving-messages",
+              "guides/media-handling",
+              "guides/group-management",
+              "guides/custom-backends"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/signal-protocol",
+              "advanced/binary-protocol",
+              "advanced/state-management",
+              "advanced/websocket-handling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/client",
+              "api/bot"
+            ]
+          },
+          {
+            "group": "Messaging",
+            "pages": [
+              "api/send",
+              "api/download",
+              "api/upload",
+              "api/receipt"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "api/groups",
+              "api/contacts",
+              "api/presence",
+              "api/chatstate",
+              "api/blocking"
+            ]
+          },
+          {
+            "group": "Storage & Backends",
+            "pages": [
+              "api/store",
+              "api/transport",
+              "api/http-client"
+            ]
+          },
+          {
+            "group": "Core Modules",
+            "pages": [
+              "api/wacore",
+              "api/waproto"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

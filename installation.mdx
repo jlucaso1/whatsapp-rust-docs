@@ -1,0 +1,95 @@
+---
+title: Installation
+description: Add whatsapp-rust to your Rust project
+---
+
+## Prerequisites
+
+Before installing whatsapp-rust, ensure you have:
+
+- **Rust 2024 edition** or later (requires recent stable Rust)
+- **Cargo** package manager
+- **SQLite** (if using the default storage backend)
+
+## Add to your project
+
+Add whatsapp-rust and its required dependencies to your `Cargo.toml`:
+
+<CodeGroup>
+
+```toml Default features
+[dependencies]
+whatsapp-rust = "0.2"
+whatsapp-rust-sqlite-storage = "0.2"
+whatsapp-rust-tokio-transport = "0.2"
+whatsapp-rust-ureq-http-client = "0.2"
+wacore = "0.2"
+waproto = "0.2"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+```toml Minimal setup
+[dependencies]
+whatsapp-rust = { version = "0.2", default-features = false }
+whatsapp-rust-sqlite-storage = "0.2"
+whatsapp-rust-tokio-transport = "0.2"
+whatsapp-rust-ureq-http-client = "0.2"
+wacore = "0.2"
+waproto = "0.2"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+</CodeGroup>
+
+## Feature flags
+
+whatsapp-rust supports several optional features:
+
+| Feature | Description | Included by default |
+|---------|-------------|--------------------|
+| `sqlite-storage` | SQLite storage backend | ✅ Yes |
+| `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
+| `ureq-client` | Ureq HTTP client | ✅ Yes |
+| `tokio-native` | Tokio multi-threaded runtime | ✅ Yes |
+| `signal` | Unix signal handling | ❌ No |
+| `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
+| `debug-snapshots` | Debug protocol snapshots | ❌ No |
+
+<Note>
+  The default features provide everything needed for most use cases. Only customize features if you have specific requirements.
+</Note>
+
+## Custom features example
+
+If you want to use only specific features:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { version = "0.2", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
+```
+
+## Verify installation
+
+Create a simple test file to verify the installation:
+
+```rust src/main.rs
+use whatsapp_rust::bot::Bot;
+
+fn main() {
+    println!("whatsapp-rust installed successfully!");
+}
+```
+
+Run it with:
+
+```bash
+cargo run
+```
+
+If you see "whatsapp-rust installed successfully!", you're ready to move on to the [Quickstart](/quickstart) guide.
+
+## Next steps
+
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  Build your first WhatsApp bot in minutes
+</Card>

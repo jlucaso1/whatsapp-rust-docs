@@ -1,0 +1,377 @@
+---
+title: "download"
+description: "Download and decrypt media from WhatsApp messages"
+---
+
+## download
+
+Download and decrypt media from a message.
+
+```rust
+pub async fn download(
+    &self,
+    downloadable: &dyn Downloadable
+) -> Result<Vec<u8>, anyhow::Error>
+```
+
+<ParamField path="downloadable" type="&dyn Downloadable" required>
+  Any message type that implements the `Downloadable` trait. Includes:
+  - `ImageMessage`
+  - `VideoMessage`
+  - `AudioMessage`
+  - `DocumentMessage`
+  - `StickerMessage`
+  - `ExternalBlobReference` (app state)
+  - `HistorySyncNotification`
+</ParamField>
+
+<ResponseField name="bytes" type="Vec<u8>">
+  Decrypted media bytes. For encrypted media (E2EE), automatically decrypts using AES-256-CBC and verifies HMAC-SHA256. For plaintext media (newsletters/channels), validates SHA-256 hash.
+</ResponseField>
+
+### Example: Download Image
+
+```rust
+use waproto::whatsapp as wa;
+
+// From a received message
+if let Some(image_msg) = message.image_message {
+    let image_bytes = client.download(image_msg.as_ref()).await?;
+    std::fs::write("downloaded_image.jpg", image_bytes)?;
+}
+```
+
+### Example: Download with Error Handling
+
+```rust
+match client.download(downloadable).await {
+    Ok(data) => {
+        println!("Downloaded {} bytes", data.len());
+        // Process data...
+    }
+    Err(e) => {
+        eprintln!("Download failed: {}", e);
+        // Fallback logic...
+    }
+}
+```
+
+---
+
+## download_to_file
+
+Download media and write directly to a file.
+
+```rust
+pub async fn download_to_file<W: Write + Seek + Send + Unpin>(
+    &self,
+    downloadable: &dyn Downloadable,
+    writer: W,
+) -> Result<(), anyhow::Error>
+```
+
+<ParamField path="downloadable" type="&dyn Downloadable" required>
+  Message containing downloadable media
+</ParamField>
+
+<ParamField path="writer" type="W: Write + Seek + Send + Unpin" required>
+  Writer to output the decrypted data. Typically a `File` or `BufWriter<File>`.
+</ParamField>
+
+### Example: Download to File
+
+```rust
+use std::fs::File;
+use std::io::BufWriter;
+
+let file = File::create("video.mp4")?;
+let writer = BufWriter::new(file);
+
+client.download_to_file(video_msg.as_ref(), writer).await?;
+println!("Video saved to video.mp4");
+```
+
+---
+
+## download_to_writer
+
+Download media using streaming (constant memory usage).
+
+The entire HTTP download, decryption, and file write happen in a single blocking thread. Memory usage is ~40KB regardless of file size.
+
+```rust
+pub async fn download_to_writer<W: Write + Seek + Send + 'static>(
+    &self,
+    downloadable: &dyn Downloadable,
+    writer: W,
+) -> Result<W, anyhow::Error>
+```
+
+<ParamField path="downloadable" type="&dyn Downloadable" required>
+  Message containing downloadable media
+</ParamField>
+
+<ParamField path="writer" type="W: Write + Seek + Send + 'static" required>
+  Writer for streaming output. Must be Send + 'static for use in blocking task.
+</ParamField>
+
+<ResponseField name="writer" type="W">
+  Returns the writer after successful download, seeked back to position 0.
+</ResponseField>
+
+### Example: Streaming Download
+
+```rust
+use std::fs::File;
+
+let file = File::create("large_video.mp4")?;
+let file = client.download_to_writer(video_msg.as_ref(), file).await?;
+// File is seeked back to start and can be reused
+```
+
+<Note>
+  Use `download_to_writer` for large media files to avoid loading entire files into memory. Memory usage is constant ~40KB (8KB read buffer + decryption state).
+</Note>
+
+---
+
+## download_from_params
+
+Download and decrypt media from raw parameters without the original message.
+
+```rust
+pub async fn download_from_params(
+    &self,
+    direct_path: &str,
+    media_key: &[u8],
+    file_sha256: &[u8],
+    file_enc_sha256: &[u8],
+    file_length: u64,
+    media_type: MediaType,
+) -> Result<Vec<u8>, anyhow::Error>
+```
+
+<ParamField path="direct_path" type="&str" required>
+  WhatsApp CDN path (e.g., `/v/t62.7118-24/12345_67890`)
+</ParamField>
+
+<ParamField path="media_key" type="&[u8]" required>
+  32-byte media encryption key from message
+</ParamField>
+
+<ParamField path="file_sha256" type="&[u8]" required>
+  SHA-256 hash of decrypted file
+</ParamField>
+
+<ParamField path="file_enc_sha256" type="&[u8]" required>
+  SHA-256 hash of encrypted file
+</ParamField>
+
+<ParamField path="file_length" type="u64" required>
+  Original file size in bytes
+</ParamField>
+
+<ParamField path="media_type" type="MediaType" required>
+  Type of media: `Image`, `Video`, `Audio`, `Document`, `Sticker`, etc.
+</ParamField>
+
+<ResponseField name="bytes" type="Vec<u8>">
+  Decrypted media bytes
+</ResponseField>
+
+### Example: Download from Stored Metadata
+
+```rust
+use wacore::download::MediaType;
+
+// If you stored media metadata separately
+let image_bytes = client.download_from_params(
+    "/v/t62.7118-24/12345_67890",
+    &media_key,
+    &file_sha256,
+    &file_enc_sha256,
+    file_length,
+    MediaType::Image
+).await?;
+```
+
+---
+
+## download_from_params_to_writer
+
+Streaming variant of `download_from_params` that writes to a writer.
+
+```rust
+pub async fn download_from_params_to_writer<W: Write + Seek + Send + 'static>(
+    &self,
+    direct_path: &str,
+    media_key: &[u8],
+    file_sha256: &[u8],
+    file_enc_sha256: &[u8],
+    file_length: u64,
+    media_type: MediaType,
+    writer: W,
+) -> Result<W, anyhow::Error>
+```
+
+<ParamField path="direct_path" type="&str" required>
+  WhatsApp CDN path
+</ParamField>
+
+<ParamField path="media_key" type="&[u8]" required>
+  32-byte media encryption key
+</ParamField>
+
+<ParamField path="file_sha256" type="&[u8]" required>
+  SHA-256 hash of decrypted file
+</ParamField>
+
+<ParamField path="file_enc_sha256" type="&[u8]" required>
+  SHA-256 hash of encrypted file
+</ParamField>
+
+<ParamField path="file_length" type="u64" required>
+  Original file size in bytes
+</ParamField>
+
+<ParamField path="media_type" type="MediaType" required>
+  Type of media
+</ParamField>
+
+<ParamField path="writer" type="W" required>
+  Writer for streaming output
+</ParamField>
+
+<ResponseField name="writer" type="W">
+  Returns the writer after successful download
+</ResponseField>
+
+---
+
+## Downloadable Trait
+
+The `Downloadable` trait provides a generic interface for downloading media from any message type.
+
+```rust
+pub trait Downloadable: Sync + Send {
+    fn direct_path(&self) -> Option<&str>;
+    fn media_key(&self) -> Option<&[u8]>;
+    fn file_enc_sha256(&self) -> Option<&[u8]>;
+    fn file_sha256(&self) -> Option<&[u8]>;
+    fn file_length(&self) -> Option<u64>;
+    fn app_info(&self) -> MediaType;
+    fn static_url(&self) -> Option<&str> { None }
+    fn is_encrypted(&self) -> bool { self.media_key().is_some() }
+}
+```
+
+<ParamField path="direct_path" type="fn() -> Option<&str>">
+  WhatsApp CDN path for the media file
+</ParamField>
+
+<ParamField path="media_key" type="fn() -> Option<&[u8]>">
+  32-byte encryption key. Present for E2EE media, `None` for plaintext (newsletter/channel) media.
+</ParamField>
+
+<ParamField path="file_enc_sha256" type="fn() -> Option<&[u8]>">
+  SHA-256 hash of the encrypted file. Used for encrypted media validation.
+</ParamField>
+
+<ParamField path="file_sha256" type="fn() -> Option<&[u8]>">
+  SHA-256 hash of the decrypted file. Used for plaintext media validation.
+</ParamField>
+
+<ParamField path="file_length" type="fn() -> Option<u64>">
+  Original file size in bytes
+</ParamField>
+
+<ParamField path="app_info" type="fn() -> MediaType">
+  Media type for HKDF key derivation (`Image`, `Video`, `Audio`, `Document`, etc.)
+</ParamField>
+
+<ParamField path="static_url" type="fn() -> Option<&str>" default="None">
+  Static CDN URL for direct download. Present on newsletter/channel media, bypasses host construction.
+</ParamField>
+
+<ParamField path="is_encrypted" type="fn() -> bool" default="media_key().is_some()">
+  Returns `true` if media is encrypted (has `media_key`), `false` for plaintext media
+</ParamField>
+
+### Built-in Implementations
+
+The `Downloadable` trait is automatically implemented for:
+
+- `wa::message::ImageMessage`
+- `wa::message::VideoMessage`
+- `wa::message::AudioMessage`
+- `wa::message::DocumentMessage`
+- `wa::message::StickerMessage`
+- `wa::ExternalBlobReference` (app state)
+- `wa::message::HistorySyncNotification`
+
+---
+
+## MediaType
+
+Media type enum for encryption/decryption.
+
+```rust
+pub enum MediaType {
+    Image,
+    Video,
+    Audio,
+    Document,
+    History,
+    AppState,
+    Sticker,
+    StickerPack,
+    LinkThumbnail,
+}
+```
+
+Each media type has specific HKDF info strings used for key derivation:
+
+- `Image` / `Sticker` → `"WhatsApp Image Keys"`
+- `Video` → `"WhatsApp Video Keys"`
+- `Audio` → `"WhatsApp Audio Keys"`
+- `Document` → `"WhatsApp Document Keys"`
+- `History` → `"WhatsApp History Keys"`
+- `AppState` → `"WhatsApp App State Keys"`
+
+---
+
+## Media Decryption
+
+WhatsApp uses different handling for encrypted (E2EE) and plaintext media:
+
+### Encrypted Media (E2EE)
+
+1. **Download** encrypted bytes from CDN
+2. **Verify** HMAC-SHA256 (last 10 bytes)
+3. **Decrypt** using AES-256-CBC with keys derived from `media_key` via HKDF
+4. **Return** decrypted plaintext
+
+The `media_key` is expanded using HKDF-SHA256 to derive:
+- 16-byte IV
+- 32-byte cipher key
+- 32-byte MAC key
+
+### Plaintext Media (Newsletter/Channel)
+
+1. **Download** plaintext bytes from CDN (often via `static_url`)
+2. **Verify** SHA-256 hash matches `file_sha256`
+3. **Return** plaintext (no decryption needed)
+
+<Note>
+  Newsletter and channel media is **not encrypted**. The library automatically detects this when `media_key` is absent and switches to plaintext validation.
+</Note>
+
+### Example: Detect Media Type
+
+```rust
+if downloadable.is_encrypted() {
+    println!("E2EE media - will decrypt");
+} else {
+    println!("Plaintext media - no decryption needed");
+}
+```

@@ -1,0 +1,609 @@
+---
+title: "WhatsApp Binary Protocol"
+description: "Deep dive into WhatsApp's custom binary serialization format, node marshaling, and protocol specifics"
+---
+
+## Overview
+
+WhatsApp uses a custom binary protocol for all communication between clients and servers. This format is significantly more compact than JSON or XML and optimized for mobile network conditions.
+
+The protocol encodes messages as **nodes** - hierarchical structures with tags, attributes, and content. All nodes are serialized to binary format before encryption and transmission.
+
+## Architecture
+
+The binary protocol implementation is in `wacore/binary/`, a platform-agnostic crate:
+
+```
+wacore/binary/src/
+├── marshal.rs     # Serialization entry points
+├── encoder.rs     # Binary encoding logic
+├── decoder.rs     # Binary decoding logic
+├── node.rs        # Node data structures
+├── token.rs       # Token dictionary
+├── jid.rs         # JID (identifier) handling
+└── builder.rs     # Fluent API for node construction
+```
+
+## Node Structure
+
+### Node Definition
+
+A node represents a protocol message or message component:
+
+```rust
+pub struct Node {
+    pub tag: String,              // e.g., "message", "receipt", "iq"
+    pub attrs: Attrs,             // Key-value attributes
+    pub content: Option<NodeContent>,  // Optional content
+}
+
+pub enum NodeContent {
+    Bytes(Vec<u8>),       // Binary payload
+    String(String),       // Text payload
+    Nodes(Vec<Node>),     // Child nodes
+}
+```
+
+Location: `wacore/binary/src/node.rs:308-314`
+
+### Attributes
+
+Attributes are stored as key-value pairs with specialized value types:
+
+```rust
+pub enum NodeValue {
+    String(String),
+    Jid(Jid),         // Optimized for WhatsApp identifiers
+}
+
+pub struct Attrs(Vec<(String, NodeValue)>);
+```
+
+**Why Jid as a separate type?**
+
+JIDs (Jabber IDs) like `15551234567@s.whatsapp.net` appear frequently in the protocol. Storing them as structured data avoids repeated parsing/formatting overhead:
+
+```rust
+pub struct Jid {
+    pub user: String,      // "15551234567"
+    pub server: String,    // "s.whatsapp.net"
+    pub agent: u8,         // Domain type (0, 1, 128, 129)
+    pub device: u16,       // Device ID (0 for primary)
+    pub integrator: u16,   // Reserved
+}
+```
+
+Location: `wacore/binary/src/node.rs:10-112`, `wacore/binary/src/jid.rs`
+
+### Example Node
+
+```rust
+use wacore_binary::builder::NodeBuilder;
+
+let message = NodeBuilder::new("message")
+    .attr("to", "15551234567@s.whatsapp.net")
+    .attr("type", "text")
+    .attr("id", "ABCD1234")
+    .content_nodes(vec![
+        NodeBuilder::new("body").text("Hello, world!").build(),
+    ])
+    .build();
+```
+
+## Token Dictionary
+
+The protocol uses a token dictionary to compress common strings into single bytes.
+
+### Token Types
+
+```rust
+// Single-byte tokens (4-235)
+pub const LIST_EMPTY: u8 = 0;
+pub const LIST_8: u8 = 248;      // List with <256 items
+pub const LIST_16: u8 = 249;     // List with ≥256 items
+pub const JID_PAIR: u8 = 250;    // JID in user@server format
+pub const AD_JID: u8 = 251;      // JID with device ID
+pub const BINARY_8: u8 = 252;    // Binary data <256 bytes
+pub const BINARY_20: u8 = 253;   // Binary data <1MB
+pub const BINARY_32: u8 = 254;   // Binary data ≥1MB
+pub const NIBBLE_8: u8 = 255;    // Packed numeric string
+pub const HEX_8: u8 = 254;       // Packed hex string
+```
+
+Location: `wacore/binary/src/token.rs`
+
+### Dictionary Lookup
+
+Common protocol strings are mapped to single-byte tokens:
+
+```rust
+index_of_single_token("message") => Some(19)
+index_of_single_token("iq") => Some(18)
+index_of_single_token("body") => Some(7)
+```
+
+The dictionary includes:
+- Protocol tags ("message", "iq", "presence")
+- Common attributes ("id", "type", "to", "from")
+- Frequent values ("text", "chat", "available")
+
+### Multi-byte Tokens
+
+Less common strings use two-byte tokens:
+
+```rust
+index_of_double_byte_token("participant") => Some((dict_index, token_index))
+```
+
+Location: `wacore/binary/src/token.rs:200-300`
+
+## Encoding Process
+
+### Marshal Functions
+
+```rust
+// Basic serialization
+pub fn marshal(node: &Node) -> Result<Vec<u8>>
+
+// Serialize to existing buffer (zero-copy for output)
+pub fn marshal_to_vec(node: &Node, output: &mut Vec<u8>) -> Result<()>
+
+// Two-pass encoding with exact size pre-calculation
+pub fn marshal_exact(node: &Node) -> Result<Vec<u8>>
+
+// Auto-sizing with heuristics
+pub fn marshal_auto(node: &Node) -> Result<Vec<u8>>
+```
+
+Location: `wacore/binary/src/marshal.rs:31-76`
+
+### Encoding Strategy
+
+The encoder uses multiple strategies based on data characteristics:
+
+```rust
+enum StringHint {
+    Empty,                          // "" → BINARY_8 + 0
+    SingleToken(u8),                // "message" → 19
+    DoubleToken { dict: u8, token: u8 },
+    PackedNibble,                   // "123-456" → compressed
+    PackedHex,                      // "DEADBEEF" → compressed
+    Jid(ParsedJidMeta),             // JID-specific encoding
+    RawBytes,                       // Fallback
+}
+```
+
+Location: `wacore/binary/src/encoder.rs:227-237`
+
+### Packed Encoding
+
+#### Nibble Packing (Numeric Strings)
+
+Strings containing only digits, dash, and dot are packed into 4 bits per character:
+
+```rust
+// Input: "123-456.789"
+// Encoding:
+// '1' → 1, '2' → 2, '3' → 3, '-' → 10, '4' → 4, ...
+// Packed: 0x12, 0x3A, 0x45, 0x67, 0x89
+
+pub const PACKED_MAX: u8 = 127;  // Max length for packed strings
+
+fn pack_nibble(value: u8) -> u8 {
+    match value {
+        b'-' => 10,
+        b'.' => 11,
+        0 => 15,  // Padding
+        c if c.is_ascii_digit() => c - b'0',
+        _ => panic!("Invalid nibble"),
+    }
+}
+```
+
+Location: `wacore/binary/src/encoder.rs:769-777`
+
+#### Hex Packing
+
+Uppercase hex strings (0-9, A-F) are packed into 4 bits per character:
+
+```rust
+// Input: "DEADBEEF"
+// Packed: 0xDE, 0xAD, 0xBE, 0xEF
+
+fn pack_hex(value: u8) -> u8 {
+    match value {
+        c if c.is_ascii_digit() => c - b'0',
+        c if (b'A'..=b'F').contains(&c) => 10 + (c - b'A'),
+        0 => 15,  // Padding
+        _ => panic!("Invalid hex"),
+    }
+}
+```
+
+Location: `wacore/binary/src/encoder.rs:780-787`
+
+#### SIMD Optimization
+
+The encoder uses SIMD instructions for fast packing of long strings:
+
+```rust
+while input_bytes.len() >= 16 {
+    let input = u8x16::from_slice(chunk);
+    let indices = input.saturating_sub(nibble_base);
+    let nibbles = lookup.swizzle_dyn(indices);
+    
+    let (evens, odds) = nibbles.deinterleave(
+        nibbles.rotate_elements_left::<1>()
+    );
+    let packed = (evens << Simd::splat(4)) | odds;
+    self.write_raw_bytes(&packed.to_array()[..8])?;
+}
+```
+
+Location: `wacore/binary/src/encoder.rs:809-824`
+
+### JID Encoding
+
+JIDs have special compact encodings:
+
+#### JID_PAIR (Standard JID)
+
+```rust
+// Format: JID_PAIR + user + server
+// Example: "15551234567@s.whatsapp.net"
+self.write_u8(token::JID_PAIR)?;
+if user.is_empty() {
+    self.write_u8(token::LIST_EMPTY)?;
+} else {
+    self.write_string(user)?;  // "15551234567"
+}
+self.write_string(server)?;    // "s.whatsapp.net"
+```
+
+Location: `wacore/binary/src/encoder.rs:706-715`
+
+#### AD_JID (Device-Specific JID)
+
+```rust
+// Format: AD_JID + domain_type + device + user
+// Example: "15551234567:1@s.whatsapp.net" (device 1)
+self.write_u8(token::AD_JID)?;
+self.write_u8(meta.domain_type)?;  // 0 for normal, 1 for lid
+self.write_u8(device)?;            // Device number
+self.write_string(user)?;          // User part only
+```
+
+Location: `wacore/binary/src/encoder.rs:699-705`
+
+### List Encoding
+
+Lists (including node structures) have length-prefixed encoding:
+
+```rust
+fn write_list_start(&mut self, len: usize) -> Result<()> {
+    if len == 0 {
+        self.write_u8(token::LIST_EMPTY)?;  // 0x00
+    } else if len < 256 {
+        self.write_u8(token::LIST_8)?;      // 0xF8
+        self.write_u8(len as u8)?;
+    } else {
+        self.write_u8(token::LIST_16)?;     // 0xF9
+        self.write_u16_be(len as u16)?;
+    }
+    Ok(())
+}
+```
+
+Location: `wacore/binary/src/encoder.rs:865-876`
+
+### Node Encoding Format
+
+A complete node is encoded as:
+
+```
+LIST_START(list_len)
+    tag
+    attr_key_1
+    attr_value_1
+    attr_key_2
+    attr_value_2
+    ...
+    [content]  // If present
+```
+
+Where `list_len = 1 (tag) + (num_attrs * 2) + (content ? 1 : 0)`
+
+```rust
+pub fn write_node<N: EncodeNode>(&mut self, node: &N) -> Result<()> {
+    let content_len = if node.has_content() { 1 } else { 0 };
+    let list_len = 1 + (node.attrs_len() * 2) + content_len;
+    
+    self.write_list_start(list_len)?;
+    self.write_string(node.tag())?;
+    node.encode_attrs(self)?;
+    node.encode_content(self)?;
+    Ok(())
+}
+```
+
+Location: `wacore/binary/src/encoder.rs:879-889`
+
+## Decoding Process
+
+### Decoder Structure
+
+```rust
+pub struct Decoder<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Decoder<'a> {
+    pub fn read_node_ref(&mut self) -> Result<NodeRef<'a>>
+    pub fn read_list_size(&mut self) -> Result<usize>
+    pub fn read_string(&mut self) -> Result<Cow<'a, str>>
+}
+```
+
+Location: `wacore/binary/src/decoder.rs`
+
+### Zero-Copy Decoding
+
+The decoder uses `NodeRef<'a>` to avoid allocations:
+
+```rust
+pub struct NodeRef<'a> {
+    pub tag: Cow<'a, str>,         // Borrowed when possible
+    pub attrs: AttrsRef<'a>,       // Vec of borrowed pairs
+    pub content: Option<Box<NodeContentRef<'a>>>,
+}
+
+pub enum NodeContentRef<'a> {
+    Bytes(Cow<'a, [u8]>),    // Zero-copy for byte content
+    String(Cow<'a, str>),    // Zero-copy when valid UTF-8
+    Nodes(Box<NodeVec<'a>>), // Recursive borrowing
+}
+```
+
+Location: `wacore/binary/src/node.rs:316-321`, `288-293`
+
+### Unpacking
+
+Reverse of the packing process:
+
+```rust
+fn unpack_nibble(packed: u8, position: u8) -> u8 {
+    let nibble = if position == 0 {
+        (packed >> 4) & 0x0F
+    } else {
+        packed & 0x0F
+    };
+    
+    match nibble {
+        0..=9 => b'0' + nibble,
+        10 => b'-',
+        11 => b'.',
+        15 => 0,  // Padding
+        _ => panic!("Invalid nibble"),
+    }
+}
+```
+
+Location: `wacore/binary/src/decoder.rs:400-450`
+
+## Performance Optimizations
+
+### Two-Pass Encoding
+
+For large or variable-size payloads, exact size calculation prevents buffer growth:
+
+```rust
+pub fn marshal_exact(node: &Node) -> Result<Vec<u8>> {
+    // Pass 1: Calculate exact size
+    let plan = build_marshaled_node_plan(node);
+    
+    // Pass 2: Encode directly into fixed-size buffer
+    let mut payload = vec![0; plan.size];
+    let mut encoder = Encoder::new_slice(&mut payload, Some(&plan.hints))?;
+    encoder.write_node(node)?;
+    Ok(payload)
+}
+```
+
+Location: `wacore/binary/src/marshal.rs:67-76`
+
+### String Hint Cache
+
+Repeated strings (like JIDs) are analyzed once and cached:
+
+```rust
+pub struct StringHintCache {
+    hints: Vec<(StrKey, StringHint)>,
+}
+
+impl StringHintCache {
+    fn hint_or_insert(&mut self, s: &str) -> StringHint {
+        if let Some(existing) = self.hints.iter().find(...) {
+            return existing;
+        }
+        let hint = classify_string_hint(s);
+        self.hints.push((key, hint));
+        hint
+    }
+}
+```
+
+Location: `wacore/binary/src/encoder.rs:240-282`
+
+### Capacity Estimation
+
+Auto-sizing strategy samples node structure to estimate capacity:
+
+```rust
+fn estimate_capacity_node(node: &Node) -> usize {
+    let mut estimate = DEFAULT_MARSHAL_CAPACITY + 16;
+    estimate += node.tag.len();
+    estimate += node.attrs.len() * AUTO_ATTR_ESTIMATE;  // ~24 bytes/attr
+    
+    if let Some(NodeContent::Nodes(children)) = &node.content {
+        estimate += children.len() * AUTO_CHILD_ESTIMATE;  // ~96 bytes/child
+        
+        // Sample first 32 children for better accuracy
+        for child in children.iter().take(AUTO_CHILD_SAMPLE_LIMIT) {
+            estimate += child.tag.len() + ...
+        }
+    }
+    
+    estimate.clamp(DEFAULT_MARSHAL_CAPACITY, AUTO_MAX_HINT_CAPACITY)
+}
+```
+
+Location: `wacore/binary/src/marshal.rs:167-200`
+
+## Common Protocol Patterns
+
+### IQ (Info/Query) Stanzas
+
+```rust
+// Request
+NodeBuilder::new("iq")
+    .attr("id", "ABC123")
+    .attr("type", "get")
+    .attr("xmlns", "w:g2")
+    .attr("to", "@s.whatsapp.net")
+    .content_nodes(vec![
+        NodeBuilder::new("query").build(),
+    ])
+    .build()
+
+// Response
+NodeBuilder::new("iq")
+    .attr("id", "ABC123")
+    .attr("type", "result")
+    .attr("from", "@s.whatsapp.net")
+    .content_nodes(vec![
+        NodeBuilder::new("group")
+            .attr("id", "123456@g.us")
+            .attr("subject", "My Group")
+            .build(),
+    ])
+    .build()
+```
+
+### Messages
+
+```rust
+NodeBuilder::new("message")
+    .attr("to", "15551234567@s.whatsapp.net")
+    .attr("type", "text")
+    .attr("id", message_id)
+    .content_nodes(vec![
+        NodeBuilder::new("enc")
+            .attr("v", "2")
+            .attr("type", "msg")
+            .bytes(encrypted_payload)
+            .build(),
+    ])
+    .build()
+```
+
+### Receipts
+
+```rust
+NodeBuilder::new("receipt")
+    .attr("to", "15551234567@s.whatsapp.net")
+    .attr("id", message_id)
+    .attr("type", "read")
+    .attr("t", timestamp)
+    .build()
+```
+
+## Wire Format Examples
+
+### Simple Message
+
+```
+Node: <message type="text"/>
+
+Binary:
+  F8 03           LIST_8(3)  [tag + 2 attrs]
+  13              Token("message")
+  16              Token("type")
+  07              Token("text")
+```
+
+### Message with Body
+
+```
+Node: <message type="text"><body>Hi</body></message>
+
+Binary:
+  F8 04           LIST_8(4)  [tag + 2 attrs + content]
+  13              Token("message")
+  16              Token("type")
+  07              Token("text")
+  F8 02           LIST_8(2)  [child: tag + content]
+  07              Token("body")
+  FC 02           BINARY_8(2)
+  48 69           "Hi"
+```
+
+## Debugging Tools
+
+### Inspecting Encoded Data
+
+Use `evcxr` REPL for interactive exploration:
+
+```rust
+:dep wacore-binary = { path = "wacore/binary" }
+:dep hex = "0.4"
+
+use wacore_binary::marshal::unmarshal_ref;
+use wacore_binary::builder::NodeBuilder;
+
+// Decode binary data
+{
+    let data = hex::decode("f8034c1a07").unwrap();
+    let node = unmarshal_ref(&data).unwrap();
+    println!("Tag: {}", node.tag);
+    for (k, v) in node.attrs.iter() {
+        println!("  {}: {}", k, v);
+    }
+}
+
+// Encode and inspect
+{
+    let node = NodeBuilder::new("message")
+        .attr("type", "text")
+        .build();
+    let bytes = marshal(&node).unwrap();
+    println!("Encoded: {:02x?}", bytes);
+}
+```
+
+## Error Handling
+
+```rust
+pub enum BinaryError {
+    UnexpectedEof,
+    InvalidToken(u8),
+    InvalidListSize,
+    AttrParse(String),
+    LeftoverData(usize),
+    Io(std::io::Error),
+}
+```
+
+Location: `wacore/binary/src/error.rs`
+
+## Related Components
+
+- [Signal Protocol](/advanced/signal-protocol) - How messages are encrypted before marshaling
+- [WebSocket Handling](/advanced/websocket-handling) - How binary data is framed and transmitted
+- [State Management](/advanced/state-management) - Protocol state stored in Device
+
+## References
+
+- Source: `wacore/binary/src/`
+- Token dictionary: `wacore/binary/src/token.rs`
+- Node builder: `wacore/binary/src/builder.rs`

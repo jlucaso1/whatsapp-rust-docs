@@ -1,0 +1,571 @@
+---
+title: Group Management
+description: Learn how to create groups, manage participants, and update group metadata in whatsapp-rust
+---
+
+## Overview
+
+This guide covers group operations including creation, participant management, and metadata updates using the whatsapp-rust library.
+
+## Accessing the Groups API
+
+All group operations are accessed through the `groups()` method:
+
+```rust
+use whatsapp_rust::client::Client;
+
+let groups = client.groups();
+```
+
+See `\1`
+
+## Creating Groups
+
+### Basic Group Creation
+
+```rust
+use whatsapp_rust::features::groups::{GroupCreateOptions, GroupSubject, GroupParticipantOptions};
+use wacore_binary::jid::Jid;
+
+let participant1: Jid = "1234567890@s.whatsapp.net".parse()?;
+let participant2: Jid = "9876543210@s.whatsapp.net".parse()?;
+
+let options = GroupCreateOptions {
+    subject: GroupSubject::new("My New Group")?,
+    participants: vec![
+        GroupParticipantOptions::new(participant1),
+        GroupParticipantOptions::new(participant2),
+    ],
+    ..Default::default()
+};
+
+let result = client.groups().create_group(options).await?;
+println!("Group created with JID: {}", result.gid);
+```
+
+See `\1`
+
+### Group Creation Options
+
+```rust
+use whatsapp_rust::features::groups::{
+    MemberAddMode,
+    MemberLinkMode,
+    MembershipApprovalMode,
+};
+
+let options = GroupCreateOptions {
+    subject: GroupSubject::new("Advanced Group")?,
+    participants: vec![
+        GroupParticipantOptions::new(participant1),
+    ],
+    // Control who can add members
+    member_add_mode: Some(MemberAddMode::AdminAdd),
+    
+    // Control membership approval requirement
+    membership_approval_mode: Some(MembershipApprovalMode::On),
+    
+    // Control who can share invite links
+    member_link_mode: Some(MemberLinkMode::AdminOnly),
+    
+    // Make it an announcement group (only admins can send messages)
+    announce: Some(true),
+    
+    // Lock the group (prevent non-admins from changing group settings)
+    locked: Some(true),
+    
+    // Make it a parent group (can have linked subgroups)
+    parent: Some(false),
+    
+    ..Default::default()
+};
+
+let result = client.groups().create_group(options).await?;
+```
+
+See `\1`
+
+### Group Constraints
+
+```rust
+use whatsapp_rust::features::groups::*;
+
+// Subject: Max 100 characters
+let subject = GroupSubject::new("A".repeat(101));
+assert!(subject.is_err());  // Fails validation
+
+// Description: Max 2048 characters
+let description = GroupDescription::new("B".repeat(2049));
+assert!(description.is_err());  // Fails validation
+
+// Participants: Max 257 (256 + creator)
+// GROUP_SIZE_LIMIT = 257
+```
+
+<Note>
+These limits are based on WhatsApp Web's A/B test properties and may change. The library validates against current known limits.
+</Note>
+
+## Querying Group Information
+
+### Get Group Metadata
+
+```rust
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+
+let metadata = client.groups().get_metadata(&group_jid).await?;
+
+println!("Group: {}", metadata.subject);
+println!("Participants: {}", metadata.participants.len());
+println!("Addressing mode: {:?}", metadata.addressing_mode);
+
+for participant in &metadata.participants {
+    println!("- {} (admin: {})", participant.jid, participant.is_admin);
+    if let Some(phone) = &participant.phone_number {
+        println!("  Phone: {}", phone);
+    }
+}
+```
+
+See `\1`
+
+### List All Groups
+
+```rust
+use std::collections::HashMap;
+
+let groups: HashMap<String, GroupMetadata> = client
+    .groups()
+    .get_participating()
+    .await?;
+
+for (jid, metadata) in groups {
+    println!("{}: {} ({} members)",
+        jid,
+        metadata.subject,
+        metadata.participants.len()
+    );
+}
+```
+
+See `\1`
+
+### Query Group Info (Internal)
+
+For lower-level access with caching:
+
+```rust
+use wacore::client::context::GroupInfo;
+
+let info: GroupInfo = client.groups().query_info(&group_jid).await?;
+
+println!("Participants: {:?}", info.participants);
+println!("Addressing mode: {:?}", info.addressing_mode);
+
+// Access LID-to-phone mapping if available
+if let Some(mapping) = info.get_lid_to_pn_map() {
+    for (lid, pn) in mapping {
+        println!("LID {} -> Phone {}", lid, pn);
+    }
+}
+```
+
+See `\1`
+
+## Updating Group Metadata
+
+### Change Group Subject
+
+```rust
+let new_subject = GroupSubject::new("Updated Group Name")?;
+
+client.groups().set_subject(&group_jid, new_subject).await?;
+```
+
+See `\1`
+
+### Set or Delete Group Description
+
+```rust
+use whatsapp_rust::features::groups::GroupDescription;
+
+// Set description
+let description = GroupDescription::new("This is the group description")?;
+client.groups().set_description(
+    &group_jid,
+    Some(description),
+    None,  // prev description ID (optional)
+).await?;
+
+// Delete description
+client.groups().set_description(
+    &group_jid,
+    None,
+    None,
+).await?;
+```
+
+See `\1`
+
+<Note>
+The `prev` parameter can be used for conflict detection. If provided and the current description ID doesn't match, the operation may fail. Pass `None` if you don't need this check.
+</Note>
+
+## Managing Participants
+
+### Add Participants
+
+```rust
+let new_members = vec![
+    "1111111111@s.whatsapp.net".parse()?,
+    "2222222222@s.whatsapp.net".parse()?,
+];
+
+let responses = client.groups().add_participants(
+    &group_jid,
+    &new_members,
+).await?;
+
+// Check results
+for response in responses {
+    match response.code {
+        200 => println!("Added: {}", response.jid),
+        403 => println!("Failed to add {} (permission denied)", response.jid),
+        409 => println!("{} is already in the group", response.jid),
+        _ => println!("Error adding {}: {}", response.jid, response.code),
+    }
+}
+```
+
+See `\1`
+
+### Remove Participants
+
+```rust
+let members_to_remove = vec![
+    "1111111111@s.whatsapp.net".parse()?,
+];
+
+let responses = client.groups().remove_participants(
+    &group_jid,
+    &members_to_remove,
+).await?;
+
+for response in responses {
+    match response.code {
+        200 => println!("Removed: {}", response.jid),
+        404 => println!("{} is not in the group", response.jid),
+        _ => println!("Error removing {}: {}", response.jid, response.code),
+    }
+}
+```
+
+See `\1`
+
+### Promote to Admin
+
+```rust
+let participants = vec!["1234567890@s.whatsapp.net".parse()?];
+
+client.groups().promote_participants(
+    &group_jid,
+    &participants,
+).await?;
+
+println!("Promoted to admin");
+```
+
+See `\1`
+
+### Demote Admin
+
+```rust
+let participants = vec!["1234567890@s.whatsapp.net".parse()?];
+
+client.groups().demote_participants(
+    &group_jid,
+    &participants,
+).await?;
+
+println!("Demoted from admin");
+```
+
+See `\1`
+
+### Leave Group
+
+```rust
+client.groups().leave(&group_jid).await?;
+println!("Left the group");
+```
+
+See `\1`
+
+## Group Invite Links
+
+### Get Invite Link
+
+```rust
+// Get existing invite link
+let link = client.groups().get_invite_link(&group_jid, false).await?;
+println!("Invite link: https://chat.whatsapp.com/{}", link);
+
+// Reset and get new invite link
+let new_link = client.groups().get_invite_link(&group_jid, true).await?;
+println!("New invite link: https://chat.whatsapp.com/{}", new_link);
+```
+
+See `\1`
+
+<Warning>
+Resetting the invite link (`reset = true`) invalidates the old link. Anyone with the old link will no longer be able to join.
+</Warning>
+
+## Group Settings
+
+### Member Add Mode
+
+Control who can add new members:
+
+```rust
+use whatsapp_rust::features::groups::MemberAddMode;
+
+pub enum MemberAddMode {
+    AdminAdd,      // Only admins can add members
+    AllMemberAdd,  // All members can add others
+}
+
+// Set during creation or via group settings update IQ
+let options = GroupCreateOptions {
+    member_add_mode: Some(MemberAddMode::AdminAdd),
+    ..Default::default()
+};
+```
+
+### Membership Approval Mode
+
+Require admin approval for new members:
+
+```rust
+use whatsapp_rust::features::groups::MembershipApprovalMode;
+
+pub enum MembershipApprovalMode {
+    On,   // Require approval
+    Off,  // Auto-accept
+}
+
+let options = GroupCreateOptions {
+    membership_approval_mode: Some(MembershipApprovalMode::On),
+    ..Default::default()
+};
+```
+
+### Announcement Mode
+
+Make it an announcement group (only admins can send messages):
+
+```rust
+let options = GroupCreateOptions {
+    announce: Some(true),
+    ..Default::default()
+};
+```
+
+## Addressing Modes
+
+Groups can use different addressing modes:
+
+```rust
+use wacore::types::message::AddressingMode;
+
+pub enum AddressingMode {
+    Pn,   // Phone number (legacy)
+    Lid,  // Long ID (new privacy mode)
+}
+
+// Check the group's addressing mode
+let info = client.groups().query_info(&group_jid).await?;
+match info.addressing_mode {
+    AddressingMode::Pn => println!("Group uses phone numbers"),
+    AddressingMode::Lid => println!("Group uses LIDs (privacy mode)"),
+}
+```
+
+<Note>
+LID (Long ID) mode provides better privacy by hiding phone numbers. The library automatically handles LID-to-phone-number mapping when needed.
+</Note>
+
+## Participant Response Codes
+
+When adding or removing participants, check the response codes:
+
+```rust
+use whatsapp_rust::features::groups::ParticipantChangeResponse;
+
+let responses = client.groups().add_participants(&group_jid, &participants).await?;
+
+for response in responses {
+    match response.code {
+        200 => println!("✅ Success"),
+        403 => println!("❌ Permission denied"),
+        404 => println!("❌ Not found"),
+        409 => println!("⚠️  Already in group"),
+        _ => println!("⚠️  Unknown error: {}", response.code),
+    }
+    
+    if let Some(error) = response.error {
+        println!("Error: {}", error);
+    }
+}
+```
+
+## Error Handling
+
+```rust
+use anyhow::Result;
+
+async fn create_group_safely(
+    client: &Client,
+    subject: &str,
+    participants: Vec<Jid>,
+) -> Result<Jid> {
+    let subject = GroupSubject::new(subject)?;
+    
+    let options = GroupCreateOptions {
+        subject,
+        participants: participants
+            .into_iter()
+            .map(GroupParticipantOptions::new)
+            .collect(),
+        ..Default::default()
+    };
+    
+    match client.groups().create_group(options).await {
+        Ok(result) => {
+            println!("✅ Group created: {}", result.gid);
+            Ok(result.gid)
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to create group: {:?}", e);
+            Err(e)
+        }
+    }
+}
+```
+
+## Advanced Usage
+
+### Handling LID Groups
+
+For LID-based groups, you may need phone number mappings:
+
+```rust
+let info = client.groups().query_info(&group_jid).await?;
+
+if info.addressing_mode == AddressingMode::Lid {
+    // Get LID-to-phone mapping
+    if let Some(mapping) = info.get_lid_to_pn_map() {
+        for (lid, pn_jid) in mapping {
+            println!("LID {} maps to phone {}", lid, pn_jid);
+        }
+    }
+}
+```
+
+### Participant Options
+
+For advanced participant configurations:
+
+```rust
+use whatsapp_rust::features::groups::GroupParticipantOptions;
+use wacore_binary::jid::Jid;
+
+let lid_jid: Jid = "123456789012345:10@lid".parse()?;
+let phone_jid: Jid = "1234567890@s.whatsapp.net".parse()?;
+
+let participant = GroupParticipantOptions::new(lid_jid)
+    .with_phone_number(phone_jid);
+
+// The library will automatically resolve phone numbers for LID participants
+```
+
+See `\1`
+
+## Best Practices
+
+<Steps>
+
+### Validate Input Before Creating Groups
+
+```rust
+// ✅ Good: Validate before creation
+let subject = match GroupSubject::new(user_input) {
+    Ok(s) => s,
+    Err(e) => {
+        eprintln!("Invalid subject: {}", e);
+        return Err(e);
+    }
+};
+
+// ❌ Bad: No validation
+let subject = GroupSubject::new(user_input)?;  // May panic on invalid input
+```
+
+### Check Response Codes
+
+Always check participant operation responses:
+
+```rust
+let responses = client.groups().add_participants(&group_jid, &participants).await?;
+
+let mut success_count = 0;
+let mut failed = Vec::new();
+
+for response in responses {
+    if response.code == 200 {
+        success_count += 1;
+    } else {
+        failed.push(response);
+    }
+}
+
+println!("Added {} participants", success_count);
+if !failed.is_empty() {
+    eprintln!("Failed to add {} participants", failed.len());
+}
+```
+
+### Handle Addressing Modes
+
+Be aware of LID vs PN addressing:
+
+```rust
+let info = client.groups().query_info(&group_jid).await?;
+
+if info.addressing_mode == AddressingMode::Lid {
+    // Handle LID-based group
+    // Phone numbers may not be directly visible
+} else {
+    // Handle phone-number-based group
+}
+```
+
+### Cache Group Information
+
+The library automatically caches group info:
+
+```rust
+// First call: fetches from server
+let info = client.groups().query_info(&group_jid).await?;
+
+// Second call: uses cache
+let info = client.groups().query_info(&group_jid).await?;
+```
+
+</Steps>
+
+## Next Steps
+
+- [Sending Messages](/guides/sending-messages) - Send messages to groups
+- [Receiving Messages](/guides/receiving-messages) - Handle group message events
+- [Custom Backends](/guides/custom-backends) - Store group metadata

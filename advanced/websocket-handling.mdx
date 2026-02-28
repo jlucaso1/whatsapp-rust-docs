@@ -1,0 +1,776 @@
+---
+title: 'WebSocket & Noise Protocol'
+description: 'NoiseSocket, connection management, handshake protocol, and frame handling in whatsapp-rust'
+---
+
+## Overview
+
+whatsapp-rust uses WebSocket for transport and the Noise Protocol for encryption. All messages are encrypted at the transport layer before being sent over the network.
+
+## Architecture
+
+The WebSocket handling system has several layers:
+
+```
+src/
+├── handshake.rs           # Noise protocol handshake
+├── socket/
+│   ├── noise_socket.rs    # Encrypted communication layer
+│   ├── mod.rs            # Re-exports
+│   └── error.rs          # Socket errors
+├── transport/            # WebSocket transport abstraction
+└── client.rs            # High-level client orchestration
+```
+
+## Noise Protocol Handshake
+
+The handshake establishes an encrypted channel using the Noise XX pattern.
+
+### Handshake State
+
+```rust
+pub struct HandshakeState {
+    noise_key: KeyPair,           // Client's static Curve25519 keypair
+    client_payload: Vec<u8>,      // Client identification data
+    pattern: &'static str,        // "Noise_XX_25519_AESGCM_SHA256"
+    prologue: &'static [u8],      // "WA" header
+}
+```
+
+Location: `wacore/src/handshake/state.rs`
+
+### Handshake Process
+
+```rust
+// From src/handshake.rs:29-104
+pub async fn do_handshake(
+    device: &Device,
+    transport: Arc<dyn Transport>,
+    transport_events: &mut async_channel::Receiver<TransportEvent>,
+) -> Result<Arc<NoiseSocket>>
+```
+
+**Step-by-step process:**
+
+1. **Prepare client payload:**
+   ```rust
+   let client_payload = device.core.get_client_payload().encode_to_vec();
+   ```
+   The payload contains:
+   - Client version
+   - Platform information
+   - Device details
+
+2. **Initialize Noise state:**
+   ```rust
+   let mut handshake_state = HandshakeState::new(
+       device.core.noise_key.clone(),
+       client_payload,
+       NOISE_START_PATTERN,  // "Noise_XX_25519_AESGCM_SHA256"
+       &WA_CONN_HEADER,      // [0x57, 0x41] ("WA")
+   )?;
+   ```
+
+3. **Send ClientHello:**
+   ```rust
+   let client_hello_bytes = handshake_state.build_client_hello()?;
+   
+   // Optionally include edge routing for faster reconnection
+   let (header, used_edge_routing) = 
+       build_handshake_header(device.core.edge_routing_info.as_deref());
+   
+   let framed = wacore::framing::encode_frame(
+       &client_hello_bytes, 
+       Some(&header)
+   )?;
+   transport.send(framed).await?;
+   ```
+
+4. **Receive ServerHello:**
+   ```rust
+   let resp_frame = loop {
+       match timeout(HANDSHAKE_TIMEOUT, transport_events.recv()).await {
+           Ok(Ok(TransportEvent::DataReceived(data))) => {
+               frame_decoder.feed(&data);
+               if let Some(frame) = frame_decoder.decode_frame() {
+                   break frame;
+               }
+           }
+           // Handle errors...
+       }
+   };
+   ```
+
+5. **Send ClientFinish:**
+   ```rust
+   let client_finish_bytes = handshake_state
+       .read_server_hello_and_build_client_finish(&resp_frame)?;
+   
+   let framed = wacore::framing::encode_frame(&client_finish_bytes, None)?;
+   transport.send(framed).await?;
+   ```
+
+6. **Complete handshake:**
+   ```rust
+   let (write_key, read_key) = handshake_state.finish()?;
+   info!("Handshake complete, switching to encrypted communication");
+   
+   Ok(Arc::new(NoiseSocket::new(transport, write_key, read_key)))
+   ```
+
+Location: `src/handshake.rs:29-104`
+
+### Edge Routing Pre-Intro
+
+For optimized reconnection, the client can include edge routing info in the initial frame:
+
+```rust
+pub fn build_handshake_header(
+    edge_routing_info: Option<&[u8]>
+) -> (Vec<u8>, bool) {
+    let mut header = WA_CONN_HEADER.to_vec();  // [0x57, 0x41]
+    
+    if let Some(info) = edge_routing_info {
+        if info.len() <= 8192 {  // Max size
+            header.extend_from_slice(info);
+            return (header, true);
+        }
+    }
+    
+    (header, false)
+}
+```
+
+Location: `wacore/src/handshake/edge_routing.rs`
+
+### Handshake Errors
+
+```rust
+pub enum HandshakeError {
+    Transport(#[from] anyhow::Error),
+    Core(#[from] CoreHandshakeError),
+    Timeout,
+    UnexpectedEvent(String),
+}
+```
+
+Location: `src/handshake.rs:15-25`
+
+## NoiseSocket
+
+The `NoiseSocket` provides encrypted send/receive operations after handshake.
+
+### Architecture
+
+```rust
+pub struct NoiseSocket {
+    read_key: Arc<NoiseCipher>,
+    read_counter: Arc<AtomicU32>,
+    send_job_tx: mpsc::Sender<SendJob>,
+    sender_task_handle: JoinHandle<()>,
+}
+
+struct SendJob {
+    plaintext_buf: Vec<u8>,
+    out_buf: Vec<u8>,
+    response_tx: oneshot::Sender<SendResult>,
+}
+```
+
+Location: `src/socket/noise_socket.rs:21-32`
+
+### Design Patterns
+
+#### Dedicated Sender Task
+
+The socket uses a dedicated task for sending to ensure frame ordering:
+
+```rust
+impl NoiseSocket {
+    pub fn new(
+        transport: Arc<dyn Transport>,
+        write_key: NoiseCipher,
+        read_key: NoiseCipher,
+    ) -> Self {
+        let (send_job_tx, send_job_rx) = mpsc::channel::<SendJob>(32);
+        
+        // Spawn dedicated sender task
+        let sender_task_handle = tokio::spawn(
+            Self::sender_task(transport, write_key, send_job_rx)
+        );
+        
+        Self {
+            read_key: Arc::new(read_key),
+            read_counter: Arc::new(AtomicU32::new(0)),
+            send_job_tx,
+            sender_task_handle,
+        }
+    }
+}
+```
+
+**Why a dedicated task?**
+
+1. **Ordering guarantee**: Frames must be sent with sequential counters
+2. **Non-blocking**: Callers don't block on encryption or network I/O
+3. **Backpressure**: Channel capacity (32) prevents unbounded queuing
+
+Location: `src/socket/noise_socket.rs:34-62`
+
+#### Sender Task Implementation
+
+```rust
+async fn sender_task(
+    transport: Arc<dyn Transport>,
+    write_key: Arc<NoiseCipher>,
+    mut send_job_rx: mpsc::Receiver<SendJob>,
+) {
+    let mut write_counter: u32 = 0;
+    
+    while let Some(job) = send_job_rx.recv().await {
+        let result = Self::process_send_job(
+            &transport,
+            &write_key,
+            &mut write_counter,
+            job.plaintext_buf,
+            job.out_buf,
+        ).await;
+        
+        // Return buffers to caller for reuse
+        let _ = job.response_tx.send(result);
+    }
+}
+```
+
+Location: `src/socket/noise_socket.rs:64-89`
+
+### Encryption
+
+#### Small Messages (≤16KB)
+
+Encrypted inline to avoid thread pool overhead:
+
+```rust
+if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
+    // Copy to output buffer and encrypt in-place
+    out_buf.clear();
+    out_buf.extend_from_slice(&plaintext_buf);
+    plaintext_buf.clear();
+    
+    write_key.encrypt_in_place_with_counter(counter, &mut out_buf)?;
+    
+    // Frame the ciphertext
+    wacore::framing::encode_frame_into(&ciphertext, None, &mut out_buf)?;
+}
+```
+
+Location: `src/socket/noise_socket.rs:103-130`
+
+#### Large Messages (>16KB)
+
+Offloaded to blocking thread pool:
+
+```rust
+else {
+    let plaintext_arc = Arc::new(plaintext_buf);
+    let plaintext_arc_for_task = plaintext_arc.clone();
+    
+    // Offload to blocking thread
+    let spawn_result = tokio::task::spawn_blocking(move || {
+        write_key.encrypt_with_counter(
+            counter, 
+            &plaintext_arc_for_task[..]
+        )
+    }).await;
+    
+    // Recover original buffer
+    plaintext_buf = Arc::try_unwrap(plaintext_arc)
+        .unwrap_or_else(|arc| (*arc).clone());
+    
+    let ciphertext = spawn_result??;
+    
+    // Frame and send
+    wacore::framing::encode_frame_into(&ciphertext, None, &mut out_buf)?;
+    transport.send(out_buf).await?;
+}
+```
+
+Location: `src/socket/noise_socket.rs:131-164`
+
+<Note>
+  The 16KB threshold is chosen based on benchmarking. Smaller messages benefit from inline encryption (no thread spawning overhead), while larger messages benefit from parallel execution.
+</Note>
+
+### Send API
+
+```rust
+pub async fn encrypt_and_send(
+    &self, 
+    plaintext_buf: Vec<u8>, 
+    out_buf: Vec<u8>
+) -> SendResult {
+    let (response_tx, response_rx) = oneshot::channel();
+    
+    let job = SendJob {
+        plaintext_buf,
+        out_buf,
+        response_tx,
+    };
+    
+    // Send to dedicated task
+    if let Err(send_err) = self.send_job_tx.send(job).await {
+        let job = send_err.0;
+        return Err(EncryptSendError::channel_closed(
+            job.plaintext_buf,
+            job.out_buf,
+        ));
+    }
+    
+    // Wait for result
+    match response_rx.await {
+        Ok(result) => result,
+        Err(_) => Err(EncryptSendError::channel_closed(
+            Vec::new(), Vec::new()
+        )),
+    }
+}
+```
+
+**Buffer Management:**
+
+The API returns both buffers for reuse:
+
+```rust
+type SendResult = Result<(Vec<u8>, Vec<u8>), EncryptSendError>;
+//                        ^^^^^^^^^^^^^^^^^^^^^                  
+//                        (plaintext_buf, out_buf) for reuse
+```
+
+This enables the client to reuse buffers across multiple sends:
+
+```rust
+let mut plaintext_buf = Vec::with_capacity(1024);
+let mut out_buf = Vec::with_capacity(1056);  // plaintext + 32 overhead
+
+loop {
+    plaintext_buf.clear();
+    marshal_to_vec(&message, &mut plaintext_buf)?;
+    
+    (plaintext_buf, out_buf) = 
+        noise_socket.encrypt_and_send(plaintext_buf, out_buf).await?;
+}
+```
+
+Location: `src/socket/noise_socket.rs:173-200`
+
+### Decryption
+
+```rust
+pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
+    self.read_key
+        .decrypt_with_counter(counter, ciphertext)
+        .map_err(|e| SocketError::Crypto(e.to_string()))
+}
+```
+
+**Decryption is synchronous** because:
+
+1. Frames arrive sequentially in the transport receiver
+2. Decryption is fast (AES-GCM hardware acceleration)
+3. No ordering concerns (unlike send)
+
+Location: `src/socket/noise_socket.rs:202-207`
+
+### Cleanup
+
+```rust
+impl Drop for NoiseSocket {
+    fn drop(&mut self) {
+        // Abort sender task to prevent resource leaks
+        self.sender_task_handle.abort();
+    }
+}
+```
+
+Location: `src/socket/noise_socket.rs:210-217`
+
+## Frame Protocol
+
+Messages are framed before encryption:
+
+```rust
+pub fn encode_frame(
+    payload: &[u8], 
+    header: Option<&[u8]>
+) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    
+    if let Some(header) = header {
+        output.extend_from_slice(header);
+    }
+    
+    // 3-byte big-endian length
+    let len = payload.len() as u32;
+    output.push(((len >> 16) & 0xFF) as u8);
+    output.push(((len >> 8) & 0xFF) as u8);
+    output.push((len & 0xFF) as u8);
+    
+    output.extend_from_slice(payload);
+    Ok(output)
+}
+```
+
+Location: `wacore/src/framing/mod.rs:10-30`
+
+### Frame Format
+
+```
+┌────────────────┬─────────────────┬────────────────────┐
+│ Optional Header│  Length (3 bytes)│     Payload       │
+│  (handshake)   │   (big-endian)  │   (encrypted)     │
+└────────────────┴─────────────────┴────────────────────┘
+```
+
+**Frame length limits:**
+
+- Maximum frame size: 16MB (enforced by framing layer)
+- Typical message frame: < 1KB
+- Media messages: 100KB - 2MB (encrypted metadata)
+
+### Frame Decoder
+
+```rust
+pub struct FrameDecoder {
+    buffer: Vec<u8>,
+}
+
+impl FrameDecoder {
+    pub fn feed(&mut self, data: &[u8]) {
+        self.buffer.extend_from_slice(data);
+    }
+    
+    pub fn decode_frame(&mut self) -> Option<Vec<u8>> {
+        if self.buffer.len() < 3 {
+            return None;  // Need length header
+        }
+        
+        let len = u32::from_be_bytes([
+            0,
+            self.buffer[0],
+            self.buffer[1],
+            self.buffer[2],
+        ]) as usize;
+        
+        if self.buffer.len() < 3 + len {
+            return None;  // Incomplete frame
+        }
+        
+        let frame = self.buffer[3..3 + len].to_vec();
+        self.buffer.drain(..3 + len);
+        Some(frame)
+    }
+}
+```
+
+Location: `wacore/src/framing/decoder.rs`
+
+## Transport Abstraction
+
+The transport layer abstracts WebSocket implementation:
+
+```rust
+#[async_trait]
+pub trait Transport: Send + Sync {
+    async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error>;
+    async fn disconnect(&self);
+}
+
+pub enum TransportEvent {
+    Connected,
+    Disconnected,
+    DataReceived(Vec<u8>),
+}
+```
+
+Location: `src/transport/mod.rs`
+
+### WebSocket Implementation
+
+```rust
+pub struct TungsteniteTransport {
+    write_tx: mpsc::Sender<Vec<u8>>,
+    disconnect_tx: Arc<Notify>,
+}
+
+#[async_trait]
+impl Transport for TungsteniteTransport {
+    async fn send(&self, data: Vec<u8>) -> Result<()> {
+        self.write_tx.send(data).await
+            .map_err(|_| anyhow!("transport closed"))
+    }
+    
+    async fn disconnect(&self) {
+        self.disconnect_tx.notify_one();
+    }
+}
+```
+
+Location: `src/transport/tungstenite.rs`
+
+## Connection Lifecycle
+
+### 1. Connect
+
+```rust
+impl Client {
+    pub async fn connect(&self) -> Result<()> {
+        // Create WebSocket transport
+        let (transport, mut events) = TungsteniteTransport::connect(
+            "wss://web.whatsapp.com/ws/chat"
+        ).await?;
+        
+        // Perform Noise handshake
+        let device = self.persistence_manager.get_device_snapshot().await;
+        let noise_socket = do_handshake(
+            &device,
+            transport,
+            &mut events
+        ).await?;
+        
+        // Store socket and start receivers
+        self.noise_socket.store(Some(Arc::clone(&noise_socket)));
+        self.start_frame_receiver(events, noise_socket).await;
+        
+        Ok(())
+    }
+}
+```
+
+### 2. Frame Receiver
+
+```rust
+async fn start_frame_receiver(
+    &self,
+    mut events: Receiver<TransportEvent>,
+    noise_socket: Arc<NoiseSocket>,
+) {
+    tokio::spawn(async move {
+        let mut frame_decoder = FrameDecoder::new();
+        
+        while let Ok(event) = events.recv().await {
+            match event {
+                TransportEvent::DataReceived(data) => {
+                    frame_decoder.feed(&data);
+                    
+                    while let Some(frame) = frame_decoder.decode_frame() {
+                        // Decrypt frame
+                        let plaintext = noise_socket
+                            .decrypt_frame(&frame)?;
+                        
+                        // Process message
+                        self.handle_frame(plaintext).await?;
+                    }
+                }
+                TransportEvent::Disconnected => {
+                    self.handle_disconnect().await;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+}
+```
+
+### 3. Send Message
+
+```rust
+impl Client {
+    pub async fn send_node(&self, node: &Node) -> Result<()> {
+        let noise_socket = self.noise_socket.load()
+            .ok_or_else(|| anyhow!("not connected"))?;
+        
+        // Reuse buffers for efficiency
+        let mut plaintext_buf = Vec::with_capacity(1024);
+        let mut out_buf = Vec::with_capacity(1056);
+        
+        // Marshal node to binary
+        marshal_to_vec(node, &mut plaintext_buf)?;
+        
+        // Encrypt and send
+        (plaintext_buf, out_buf) = noise_socket
+            .encrypt_and_send(plaintext_buf, out_buf)
+            .await?;
+        
+        // Buffers returned for potential reuse
+        Ok(())
+    }
+}
+```
+
+### 4. Disconnect
+
+```rust
+impl Client {
+    pub async fn disconnect(&self) -> Result<()> {
+        if let Some(socket) = self.noise_socket.swap(None) {
+            // Transport will close connection
+            socket.transport.disconnect().await;
+        }
+        Ok(())
+    }
+}
+```
+
+## Error Handling
+
+### Socket Errors
+
+```rust
+pub enum SocketError {
+    Crypto(String),
+    Transport(#[from] anyhow::Error),
+    Framing(#[from] FramingError),
+}
+
+pub enum EncryptSendError {
+    Crypto { error: anyhow::Error, ... },
+    Transport { error: anyhow::Error, ... },
+    Framing { error: FramingError, ... },
+    Join { error: JoinError, ... },
+    ChannelClosed { ... },
+}
+```
+
+All variants return buffers for reuse:
+
+```rust
+impl EncryptSendError {
+    pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
+        match self {
+            Self::Crypto { plaintext_buf, out_buf, .. } => 
+                (plaintext_buf, out_buf),
+            Self::Transport { plaintext_buf, out_buf, .. } => 
+                (plaintext_buf, out_buf),
+            // ...
+        }
+    }
+}
+```
+
+Location: `src/socket/error.rs`
+
+### Retry Strategy
+
+```rust
+impl Client {
+    pub async fn connect_with_retry(&self, max_attempts: u32) -> Result<()> {
+        let mut attempt = 0;
+        
+        loop {
+            match self.connect().await {
+                Ok(()) => return Ok(()),
+                Err(e) if attempt < max_attempts => {
+                    attempt += 1;
+                    let backoff = Duration::from_secs(2u64.pow(attempt));
+                    warn!("Connection failed (attempt {attempt}): {e}");
+                    sleep(backoff).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+```
+
+## Performance Considerations
+
+### Buffer Sizing
+
+Optimal buffer capacity based on payload characteristics:
+
+```rust
+// Encrypted size = plaintext + 16 (AES-GCM tag) + 3 (frame header)
+let buffer_capacity = plaintext.len() + 32;  // Extra headroom
+let out_buf = Vec::with_capacity(buffer_capacity);
+```
+
+Location: `src/socket/noise_socket.rs:373-407` (tests verify this formula)
+
+### SIMD Encryption
+
+The Noise cipher uses hardware AES acceleration when available:
+
+```rust
+pub struct NoiseCipher {
+    cipher: Aes256Gcm,  // Uses AES-NI on x86_64
+}
+```
+
+### Zero-Copy Patterns
+
+```rust
+// Bad: Allocates new buffer
+let data = node.to_bytes();
+socket.send(data).await?;
+
+// Good: Reuses buffer
+let mut buf = Vec::with_capacity(1024);
+marshal_to_vec(&node, &mut buf)?;
+socket.send(buf).await?;
+```
+
+## Testing
+
+### Mock Transport
+
+```rust
+pub struct MockTransport;
+
+#[async_trait]
+impl Transport for MockTransport {
+    async fn send(&self, data: Vec<u8>) -> Result<()> {
+        // Record for assertions
+        Ok(())
+    }
+    async fn disconnect(&self) {}
+}
+```
+
+Location: `src/transport/mock.rs`
+
+### Test Cases
+
+Key test scenarios:
+
+```rust
+#[tokio::test]
+async fn test_encrypt_and_send_returns_both_buffers()
+
+#[tokio::test]
+async fn test_concurrent_sends_maintain_order()
+
+#[tokio::test]
+async fn test_encrypted_buffer_sizing_is_sufficient()
+
+#[tokio::test]
+async fn test_handshake_with_edge_routing()
+```
+
+Location: `src/socket/noise_socket.rs:219-459`
+
+## Related Components
+
+- [Signal Protocol](/advanced/signal-protocol) - Message-level encryption
+- [Binary Protocol](/advanced/binary-protocol) - Payload serialization
+- [State Management](/advanced/state-management) - Connection state persistence
+
+## References
+
+- Handshake: `src/handshake.rs`
+- NoiseSocket: `src/socket/noise_socket.rs`
+- Framing: `wacore/src/framing/`
+- Transport: `src/transport/`
+- [Noise Protocol Framework](https://noiseprotocol.org/noise.html)
+- [Noise XX Pattern](https://noiseprotocol.org/noise.html#interactive-patterns)

@@ -1,0 +1,332 @@
+---
+title: "send"
+description: "Send messages, configure send options, and revoke messages"
+---
+
+## send_message
+
+Send a message to a chat.
+
+```rust
+pub async fn send_message(
+    &self,
+    to: Jid,
+    message: wa::Message,
+) -> Result<String, anyhow::Error>
+```
+
+<ParamField path="to" type="Jid" required>
+  Recipient JID. Can be:
+  - Direct message: `15551234567@s.whatsapp.net`
+  - Group: `120363040237990503@g.us`
+  - Newsletter: `120363999999999999@newsletter`
+</ParamField>
+
+<ParamField path="message" type="wa::Message" required>
+  Protobuf message to send. Set one of the message fields:
+  - `conversation` - Plain text message
+  - `extended_text_message` - Text with formatting/links
+  - `image_message` - Image with caption
+  - `video_message` - Video with caption
+  - `document_message` - Document/file
+  - `audio_message` - Audio/voice note
+  - `sticker_message` - Sticker
+  - `location_message` - GPS location
+  - `contact_message` - Contact card
+</ParamField>
+
+<ResponseField name="message_id" type="String">
+  Unique message ID generated for this message. Use this ID to track delivery receipts and edit/revoke the message.
+</ResponseField>
+
+### Example: Text Message
+
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    conversation: Some("Hello, world!".to_string()),
+    ..Default::default()
+};
+
+let message_id = client.send_message(
+    "15551234567@s.whatsapp.net".parse()?,
+    message
+).await?;
+
+println!("Message sent with ID: {}", message_id);
+```
+
+### Example: Image with Caption
+
+```rust
+use waproto::whatsapp as wa;
+
+// First upload the image
+let upload_result = client.upload(image_bytes, MediaType::Image).await?;
+
+let message = wa::Message {
+    image_message: Some(Box::new(wa::message::ImageMessage {
+        url: Some(upload_result.url),
+        direct_path: Some(upload_result.direct_path),
+        media_key: Some(upload_result.media_key),
+        file_enc_sha256: Some(upload_result.file_enc_sha256),
+        file_sha256: Some(upload_result.file_sha256),
+        file_length: Some(upload_result.file_length),
+        caption: Some("Check out this image!".to_string()),
+        mimetype: Some("image/jpeg".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(chat_jid, message).await?;
+```
+
+---
+
+## send_message_with_options
+
+Send a message with additional customization options.
+
+```rust
+pub async fn send_message_with_options(
+    &self,
+    to: Jid,
+    message: wa::Message,
+    options: SendOptions,
+) -> Result<String, anyhow::Error>
+```
+
+<ParamField path="to" type="Jid" required>
+  Recipient JID
+</ParamField>
+
+<ParamField path="message" type="wa::Message" required>
+  Protobuf message to send
+</ParamField>
+
+<ParamField path="options" type="SendOptions" required>
+  Additional send options (see below)
+</ParamField>
+
+<ResponseField name="message_id" type="String">
+  Unique message ID
+</ResponseField>
+
+### SendOptions
+
+Options for customizing message sending behavior.
+
+```rust
+pub struct SendOptions {
+    /// Extra XML nodes to add to the message stanza
+    pub extra_stanza_nodes: Vec<Node>,
+}
+```
+
+<ParamField path="extra_stanza_nodes" type="Vec<Node>" default="[]">
+  Additional XML nodes to include in the message stanza. Used for advanced protocol features like quoted replies, mentions, or custom metadata.
+</ParamField>
+
+### Example: Send with Custom Options
+
+```rust
+use wacore_binary::builder::NodeBuilder;
+
+let options = SendOptions {
+    extra_stanza_nodes: vec![
+        NodeBuilder::new("custom-tag")
+            .attr("key", "value")
+            .build()
+    ],
+};
+
+let message_id = client.send_message_with_options(
+    chat_jid,
+    message,
+    options
+).await?;
+```
+
+---
+
+## revoke_message
+
+Delete a message for everyone in the chat (revoke).
+
+This sends a revoke protocol message that removes the message for all participants. The message will show as "This message was deleted" for recipients.
+
+```rust
+pub async fn revoke_message(
+    &self,
+    to: Jid,
+    message_id: impl Into<String>,
+    revoke_type: RevokeType,
+) -> Result<(), anyhow::Error>
+```
+
+<ParamField path="to" type="Jid" required>
+  Chat JID (direct message or group)
+</ParamField>
+
+<ParamField path="message_id" type="String" required>
+  ID of the message to delete (from `send_message` return value)
+</ParamField>
+
+<ParamField path="revoke_type" type="RevokeType" required>
+  Who is revoking the message:
+  - `RevokeType::Sender` - Delete your own message
+  - `RevokeType::Admin { original_sender }` - Admin deleting another user's message in a group
+</ParamField>
+
+### RevokeType
+
+Specifies who is revoking (deleting) the message.
+
+```rust
+pub enum RevokeType {
+    /// The message sender deleting their own message
+    Sender,
+    /// A group admin deleting another user's message
+    /// `original_sender` is the JID of the user who sent the message
+    Admin { original_sender: Jid },
+}
+```
+
+<ParamField path="Sender" type="variant">
+  Default variant. Use when deleting your own message. Works in both DMs and groups.
+</ParamField>
+
+<ParamField path="Admin" type="variant">
+  Use when a group admin is deleting another user's message. Only valid in groups. Requires `original_sender` JID.
+</ParamField>
+
+### Example: Revoke Own Message
+
+```rust
+// Send a message
+let message_id = client.send_message(
+    chat_jid,
+    message
+).await?;
+
+// Delete it (sender revoke)
+client.revoke_message(
+    chat_jid,
+    &message_id,
+    RevokeType::Sender
+).await?;
+```
+
+### Example: Admin Revoke in Group
+
+```rust
+use wacore_binary::jid::Jid;
+
+// Admin deleting another user's message
+let original_sender: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.revoke_message(
+    group_jid,
+    &message_id,
+    RevokeType::Admin { original_sender }
+).await?;
+```
+
+<Note>
+  Admin revoke is only valid for group chats. Attempting to use it in a direct message will return an error.
+</Note>
+
+---
+
+## Message Types
+
+The `wa::Message` protobuf supports various message types. Set exactly one of these fields:
+
+### Text Messages
+
+<ParamField path="conversation" type="String">
+  Simple text message without formatting
+</ParamField>
+
+<ParamField path="extended_text_message" type="ExtendedTextMessage">
+  Text with formatting, links, quoted replies, or mentions
+  
+  Key fields:
+  - `text` - Message text
+  - `contextInfo` - Quoted message, mentions
+  - `previewType` - Link preview behavior
+</ParamField>
+
+### Media Messages
+
+<ParamField path="image_message" type="ImageMessage">
+  Image with optional caption. Upload the image first using `client.upload()`, then populate:
+  - `url`, `direct_path`, `media_key`, `file_enc_sha256`, `file_sha256`, `file_length`
+  - `caption` - Image caption
+  - `mimetype` - e.g., `"image/jpeg"`
+</ParamField>
+
+<ParamField path="video_message" type="VideoMessage">
+  Video with optional caption. Same upload pattern as images.
+</ParamField>
+
+<ParamField path="audio_message" type="AudioMessage">
+  Audio file or voice note:
+  - `ptt` - Set to `true` for voice notes (Push-To-Talk)
+  - `mimetype` - e.g., `"audio/ogg; codecs=opus"`
+</ParamField>
+
+<ParamField path="document_message" type="DocumentMessage">
+  Document/file with metadata:
+  - `file_name` - Original filename
+  - `mimetype` - File MIME type
+  - `caption` - Optional description
+</ParamField>
+
+<ParamField path="sticker_message" type="StickerMessage">
+  Sticker image (WebP format)
+</ParamField>
+
+### Other Messages
+
+<ParamField path="location_message" type="LocationMessage">
+  GPS location with latitude, longitude, and optional name/address
+</ParamField>
+
+<ParamField path="contact_message" type="ContactMessage">
+  Contact card with vCard data
+</ParamField>
+
+<ParamField path="contacts_array_message" type="ContactsArrayMessage">
+  Multiple contact cards
+</ParamField>
+
+<ParamField path="live_location_message" type="LiveLocationMessage">
+  Real-time location sharing
+</ParamField>
+
+<ParamField path="reaction_message" type="ReactionMessage">
+  Emoji reaction to another message
+</ParamField>
+
+### Example: Extended Text with Quote
+
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        text: Some("Reply to your message".to_string()),
+        context_info: Some(wa::ContextInfo {
+            stanza_id: Some(quoted_message_id),
+            participant: Some(quoted_sender_jid.to_string()),
+            quoted_message: Some(Box::new(quoted_message)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+```

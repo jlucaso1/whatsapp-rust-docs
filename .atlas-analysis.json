@@ -1,0 +1,128 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "WhatsApp Rust",
+  "projectDescription": "High-performance async Rust library for the WhatsApp Web API with end-to-end encryption support",
+  "theme": "aspen",
+  "primaryColor": "#25D366",
+  "lightColor": "#DCF8C6",
+  "darkColor": "#075E54",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/authentication",
+              "concepts/events",
+              "concepts/storage"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/sending-messages",
+              "guides/receiving-messages",
+              "guides/media-handling",
+              "guides/group-management",
+              "guides/custom-backends"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/signal-protocol",
+              "advanced/binary-protocol",
+              "advanced/state-management",
+              "advanced/websocket-handling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/client",
+              "api/bot"
+            ]
+          },
+          {
+            "group": "Messaging",
+            "pages": [
+              "api/send",
+              "api/download",
+              "api/upload",
+              "api/receipt"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "api/groups",
+              "api/contacts",
+              "api/presence",
+              "api/chatstate",
+              "api/blocking"
+            ]
+          },
+          {
+            "group": "Storage & Backends",
+            "pages": [
+              "api/store",
+              "api/transport",
+              "api/http-client"
+            ]
+          },
+          {
+            "group": "Core Modules",
+            "pages": [
+              "api/wacore",
+              "api/waproto"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "QR code and pair code authentication",
+    "End-to-end encrypted messaging with Signal Protocol",
+    "Group chat management and operations",
+    "Media upload/download with automatic encryption",
+    "Pluggable storage, transport, and HTTP backends",
+    "Async/await with Tokio runtime",
+    "Type-safe protocol implementations",
+    "Bot framework with event handling"
+  ],
+  "publicApiSurface": [
+    "Client",
+    "Bot",
+    "Groups",
+    "Contacts",
+    "Presence",
+    "Chatstate",
+    "Blocking",
+    "send_message",
+    "download",
+    "upload",
+    "SqliteStore",
+    "TokioWebSocketTransportFactory",
+    "UreqHttpClient",
+    "Event",
+    "Jid",
+    "NodeBuilder"
+  ]
+}

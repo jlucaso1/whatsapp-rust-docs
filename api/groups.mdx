@@ -1,0 +1,407 @@
+---
+title: Groups
+description: Group management operations - create, modify, and manage WhatsApp groups
+---
+
+The `Groups` trait provides methods for managing WhatsApp groups, including creating groups, managing participants, and modifying group settings.
+
+## Access
+
+Access group operations through the client:
+
+```rust
+let groups = client.groups();
+```
+
+## Methods
+
+### query_info
+
+Query group information with caching support.
+
+```rust
+pub async fn query_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID (must end with `@g.us`)
+
+**Returns:**
+- `GroupInfo` - Contains participants list and addressing mode
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let info = client.groups().query_info(&group_jid).await?;
+
+println!("Participants: {}", info.participants().len());
+println!("Addressing mode: {:?}", info.addressing_mode());
+```
+
+### get_participating
+
+Get all groups the client is participating in.
+
+```rust
+pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, anyhow::Error>
+```
+
+**Returns:**
+- `HashMap<String, GroupMetadata>` - Map of group JID strings to metadata
+
+**GroupMetadata fields:**
+- `id: Jid` - Group JID
+- `subject: String` - Group name
+- `participants: Vec<GroupParticipant>` - List of participants
+- `addressing_mode: AddressingMode` - Phone number or LID mode
+
+**GroupParticipant fields:**
+- `jid: Jid` - Participant JID
+- `phone_number: Option<Jid>` - Phone number JID (for LID groups)
+- `is_admin: bool` - Whether participant is an admin
+
+**Example:**
+```rust
+let groups = client.groups().get_participating().await?;
+
+for (jid_str, metadata) in groups {
+    println!("Group: {} ({})", metadata.subject, jid_str);
+    println!("  Participants: {}", metadata.participants.len());
+    
+    for participant in &metadata.participants {
+        println!("    {} (admin: {})", participant.jid, participant.is_admin);
+    }
+}
+```
+
+### get_metadata
+
+Get metadata for a specific group.
+
+```rust
+pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+
+**Returns:**
+- `GroupMetadata` - Group metadata (see `get_participating` for fields)
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let metadata = client.groups().get_metadata(&group_jid).await?;
+
+println!("Subject: {}", metadata.subject);
+println!("Mode: {:?}", metadata.addressing_mode);
+```
+
+### create_group
+
+Create a new group.
+
+```rust
+pub async fn create_group(
+    &self,
+    options: GroupCreateOptions,
+) -> Result<CreateGroupResult, anyhow::Error>
+```
+
+**Parameters:**
+- `options: GroupCreateOptions` - Group creation options
+  - `subject: GroupSubject` - Group name (max 100 characters)
+  - `participants: Vec<GroupParticipantOptions>` - Initial participants
+  - `description: Option<GroupDescription>` - Optional description (max 2048 characters)
+  - `member_add_mode: MemberAddMode` - Who can add members
+  - `membership_approval_mode: MembershipApprovalMode` - Require admin approval
+
+**Returns:**
+- `CreateGroupResult` with `gid: Jid` field
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::{GroupCreateOptions, GroupSubject};
+
+let subject = GroupSubject::new("My New Group")?;
+let participant1: Jid = "15551234567@s.whatsapp.net".parse()?;
+let participant2: Jid = "15559876543@s.whatsapp.net".parse()?;
+
+let options = GroupCreateOptions::new(subject)
+    .with_participants(vec![participant1, participant2]);
+
+let result = client.groups().create_group(options).await?;
+println!("Created group: {}", result.gid);
+```
+
+### set_subject
+
+Change the group name.
+
+```rust
+pub async fn set_subject(&self, jid: &Jid, subject: GroupSubject) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `subject` - New group name (max 100 characters)
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let new_subject = GroupSubject::new("Updated Group Name")?;
+
+client.groups().set_subject(&group_jid, new_subject).await?;
+```
+
+### set_description
+
+Set or delete the group description.
+
+```rust
+pub async fn set_description(
+    &self,
+    jid: &Jid,
+    description: Option<GroupDescription>,
+    prev: Option<String>,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `description` - New description (max 2048 characters) or `None` to delete
+- `prev` - Current description ID for conflict detection (pass `None` if unknown)
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let desc = GroupDescription::new("This is our group chat")?;
+
+client.groups().set_description(&group_jid, Some(desc), None).await?;
+
+// Delete description
+client.groups().set_description(&group_jid, None, None).await?;
+```
+
+### leave
+
+Leave a group.
+
+```rust
+pub async fn leave(&self, jid: &Jid) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID to leave
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+client.groups().leave(&group_jid).await?;
+```
+
+### add_participants
+
+Add participants to a group.
+
+```rust
+pub async fn add_participants(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of participant JIDs to add
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let new_members = vec![
+    "15551234567@s.whatsapp.net".parse()?,
+    "15559876543@s.whatsapp.net".parse()?,
+];
+
+let results = client.groups().add_participants(&group_jid, &new_members).await?;
+
+for result in results {
+    println!("Added: {:?}", result);
+}
+```
+
+### remove_participants
+
+Remove participants from a group.
+
+```rust
+pub async fn remove_participants(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of participant JIDs to remove
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_remove = vec!["15551234567@s.whatsapp.net".parse()?];
+
+client.groups().remove_participants(&group_jid, &to_remove).await?;
+```
+
+### promote_participants
+
+Promote participants to admin.
+
+```rust
+pub async fn promote_participants(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of participant JIDs to promote
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_promote = vec!["15551234567@s.whatsapp.net".parse()?];
+
+client.groups().promote_participants(&group_jid, &to_promote).await?;
+```
+
+### demote_participants
+
+Demote admin participants to regular members.
+
+```rust
+pub async fn demote_participants(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of admin JIDs to demote
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_demote = vec!["15551234567@s.whatsapp.net".parse()?];
+
+client.groups().demote_participants(&group_jid, &to_demote).await?;
+```
+
+### get_invite_link
+
+Get or reset the group invite link.
+
+```rust
+pub async fn get_invite_link(&self, jid: &Jid, reset: bool) -> Result<String, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `reset` - Whether to reset and generate a new invite link
+
+**Returns:**
+- `String` - Invite link code
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Get current invite link
+let link = client.groups().get_invite_link(&group_jid, false).await?;
+println!("Invite link: https://chat.whatsapp.com/{}", link);
+
+// Reset and get new link
+let new_link = client.groups().get_invite_link(&group_jid, true).await?;
+println!("New invite link: https://chat.whatsapp.com/{}", new_link);
+```
+
+## Types
+
+### GroupSubject
+
+Validated group name with 100 character limit.
+
+```rust
+impl GroupSubject {
+    pub fn new(subject: impl Into<String>) -> Result<Self, anyhow::Error>
+    pub fn into_string(self) -> String
+}
+```
+
+### GroupDescription
+
+Validated group description with 2048 character limit.
+
+```rust
+impl GroupDescription {
+    pub fn new(description: impl Into<String>) -> Result<Self, anyhow::Error>
+    pub fn into_string(self) -> String
+}
+```
+
+### MemberAddMode
+
+```rust
+pub enum MemberAddMode {
+    AdminAdd,      // Only admins can add members
+    AllMemberAdd,  // All members can add
+}
+```
+
+### MembershipApprovalMode
+
+```rust
+pub enum MembershipApprovalMode {
+    Off,  // No approval required
+    On,   // Admin approval required
+}
+```
+
+### AddressingMode
+
+```rust
+pub enum AddressingMode {
+    Pn,   // Phone number addressing
+    Lid,  // LID (privacy) addressing
+}
+```
+
+## Error Handling
+
+All methods return `Result<T, anyhow::Error>`. Common errors:
+
+- Invalid JID format
+- Network errors
+- Permission denied (not admin)
+- Group not found
+- Subject/description too long
+- Participant not found
+
+```rust
+match client.groups().set_subject(&group_jid, subject).await {
+    Ok(_) => println!("Subject updated"),
+    Err(e) => eprintln!("Failed to update subject: {}", e),
+}
+```

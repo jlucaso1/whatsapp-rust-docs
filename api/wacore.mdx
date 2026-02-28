@@ -1,0 +1,380 @@
+---
+title: "wacore"
+description: "Platform-agnostic WhatsApp protocol implementation"
+---
+
+## Overview
+
+`wacore` is the core WhatsApp protocol implementation for whatsapp-rust. It's designed to be **platform-agnostic** with no runtime dependencies on Tokio or specific databases, making it portable across different async runtimes and storage backends.
+
+```toml
+[dependencies]
+wacore = "0.2.0"
+```
+
+## Philosophy
+
+wacore contains all the core logic for:
+- Binary protocol encoding/decoding
+- Cryptographic primitives (AES-GCM, Signal Protocol)
+- IQ protocol types and specifications
+- State management traits
+- Message builders and parsers
+
+It has **no runtime dependencies** on Tokio or databases. The main `whatsapp-rust` crate integrates wacore with Tokio for async operations and Diesel for persistence.
+
+## Key Exports
+
+### Re-exported Crates
+
+```rust
+pub use aes_gcm;                      // AES-GCM encryption
+pub use wacore_appstate as appstate;  // App state sync
+pub use wacore_noise as noise;        // Noise Protocol
+pub use wacore_libsignal as libsignal; // Signal Protocol
+```
+
+### Derive Macros
+
+```rust
+pub use wacore_derive::{EmptyNode, ProtocolNode, StringEnum};
+```
+
+- **`EmptyNode`** - For protocol nodes with only a tag (no attributes)
+- **`ProtocolNode`** - For protocol nodes with string attributes  
+- **`StringEnum`** - For enums with string representations
+
+See [Binary Protocol](/advanced/binary-protocol) for usage examples.
+
+### Framing
+
+```rust
+pub use wacore_noise::framing; // WebSocket frame encoding/decoding
+```
+
+## Core Modules
+
+### Protocol & Binary
+
+<CardGroup cols={2}>
+  <Card title="Binary protocol" icon="code" href="/advanced/binary-protocol">
+    Type-safe protocol node builders and parsers
+  </Card>
+  <Card title="xml" icon="brackets-curly">
+    XML utilities for protocol nodes
+  </Card>
+</CardGroup>
+
+### Cryptography
+
+<CardGroup cols={2}>
+  <Card title="Signal Protocol" icon="shield-halved" href="/advanced/signal-protocol">
+    Signal Protocol implementation for E2E encryption
+  </Card>
+  <Card title="noise" icon="fingerprint">
+    Noise Protocol XX for handshake encryption
+  </Card>
+</CardGroup>
+
+### IQ Protocol
+
+```rust
+pub mod iq;
+```
+
+Type-safe IQ request/response specifications:
+
+- **`blocklist`** - Block/unblock contacts
+- **`chatstate`** - Typing indicators, presence
+- **`contacts`** - Contact synchronization
+- **`dirty`** - Dirty bit checking
+- **`groups`** - Group management operations
+- **`keepalive`** - Connection keepalive
+- **`mediaconn`** - Media server connections
+- **`mex`** - Message Extension queries
+- **`passive`** - Passive IQ handling
+- **`prekeys`** - Prekey distribution
+- **`privacy`** - Privacy settings
+- **`props`** - Server properties
+- **`spam_report`** - Spam reporting
+- **`tctoken`** - Temporary client tokens
+- **`usync`** - User synchronization
+
+See [Architecture](/concepts/architecture) for the IQ protocol pattern.
+
+### Message Handling
+
+<CardGroup cols={2}>
+  <Card title="messages" icon="message">
+    Message encryption and decryption
+  </Card>
+  <Card title="send" icon="paper-plane">
+    Message sending logic
+  </Card>
+  <Card title="download" icon="download">
+    Media download and decryption
+  </Card>
+  <Card title="upload" icon="upload">
+    Media encryption and upload preparation
+  </Card>
+</CardGroup>
+
+### State Management
+
+```rust
+pub mod store;
+```
+
+- **`Device`** - Core device state structure
+- **`DeviceCommand`** - State mutation commands
+- **`traits`** - Backend trait definitions (`Backend`, `SessionStore`, etc.)
+
+See [State Management](/advanced/state-management) for the command pattern.
+
+### Connection & Pairing
+
+<CardGroup cols={2}>
+  <Card title="handshake" icon="handshake">
+    Noise Protocol handshake
+  </Card>
+  <Card title="pair" icon="qrcode">
+    QR code pairing
+  </Card>
+  <Card title="pair_code" icon="mobile">
+    Phone number pairing
+  </Card>
+  <Card title="net" icon="network-wired">
+    Network utilities
+  </Card>
+</CardGroup>
+
+### Specialized Features
+
+<CardGroup cols={2}>
+  <Card title="appstate" icon="database">
+    App state synchronization (contacts, settings)
+  </Card>
+  <Card title="history_sync" icon="clock-rotate-left">
+    Message history synchronization
+  </Card>
+  <Card title="usync" icon="users">
+    User device list synchronization
+  </Card>
+  <Card title="prekeys" icon="key">
+    Signal Protocol prekey generation
+  </Card>
+</CardGroup>
+
+### Utilities
+
+- **`client`** - Client context traits
+- **`ib`** - Identity byte utilities
+- **`proto_helpers`** - Protobuf conversion helpers
+- **`reporting_token`** - Reporting token generation
+- **`request`** - Request building utilities
+- **`stanza`** - Common stanza builders
+- **`types`** - Common type definitions (JID, events, messages)
+- **`version`** - WhatsApp version constants
+
+## Submodule Packages
+
+wacore is split into several workspace crates:
+
+### wacore-binary
+
+**Location:** `wacore/binary`
+
+Binary protocol encoding/decoding using WhatsApp's custom format.
+
+```rust
+use wacore_binary::{
+    jid::Jid,
+    node::Node,
+    builder::NodeBuilder,
+    marshal::{marshal, unmarshal_ref},
+};
+
+let node = NodeBuilder::new("message")
+    .attr("type", "text")
+    .attr("to", "15551234567@s.whatsapp.net")
+    .build();
+
+let bytes = marshal(&node)?;
+let decoded = unmarshal_ref(&bytes)?;
+```
+
+**Key exports:**
+- `jid::Jid` - WhatsApp JID (Jabber ID) parsing
+- `node::{Node, NodeRef, NodeValue}` - Protocol node types
+- `builder::NodeBuilder` - Fluent node builder
+- `marshal::*` - Binary marshaling functions
+- `attrs::AttrParser` - Attribute parsing utilities
+- `token` - Token dictionary
+
+### wacore-libsignal
+
+**Location:** `wacore/libsignal`
+
+Signal Protocol implementation for end-to-end encryption.
+
+```rust
+use wacore::libsignal::{
+    core::SessionCipher,
+    protocol::{PreKeyBundle, PublicKey},
+    store::SessionStore,
+};
+```
+
+**Key modules:**
+- `core` - Core session cipher logic
+- `crypto` - Cryptographic primitives (HKDF, HMAC, AES)
+- `protocol` - Protocol message types
+- `store` - Store trait definitions
+
+See [Signal Protocol](/advanced/signal-protocol) for encryption details.
+
+### wacore-noise
+
+**Location:** `wacore/noise`
+
+Noise Protocol XX implementation for handshake encryption.
+
+```rust
+use wacore::noise::{
+    NoiseHandshake,
+    HandshakeUtils,
+    build_handshake_header,
+};
+```
+
+**Key exports:**
+- `NoiseState` - Generic Noise XX state machine
+- `NoiseHandshake` - WhatsApp-specific handshake wrapper
+- `HandshakeUtils` - Protocol message building/parsing
+- `framing` - WebSocket frame encoding
+- `build_edge_routing_preintro` - Edge routing helper
+
+### wacore-appstate
+
+**Location:** `wacore/appstate`
+
+App state synchronization for contacts, settings, and metadata.
+
+```rust
+use wacore::appstate::{
+    process_snapshot,
+    process_patch,
+    expand_app_state_keys,
+    Mutation,
+};
+```
+
+**Key exports:**
+- `process_snapshot` - Process full state snapshots
+- `process_patch` - Apply incremental patches
+- `Mutation` - State mutation records
+- `LTHash` - LTHash implementation for integrity
+- `expand_app_state_keys` - Key derivation
+
+### wacore-derive
+
+**Location:** `wacore/derive`
+
+Procedural macros for protocol node generation.
+
+```rust
+use wacore::{EmptyNode, ProtocolNode, StringEnum};
+
+#[derive(EmptyNode)]
+#[protocol(tag = "participants")]
+pub struct ParticipantsRequest;
+
+#[derive(ProtocolNode)]
+#[protocol(tag = "query")]
+pub struct QueryRequest {
+    #[attr(name = "request", default = "interactive")]
+    pub request_type: String,
+}
+
+#[derive(StringEnum)]
+pub enum Action {
+    #[str = "block"]
+    Block,
+    #[str = "unblock"]
+    Unblock,
+}
+```
+
+## Usage in Main Library
+
+The main `whatsapp-rust` crate uses wacore modules throughout:
+
+```rust
+// Binary protocol
+use wacore_binary::jid::Jid;
+use wacore_binary::builder::NodeBuilder;
+
+// Signal Protocol
+use wacore::libsignal::store::SessionStore;
+use wacore::libsignal::protocol::PreKeyBundle;
+
+// App state
+use wacore::appstate::{
+    process_snapshot,
+    Mutation,
+};
+
+// IQ specs
+use wacore::iq::privacy as privacy_settings;
+
+// Store traits
+use wacore::store::traits::Backend;
+
+// Protobuf helpers
+use wacore::proto_helpers;
+```
+
+## Design Principles
+
+### Platform-Agnostic
+
+No dependencies on:
+- Tokio or any async runtime
+- Specific database implementations
+- File system operations
+
+This allows the main library to choose:
+- **Runtime:** Tokio (current), async-std, smol, etc.
+- **Storage:** SQLite (current), PostgreSQL, in-memory, etc.
+- **Transport:** WebSocket (current), custom protocols
+
+### Type Safety
+
+Strong typing throughout:
+- `Jid` for WhatsApp identifiers
+- `Node` for protocol messages
+- Validated newtypes (e.g., `GroupSubject` with length limits)
+- Enum variants with `StringEnum` for protocol values
+
+### Zero-Copy Where Possible
+
+- `NodeRef` for borrowed node parsing
+- `AttrParserRef` for attribute iteration
+- `marshal_ref` for encoding without cloning
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="waproto" icon="file-code" href="/api/waproto">
+    Protocol Buffers message definitions
+  </Card>
+  <Card title="Binary Protocol" icon="diagram-project" href="/advanced/binary-protocol">
+    Type-safe protocol node pattern
+  </Card>
+  <Card title="Architecture" icon="message-code" href="/concepts/architecture">
+    IqSpec request/response pairing
+  </Card>
+  <Card title="State Management" icon="database" href="/advanced/state-management">
+    Device state and commands
+  </Card>
+</CardGroup>

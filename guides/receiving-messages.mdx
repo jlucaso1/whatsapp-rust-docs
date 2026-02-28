@@ -1,0 +1,515 @@
+---
+title: Receiving Messages
+description: Learn how to handle incoming messages, decrypt content, and send receipts in whatsapp-rust
+---
+
+## Overview
+
+This guide covers message event handling, decryption, and receipt management in whatsapp-rust.
+
+## Event System
+
+### Subscribing to Events
+
+Use the Bot API to handle events:
+
+```rust
+use whatsapp_rust::bot::Bot;
+use wacore::types::events::Event;
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport_factory)
+    .with_http_client(http_client)
+    .on_event(|event, client| async move {
+        match event {
+            Event::Message(message, info) => {
+                println!("📨 Message from: {}", info.source.sender);
+                println!("💬 Text: {:?}", message.text_content());
+            }
+            Event::Connected(_) => {
+                println!("✅ Connected!");
+            }
+            _ => {}
+        }
+    })
+    .build()
+    .await?;
+```
+
+See `\1`
+
+### Available Events
+
+```rust
+pub enum Event {
+    /// Successfully decrypted message
+    Message(Box<wa::Message>, MessageInfo),
+    
+    /// Message that couldn't be decrypted
+    UndecryptableMessage(UndecryptableMessage),
+    
+    /// Client connected to WhatsApp
+    Connected(ConnectedInfo),
+    
+    /// Client disconnected
+    Disconnected,
+    
+    /// Logged out (session invalidated)
+    LoggedOut(LoggedOutReason),
+    
+    /// Pairing QR code for scanning
+    PairingQrCode { code: String, timeout: Duration },
+    
+    /// Receipt (delivery, read, played)
+    Receipt(Receipt),
+    
+    // ... other events
+}
+```
+
+## Message Structure
+
+### MessageInfo
+
+Every message event includes metadata:
+
+```rust
+use crate::types::message::MessageInfo;
+
+// Access message metadata
+println!("Message ID: {}", info.id);
+println!("Timestamp: {}", info.timestamp);
+println!("Chat: {}", info.source.chat);
+println!("Sender: {}", info.source.sender);
+println!("From me: {}", info.source.is_from_me);
+
+// Check if it's a group message
+if info.source.chat.is_group() {
+    println!("Group message from participant: {}", info.source.sender);
+}
+```
+
+### Message Content Extraction
+
+Use the `MessageExt` trait to extract content:
+
+```rust
+use wacore::proto_helpers::MessageExt;
+
+// Get text content (conversation or extended_text_message)
+if let Some(text) = message.text_content() {
+    println!("Text: {}", text);
+}
+
+// Get media caption
+if let Some(caption) = message.get_caption() {
+    println!("Caption: {}", caption);
+}
+
+// Get base message (unwrap ephemeral/view-once/edited wrappers)
+let base = message.get_base_message();
+
+// Check wrapper types
+if message.is_ephemeral() {
+    println!("This is an ephemeral message");
+}
+if message.is_view_once() {
+    println!("This is a view-once message");
+}
+```
+
+See `\1`
+
+## Message Types
+
+### Text Messages
+
+```rust
+match event {
+    Event::Message(message, info) => {
+        // Simple text
+        if let Some(text) = &message.conversation {
+            println!("Text: {}", text);
+        }
+        
+        // Extended text (with links, formatting)
+        if let Some(ext) = &message.extended_text_message {
+            if let Some(text) = &ext.text {
+                println!("Extended text: {}", text);
+            }
+            if let Some(url) = &ext.matched_text {
+                println!("Contains link: {}", url);
+            }
+        }
+    }
+    _ => {}
+}
+```
+
+### Media Messages
+
+```rust
+if let Some(img) = &message.image_message {
+    println!("📷 Image message");
+    if let Some(caption) = &img.caption {
+        println!("Caption: {}", caption);
+    }
+    
+    // Download the image
+    let data = client.download(img.as_ref()).await?;
+    std::fs::write("image.jpg", data)?;
+}
+
+if let Some(video) = &message.video_message {
+    println!("🎥 Video message");
+}
+
+if let Some(audio) = &message.audio_message {
+    println!("🎵 Audio message");
+    if audio.ptt() {
+        println!("This is a voice message");
+    }
+}
+
+if let Some(doc) = &message.document_message {
+    println!("📄 Document: {}", doc.file_name.as_deref().unwrap_or("unknown"));
+}
+
+if let Some(sticker) = &message.sticker_message {
+    println!("🎨 Sticker");
+}
+```
+
+See [Media Handling Guide](/guides/media-handling) for download details.
+
+### Reactions
+
+```rust
+if let Some(reaction) = &message.reaction_message {
+    if let Some(emoji) = &reaction.text {
+        println!("👍 Reaction: {}", emoji);
+    } else {
+        println!("Reaction removed");
+    }
+    
+    if let Some(key) = &reaction.key {
+        println!("Reacted to message: {:?}", key.id);
+    }
+}
+```
+
+### Quoted Messages
+
+```rust
+if let Some(ext) = &message.extended_text_message {
+    if let Some(context) = &ext.context_info {
+        if let Some(quoted) = &context.quoted_message {
+            println!("💬 This is a reply");
+            println!("Original message ID: {:?}", context.stanza_id);
+            println!("Original sender: {:?}", context.participant);
+            
+            // Access quoted content
+            if let Some(quoted_text) = quoted.text_content() {
+                println!("Replying to: {}", quoted_text);
+            }
+        }
+    }
+}
+```
+
+## Decryption
+
+### Automatic Decryption
+
+Messages are automatically decrypted by the client:
+
+```rust
+// The Event::Message already contains decrypted content
+match event {
+    Event::Message(message, info) => {
+        // Message is already decrypted and ready to use
+        println!("Decrypted: {:?}", message.conversation);
+    }
+    _ => {}
+}
+```
+
+### Undecryptable Messages
+
+When decryption fails, you receive an `UndecryptableMessage` event:
+
+```rust
+match event {
+    Event::UndecryptableMessage(undecryptable) => {
+        println!("❌ Could not decrypt message");
+        println!("Message ID: {}", undecryptable.info.id);
+        println!("From: {}", undecryptable.info.source.sender);
+        
+        // The client automatically sends retry receipts
+        // No manual action needed
+    }
+    _ => {}
+}
+```
+
+<Note>
+The client automatically handles decryption retries using the retry receipt mechanism. Failed messages trigger `Event::UndecryptableMessage`, and the client will request re-encryption from the sender.
+</Note>
+
+See `\1` and `\1`
+
+### Decryption Retry Mechanism
+
+The library automatically:
+1. Detects decryption failures (no session, invalid keys, MAC errors)
+2. Sends retry receipts with fresh prekeys
+3. Tracks retry count (max 5 attempts)
+4. Falls back to PDO (Peer Data Operation) as last resort
+
+```rust
+// Retry reasons (internal, handled automatically)
+enum RetryReason {
+    NoSession = 1,        // No session exists
+    InvalidKey = 2,       // Invalid key
+    InvalidKeyId = 3,     // PreKey ID not found
+    InvalidMessage = 4,   // Invalid format or MAC
+    // ... other reasons
+}
+```
+
+See `\1`
+
+## Receipts
+
+### Automatic Delivery Receipts
+
+The client automatically sends delivery receipts for successfully decrypted messages:
+
+```rust
+// Happens automatically after message decryption
+// No manual action needed
+```
+
+See `\1`
+
+### Sending Read Receipts
+
+```rust
+// Mark a message as read
+client.send_read_receipt(&message_info).await?;
+
+// Mark multiple messages as read
+let message_ids = vec!["msg1", "msg2", "msg3"];
+client.send_read_receipts(
+    &chat_jid,
+    &message_ids,
+    &sender_jid,
+).await?;
+```
+
+### Receipt Events
+
+Handle receipt updates from other participants:
+
+```rust
+match event {
+    Event::Receipt(receipt) => {
+        println!("📬 Receipt for: {:?}", receipt.message_ids);
+        match receipt.r#type {
+            ReceiptType::Delivered => println!("Delivered"),
+            ReceiptType::Read => println!("Read"),
+            ReceiptType::ReadSelf => println!("Read on another device"),
+            ReceiptType::Played => println!("Played (voice/video)"),
+            _ => {}
+        }
+    }
+    _ => {}
+}
+```
+
+## Advanced Usage
+
+### Custom Encryption Handlers
+
+For custom encryption types (e.g., `pkmsg`, `msg`, `skmsg`):
+
+```rust
+use whatsapp_rust::client::EncHandler;
+use async_trait::async_trait;
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct CustomEncHandler;
+
+#[async_trait]
+impl EncHandler for CustomEncHandler {
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: &Node,
+        info: &MessageInfo,
+    ) -> Result<(), anyhow::Error> {
+        // Custom decryption logic
+        println!("Custom encryption type: {:?}", node.attrs().optional_string("type"));
+        Ok(())
+    }
+}
+
+// Register the handler
+client.register_enc_handler("custom_type", Arc::new(CustomEncHandler));
+```
+
+See `\1`
+
+### Filtering Messages
+
+```rust
+use wacore_binary::jid::JidExt;
+
+.on_event(|event, _client| async move {
+    match event {
+        Event::Message(message, info) => {
+            // Ignore own messages
+            if info.source.is_from_me {
+                return;
+            }
+            
+            // Only handle group messages
+            if !info.source.chat.is_group() {
+                return;
+            }
+            
+            // Only handle text messages
+            if let Some(text) = message.text_content() {
+                println!("Group text: {}", text);
+            }
+        }
+        _ => {}
+    }
+})
+```
+
+### Session and Key Management
+
+The library automatically manages Signal Protocol sessions:
+
+```rust
+// Sessions are established automatically when:
+// - Receiving PreKeySignalMessage (pkmsg)
+// - Receiving SignalMessage (msg) for existing sessions
+// - Receiving SenderKeyDistributionMessage for groups
+
+// No manual session management needed!
+```
+
+For advanced cases (identity changes, session cleanup):
+
+```rust
+// The library handles identity changes automatically:
+// - Detects UntrustedIdentity errors
+// - Clears old identity
+// - Retries decryption with new identity
+// - Preserves old session for in-flight messages
+```
+
+See `\1`
+
+## Error Handling
+
+```rust
+.on_event(|event, client| async move {
+    match event {
+        Event::Message(message, info) => {
+            // Process message
+            if let Err(e) = process_message(&message, &info, client).await {
+                eprintln!("Error processing message {}: {:?}", info.id, e);
+            }
+        }
+        Event::UndecryptableMessage(undecryptable) => {
+            eprintln!("⚠️  Undecryptable message from {}", 
+                undecryptable.info.source.sender);
+            // Client automatically handles retries
+        }
+        _ => {}
+    }
+})
+
+async fn process_message(
+    message: &wa::Message,
+    info: &MessageInfo,
+    client: Arc<Client>,
+) -> Result<()> {
+    // Your message processing logic
+    Ok(())
+}
+```
+
+## Best Practices
+
+<Steps>
+
+### Use the Bot API for Event Handling
+
+The Bot API provides a clean interface for message handling:
+
+```rust
+let bot = Bot::builder()
+    .on_event(|event, client| async move {
+        // Handle events here
+    })
+    .build()
+    .await?;
+```
+
+### Extract Content with Helper Methods
+
+```rust
+use wacore::proto_helpers::MessageExt;
+
+// Use helper methods instead of manual field access
+let text = message.text_content();
+let caption = message.get_caption();
+let base = message.get_base_message();
+```
+
+### Handle All Event Types
+
+Always handle critical events:
+
+```rust
+match event {
+    Event::Message(message, info) => { /* ... */ }
+    Event::Connected(_) => { /* Initialize */ }
+    Event::Disconnected => { /* Cleanup */ }
+    Event::LoggedOut(_) => { /* Re-authenticate */ }
+    _ => {}
+}
+```
+
+### Don't Block Event Handlers
+
+Spawn tasks for long-running operations:
+
+```rust
+.on_event(|event, client| async move {
+    match event {
+        Event::Message(message, info) => {
+            // Spawn task for heavy processing
+            let client = client.clone();
+            tokio::spawn(async move {
+                process_heavy_task(message, info, client).await;
+            });
+        }
+        _ => {}
+    }
+})
+```
+
+</Steps>
+
+## Next Steps
+
+- [Sending Messages](/guides/sending-messages) - Send text, reactions, and replies
+- [Media Handling](/guides/media-handling) - Download and process media
+- [Group Management](/guides/group-management) - Handle group events

@@ -1,0 +1,243 @@
+---
+title: MEX (GraphQL)
+description: Execute GraphQL queries and mutations via Meta Exchange
+---
+
+The `Mex` feature provides access to WhatsApp's Meta Exchange (MEX) GraphQL API, enabling queries and mutations for advanced operations.
+
+## Access
+
+Access MEX operations through the client:
+
+```rust
+let mex = client.mex();
+```
+
+## Methods
+
+### query
+
+Execute a GraphQL query.
+
+```rust
+pub async fn query(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError>
+```
+
+**Parameters:**
+- `request` - A `MexRequest` containing the document ID and variables
+
+**Returns:**
+- `MexResponse` - The GraphQL response with data and/or errors
+
+**Example:**
+```rust
+use serde_json::json;
+use whatsapp_rust::MexRequest;
+
+let request = MexRequest {
+    doc_id: "29829202653362039",
+    variables: json!({
+        "user_ids": ["15551234567@s.whatsapp.net"]
+    }),
+};
+
+let response = client.mex().query(request).await?;
+
+if response.has_data() {
+    let data = response.data.unwrap();
+    println!("Result: {:?}", data);
+}
+```
+
+### mutate
+
+Execute a GraphQL mutation.
+
+```rust
+pub async fn mutate(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError>
+```
+
+**Parameters:**
+- `request` - A `MexRequest` containing the document ID and variables
+
+**Returns:**
+- `MexResponse` - The GraphQL response with data and/or errors
+
+**Example:**
+```rust
+use serde_json::json;
+use whatsapp_rust::MexRequest;
+
+let request = MexRequest {
+    doc_id: "mutation_doc_id_here",
+    variables: json!({
+        "input": {
+            "field": "value"
+        }
+    }),
+};
+
+let response = client.mex().mutate(request).await?;
+
+if let Some(errors) = &response.errors {
+    for error in errors {
+        eprintln!("Error: {}", error.message);
+    }
+}
+```
+
+## Types
+
+### MexRequest
+
+Request structure for GraphQL operations.
+
+```rust
+pub struct MexRequest<'a> {
+    /// GraphQL document ID
+    pub doc_id: &'a str,
+    /// Query variables as JSON
+    pub variables: serde_json::Value,
+}
+```
+
+### MexResponse
+
+Response from a GraphQL operation.
+
+```rust
+pub struct MexResponse {
+    /// Response data (if successful)
+    pub data: Option<serde_json::Value>,
+    /// List of errors (if any)
+    pub errors: Option<Vec<MexGraphQLError>>,
+}
+```
+
+**Methods:**
+- `has_data()` - Returns `true` if response contains data
+- `has_errors()` - Returns `true` if response contains errors
+- `fatal_error()` - Returns the first fatal error, if any
+
+### MexGraphQLError
+
+GraphQL error structure.
+
+```rust
+pub struct MexGraphQLError {
+    /// Error message
+    pub message: String,
+    /// Error extensions with additional details
+    pub extensions: Option<MexErrorExtensions>,
+}
+```
+
+**Methods:**
+- `error_code()` - Returns the error code if available
+- `is_fatal()` - Returns `true` if this is a fatal error
+
+### MexErrorExtensions
+
+Additional error metadata.
+
+```rust
+pub struct MexErrorExtensions {
+    /// Numeric error code
+    pub error_code: Option<i32>,
+    /// Whether this is a summary error
+    pub is_summary: Option<bool>,
+    /// Whether the operation can be retried
+    pub is_retryable: Option<bool>,
+    /// Error severity level
+    pub severity: Option<String>,
+}
+```
+
+## Error handling
+
+The `MexError` enum covers all possible error cases:
+
+```rust
+pub enum MexError {
+    /// Payload parsing error
+    PayloadParsing(String),
+    /// Extension error with code and message
+    ExtensionError { code: i32, message: String },
+    /// IQ request failed
+    Request(IqError),
+    /// JSON serialization/deserialization error
+    Json(serde_json::Error),
+}
+```
+
+**Example:**
+```rust
+match client.mex().query(request).await {
+    Ok(response) => {
+        if let Some(fatal) = response.fatal_error() {
+            eprintln!("Fatal error: {} (code: {:?})", 
+                fatal.message, 
+                fatal.error_code()
+            );
+        } else if response.has_data() {
+            println!("Success: {:?}", response.data);
+        }
+    }
+    Err(MexError::ExtensionError { code, message }) => {
+        eprintln!("MEX error {}: {}", code, message);
+    }
+    Err(e) => eprintln!("Request failed: {}", e),
+}
+```
+
+## Response handling
+
+### Check for data
+
+```rust
+let response = client.mex().query(request).await?;
+
+if response.has_data() {
+    let data = response.data.unwrap();
+    // Process data
+}
+```
+
+### Handle non-fatal errors
+
+```rust
+let response = client.mex().query(request).await?;
+
+if response.has_errors() {
+    for error in response.errors.as_ref().unwrap() {
+        if !error.is_fatal() {
+            // Log warning but continue
+            eprintln!("Warning: {}", error.message);
+        }
+    }
+}
+```
+
+### Extract typed data
+
+```rust
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct UserResult {
+    jid: String,
+    country_code: String,
+}
+
+let response = client.mex().query(request).await?;
+
+if let Some(data) = response.data {
+    let users: Vec<UserResult> = serde_json::from_value(
+        data["xwa2_fetch_wa_users"].clone()
+    )?;
+    
+    for user in users {
+        println!("User {} from {}", user.jid, user.country_code);
+    }
+}
+```

@@ -1,0 +1,307 @@
+---
+title: Status
+description: Post and manage WhatsApp status/story updates
+---
+
+The `Status` feature provides APIs for posting text, image, and video status updates, as well as revoking previously sent statuses.
+
+## Access
+
+Access status operations through the client:
+
+```rust
+let status = client.status();
+```
+
+## Methods
+
+### send_text
+
+Send a text status update with background color and font style.
+
+```rust
+pub async fn send_text(
+    &self,
+    text: &str,
+    background_argb: u32,
+    font: i32,
+    recipients: Vec<Jid>,
+    options: StatusSendOptions,
+) -> Result<String, anyhow::Error>
+```
+
+**Parameters:**
+- `text` - Status text content
+- `background_argb` - Background color as ARGB (e.g., `0xFF1E6E4F`)
+- `font` - Font style index (0-4)
+- `recipients` - List of recipient JIDs
+- `options` - Privacy and delivery options
+
+**Returns:**
+- Message ID of the sent status
+
+**Example:**
+```rust
+use whatsapp_rust::{Jid, StatusSendOptions};
+
+let recipients = vec![
+    Jid::pn("15551234567"),
+    Jid::pn("15559876543"),
+];
+
+let message_id = client.status()
+    .send_text(
+        "Hello from Rust!",
+        0xFF1E6E4F, // Green background
+        0,          // Default font
+        recipients,
+        StatusSendOptions::default(),
+    )
+    .await?;
+
+println!("Status sent: {}", message_id);
+```
+
+### send_image
+
+Send an image status update.
+
+```rust
+pub async fn send_image(
+    &self,
+    upload: &UploadResponse,
+    thumbnail: Vec<u8>,
+    caption: Option<&str>,
+    recipients: Vec<Jid>,
+    options: StatusSendOptions,
+) -> Result<String, anyhow::Error>
+```
+
+**Parameters:**
+- `upload` - Upload response from `client.upload()`
+- `thumbnail` - JPEG thumbnail bytes
+- `caption` - Optional caption text
+- `recipients` - List of recipient JIDs
+- `options` - Privacy options
+
+**Example:**
+```rust
+use whatsapp_rust::upload::MediaType;
+
+// Upload the image first
+let image_data = std::fs::read("photo.jpg")?;
+let upload = client.upload(&image_data, MediaType::Image).await?;
+
+// Create thumbnail (simplified - use proper JPEG encoding)
+let thumbnail = create_thumbnail(&image_data)?;
+
+let recipients = vec![Jid::pn("15551234567")];
+
+let message_id = client.status()
+    .send_image(
+        &upload,
+        thumbnail,
+        Some("Check this out!"),
+        recipients,
+        StatusSendOptions::default(),
+    )
+    .await?;
+```
+
+### send_video
+
+Send a video status update.
+
+```rust
+pub async fn send_video(
+    &self,
+    upload: &UploadResponse,
+    thumbnail: Vec<u8>,
+    duration_seconds: u32,
+    caption: Option<&str>,
+    recipients: Vec<Jid>,
+    options: StatusSendOptions,
+) -> Result<String, anyhow::Error>
+```
+
+**Parameters:**
+- `upload` - Upload response from `client.upload()`
+- `thumbnail` - JPEG thumbnail bytes
+- `duration_seconds` - Video duration
+- `caption` - Optional caption text
+- `recipients` - List of recipient JIDs
+- `options` - Privacy options
+
+**Example:**
+```rust
+use whatsapp_rust::upload::MediaType;
+
+let video_data = std::fs::read("video.mp4")?;
+let upload = client.upload(&video_data, MediaType::Video).await?;
+let thumbnail = extract_video_thumbnail(&video_data)?;
+
+let recipients = vec![Jid::pn("15551234567")];
+
+let message_id = client.status()
+    .send_video(
+        &upload,
+        thumbnail,
+        30, // 30 seconds
+        None,
+        recipients,
+        StatusSendOptions::default(),
+    )
+    .await?;
+```
+
+### send_raw
+
+Send a custom message type as a status update.
+
+```rust
+pub async fn send_raw(
+    &self,
+    message: wa::Message,
+    recipients: Vec<Jid>,
+    options: StatusSendOptions,
+) -> Result<String, anyhow::Error>
+```
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        text: Some("Custom message".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.status()
+    .send_raw(message, recipients, StatusSendOptions::default())
+    .await?;
+```
+
+### revoke
+
+Delete a previously sent status update.
+
+```rust
+pub async fn revoke(
+    &self,
+    message_id: impl Into<String>,
+    recipients: Vec<Jid>,
+    options: StatusSendOptions,
+) -> Result<String, anyhow::Error>
+```
+
+**Parameters:**
+- `message_id` - ID of the status to revoke
+- `recipients` - Same recipients the status was sent to
+- `options` - Privacy options
+
+**Example:**
+```rust
+// Send a status
+let message_id = client.status()
+    .send_text("Temporary status", 0xFF000000, 0, recipients.clone(), Default::default())
+    .await?;
+
+// Later, revoke it
+client.status()
+    .revoke(message_id, recipients, Default::default())
+    .await?;
+```
+
+## Types
+
+### StatusPrivacySetting
+
+Privacy setting for status delivery.
+
+```rust
+pub enum StatusPrivacySetting {
+    /// Send to all contacts in address book (default)
+    Contacts,
+    /// Send only to contacts in an allow list
+    AllowList,
+    /// Send to all contacts except those in a deny list
+    DenyList,
+}
+```
+
+### StatusSendOptions
+
+Options for sending status updates.
+
+```rust
+pub struct StatusSendOptions {
+    /// Privacy setting for this status
+    pub privacy: StatusPrivacySetting,
+}
+```
+
+**Example:**
+```rust
+use whatsapp_rust::{StatusSendOptions, StatusPrivacySetting};
+
+// Send to all contacts
+let options = StatusSendOptions::default();
+
+// Send to allow list only
+let options = StatusSendOptions {
+    privacy: StatusPrivacySetting::AllowList,
+};
+```
+
+## Font styles
+
+WhatsApp Web supports 5 font styles (0-4):
+
+| Index | Style |
+|-------|-------|
+| 0 | Default (sans-serif) |
+| 1 | Serif |
+| 2 | Typewriter (monospace) |
+| 3 | Bold script |
+| 4 | Condensed |
+
+## Background colors
+
+Background colors use ARGB format (`0xAARRGGBB`):
+
+```rust
+// Solid green
+let green = 0xFF1E6E4F_u32;
+
+// Solid blue
+let blue = 0xFF1A73E8_u32;
+
+// Solid red
+let red = 0xFFD93025_u32;
+
+// Semi-transparent black
+let overlay = 0x80000000_u32;
+```
+
+## Recipient management
+
+Recipients should be JIDs of users who can see the status:
+
+```rust
+// Single recipient
+let recipients = vec![Jid::pn("15551234567")];
+
+// Multiple recipients
+let recipients = vec![
+    Jid::pn("15551234567"),
+    Jid::pn("15559876543"),
+    "15557654321@s.whatsapp.net".parse()?,
+];
+```
+
+<Note>
+The `recipients` list should match your privacy settings. When revoking a status, use the same recipients list that was used when posting.
+</Note>

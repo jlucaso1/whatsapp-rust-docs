@@ -87,7 +87,10 @@
               "api/contacts",
               "api/presence",
               "api/chatstate",
-              "api/blocking"
+              "api/blocking",
+              "api/status",
+              "api/mex",
+              "api/tctoken"
             ]
           },
           {

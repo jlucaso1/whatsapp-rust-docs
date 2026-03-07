@@ -74,15 +74,17 @@ The library is organized into multiple crates for maximum flexibility:
 
 ```
 whatsapp-rust/
-├── src/                    # Main client library
-├── wacore/                 # Platform-agnostic core (no_std compatible)
-│   ├── binary/             # WhatsApp binary protocol
-│   ├── libsignal/          # Signal Protocol implementation
-│   └── appstate/           # App state management
-├── waproto/                # Protocol Buffers definitions
-├── storages/sqlite-storage # SQLite backend
-├── transports/tokio-transport
-└── http_clients/ureq-client
+├── src/                          # Main client library
+├── wacore/                       # Platform-agnostic core (no_std compatible)
+│   ├── binary/                   # WhatsApp binary protocol
+│   ├── libsignal/                # Signal Protocol implementation
+│   ├── appstate/                 # App state management
+│   ├── noise/                    # Noise Protocol handshake
+│   └── derive/                   # Derive macros
+├── waproto/                      # Protocol Buffers definitions
+├── storages/sqlite-storage/      # SQLite backend
+├── transports/tokio-transport/   # Tokio WebSocket transport
+└── http_clients/ureq-client/     # HTTP client for media
 ```
 
 ## Acknowledgements

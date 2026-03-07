@@ -254,6 +254,62 @@ impl NoiseSocket {
 }
 ```
 
+## Connection Lifecycle
+
+### Auto-Reconnection
+
+The client implements robust reconnection handling:
+
+```rust
+// Client fields for reconnection management
+pub enable_auto_reconnect: Arc<AtomicBool>,      // Toggle auto-reconnect
+pub auto_reconnect_errors: Arc<AtomicU32>,        // Error count for backoff
+pub(crate) expected_disconnect: Arc<AtomicBool>,  // Expected vs unexpected
+pub(crate) connection_generation: Arc<AtomicU64>, // Detect stale tasks
+```
+
+**Reconnection Flow:**
+1. Connection lost → `cleanup_connection_state()`
+2. Check `enable_auto_reconnect` → exit if disabled
+3. Check `expected_disconnect` → immediate reconnect if expected (e.g., 515)
+4. Calculate backoff delay (2s × error_count, max 30s)
+5. Wait → attempt reconnection
+
+### Keepalive Loop
+
+Monitors connection health with periodic pings:
+
+```rust
+const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
+const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
+const KEEP_ALIVE_MAX_FAIL_TIME: Duration = Duration::from_secs(180);
+const KEEP_ALIVE_RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
+```
+
+**Behavior:**
+- Sends ping every 20-30 seconds (randomized)
+- Waits up to 20s for response
+- Forces reconnect after 180s of consecutive failures
+
+### Offline Sync
+
+When reconnecting, the client tracks offline message sync progress:
+
+```rust
+pub(crate) struct OfflineSyncMetrics {
+    pub active: AtomicBool,
+    pub total_messages: AtomicUsize,
+    pub processed_messages: AtomicUsize,
+    pub start_time: Mutex<Option<Instant>>,
+}
+```
+
+**Sync Flow:**
+1. Receive `<ib><offline_preview count="N"/>` → start tracking
+2. Process messages with `offline` attribute → increment counter
+3. Receive `<ib><offline/>` → sync complete
+4. Emit `OfflineSyncCompleted` event
+
 ## Concurrency Patterns
 
 ### Per-Chat Message Queues

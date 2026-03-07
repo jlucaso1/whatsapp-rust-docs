@@ -150,6 +150,39 @@ Returns `true` if authenticated with WhatsApp servers.
 
 ---
 
+## Auto-Reconnection
+
+The client includes automatic reconnection handling with exponential backoff.
+
+### How it works
+
+1. **On disconnect**: The client detects unexpected disconnections and automatically attempts to reconnect
+2. **Backoff delay**: Each failed attempt increases the delay (2s, 4s, 6s... up to 30s max)
+3. **Expected disconnects**: Protocol-expected disconnects (e.g., 515 stream error after pairing) trigger immediate reconnection without backoff
+4. **Keepalive monitoring**: A keepalive loop sends periodic pings (every 20-30s) and forces reconnection if no response is received for 180 seconds
+
+### Controlling auto-reconnect
+
+```rust
+// Disable auto-reconnect (default: enabled)
+client.enable_auto_reconnect.store(false, Ordering::Relaxed);
+
+// Check current state
+let enabled = client.enable_auto_reconnect.load(Ordering::Relaxed);
+```
+
+### Reconnection behavior
+
+| Scenario | Behavior |
+|----------|----------|
+| Unexpected disconnect | Reconnect with exponential backoff |
+| 515 stream error (after pairing) | Immediate reconnect |
+| Keepalive timeout (180s) | Force disconnect and reconnect |
+| `disconnect()` called | No reconnect attempt |
+| Auto-reconnect disabled | No reconnect attempt |
+
+---
+
 ## Messaging
 
 ### send_message

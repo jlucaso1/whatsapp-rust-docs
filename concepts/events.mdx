@@ -706,7 +706,7 @@ Event::HistorySync(HistorySync)
 
 ### OfflineSyncPreview
 
-**Emitted:** Preview of pending offline sync data
+**Emitted:** Preview of pending offline sync data when reconnecting
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -719,9 +719,17 @@ pub struct OfflineSyncPreview {
 }
 ```
 
+**Example:**
+```rust
+Event::OfflineSyncPreview(preview) => {
+    println!("Syncing {} items ({} messages, {} notifications)", 
+        preview.total, preview.messages, preview.notifications);
+}
+```
+
 ### OfflineSyncCompleted
 
-**Emitted:** When offline sync completes
+**Emitted:** When offline sync completes after reconnection
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -729,6 +737,17 @@ pub struct OfflineSyncCompleted {
     pub count: i32,
 }
 ```
+
+**Example:**
+```rust
+Event::OfflineSyncCompleted(sync) => {
+    println!("Offline sync completed: {} items processed", sync.count);
+}
+```
+
+<Note>
+Offline sync happens automatically when the client reconnects after being disconnected. The client tracks progress internally and emits these events to notify your application of sync status.
+</Note>
 
 ## Device Events
 

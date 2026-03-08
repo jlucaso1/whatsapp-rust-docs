@@ -90,7 +90,8 @@
               "api/blocking",
               "api/status",
               "api/mex",
-              "api/tctoken"
+              "api/tctoken",
+              "api/spam-report"
             ]
           },
           {

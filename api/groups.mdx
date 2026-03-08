@@ -54,6 +54,19 @@ pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, 
 - `subject: String` - Group name
 - `participants: Vec<GroupParticipant>` - List of participants
 - `addressing_mode: AddressingMode` - Phone number or LID mode
+- `creator: Option<Jid>` - Group creator JID
+- `creation_time: Option<u64>` - Group creation timestamp (Unix seconds)
+- `subject_time: Option<u64>` - Subject modification timestamp (Unix seconds)
+- `subject_owner: Option<Jid>` - Subject owner JID
+- `description: Option<String>` - Group description body text
+- `description_id: Option<String>` - Description ID (for conflict detection when updating)
+- `is_locked: bool` - Whether the group is locked (only admins can edit group info)
+- `is_announcement: bool` - Whether announcement mode is enabled (only admins can send messages)
+- `ephemeral_expiration: u32` - Ephemeral message expiration in seconds (0 = disabled)
+- `membership_approval: bool` - Whether membership approval is required to join
+- `member_add_mode: Option<MemberAddMode>` - Who can add members to the group
+- `member_link_mode: Option<MemberLinkMode>` - Who can use invite links
+- `size: Option<u32>` - Total participant count
 
 **GroupParticipant fields:**
 - `jid: Jid` - Participant JID
@@ -337,6 +350,107 @@ let new_link = client.groups().get_invite_link(&group_jid, true).await?;
 println!("New invite link: https://chat.whatsapp.com/{}", new_link);
 ```
 
+### set_locked
+
+Lock the group so only admins can change group info.
+
+```rust
+pub async fn set_locked(&self, jid: &Jid, locked: bool) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `locked` - `true` to lock, `false` to unlock
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Lock the group
+client.groups().set_locked(&group_jid, true).await?;
+
+// Unlock the group
+client.groups().set_locked(&group_jid, false).await?;
+```
+
+### set_announce
+
+Set announcement mode. When enabled, only admins can send messages.
+
+```rust
+pub async fn set_announce(&self, jid: &Jid, announce: bool) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `announce` - `true` to enable announcement mode, `false` to disable
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Enable announcement mode
+client.groups().set_announce(&group_jid, true).await?;
+
+// Disable announcement mode
+client.groups().set_announce(&group_jid, false).await?;
+```
+
+### set_ephemeral
+
+Set ephemeral (disappearing) messages timer on the group.
+
+```rust
+pub async fn set_ephemeral(&self, jid: &Jid, expiration: u32) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `expiration` - Expiration time in seconds. Common values: `86400` (24h), `604800` (7d), `7776000` (90d). Pass `0` to disable.
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Set 24-hour disappearing messages
+client.groups().set_ephemeral(&group_jid, 86400).await?;
+
+// Set 7-day disappearing messages
+client.groups().set_ephemeral(&group_jid, 604800).await?;
+
+// Disable disappearing messages
+client.groups().set_ephemeral(&group_jid, 0).await?;
+```
+
+### set_membership_approval
+
+Set membership approval mode. When on, new members must be approved by an admin.
+
+```rust
+pub async fn set_membership_approval(
+    &self,
+    jid: &Jid,
+    mode: MembershipApprovalMode,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `mode` - `MembershipApprovalMode::On` to require approval, `MembershipApprovalMode::Off` to auto-accept
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::MembershipApprovalMode;
+
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Require admin approval for new members
+client.groups().set_membership_approval(&group_jid, MembershipApprovalMode::On).await?;
+
+// Auto-accept new members
+client.groups().set_membership_approval(&group_jid, MembershipApprovalMode::Off).await?;
+```
+
 ## Types
 
 ### GroupSubject
@@ -367,6 +481,15 @@ impl GroupDescription {
 pub enum MemberAddMode {
     AdminAdd,      // Only admins can add members
     AllMemberAdd,  // All members can add
+}
+```
+
+### MemberLinkMode
+
+```rust
+pub enum MemberLinkMode {
+    AdminOnly,  // Only admins can share invite links
+    AllMembers, // All members can share invite links
 }
 ```
 

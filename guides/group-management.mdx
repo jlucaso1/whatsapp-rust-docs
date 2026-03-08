@@ -119,6 +119,18 @@ println!("Group: {}", metadata.subject);
 println!("Participants: {}", metadata.participants.len());
 println!("Addressing mode: {:?}", metadata.addressing_mode);
 
+// Access extended metadata
+if let Some(creator) = &metadata.creator {
+    println!("Created by: {}", creator);
+}
+if let Some(desc) = &metadata.description {
+    println!("Description: {}", desc);
+}
+println!("Locked: {}", metadata.is_locked);
+println!("Announcement: {}", metadata.is_announcement);
+println!("Ephemeral: {} seconds", metadata.ephemeral_expiration);
+println!("Membership approval: {}", metadata.membership_approval);
+
 for participant in &metadata.participants {
     println!("- {} (admin: {})", participant.jid, participant.is_admin);
     if let Some(phone) = &participant.phone_number {
@@ -323,9 +335,81 @@ Resetting the invite link (`reset = true`) invalidates the old link. Anyone with
 
 ## Group Settings
 
+### Lock Group
+
+Lock the group so only admins can change group info:
+
+```rust
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+
+// Lock the group
+client.groups().set_locked(&group_jid, true).await?;
+
+// Unlock the group
+client.groups().set_locked(&group_jid, false).await?;
+```
+
+See [set_locked](/api/groups#set_locked)
+
+### Announcement Mode
+
+Set announcement mode so only admins can send messages:
+
+```rust
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+
+// Enable announcement mode
+client.groups().set_announce(&group_jid, true).await?;
+
+// Disable announcement mode
+client.groups().set_announce(&group_jid, false).await?;
+```
+
+See [set_announce](/api/groups#set_announce)
+
+### Disappearing Messages
+
+Set ephemeral (disappearing) messages timer:
+
+```rust
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+
+// Set 24-hour disappearing messages
+client.groups().set_ephemeral(&group_jid, 86400).await?;
+
+// Set 7-day disappearing messages
+client.groups().set_ephemeral(&group_jid, 604800).await?;
+
+// Set 90-day disappearing messages
+client.groups().set_ephemeral(&group_jid, 7776000).await?;
+
+// Disable disappearing messages
+client.groups().set_ephemeral(&group_jid, 0).await?;
+```
+
+See [set_ephemeral](/api/groups#set_ephemeral)
+
+### Membership Approval Mode
+
+Require admin approval for new members:
+
+```rust
+use whatsapp_rust::features::groups::MembershipApprovalMode;
+
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+
+// Require approval
+client.groups().set_membership_approval(&group_jid, MembershipApprovalMode::On).await?;
+
+// Auto-accept
+client.groups().set_membership_approval(&group_jid, MembershipApprovalMode::Off).await?;
+```
+
+See [set_membership_approval](/api/groups#set_membership_approval)
+
 ### Member Add Mode
 
-Control who can add new members:
+Control who can add new members during group creation:
 
 ```rust
 use whatsapp_rust::features::groups::MemberAddMode;
@@ -335,40 +419,31 @@ pub enum MemberAddMode {
     AllMemberAdd,  // All members can add others
 }
 
-// Set during creation or via group settings update IQ
 let options = GroupCreateOptions {
     member_add_mode: Some(MemberAddMode::AdminAdd),
     ..Default::default()
 };
 ```
 
-### Membership Approval Mode
+### Group Creation Options
 
-Require admin approval for new members:
+Set all options during creation:
 
 ```rust
-use whatsapp_rust::features::groups::MembershipApprovalMode;
-
-pub enum MembershipApprovalMode {
-    On,   // Require approval
-    Off,  // Auto-accept
-}
-
 let options = GroupCreateOptions {
+    subject: GroupSubject::new("My Group")?,
+    participants: vec![
+        GroupParticipantOptions::new(participant1),
+    ],
+    member_add_mode: Some(MemberAddMode::AdminAdd),
     membership_approval_mode: Some(MembershipApprovalMode::On),
-    ..Default::default()
-};
-```
-
-### Announcement Mode
-
-Make it an announcement group (only admins can send messages):
-
-```rust
-let options = GroupCreateOptions {
+    member_link_mode: Some(MemberLinkMode::AdminOnly),
     announce: Some(true),
+    locked: Some(true),
     ..Default::default()
 };
+
+let result = client.groups().create_group(options).await?;
 ```
 
 ## Addressing Modes

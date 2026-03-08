@@ -511,7 +511,7 @@ struct MyHandler;
 impl EventHandler for MyHandler {
     fn handle_event(&self, event: &Event) {
         match event {
-            Event::Message(msg) => println!("New message: {:?}", msg),
+            Event::Message(msg, info) => println!("New message from {}: {:?}", info.source.sender, msg),
             Event::Connected(_) => println!("Connected!"),
             _ => {}
         }

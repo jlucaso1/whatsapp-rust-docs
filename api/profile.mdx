@@ -1,0 +1,157 @@
+---
+title: "Profile"
+description: "Manage your WhatsApp profile - push name and status text"
+---
+
+The Profile API lets you update your WhatsApp profile information, including your display name (push name) and status text (about).
+
+## Overview
+
+Access profile methods through the `profile()` method on a `Client`:
+
+```rust
+let client: Arc<Client> = bot.client();
+client.profile().set_push_name("My Bot").await?;
+client.profile().set_status_text("Online 24/7").await?;
+```
+
+---
+
+## Methods
+
+### set_push_name
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<()>
+```
+
+Sets your display name (push name) that other users see.
+
+<ParamField path="name" type="&str" required>
+  The new display name. Cannot be empty.
+</ParamField>
+
+**Behavior:**
+1. Sends a presence stanza with the new name immediately
+2. Syncs via app state mutation to `critical_block` collection for cross-device propagation
+3. Persists the name locally
+
+**Example:**
+```rust
+use std::sync::Arc;
+use whatsapp_rust::client::Client;
+
+async fn update_name(client: &Arc<Client>) -> anyhow::Result<()> {
+    client.profile().set_push_name("My WhatsApp Bot").await?;
+    println!("Push name updated successfully");
+    Ok(())
+}
+```
+
+<Warning>
+The name cannot be empty. Attempting to set an empty name will return an error.
+</Warning>
+
+### set_status_text
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<()>
+```
+
+Sets your profile status text (the "About" field).
+
+<ParamField path="text" type="&str" required>
+  The new status text.
+</ParamField>
+
+**Wire format:**
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Hello world!</status>
+</iq>
+```
+
+**Example:**
+```rust
+use std::sync::Arc;
+use whatsapp_rust::client::Client;
+
+async fn update_status(client: &Arc<Client>) -> anyhow::Result<()> {
+    client.profile().set_status_text("Available for support").await?;
+    println!("Status text updated successfully");
+    Ok(())
+}
+```
+
+<Note>
+This sets the profile "About" text that appears in your profile, not ephemeral text status updates (stories).
+</Note>
+
+---
+
+## Complete example
+
+```rust
+use std::sync::Arc;
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use wacore::types::events::Event;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .on_event(|event, client| async move {
+            match event {
+                Event::Connected(_) => {
+                    // Update profile after connecting
+                    if let Err(e) = client.profile().set_push_name("My Bot").await {
+                        eprintln!("Failed to set push name: {}", e);
+                    }
+                    if let Err(e) = client.profile().set_status_text("Online").await {
+                        eprintln!("Failed to set status: {}", e);
+                    }
+                }
+                Event::Message(msg, info) => {
+                    // Handle !setname command
+                    if let Some(text) = wacore::proto_helpers::MessageExt::text_content(&*msg) {
+                        if let Some(new_name) = text.strip_prefix("!setname ") {
+                            let new_name = new_name.trim();
+                            if !new_name.is_empty() {
+                                match client.profile().set_push_name(new_name).await {
+                                    Ok(()) => println!("Push name updated to: {}", new_name),
+                                    Err(e) => eprintln!("Failed: {}", e),
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .await?;
+
+    bot.run().await?.await?;
+    Ok(())
+}
+```
+
+---
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Client" icon="code" href="/api/client">
+    Core client API reference
+  </Card>
+  <Card title="Presence" icon="circle" href="/api/presence">
+    Online/offline status management
+  </Card>
+</CardGroup>

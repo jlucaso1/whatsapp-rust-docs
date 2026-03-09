@@ -357,6 +357,31 @@ client.presence().set_available().await?;
 client.presence().subscribe(&jid).await?;
 ```
 
+### profile
+
+```rust
+pub fn profile(self: &Arc<Self>) -> Profile<'_>
+```
+
+Access profile operations for the user's own account.
+
+**Methods:**
+- `set_push_name(name: &str)` - Set display name (push name)
+- `set_status_text(text: &str)` - Set status text (about)
+
+**Example:**
+```rust
+// Change your display name
+client.profile().set_push_name("My New Name").await?;
+
+// Change your status/about text
+client.profile().set_status_text("Hello, world!").await?;
+```
+
+<Note>
+`set_push_name` sends a presence stanza and syncs across devices via app state. `set_status_text` uses an IQ-based approach matching WhatsApp Web's behavior.
+</Note>
+
 ### contacts
 
 ```rust

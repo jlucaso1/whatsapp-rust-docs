@@ -189,6 +189,25 @@ The default HTTP client implementation using the `ureq` crate for synchronous HT
 - **Streaming Support** - Implements efficient streaming downloads
 - **Simple API** - Minimal configuration required
 - **Thread-Safe** - Implements `Clone` for easy sharing
+- **TLS Verification Skip** - Optional feature for testing with mock servers
+
+### Cargo features
+
+| Feature | Description |
+|---------|-------------|
+| `default` | Standard TLS verification enabled |
+| `danger-skip-tls-verify` | Disables TLS certificate verification. **Only use for testing with mock servers.** |
+
+<Warning>
+The `danger-skip-tls-verify` feature disables TLS certificate verification, making connections vulnerable to man-in-the-middle attacks. Never enable this in production.
+</Warning>
+
+To enable TLS verification skip for testing:
+
+```toml
+[dependencies]
+whatsapp-rust-ureq-http-client = { version = "0.1", features = ["danger-skip-tls-verify"] }
+```
 
 ### Creating a Client
 
@@ -201,6 +220,8 @@ let client = UreqHttpClient::new();
 // Or use default
 let client = UreqHttpClient::default();
 ```
+
+The client internally creates and caches a `ureq::Agent` for connection reuse. When the `danger-skip-tls-verify` feature is enabled, the agent is configured to skip TLS certificate verification.
 
 ### Usage Examples
 
@@ -282,24 +303,58 @@ println!("Downloaded {} bytes", file_data.len());
 
 ### Internal Implementation
 
-The `execute` method wraps ureq calls in `spawn_blocking`:
+The `UreqHttpClient` stores a pre-configured `ureq::Agent` for connection reuse:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct UreqHttpClient {
+    agent: ureq::Agent,
+}
+
+impl UreqHttpClient {
+    pub fn new() -> Self {
+        let agent = build_agent();
+        Self { agent }
+    }
+}
+
+fn build_agent() -> ureq::Agent {
+    #[cfg(feature = "danger-skip-tls-verify")]
+    {
+        use ureq::config::Config;
+        use ureq::tls::TlsConfig;
+        Config::builder()
+            .tls_config(TlsConfig::builder().disable_verification(true).build())
+            .build()
+            .into()
+    }
+
+    #[cfg(not(feature = "danger-skip-tls-verify"))]
+    {
+        ureq::Agent::new_with_defaults()
+    }
+}
+```
+
+The `execute` method wraps ureq calls in `spawn_blocking` and uses the cached agent:
 
 ```rust
 #[async_trait]
 impl HttpClient for UreqHttpClient {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+        let agent = self.agent.clone();
         // ureq is blocking, so wrap in spawn_blocking
         tokio::task::spawn_blocking(move || {
             let response = match request.method.as_str() {
                 "GET" => {
-                    let mut req = ureq::get(&request.url);
+                    let mut req = agent.get(&request.url);
                     for (key, value) in &request.headers {
                         req = req.header(key, value);
                     }
                     req.call()?
                 }
                 "POST" => {
-                    let mut req = ureq::post(&request.url);
+                    let mut req = agent.post(&request.url);
                     for (key, value) in &request.headers {
                         req = req.header(key, value);
                     }
@@ -333,7 +388,7 @@ The `execute_streaming` method is synchronous (no `spawn_blocking`) because it's
 fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse> {
     let response = match request.method.as_str() {
         "GET" => {
-            let mut req = ureq::get(&request.url);
+            let mut req = self.agent.get(&request.url);
             for (key, value) in &request.headers {
                 req = req.header(key, value);
             }

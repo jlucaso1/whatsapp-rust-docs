@@ -1,0 +1,103 @@
+---
+title: Profile
+description: Manage your WhatsApp profile settings (push name and status text)
+---
+
+The `Profile` trait provides methods for updating your WhatsApp profile, including your display name (push name) and status text (about).
+
+## Access
+
+Access profile operations through the client:
+
+```rust
+let profile = client.profile();
+```
+
+## Methods
+
+### set_push_name
+
+Set your display name (push name) that other users see in chats.
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<()>
+```
+
+**Parameters:**
+- `name` - New display name (cannot be empty)
+
+**Behavior:**
+1. Sends a presence stanza with the new name immediately
+2. Syncs via app state mutation to `critical_block` for cross-device propagation
+3. Persists the change locally
+
+**Example:**
+```rust
+client.profile().set_push_name("John Doe").await?;
+```
+
+**Error:**
+- Returns error if `name` is empty
+
+### set_status_text
+
+Set your status text (about section) that appears on your profile.
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<()>
+```
+
+**Parameters:**
+- `text` - New status text
+
+**Wire format:**
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Hello world!</status>
+</iq>
+```
+
+**Example:**
+```rust
+client.profile().set_status_text("Available").await?;
+
+// Clear status text
+client.profile().set_status_text("").await?;
+```
+
+<Note>
+This sets the profile "About" text, not ephemeral text status updates. For posting status updates (stories), see the [Status API](/api/status).
+</Note>
+
+## Complete example
+
+```rust
+use whatsapp_rust::Client;
+use std::sync::Arc;
+
+async fn update_profile(client: Arc<Client>) -> anyhow::Result<()> {
+    // Update display name
+    client.profile().set_push_name("My Bot").await?;
+    
+    // Update about text
+    client.profile().set_status_text("🤖 Powered by whatsapp-rust").await?;
+    
+    Ok(())
+}
+```
+
+## Cross-device sync
+
+When you change your push name, the library automatically:
+
+1. Sends a `<presence name="..."/>` stanza for immediate effect
+2. Creates an app state mutation (`setting_pushName` in `critical_block` collection)
+3. Syncs the change to all your linked devices
+
+If app state sync fails (e.g., keys not yet available after pairing), the presence change still takes effect immediately. The sync will complete on the next successful connection.
+
+## See also
+
+- [Contacts](/api/contacts) - Get profile pictures and user info for other users
+- [Status](/api/status) - Post status updates (stories)
+- [Presence](/api/presence) - Set online/offline status

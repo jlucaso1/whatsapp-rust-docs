@@ -1,0 +1,160 @@
+---
+title: Profile
+description: Manage your own WhatsApp profile settings
+---
+
+The `Profile` feature provides APIs for managing your own account settings, including push name (display name) and status text (about).
+
+## Access
+
+Access profile operations through an `Arc<Client>`:
+
+```rust
+let profile = client.profile();
+```
+
+<Note>
+Profile operations require `Arc<Client>` because they may need to perform app state synchronization.
+</Note>
+
+## Methods
+
+### set_status_text
+
+Set your profile "About" text.
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<()>
+```
+
+**Parameters:**
+- `text` - The status text to set
+
+**Example:**
+```rust
+client.profile()
+    .set_status_text("Available for work")
+    .await?;
+```
+
+<Note>
+This sets the profile "About" text visible on your profile, not ephemeral text status updates. For posting status/story updates, see the [Status API](/api/status).
+</Note>
+
+### set_push_name
+
+Set your display name (push name).
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<()>
+```
+
+**Parameters:**
+- `name` - The display name to set (cannot be empty)
+
+**Example:**
+```rust
+client.profile()
+    .set_push_name("My Bot")
+    .await?;
+```
+
+**Behavior:**
+1. Sends a presence stanza with the new name for immediate effect
+2. Syncs via app state mutation to `critical_block` collection for cross-device synchronization
+3. Persists the name locally
+
+<Note>
+The push name is what other users see as your display name in their chat lists. Changes propagate to all linked devices automatically.
+</Note>
+
+## Wire format
+
+### set_status_text
+
+Uses the IQ-based approach matching WhatsApp Web:
+
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Hello world!</status>
+</iq>
+```
+
+### set_push_name
+
+Sends a presence stanza:
+
+```xml
+<presence name="New Name"/>
+```
+
+Additionally sends an app state mutation to `critical_block` collection with `setting_pushName` key for cross-device sync.
+
+## Related events
+
+When your push name is updated (either by you or synced from another device), the following event is emitted:
+
+```rust
+Event::SelfPushNameUpdated(SelfPushNameUpdated {
+    from_server: bool,  // true if change came from app state sync
+    old_name: String,
+    new_name: String,
+})
+```
+
+**Example:**
+```rust
+Event::SelfPushNameUpdated(update) => {
+    println!("Name changed from '{}' to '{}'", update.old_name, update.new_name);
+    if update.from_server {
+        println!("(synced from another device)");
+    }
+}
+```
+
+## Complete example
+
+```rust
+use whatsapp_rust::Bot;
+use whatsapp_rust::types::events::Event;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let backend = Arc::new(SqliteStore::new("bot.db").await?);
+    
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .on_event(|event, client| async move {
+            match event {
+                Event::Connected(_) => {
+                    // Update profile on connect
+                    if let Err(e) = client.profile().set_push_name("My Bot").await {
+                        eprintln!("Failed to set push name: {}", e);
+                    }
+                    
+                    if let Err(e) = client.profile().set_status_text("Online and ready!").await {
+                        eprintln!("Failed to set status: {}", e);
+                    }
+                }
+                Event::SelfPushNameUpdated(update) => {
+                    println!("Push name updated: {} -> {}", update.old_name, update.new_name);
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .await?;
+
+    bot.run().await?.await?;
+    Ok(())
+}
+```
+
+## See also
+
+- [Status](/api/status) - Post status/story updates
+- [Presence](/api/presence) - Set online/offline status
+- [Events](/concepts/events) - Event types including `SelfPushNameUpdated`

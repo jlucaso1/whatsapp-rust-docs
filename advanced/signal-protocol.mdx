@@ -307,11 +307,47 @@ whatsapp-rust integrates Signal Protocol storage with SQLite via Diesel:
 
 ```
 src/store/
+├── signal_cache.rs         # In-memory cache layer
+├── signal_adapter.rs       # Cache-aware storage adapter
 ├── signal_identity.rs      # Identity key storage
 ├── signal_prekey.rs        # PreKey storage
 ├── signal_session.rs       # Session state storage
 └── signal_sender_key.rs    # Sender key storage
 ```
+
+### Signal store cache
+
+All cryptographic operations go through `SignalStoreCache`, an in-memory cache that defers database writes to explicit `flush()` calls. This matches WhatsApp Web's `SignalStoreCache` pattern for improved performance.
+
+**Cache behavior:**
+- **Read-through**: Cache misses query the database and cache the result
+- **Write-back**: Modifications are cached and flushed in batches
+- **Negative caching**: Missing entries are cached as `None` to avoid repeated lookups
+- **Reconnect safety**: Cache is cleared on disconnect to prevent stale crypto state
+
+```rust
+// All crypto operations use the cache
+let session = cache.get_session(address, &backend).await?;
+cache.put_session(address, &data).await;
+
+// Explicit flush persists all dirty state
+cache.flush(&backend).await?;
+```
+
+The cache uses per-store-type mutexes (sessions, identities, sender keys) for independent locking, allowing concurrent access across different data types.
+
+### Flush semantics
+
+The `flush()` method ensures atomic persistence:
+
+1. Acquires all three mutexes for consistency
+2. Snapshots dirty/deleted sets (preserved on failure)
+3. Persists all changes to the database
+4. Clears dirty sets only after success
+
+If any write fails, dirty tracking is preserved for retry on the next flush.
+
+### Storage trait implementation
 
 Each storage trait from `wacore/libsignal/src/protocol/storage/traits.rs` is implemented using SQL queries:
 
@@ -385,7 +421,19 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
 
 ## Performance Optimizations
 
-### Take/Restore Pattern
+### Signal store cache
+
+The `SignalStoreCache` provides significant performance benefits:
+
+- **Faster decryption**: Avoids database round-trips during message processing
+- **Batched writes**: Groups multiple state changes into a single database transaction
+- **Parallel processing**: Per-store-type mutexes allow concurrent operations after offline sync completes
+
+During offline sync, a global processing gate ensures consistent message ordering. Once sync completes, the cache enables broader parallelism for concurrent message handling.
+
+Location: `src/store/signal_cache.rs`
+
+### Take/Restore pattern
 
 Avoids cloning session states during decryption attempts:
 
@@ -407,7 +455,7 @@ if let Some(mut current_state) = record.take_session_state() {
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:495-564`
 
-### Buffer Reuse
+### Buffer reuse
 
 Thread-local buffers eliminate per-message allocations:
 

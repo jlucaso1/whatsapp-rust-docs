@@ -1,0 +1,192 @@
+---
+title: Profile
+description: Manage your own WhatsApp profile settings
+---
+
+The `Profile` feature provides APIs for managing your own WhatsApp account profile, including push name (display name), status text (about), and profile picture.
+
+## Access
+
+Access profile operations through the client (requires `Arc<Client>`):
+
+```rust
+let profile = client.profile();
+```
+
+## Methods
+
+### set_push_name
+
+Set your display name visible to other users.
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `name` - New display name (cannot be empty)
+
+**Behavior:**
+1. Sends a presence stanza with the new name immediately
+2. Syncs the change via app state mutation for cross-device synchronization
+3. Persists the name to local storage
+
+**Example:**
+```rust
+client.profile().set_push_name("John Doe").await?;
+```
+
+<Note>
+The push name cannot be empty. An error will be returned if you pass an empty string.
+</Note>
+
+### set_status_text
+
+Set your profile "About" text.
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `text` - New status/about text
+
+**Example:**
+```rust
+client.profile().set_status_text("Available for calls").await?;
+
+// Clear status
+client.profile().set_status_text("").await?;
+```
+
+<Note>
+This sets the permanent profile "About" text, not ephemeral text status updates. For status/story updates, use the [Status API](/api/status).
+</Note>
+
+### set_profile_picture
+
+Set your profile picture.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    image_data: Vec<u8>,
+) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Parameters:**
+- `image_data` - JPEG image bytes
+
+**Returns:**
+- `SetProfilePictureResponse` containing the new picture ID
+
+**Example:**
+```rust
+// Read image from file
+let image_data = std::fs::read("profile.jpg")?;
+
+// Set as profile picture
+let response = client.profile().set_profile_picture(image_data).await?;
+println!("New picture ID: {}", response.picture_id);
+```
+
+<Note>
+The image should be properly sized and cropped before upload. WhatsApp typically uses 640x640 pixels for profile pictures. The library does not resize images automatically.
+</Note>
+
+### remove_profile_picture
+
+Remove your profile picture.
+
+```rust
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Returns:**
+- `SetProfilePictureResponse` confirming removal
+
+**Example:**
+```rust
+client.profile().remove_profile_picture().await?;
+```
+
+## Types
+
+### SetProfilePictureResponse
+
+Response from profile picture operations.
+
+```rust
+pub struct SetProfilePictureResponse {
+    /// The new picture ID, or empty if removed
+    pub picture_id: String,
+}
+```
+
+## Image requirements
+
+When setting a profile picture:
+
+- **Format:** JPEG only
+- **Recommended size:** 640×640 pixels
+- **Maximum size:** No hard limit, but larger images may be compressed server-side
+- **Aspect ratio:** Square recommended (will be center-cropped if not)
+
+**Example with image processing:**
+```rust
+use image::GenericImageView;
+
+// Load and resize image to 640x640
+let img = image::open("photo.jpg")?;
+let resized = img.resize_to_fill(640, 640, image::imageops::FilterType::Lanczos3);
+
+// Encode as JPEG
+let mut buffer = Vec::new();
+resized.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Jpeg)?;
+
+// Upload
+client.profile().set_profile_picture(buffer).await?;
+```
+
+## Wire format
+
+### Push name
+```xml
+<presence name="John Doe"/>
+```
+
+### Status text
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Available for calls</status>
+</iq>
+```
+
+### Profile picture
+```xml
+<iq type="set" xmlns="w:profile:picture" to="s.whatsapp.net">
+  <picture type="image">{jpeg bytes}</picture>
+</iq>
+```
+
+## Cross-device sync
+
+Push name changes are automatically synced across all linked devices via WhatsApp's app state sync mechanism. The change is propagated to the `critical_block` collection with a `setting_pushName` mutation.
+
+<Note>
+If app state sync fails (e.g., right after pairing before initial sync completes), the push name change still takes effect immediately via the presence stanza. The sync failure is logged as a warning but doesn't cause the operation to fail.
+</Note>
+
+## Error handling
+
+```rust
+match client.profile().set_push_name("New Name").await {
+    Ok(()) => println!("Push name updated"),
+    Err(e) => eprintln!("Failed to update push name: {}", e),
+}
+```
+
+Common errors:
+- Empty push name
+- Network errors
+- Not connected/logged in

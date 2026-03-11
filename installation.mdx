@@ -47,6 +47,7 @@ whatsapp-rust supports several optional features:
 
 | Feature | Description | Included by default |
 |---------|-------------|--------------------|
+| `simd` | SIMD optimizations for binary protocol | ✅ Yes |
 | `sqlite-storage` | SQLite storage backend | ✅ Yes |
 | `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
 | `ureq-client` | Ureq HTTP client | ✅ Yes |
@@ -58,6 +59,17 @@ whatsapp-rust supports several optional features:
 <Note>
   The default features provide everything needed for most use cases. Only customize features if you have specific requirements.
 </Note>
+
+### SIMD optimizations
+
+The `simd` feature enables SIMD (Single Instruction, Multiple Data) optimizations for the binary protocol encoder/decoder. This provides significant performance improvements on supported platforms.
+
+To disable SIMD optimizations (for example, on platforms without SIMD support):
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { version = "0.3", default-features = false, features = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"] }
+```
 
 ## Custom features example
 

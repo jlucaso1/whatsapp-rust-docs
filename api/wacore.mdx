@@ -41,8 +41,8 @@ pub use wacore_derive::{EmptyNode, ProtocolNode, StringEnum};
 ```
 
 - **`EmptyNode`** - For protocol nodes with only a tag (no attributes)
-- **`ProtocolNode`** - For protocol nodes with string attributes  
-- **`StringEnum`** - For enums with string representations
+- **`ProtocolNode`** - For protocol nodes with attributes (strings, JIDs, enums, numerics)  
+- **`StringEnum`** - For enums with string representations (supports fallback variants)
 
 See [Binary Protocol](/advanced/binary-protocol) for usage examples.
 
@@ -294,6 +294,12 @@ pub struct ParticipantsRequest;
 pub struct QueryRequest {
     #[attr(name = "request", default = "interactive")]
     pub request_type: String,
+    
+    #[attr(name = "count", u32)]
+    pub count: Option<u32>,
+    
+    #[attr(name = "timestamp", u64)]
+    pub timestamp: u64,
 }
 
 #[derive(StringEnum)]
@@ -303,7 +309,32 @@ pub enum Action {
     #[str = "unblock"]
     Unblock,
 }
+
+// StringEnum with fallback for unknown values
+#[derive(StringEnum)]
+pub enum PrivacyCategory {
+    #[str = "last"]
+    Last,
+    #[str = "online"]
+    Online,
+    #[string_fallback]
+    Other(String),  // Captures unknown values
+}
 ```
+
+**ProtocolNode attribute types:**
+- `#[attr(name = "x")]` - String attribute
+- `#[attr(name = "x", jid)]` - JID attribute
+- `#[attr(name = "x", jid, optional)]` - Optional JID
+- `#[attr(name = "x", string_enum)]` - StringEnum type
+- `#[attr(name = "x", u32)]` - u32 numeric attribute
+- `#[attr(name = "x", u64)]` - u64 numeric attribute
+- `#[attr(name = "x", default = "value")]` - Default value
+
+**StringEnum attributes:**
+- `#[str = "value"]` - String representation (required on unit variants)
+- `#[string_default]` - Mark as default variant
+- `#[string_fallback]` - Catch-all variant for unknown strings (must be `Variant(String)`)
 
 ## Usage in Main Library
 

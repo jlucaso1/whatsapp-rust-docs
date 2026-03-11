@@ -542,21 +542,44 @@ Event::Presence(update) => {
 
 ### PictureUpdate
 
-**Emitted:** When a user changes their profile picture
+**Emitted:** When a user or group changes their profile picture
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct PictureUpdate {
+    /// The JID whose picture changed (user or group)
     pub jid: Jid,
-    pub author: Jid,
+    /// The user who made the change. Present for group picture changes
+    /// (the admin who changed it). None for personal picture updates.
+    pub author: Option<Jid>,
     pub timestamp: DateTime<Utc>,
-    pub photo_change: Option<wa::PhotoChange>,
+    /// Whether the picture was removed (true) or set/updated (false)
+    pub removed: bool,
+    /// The server-assigned picture ID. None for deletions.
+    pub picture_id: Option<String>,
+}
+```
+
+**Example:**
+```rust
+Event::PictureUpdate(update) => {
+    if update.removed {
+        println!("{} removed their profile picture", update.jid);
+    } else {
+        println!("{} updated their profile picture (id: {:?})", 
+            update.jid, update.picture_id);
+    }
+    
+    // For group pictures, author shows who made the change
+    if let Some(author) = &update.author {
+        println!("Changed by: {}", author);
+    }
 }
 ```
 
 ### UserAboutUpdate
 
-**Emitted:** When a user changes their status/about
+**Emitted:** When a user changes their status/about text
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -564,6 +587,13 @@ pub struct UserAboutUpdate {
     pub jid: Jid,
     pub status: String,
     pub timestamp: DateTime<Utc>,
+}
+```
+
+**Example:**
+```rust
+Event::UserAboutUpdate(update) => {
+    println!("{} updated their status: {}", update.jid, update.status);
 }
 ```
 
@@ -753,30 +783,67 @@ Offline sync happens automatically when the client reconnects after being discon
 
 ### DeviceListUpdate
 
-**Emitted:** When a user's device list changes
+**Emitted:** When a user's device list changes (device added, removed, or updated)
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceListUpdate {
+    /// The user whose device list changed
     pub user: Jid,
+    /// Optional LID user (for LID-PN mapping)
     pub lid_user: Option<Jid>,
+    /// Type of update (add/remove/update)
     pub update_type: DeviceListUpdateType,
+    /// Affected devices with detailed info
     pub devices: Vec<DeviceNotificationInfo>,
+    /// Key index info (for add/remove operations)
     pub key_index: Option<KeyIndexInfo>,
+    /// Contact hash (for update - used for contact lookup)
     pub contact_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DeviceListUpdateType {
+    /// A device was added to the user's account
     Add,
+    /// A device was removed from the user's account
     Remove,
+    /// Device information was updated
     Update,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceNotificationInfo {
+    /// Device ID (extracted from JID)
+    pub device_id: u32,
+    /// Optional key index
+    pub key_index: Option<u32>,
+}
+```
+
+**Example:**
+```rust
+Event::DeviceListUpdate(update) => {
+    match update.update_type {
+        DeviceListUpdateType::Add => {
+            println!("{} added a new device", update.user);
+            for device in &update.devices {
+                println!("  Device ID: {}", device.device_id);
+            }
+        }
+        DeviceListUpdateType::Remove => {
+            println!("{} removed a device", update.user);
+        }
+        DeviceListUpdateType::Update => {
+            println!("{} device list updated", update.user);
+        }
+    }
 }
 ```
 
 ### BusinessStatusUpdate
 
-**Emitted:** When a business account status changes
+**Emitted:** When a business account status changes (verified name, profile, or conversion to personal account)
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -794,13 +861,39 @@ pub struct BusinessStatusUpdate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum BusinessUpdateType {
+    /// Contact is no longer a business account
     RemovedAsBusiness,
+    /// Business verified name changed
     VerifiedNameChanged,
+    /// Business profile was updated
     ProfileUpdated,
+    /// Business products were updated
     ProductsUpdated,
+    /// Business collections were updated
     CollectionsUpdated,
+    /// Business subscriptions were updated
     SubscriptionsUpdated,
     Unknown,
+}
+```
+
+**Example:**
+```rust
+Event::BusinessStatusUpdate(update) => {
+    match update.update_type {
+        BusinessUpdateType::RemovedAsBusiness => {
+            println!("{} is no longer a business account", update.jid);
+        }
+        BusinessUpdateType::VerifiedNameChanged => {
+            if let Some(name) = &update.verified_name {
+                println!("{} verified business name: {}", update.jid, name);
+            }
+        }
+        BusinessUpdateType::ProfileUpdated => {
+            println!("{} business profile updated", update.jid);
+        }
+        _ => {}
+    }
 }
 ```
 

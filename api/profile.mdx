@@ -1,0 +1,174 @@
+---
+title: Profile
+description: Manage your account's profile settings including display name, status text, and profile picture
+---
+
+The `Profile` trait provides methods for managing your own account's profile information.
+
+## Access
+
+Access profile operations through the client:
+
+```rust
+let profile = client.profile();
+```
+
+## Methods
+
+### set_push_name
+
+Set your display name (push name).
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `name` - New display name (cannot be empty)
+
+**Behavior:**
+1. Sends `<presence name="..."/>` stanza immediately
+2. Syncs via app state mutation to `critical_block` collection for cross-device propagation
+3. Persists to local device store
+
+**Example:**
+```rust
+client.profile().set_push_name("Alice").await?;
+println!("Display name updated");
+```
+
+**Error cases:**
+- Empty name returns an error
+- App state sync may fail if keys aren't available (e.g., right after pairing)
+
+### set_status_text
+
+Set your profile "About" text.
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `text` - New status/about text
+
+**Note:** This sets your profile "About" text, not ephemeral text status updates. For ephemeral status posts, see the [Status API](/api/status).
+
+**Example:**
+```rust
+client.profile().set_status_text("Available for chat").await?;
+println!("Status text updated");
+```
+
+**Wire format:**
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Available for chat</status>
+</iq>
+```
+
+### set_profile_picture
+
+Set your profile picture.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    image_data: Vec<u8>,
+) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Parameters:**
+- `image_data` - JPEG image bytes (recommended size: 640x640)
+
+**Returns:**
+- `SetProfilePictureResponse` - Response containing the new picture ID
+
+**Example:**
+```rust
+use std::fs;
+
+let image_data = fs::read("profile.jpg")?;
+let response = client.profile().set_profile_picture(image_data).await?;
+println!("Profile picture updated");
+```
+
+**Wire format:**
+```xml
+<iq type="set" xmlns="w:profile:picture" to="s.whatsapp.net">
+  <picture type="image">{jpeg bytes}</picture>
+</iq>
+```
+
+### remove_profile_picture
+
+Remove your profile picture.
+
+```rust
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Example:**
+```rust
+client.profile().remove_profile_picture().await?;
+println!("Profile picture removed");
+```
+
+## SetProfilePictureResponse
+
+Response returned from profile picture operations.
+
+**Fields:**
+- `id: Option<String>` - New picture ID (present on set, absent on remove)
+
+## Image requirements
+
+When setting a profile picture:
+- Format: JPEG
+- Recommended size: 640x640 pixels
+- The image should be pre-cropped by your application
+- WhatsApp may resize/compress the image server-side
+
+## Error handling
+
+All methods return `Result<T, anyhow::Error>`. Common errors:
+
+- **Empty push name**: "Push name cannot be empty"
+- **Network errors**: Connection timeout, disconnection
+- **App state sync failure**: Keys not available (non-fatal for push name)
+
+```rust
+match client.profile().set_push_name("Alice").await {
+    Ok(_) => println!("Name updated"),
+    Err(e) if e.to_string().contains("empty") => {
+        eprintln!("Name cannot be empty");
+    }
+    Err(e) => eprintln!("Failed: {}", e),
+}
+```
+
+## Complete example
+
+```rust
+use std::fs;
+
+// Update display name
+client.profile().set_push_name("Alice Smith").await?;
+
+// Update status text
+client.profile().set_status_text("Hey there! I'm using WhatsApp.").await?;
+
+// Update profile picture
+let image = fs::read("my_photo.jpg")?;
+client.profile().set_profile_picture(image).await?;
+
+// Later, remove the profile picture
+client.profile().remove_profile_picture().await?;
+```
+
+## Cross-device sync
+
+Push name changes are propagated to other devices through WhatsApp's app state sync mechanism:
+- The `setting_pushName` mutation is sent to the `critical_block` collection
+- Other linked devices receive this mutation and update their local state
+- This matches WhatsApp Web's `WAWebPushNameBridge` behavior

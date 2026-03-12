@@ -87,6 +87,8 @@
               "api/contacts",
               "api/presence",
               "api/chatstate",
+              "api/chat-actions",
+              "api/profile",
               "api/blocking",
               "api/status",
               "api/mex",

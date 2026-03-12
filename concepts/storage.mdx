@@ -226,6 +226,7 @@ pub trait SignalStore: Send + Sync {
     async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()>;
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
     async fn remove_prekey(&self, id: u32) -> Result<()>;
+    async fn get_max_prekey_id(&self) -> Result<u32>;  // For ID collision prevention
 
     // Signed PreKey Operations
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()>;
@@ -239,6 +240,10 @@ pub trait SignalStore: Send + Sync {
     async fn delete_sender_key(&self, address: &str) -> Result<()>;
 }
 ```
+
+<Note>
+The `get_max_prekey_id()` method returns the highest pre-key ID in the store. This is used alongside `Device.next_pre_key_id` to prevent ID collisions during pre-key upload.
+</Note>
 
 **Usage Example:**
 ```rust
@@ -399,15 +404,21 @@ pub struct Device {
     pub pn: Option<Jid>,                    // Phone number JID
     pub lid: Option<Jid>,                   // Long-term identifier
     pub push_name: String,                  // Display name
-    pub platform: String,                   // Platform identifier
     pub registration_id: u32,               // Signal registration ID
     pub adv_secret_key: [u8; 32],          // Advertisement secret
     pub identity_key: KeyPair,              // Signal identity keypair
     pub noise_key: KeyPair,                 // Noise protocol keypair
+    pub signed_pre_key: KeyPair,           // Signed pre-key for session init
+    pub signed_pre_key_id: u32,            // Signed pre-key identifier
     pub account: Option<wa::AdvSignedDeviceIdentity>,
+    pub next_pre_key_id: u32,              // Monotonic pre-key ID counter
     // ... more fields
 }
 ```
+
+<Note>
+The `next_pre_key_id` field is a monotonically increasing counter matching WhatsApp Web's `NEXT_PK_ID` pattern. It prevents pre-key ID collisions when keys are consumed non-sequentially from the store. See the [Signal Protocol](/advanced/signal-protocol#pre-key-management) page for details.
+</Note>
 
 ## SqliteStore Implementation
 
@@ -560,9 +571,11 @@ pub enum DeviceCommand {
     SetId(Option<Jid>),
     SetLid(Option<Jid>),
     SetPushName(String),
-    SetPlatform(String),
     SetAccount(Option<wa::AdvSignedDeviceIdentity>),
-    // ... more commands
+    SetAppVersion((u32, u32, u32)),
+    SetDeviceProps(Option<String>, Option<AppVersion>, Option<PlatformType>),
+    SetPropsHash(Option<String>),
+    SetNextPreKeyId(u32),
 }
 ```
 

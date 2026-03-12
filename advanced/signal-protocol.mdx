@@ -307,10 +307,10 @@ whatsapp-rust integrates Signal Protocol storage with SQLite via Diesel:
 
 ```
 src/store/
-├── signal_identity.rs      # Identity key storage
-├── signal_prekey.rs        # PreKey storage
-├── signal_session.rs       # Session state storage
-└── signal_sender_key.rs    # Sender key storage
+├── signal.rs               # Device store implementations
+├── signal_adapter.rs       # Protocol adapter layer
+├── signal_cache.rs         # In-memory write-through cache
+└── persistence_manager.rs  # State management
 ```
 
 Each storage trait from `wacore/libsignal/src/protocol/storage/traits.rs` is implemented using SQL queries:
@@ -327,6 +327,104 @@ impl SessionStore for SqliteStore {
     }
 }
 ```
+
+### Signal store cache
+
+The `SignalStoreCache` provides an in-memory write-through cache for Signal protocol state, matching WhatsApp Web's `SignalStoreCache` pattern.
+
+```rust
+pub struct SignalStoreCache {
+    sessions: Mutex<StoreState>,
+    identities: Mutex<StoreState>,
+    sender_keys: Mutex<StoreState>,
+}
+```
+
+**Features:**
+- Each store type has independent locking for concurrent access
+- Supports negative caching (`None` values) to avoid repeated DB lookups
+- Dirty tracking ensures modified state is persisted on `flush()`
+- All writes go through the cache first, then batch-persist to the backend
+
+**Usage pattern:**
+```rust
+// Read through cache (populates from backend on miss)
+let session = cache.get_session(address, &backend).await?;
+
+// Write to cache (marks dirty for later flush)
+cache.put_session(address, &session_data).await;
+
+// Batch persist all dirty state
+cache.flush(&backend).await?;
+```
+
+**Failure handling:**
+- Dirty sets are only cleared after all writes succeed
+- If any write fails, dirty tracking is preserved for retry on next flush
+
+Location: `src/store/signal_cache.rs`
+
+## Pre-key management
+
+Pre-keys are one-time-use keys uploaded to the server for session establishment. whatsapp-rust uses a persistent monotonic counter to prevent ID collisions.
+
+### Pre-key ID tracking
+
+The `Device.next_pre_key_id` field tracks the next available pre-key ID, matching WhatsApp Web's `NEXT_PK_ID` pattern:
+
+```rust
+pub struct Device {
+    // ...
+    /// Monotonically increasing counter for one-time pre-key ID generation.
+    /// Only increases, never resets. Prevents collisions when prekeys
+    /// are consumed non-sequentially.
+    pub next_pre_key_id: u32,
+}
+```
+
+**ID assignment flow:**
+
+1. On upload, compute starting ID as `max(next_pre_key_id, max_db_id + 1)`
+2. Generate pre-keys with sequential IDs starting from that value
+3. Persist pre-keys to local store *before* uploading (crash safety)
+4. Upload to server
+5. Update `next_pre_key_id` to `start_id + count`
+
+```rust
+// From src/prekeys.rs
+let max_id = backend.get_max_prekey_id().await?;
+let start_id = if device_snapshot.next_pre_key_id > 0 {
+    std::cmp::max(device_snapshot.next_pre_key_id, max_id + 1)
+} else {
+    max_id + 1  // Migration path for existing devices
+};
+
+// Generate and persist locally BEFORE upload
+for (id, record) in &keys_to_upload {
+    backend.store_prekey(*id, &record_bytes, false).await?;
+}
+
+// Upload to server
+self.execute(PreKeyUploadSpec::new(...)).await?;
+
+// Update persistent counter
+self.persistence_manager
+    .process_command(DeviceCommand::SetNextPreKeyId(next_id))
+    .await;
+```
+
+<Warning>
+Using `max(counter, max_id+1)` guards against crash-after-upload-before-persist scenarios where the counter would be stale but keys already exist in the store.
+</Warning>
+
+### Pre-key upload thresholds
+
+```rust
+const WANTED_PRE_KEY_COUNT: usize = 50;  // Keys uploaded per batch
+const MIN_PRE_KEY_COUNT: usize = 5;      // Minimum before upload triggered
+```
+
+Location: `src/prekeys.rs`
 
 ## Security Considerations
 

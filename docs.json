@@ -85,6 +85,7 @@
             "pages": [
               "api/groups",
               "api/contacts",
+              "api/profile",
               "api/presence",
               "api/chatstate",
               "api/blocking",

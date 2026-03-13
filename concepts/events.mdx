@@ -105,7 +105,7 @@ pub enum Event {
 
     // Group Updates
     JoinedGroup(LazyConversation),
-    GroupInfoUpdate { jid: Jid, update: Box<wa::SyncActionValue> },
+    GroupUpdate(GroupUpdate),
 
     // Contact Updates
     ContactUpdate(ContactUpdate),
@@ -114,6 +114,7 @@ pub enum Event {
     PinUpdate(PinUpdate),
     MuteUpdate(MuteUpdate),
     ArchiveUpdate(ArchiveUpdate),
+    StarUpdate(StarUpdate),
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
 
     // History Sync
@@ -542,15 +543,20 @@ Event::Presence(update) => {
 
 ### PictureUpdate
 
-**Emitted:** When a user changes their profile picture
+**Emitted:** When a user or group profile picture changes
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct PictureUpdate {
+    /// The JID whose picture changed (user or group)
     pub jid: Jid,
-    pub author: Jid,
+    /// The user who made the change (present for group picture changes)
+    pub author: Option<Jid>,
     pub timestamp: DateTime<Utc>,
-    pub photo_change: Option<wa::PhotoChange>,
+    /// Whether the picture was removed (true) or set/updated (false)
+    pub removed: bool,
+    /// The server-assigned picture ID (None for deletions)
+    pub picture_id: Option<String>,
 }
 ```
 
@@ -614,22 +620,43 @@ Event::JoinedGroup(lazy_conv) => {
 }
 ```
 
-### GroupInfoUpdate
+### GroupUpdate
 
-**Emitted:** When group metadata changes (subject, participants, etc.)
+**Emitted:** For group metadata changes, participant updates, and administrative actions
 
 ```rust
-Event::GroupInfoUpdate {
-    jid: Jid,
-    update: Box<wa::SyncActionValue>,
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupUpdate {
+    /// The group this update applies to
+    pub group_jid: Jid,
+    /// The admin/user who triggered the change
+    pub participant: Option<Jid>,
+    /// Phone number JID of the participant (for LID-addressed groups)
+    pub participant_pn: Option<Jid>,
+    /// When the change occurred
+    pub timestamp: DateTime<Utc>,
+    /// Whether the group uses LID addressing mode
+    pub is_lid_addressing_mode: bool,
+    /// The specific action (subject change, participant add/remove, etc.)
+    pub action: GroupNotificationAction,
 }
 ```
 
 **Example:**
 ```rust
-Event::GroupInfoUpdate { jid, update } => {
-    if let Some(action) = &update.group_action {
-        println!("Group {} updated: {:?}", jid, action);
+Event::GroupUpdate(update) => {
+    println!("Group {} updated by {:?}", update.group_jid, update.participant);
+    match &update.action {
+        GroupNotificationAction::Subject { subject, .. } => {
+            println!("Subject changed to: {}", subject);
+        }
+        GroupNotificationAction::Add { participants, .. } => {
+            println!("Added: {:?}", participants);
+        }
+        GroupNotificationAction::Remove { participants, .. } => {
+            println!("Removed: {:?}", participants);
+        }
+        _ => {}
     }
 }
 ```
@@ -675,6 +702,36 @@ pub struct ArchiveUpdate {
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ArchiveChatAction>,
     pub from_full_sync: bool,
+}
+```
+
+### StarUpdate
+
+**Emitted:** When a message is starred or unstarred
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct StarUpdate {
+    pub chat_jid: Jid,
+    /// The participant who sent the message (Some for group messages, None for 1-on-1)
+    pub participant_jid: Option<Jid>,
+    pub message_id: String,
+    pub from_me: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::StarAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Example:**
+```rust
+Event::StarUpdate(update) => {
+    let starred = update.action.starred.unwrap_or(false);
+    println!("Message {} in {} {}", 
+        update.message_id, 
+        update.chat_jid,
+        if starred { "starred" } else { "unstarred" }
+    );
 }
 ```
 

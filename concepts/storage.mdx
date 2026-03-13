@@ -254,6 +254,50 @@ if let Some(session) = backend.get_session("15551234567@s.whatsapp.net:0").await
 }
 ```
 
+### SignalStoreCache
+
+**Location:** `src/store/signal_cache.rs`
+
+The `SignalStoreCache` provides an in-memory cache layer for Signal protocol state, matching WhatsApp Web's `SignalStoreCache` implementation. All crypto operations read and write through this cache, with database writes deferred to explicit `flush()` calls.
+
+```rust
+pub struct SignalStoreCache {
+    sessions: Mutex<StoreState>,
+    identities: Mutex<StoreState>,
+    sender_keys: Mutex<StoreState>,
+}
+```
+
+**Key features:**
+- **Deferred writes**: Changes are accumulated in memory and batch-written on `flush()`
+- **Negative caching**: Known-absent keys are cached as `None` to avoid repeated DB lookups
+- **Independent locking**: Sessions, identities, and sender keys each have their own mutex
+- **O(1) reads**: Values stored as `Arc<[u8]>` for cheap cloning (reference count bump)
+
+**Cache operations:**
+
+```rust
+// Read (loads from backend if not cached)
+let session = cache.get_session(address, &backend).await?;
+
+// Write (marks as dirty, doesn't hit backend)
+cache.put_session(address, &data).await;
+
+// Delete (marks for deletion on flush)
+cache.delete_session(address).await;
+
+// Persist all dirty state to backend
+cache.flush(&backend).await?;
+
+// Clear cache (on disconnect/reconnect)
+cache.clear().await;
+```
+
+**Flush behavior:**
+- Acquires all three mutexes to ensure consistency
+- Only clears dirty tracking after ALL writes succeed
+- On failure, dirty state is preserved for retry on next flush
+
 ## AppSyncStore
 
 **Purpose:** WhatsApp app state synchronization
@@ -348,6 +392,57 @@ pub struct LidPnMappingEntry {
     pub learning_source: String,
 }
 ```
+
+### LidPnCache
+
+**Location:** `src/lid_pn_cache.rs`
+
+The `LidPnCache` provides a bounded in-memory cache for LID to phone number mappings, used for Signal address resolution. WhatsApp Web uses LID-based addresses for Signal sessions when available.
+
+```rust
+pub struct LidPnCache {
+    lid_to_entry: Cache<String, LidPnEntry>,
+    pn_to_entry: Cache<String, LidPnEntry>,
+}
+```
+
+**Bounds (prevents unbounded memory growth):**
+- **Max capacity**: 10,000 entries per map
+- **Time-to-idle TTL**: 1 hour
+
+**Bidirectional lookups:**
+
+```rust
+// Get LID for a phone number
+let lid = cache.get_current_lid("15551234567").await;
+
+// Get phone number for a LID
+let phone = cache.get_phone_number("100000012345678").await;
+```
+
+**Timestamp conflict resolution:**
+
+When multiple LIDs exist for the same phone number, the entry with the most recent `created_at` timestamp wins for the PN → LID lookup:
+
+```rust
+// Add mapping (only updates PN map if newer timestamp)
+cache.add(entry).await;
+```
+
+**Initialization:**
+
+```rust
+// Warm up cache from persistent storage on client init
+let entries = backend.get_all_lid_mappings().await?;
+cache.warm_up(entries).await;
+```
+
+**Learning sources:**
+- `usync` - User sync responses
+- `peer_pn_message` / `peer_lid_message` - Peer messages
+- `pairing` - Device pairing
+- `device_notification` - Device notifications
+- `blocklist_active` / `blocklist_inactive` - Blocklist operations
 
 **DeviceListRecord:**
 ```rust

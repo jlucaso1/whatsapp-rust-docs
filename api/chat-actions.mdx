@@ -1,0 +1,316 @@
+---
+title: Chat actions
+description: Archive, pin, mute, and star messages
+---
+
+The `ChatActions` API provides methods for managing chat organization: archiving, pinning, muting chats, and starring messages. These actions sync across all your devices via WhatsApp's app state mechanism.
+
+## Access
+
+Access chat actions through an `Arc<Client>`:
+
+```rust
+let actions = client.chat_actions();
+```
+
+<Note>
+Chat actions require `Arc<Client>` because app state mutations need encryption key access.
+</Note>
+
+## Archive
+
+Archive and unarchive chats to organize your conversation list.
+
+### archive_chat
+
+Archive a chat to hide it from the main chat list.
+
+```rust
+pub async fn archive_chat(&self, jid: &Jid) -> Result<()>
+```
+
+**Example:**
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions().archive_chat(&chat).await?;
+```
+
+### unarchive_chat
+
+Restore a chat to the main list.
+
+```rust
+pub async fn unarchive_chat(&self, jid: &Jid) -> Result<()>
+```
+
+**Example:**
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions().unarchive_chat(&chat).await?;
+```
+
+## Pin
+
+Pin important chats to the top of your chat list.
+
+### pin_chat
+
+Pin a chat to keep it at the top.
+
+```rust
+pub async fn pin_chat(&self, jid: &Jid) -> Result<()>
+```
+
+**Example:**
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions().pin_chat(&chat).await?;
+```
+
+### unpin_chat
+
+Remove a chat from pinned conversations.
+
+```rust
+pub async fn unpin_chat(&self, jid: &Jid) -> Result<()>
+```
+
+**Example:**
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions().unpin_chat(&chat).await?;
+```
+
+## Mute
+
+Mute notifications from specific chats.
+
+### mute_chat
+
+Mute a chat indefinitely.
+
+```rust
+pub async fn mute_chat(&self, jid: &Jid) -> Result<()>
+```
+
+**Example:**
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions().mute_chat(&chat).await?;
+```
+
+### mute_chat_until
+
+Mute a chat until a specific time.
+
+```rust
+pub async fn mute_chat_until(&self, jid: &Jid, mute_end_timestamp_ms: i64) -> Result<()>
+```
+
+**Parameters:**
+- `jid` - Chat to mute
+- `mute_end_timestamp_ms` - Unix timestamp in milliseconds when the mute expires
+
+**Example:**
+
+```rust
+use chrono::{Duration, Utc};
+
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Mute for 8 hours
+let mute_until = Utc::now() + Duration::hours(8);
+client.chat_actions()
+    .mute_chat_until(&chat, mute_until.timestamp_millis())
+    .await?;
+```
+
+### unmute_chat
+
+Restore notifications for a chat.
+
+```rust
+pub async fn unmute_chat(&self, jid: &Jid) -> Result<()>
+```
+
+**Example:**
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions().unmute_chat(&chat).await?;
+```
+
+## Star messages
+
+Mark important messages for quick access later.
+
+### star_message
+
+Star a message.
+
+```rust
+pub async fn star_message(
+    &self,
+    chat_jid: &Jid,
+    participant_jid: Option<&Jid>,
+    message_id: &str,
+    from_me: bool,
+) -> Result<()>
+```
+
+**Parameters:**
+- `chat_jid` - The chat containing the message
+- `participant_jid` - For group messages from others, pass `Some(&sender_jid)`. For 1-on-1 or own messages, pass `None`
+- `message_id` - The message ID to star
+- `from_me` - Whether the message was sent by you
+
+**Example:**
+
+```rust
+// Star your own message in a 1-on-1 chat
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions()
+    .star_message(&chat, None, "MSG_ID_123", true)
+    .await?;
+
+// Star someone else's message in a group
+let group: Jid = "120363025918861132@g.us".parse()?;
+let sender: Jid = "15559876543@s.whatsapp.net".parse()?;
+client.chat_actions()
+    .star_message(&group, Some(&sender), "MSG_ID_456", false)
+    .await?;
+```
+
+### unstar_message
+
+Remove the star from a message.
+
+```rust
+pub async fn unstar_message(
+    &self,
+    chat_jid: &Jid,
+    participant_jid: Option<&Jid>,
+    message_id: &str,
+    from_me: bool,
+) -> Result<()>
+```
+
+Parameters are the same as `star_message`.
+
+**Example:**
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.chat_actions()
+    .unstar_message(&chat, None, "MSG_ID_123", true)
+    .await?;
+```
+
+## Events
+
+Listen for chat action updates from other devices or the server.
+
+### MuteUpdate
+
+Fired when a chat's mute status changes.
+
+```rust
+Event::MuteUpdate(MuteUpdate {
+    jid,           // Chat JID
+    timestamp,     // When the action occurred
+    action,        // MuteAction with muted state and end timestamp
+    from_full_sync // Whether this came from initial sync
+})
+```
+
+### PinUpdate
+
+Fired when a chat is pinned or unpinned.
+
+```rust
+Event::PinUpdate(PinUpdate {
+    jid,
+    timestamp,
+    action,        // PinAction with pinned state
+    from_full_sync
+})
+```
+
+### ArchiveUpdate
+
+Fired when a chat is archived or unarchived.
+
+```rust
+Event::ArchiveUpdate(ArchiveUpdate {
+    jid,
+    timestamp,
+    action,        // ArchiveChatAction with archived state
+    from_full_sync
+})
+```
+
+### StarUpdate
+
+Fired when a message is starred or unstarred.
+
+```rust
+Event::StarUpdate(StarUpdate {
+    chat_jid,       // Chat containing the message
+    participant_jid, // Sender for group messages
+    message_id,
+    from_me,
+    timestamp,
+    action,         // StarAction with starred state
+    from_full_sync
+})
+```
+
+## Complete example
+
+```rust
+use std::sync::Arc;
+use chrono::{Duration, Utc};
+
+async fn organize_chats(client: Arc<Client>) -> anyhow::Result<()> {
+    let important_contact: Jid = "15551234567@s.whatsapp.net".parse()?;
+    let noisy_group: Jid = "120363025918861132@g.us".parse()?;
+    let old_chat: Jid = "15559999999@s.whatsapp.net".parse()?;
+
+    // Pin important contact
+    client.chat_actions().pin_chat(&important_contact).await?;
+
+    // Mute noisy group for 24 hours
+    let tomorrow = Utc::now() + Duration::hours(24);
+    client.chat_actions()
+        .mute_chat_until(&noisy_group, tomorrow.timestamp_millis())
+        .await?;
+
+    // Archive old conversation
+    client.chat_actions().archive_chat(&old_chat).await?;
+
+    // Star an important message
+    client.chat_actions()
+        .star_message(&important_contact, None, "important_msg_id", false)
+        .await?;
+
+    Ok(())
+}
+```
+
+## App state sync
+
+Chat actions use WhatsApp's app state synchronization mechanism:
+
+| Action | Collection |
+|--------|------------|
+| Archive | `regular_low` |
+| Pin | `regular_low` |
+| Mute | `regular_high` |
+| Star | `regular_high` |
+
+Changes sync automatically across all devices linked to your account.

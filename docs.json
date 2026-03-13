@@ -85,9 +85,12 @@
             "pages": [
               "api/groups",
               "api/contacts",
+              "api/profile",
               "api/presence",
               "api/chatstate",
+              "api/chat-actions",
               "api/blocking",
+              "api/spam-reporting",
               "api/status",
               "api/mex",
               "api/tctoken"

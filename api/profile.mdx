@@ -1,0 +1,178 @@
+---
+title: Profile
+description: Manage your own WhatsApp profile settings
+---
+
+The `Profile` feature provides methods for managing your own WhatsApp profile, including push name (display name), status text (about), and profile picture.
+
+## Access
+
+Access profile operations through the client:
+
+```rust
+let profile = client.profile();
+```
+
+## Methods
+
+### set_push_name
+
+Set your display name visible to others.
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `name` - New display name (cannot be empty)
+
+**Behavior:**
+1. Sends a presence stanza with the new name
+2. Syncs via app state mutation for cross-device propagation
+3. Persists locally
+
+**Example:**
+```rust
+client.profile().set_push_name("John Doe").await?;
+println!("Display name updated");
+```
+
+**Wire format:**
+```xml
+<presence name="John Doe"/>
+```
+
+### set_status_text
+
+Set your profile "About" text.
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `text` - New status/about text
+
+**Example:**
+```rust
+client.profile().set_status_text("Available for calls").await?;
+println!("About text updated");
+
+// Clear status text
+client.profile().set_status_text("").await?;
+```
+
+**Wire format:**
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Available for calls</status>
+</iq>
+```
+
+<Note>
+This sets the profile "About" text, not ephemeral story/status updates. For posting status updates, see the [Status API](/api/status).
+</Note>
+
+### set_profile_picture
+
+Set your profile picture.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    image_data: Vec<u8>,
+) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Parameters:**
+- `image_data` - JPEG image bytes (recommended: 640x640 pixels)
+
+**Returns:**
+- `SetProfilePictureResponse` with the new picture ID
+
+**Example:**
+```rust
+let image_data = std::fs::read("profile.jpg")?;
+let response = client.profile().set_profile_picture(image_data).await?;
+println!("New picture ID: {:?}", response.picture_id);
+```
+
+**Wire format:**
+```xml
+<iq type="set" xmlns="w:profile:picture" to="s.whatsapp.net">
+  <picture type="image">{jpeg bytes}</picture>
+</iq>
+```
+
+### remove_profile_picture
+
+Remove your profile picture.
+
+```rust
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Example:**
+```rust
+let response = client.profile().remove_profile_picture().await?;
+println!("Profile picture removed");
+```
+
+## Types
+
+### SetProfilePictureResponse
+
+Response from setting or removing a profile picture.
+
+```rust
+pub struct SetProfilePictureResponse {
+    pub picture_id: Option<String>,
+}
+```
+
+## Cross-device sync
+
+Changes to push name are automatically synced across your linked devices via the app state sync mechanism. The library handles this internally by:
+
+1. Sending the immediate presence update
+2. Creating a `setting_pushName` mutation in the `critical_block` collection
+
+If the app state sync fails (e.g., right after pairing before initial sync), the presence update still takes effect immediately.
+
+## Error handling
+
+```rust
+use anyhow::Result;
+
+// Empty name is rejected
+let result = client.profile().set_push_name("").await;
+assert!(result.is_err());
+
+// Valid update
+match client.profile().set_push_name("New Name").await {
+    Ok(_) => println!("Name updated"),
+    Err(e) => eprintln!("Failed: {}", e),
+}
+```
+
+## Complete example
+
+```rust
+use std::sync::Arc;
+use whatsapp_rust::Client;
+
+async fn update_profile(client: &Arc<Client>) -> anyhow::Result<()> {
+    // Update display name
+    client.profile().set_push_name("My Bot").await?;
+    
+    // Update about text
+    client.profile().set_status_text("Automated assistant").await?;
+    
+    // Set profile picture
+    let image = std::fs::read("bot_avatar.jpg")?;
+    client.profile().set_profile_picture(image).await?;
+    
+    println!("Profile fully updated!");
+    Ok(())
+}
+```

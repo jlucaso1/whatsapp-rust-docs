@@ -1,0 +1,154 @@
+---
+title: Profile
+description: Manage your own profile settings including push name, status text, and profile picture
+---
+
+The `Profile` struct provides methods for managing your own WhatsApp profile settings. This includes changing your display name (push name), status text (about), and profile picture.
+
+## Access
+
+Access profile operations through the client:
+
+```rust
+let profile = client.profile();
+```
+
+## Methods
+
+### set_push_name
+
+Set the user's display name (push name).
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<()>
+```
+
+**Parameters:**
+- `name` - The new display name (cannot be empty)
+
+**Behavior:**
+- Sends a presence stanza with the new name
+- Propagates the change via app state sync for cross-device synchronization
+- Persists the change to local storage
+
+**Example:**
+```rust
+client.profile().set_push_name("John Doe").await?;
+```
+
+<Note>
+  The push name change is synchronized across all your linked devices via app state sync to the `critical_block` collection.
+</Note>
+
+### set_status_text
+
+Set the user's status text (about).
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<()>
+```
+
+**Parameters:**
+- `text` - The new status text
+
+**Example:**
+```rust
+client.profile().set_status_text("Available").await?;
+```
+
+<Note>
+  This sets the profile "About" text, not ephemeral text status updates. For status updates (Stories), see the [Status API](/api/status).
+</Note>
+
+### set_profile_picture
+
+Set the user's profile picture.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    image_data: Vec<u8>,
+) -> Result<SetProfilePictureResponse>
+```
+
+**Parameters:**
+- `image_data` - JPEG image bytes (typically 640x640 pixels)
+
+**Returns:**
+- `SetProfilePictureResponse` - Contains the new picture ID
+
+**Example:**
+```rust
+let image_data = std::fs::read("profile.jpg")?;
+let response = client.profile().set_profile_picture(image_data).await?;
+println!("New picture ID: {:?}", response);
+```
+
+<Tip>
+  The image should already be properly sized and cropped by the caller. WhatsApp typically uses 640x640 pixel images.
+</Tip>
+
+### remove_profile_picture
+
+Remove the user's profile picture.
+
+```rust
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse>
+```
+
+**Returns:**
+- `SetProfilePictureResponse` - Confirmation of removal
+
+**Example:**
+```rust
+client.profile().remove_profile_picture().await?;
+```
+
+## Complete example
+
+```rust
+use whatsapp_rust::Profile;
+
+async fn update_profile(client: &Arc<Client>) -> Result<()> {
+    let profile = client.profile();
+    
+    // Update display name
+    profile.set_push_name("My Bot").await?;
+    
+    // Update status text
+    profile.set_status_text("I'm a WhatsApp bot! 🤖").await?;
+    
+    // Update profile picture
+    let image = std::fs::read("bot_avatar.jpg")?;
+    profile.set_profile_picture(image).await?;
+    
+    Ok(())
+}
+```
+
+## Error handling
+
+All methods return `Result<T, anyhow::Error>`. Common errors:
+
+- Empty push name (must be non-empty)
+- Invalid image data
+- Network errors
+- App state sync failures (non-fatal for push name)
+
+```rust
+match client.profile().set_push_name("New Name").await {
+    Ok(()) => println!("Push name updated successfully"),
+    Err(e) => eprintln!("Failed to update push name: {}", e),
+}
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Contacts" icon="address-book" href="/api/contacts">
+    Fetch other users' profile pictures and info
+  </Card>
+  <Card title="Status" icon="circle-user" href="/api/status">
+    Post ephemeral status updates (Stories)
+  </Card>
+</CardGroup>

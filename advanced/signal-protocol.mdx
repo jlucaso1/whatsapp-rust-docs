@@ -434,6 +434,96 @@ fn get_buffer(&mut self) -> &mut Vec<u8> {
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`
 
+## Error Handling
+
+The Signal Protocol implementation uses typed errors for all cryptographic operations:
+
+```rust
+#[derive(Debug, Error)]
+pub enum SignalProtocolError {
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+    #[error("invalid state for call to {0} to succeed: {1}")]
+    InvalidState(&'static str, String),
+
+    #[error("protobuf encoding was invalid")]
+    InvalidProtobufEncoding,
+
+    #[error("ciphertext serialized bytes were too short <{0}>")]
+    CiphertextMessageTooShort(usize),
+    #[error("ciphertext version was too old <{0}>")]
+    LegacyCiphertextVersion(u8),
+    #[error("unrecognized ciphertext version <{0}>")]
+    UnrecognizedCiphertextVersion(u8),
+    #[error("unrecognized message version <{0}>")]
+    UnrecognizedMessageVersion(u32),
+
+    #[error("no key type identifier")]
+    NoKeyTypeIdentifier,
+    #[error("bad key type <{0:#04x}>")]
+    BadKeyType(u8),
+    #[error("bad key length <{1}> for key with type <{0}>")]
+    BadKeyLength(KeyType, usize),
+
+    #[error("invalid signature detected")]
+    SignatureValidationFailed,
+
+    #[error("untrusted identity for address {0}")]
+    UntrustedIdentity(ProtocolAddress),
+
+    #[error("invalid prekey identifier")]
+    InvalidPreKeyId,
+    #[error("invalid signed prekey identifier")]
+    InvalidSignedPreKeyId,
+
+    #[error("no sender key state: {0}")]
+    NoSenderKeyState(String),
+
+    #[error("session with {0} not found")]
+    SessionNotFound(ProtocolAddress),
+    #[error("invalid session: {0}")]
+    InvalidSessionStructure(&'static str),
+    #[error("invalid sender key session")]
+    InvalidSenderKeySession,
+
+    #[error("message with old counter {0} / {1}")]
+    DuplicatedMessage(u32, u32),
+    #[error("invalid {0:?} message: {1}")]
+    InvalidMessage(CiphertextMessageType, &'static str),
+
+    #[error("error while invoking an ffi callback: {0}")]
+    FfiBindingError(String),
+    #[error("error in method call '{0}': {1}")]
+    ApplicationCallbackError(&'static str, Box<dyn std::error::Error + Send + Sync>),
+}
+```
+
+### Common Error Scenarios
+
+| Error | Cause | Resolution |
+|-------|-------|------------|
+| `SessionNotFound` | No session with sender | Request retry, wait for prekey message |
+| `UntrustedIdentity` | Identity key changed | Clear old identity, retry |
+| `DuplicatedMessage` | Replay attack or duplicate | Silently ignore |
+| `InvalidMessage` | Corrupted ciphertext | Request retry from sender |
+| `NoSenderKeyState` | Missing group sender key | Wait for SKDM |
+
+### Helper Methods
+
+```rust
+impl SignalProtocolError {
+    /// Create an ApplicationCallbackError for storage callbacks
+    pub fn for_application_callback<E>(method: &'static str) -> impl FnOnce(E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static
+    {
+        move |error| Self::ApplicationCallbackError(method, Box::new(error))
+    }
+}
+```
+
+Location: `wacore/libsignal/src/protocol/error.rs`
+
 ## Related Components
 
 - [Binary Protocol](/advanced/binary-protocol) - How encrypted messages are serialized

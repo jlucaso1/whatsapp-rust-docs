@@ -610,6 +610,8 @@ Sends Signal Protocol prekey bundle digest to the server.
 
 ## Error Types
 
+### ClientError
+
 ```rust
 pub enum ClientError {
     NotConnected,
@@ -617,6 +619,74 @@ pub enum ClientError {
     EncryptSend(EncryptSendError),
     AlreadyConnected,
     NotLoggedIn,
+}
+```
+
+### SocketError
+
+```rust
+#[derive(Debug, Error)]
+pub enum SocketError {
+    #[error("Socket is closed")]
+    SocketClosed,
+    #[error("Noise handshake failed: {0}")]
+    NoiseHandshake(String),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Crypto error: {0}")]
+    Crypto(String),
+}
+```
+
+### EncryptSendError
+
+Provides detailed error information with buffer recovery for retry scenarios:
+
+```rust
+#[derive(Debug, Error)]
+pub enum EncryptSendErrorKind {
+    #[error("cryptography error")]
+    Crypto,
+    #[error("framing error")]
+    Framing,
+    #[error("transport error")]
+    Transport,
+    #[error("tokio join error")]
+    Join,
+    #[error("sender channel closed")]
+    ChannelClosed,
+}
+
+#[derive(Debug, Error)]
+#[error("{kind}")]
+pub struct EncryptSendError {
+    pub kind: EncryptSendErrorKind,
+    #[source]
+    pub source: anyhow::Error,
+    pub plaintext_buf: Vec<u8>,  // Original plaintext for retry
+    pub out_buf: Vec<u8>,        // Partially encrypted output
+}
+```
+
+**Usage:**
+```rust
+match client.send_node(node).await {
+    Ok(()) => println!("Sent successfully"),
+    Err(ClientError::EncryptSend(e)) => {
+        match e.kind {
+            EncryptSendErrorKind::Transport => {
+                // Network issue - can retry with e.plaintext_buf
+            }
+            EncryptSendErrorKind::Crypto => {
+                // Encryption failed - check session state
+            }
+            _ => {}
+        }
+    }
+    Err(ClientError::NotConnected) => {
+        // Reconnect and retry
+    }
+    _ => {}
 }
 ```
 

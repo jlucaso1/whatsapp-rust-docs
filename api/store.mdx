@@ -489,15 +489,74 @@ pub struct DeviceInfo {
 All storage operations return `Result<T>` from `wacore::store::error`:
 
 ```rust
+#[derive(Debug, Error)]
 pub enum StoreError {
-    Connection(String),    // Connection failures
-    Database(String),      // Database operation errors
-    Migration(String),     // Migration errors
-    Serialization(String), // Serialization/deserialization errors
-    NotFound,             // Resource not found
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Serialization/deserialization error: {0}")]
+    Serialization(String),
+
+    #[error("Item not found: {0}")]
+    NotFound(String),
+
+    #[error("Database backend error: {0}")]
+    Backend(#[from] Box<dyn std::error::Error + Send + Sync>),
+
+    #[error("Database connection error: {0}")]
+    Connection(String),
+
+    #[error("Database operation error: {0}")]
+    Database(String),
+
+    #[error("Migration error: {0}")]
+    Migration(String),
+
+    #[error("Device with ID {0} not found")]
+    DeviceNotFound(i32),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+```
+
+### Helper Function
+
+Use `db_err` for convenient error conversion:
+
+```rust
+use wacore::store::error::db_err;
+
+async fn my_operation(&self) -> Result<()> {
+    self.connection.execute("...")
+        .await
+        .map_err(db_err)?;  // Converts any Display error to StoreError::Database
+    Ok(())
+}
+```
+
+### Error Handling Example
+
+```rust
+match store.load_identity("address").await {
+    Ok(Some(key)) => {
+        // Identity found
+    }
+    Ok(None) => {
+        // No identity stored for this address
+    }
+    Err(StoreError::Connection(msg)) => {
+        // Database connection issue
+        eprintln!("Connection error: {}", msg);
+    }
+    Err(StoreError::Database(msg)) => {
+        // Query execution error
+        eprintln!("Database error: {}", msg);
+    }
+    Err(e) => {
+        // Other errors
+        eprintln!("Storage error: {}", e);
+    }
+}
 ```
 
 ## See Also

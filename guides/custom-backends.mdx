@@ -656,8 +656,10 @@ let backend = MyCustomStore::new(connection_string);
 
 ### Implement Proper Error Handling
 
+Use the typed `StoreError` variants for proper error categorization:
+
 ```rust
-use wacore::store::error::{Result, StoreError};
+use wacore::store::error::{Result, StoreError, db_err};
 
 async fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
     match self.connection.query("SELECT ...", &[address]).await {
@@ -666,7 +668,29 @@ async fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
         Err(e) => Err(StoreError::Database(e.to_string())),
     }
 }
+
+// Use db_err helper for concise error conversion
+async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
+    self.connection
+        .execute("INSERT OR REPLACE INTO sessions ...", &[address, session])
+        .await
+        .map_err(db_err)?;
+    Ok(())
+}
 ```
+
+#### StoreError Variants
+
+| Variant | Use Case |
+|---------|----------|
+| `Io(std::io::Error)` | File system operations |
+| `Serialization(String)` | Encode/decode failures |
+| `NotFound(String)` | Missing required resources |
+| `Backend(Box<dyn Error>)` | Underlying storage errors |
+| `Connection(String)` | Connection establishment failures |
+| `Database(String)` | Query execution errors |
+| `Migration(String)` | Schema migration failures |
+| `DeviceNotFound(i32)` | Device ID not in store |
 
 ### Use Transactions for Batch Operations
 

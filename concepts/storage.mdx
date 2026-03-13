@@ -405,6 +405,7 @@ pub struct Device {
     pub identity_key: KeyPair,              // Signal identity keypair
     pub noise_key: KeyPair,                 // Noise protocol keypair
     pub account: Option<wa::AdvSignedDeviceIdentity>,
+    pub next_pre_key_id: u32,              // Monotonic counter for prekey IDs
     // ... more fields
 }
 ```
@@ -562,6 +563,7 @@ pub enum DeviceCommand {
     SetPushName(String),
     SetPlatform(String),
     SetAccount(Option<wa::AdvSignedDeviceIdentity>),
+    SetNextPreKeyId(u32),
     // ... more commands
 }
 ```

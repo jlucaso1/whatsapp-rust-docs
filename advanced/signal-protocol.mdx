@@ -301,6 +301,42 @@ pub fn derive_keys(secret_input: &[u8]) -> (RootKey, ChainKey, InitialPQRKey) {
 
 Location: `wacore/libsignal/src/protocol/ratchet.rs:18-39`
 
+## PreKey Management
+
+Pre-keys enable asynchronous session establishment in the Signal Protocol. whatsapp-rust manages pre-key generation and upload to match WhatsApp Web's behavior.
+
+### Configuration
+
+```rust
+// src/prekeys.rs
+/// Matches WA Web's UPLOAD_KEYS_COUNT from WAWebSignalStoreApi
+const WANTED_PRE_KEY_COUNT: usize = 812;
+const MIN_PRE_KEY_COUNT: usize = 5;
+```
+
+**Constants:**
+- **WANTED_PRE_KEY_COUNT (812)**: Number of pre-keys uploaded in each batch, matching WhatsApp Web
+- **MIN_PRE_KEY_COUNT (5)**: Minimum server-side pre-key count before triggering upload
+
+### Pre-key ID Counter
+
+Pre-key IDs use a persistent monotonic counter (`Device::next_pre_key_id`) that only increases, matching WhatsApp Web's `NEXT_PK_ID` pattern:
+
+```rust
+// Determine starting ID using both the persistent counter AND the store max
+let max_id = backend.get_max_prekey_id().await?;
+let start_id = if device_snapshot.next_pre_key_id > 0 {
+    std::cmp::max(device_snapshot.next_pre_key_id, max_id + 1)
+} else {
+    // Migration: start from MAX(key_id) + 1
+    max_id + 1
+};
+```
+
+This approach prevents ID collisions when pre-keys are consumed non-sequentially from the store.
+
+Location: `src/prekeys.rs`
+
 ## Storage Integration
 
 whatsapp-rust integrates Signal Protocol storage with SQLite via Diesel:

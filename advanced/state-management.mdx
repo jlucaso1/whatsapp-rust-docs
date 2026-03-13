@@ -197,6 +197,7 @@ pub enum DeviceCommand {
     SetNoiseKey { keypair: KeyPair },
     SetIdentityKey { keypair: IdentityKeyPair },
     SetAdvSecretKey { key: Vec<u8> },
+    SetNextPreKeyId(u32),  // Monotonic counter for prekey ID generation
     
     // Connection state
     SetEdgeRoutingInfo { info: Option<Vec<u8>> },
@@ -438,7 +439,8 @@ CREATE TABLE devices (
     registration_id INTEGER,
     adv_secret_key BLOB,
     edge_routing_info BLOB,
-    last_connected INTEGER
+    last_connected INTEGER,
+    next_pre_key_id INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE skdm_recipients (

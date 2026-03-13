@@ -1,0 +1,157 @@
+---
+title: Profile
+description: Manage your own WhatsApp profile (push name, status text, profile picture)
+---
+
+The `Profile` feature provides APIs for managing your own WhatsApp account profile, including display name, status text (about), and profile picture.
+
+## Access
+
+Access profile operations through the client:
+
+```rust
+let profile = client.profile();
+```
+
+<Note>
+The `profile()` method requires `Arc<Client>` since it needs to persist state changes.
+</Note>
+
+## Methods
+
+### set_push_name
+
+Set the user's push name (display name).
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<()>
+```
+
+Updates the display name by:
+1. Sending a presence stanza with the new name
+2. Syncing via app state mutation to `critical_block` collection for cross-device synchronization
+3. Persisting to local storage
+
+<ParamField path="name" type="&str" required>
+  New display name. Cannot be empty.
+</ParamField>
+
+**Example:**
+```rust
+client.profile().set_push_name("My Bot").await?;
+```
+
+<Warning>
+Push name cannot be empty. The method will return an error if an empty string is provided.
+</Warning>
+
+### set_status_text
+
+Set the user's status text (about).
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<()>
+```
+
+Uses the stable IQ-based approach matching WhatsApp Web's behavior:
+
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Hello world!</status>
+</iq>
+```
+
+<ParamField path="text" type="&str" required>
+  New status text (about section).
+</ParamField>
+
+**Example:**
+```rust
+client.profile().set_status_text("Available for business inquiries").await?;
+```
+
+<Note>
+This sets the profile "About" text, not ephemeral status updates. For posting story/status updates, use [`client.status()`](/api/status).
+</Note>
+
+### set_profile_picture
+
+Set the user's own profile picture.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    image_data: Vec<u8>,
+) -> Result<SetProfilePictureResponse>
+```
+
+<ParamField path="image_data" type="Vec<u8>" required>
+  JPEG image data. Should be properly sized/cropped (WhatsApp typically uses 640x640).
+</ParamField>
+
+**Returns:**
+- `SetProfilePictureResponse` containing the new picture ID
+
+**Example:**
+```rust
+let image_data = std::fs::read("profile.jpg")?;
+let response = client.profile().set_profile_picture(image_data).await?;
+println!("New picture ID: {:?}", response.picture_id);
+```
+
+<Tip>
+For best results, crop and resize your image to 640x640 pixels before uploading.
+</Tip>
+
+### remove_profile_picture
+
+Remove the user's own profile picture.
+
+```rust
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse>
+```
+
+**Example:**
+```rust
+client.profile().remove_profile_picture().await?;
+```
+
+## Types
+
+### SetProfilePictureResponse
+
+Response from profile picture operations.
+
+```rust
+pub struct SetProfilePictureResponse {
+    /// New picture ID (None if picture was removed)
+    pub picture_id: Option<String>,
+}
+```
+
+## Complete example
+
+```rust
+use std::sync::Arc;
+use whatsapp_rust::Client;
+
+async fn update_profile(client: &Arc<Client>) -> anyhow::Result<()> {
+    // Update display name
+    client.profile().set_push_name("My WhatsApp Bot").await?;
+    
+    // Update about text
+    client.profile().set_status_text("Powered by whatsapp-rust").await?;
+    
+    // Update profile picture
+    let image = std::fs::read("bot_avatar.jpg")?;
+    client.profile().set_profile_picture(image).await?;
+    
+    Ok(())
+}
+```
+
+## See also
+
+- [Status](/api/status) - Post ephemeral status/story updates
+- [Contacts](/api/contacts) - Fetch profile information for other users
+- [Client](/api/client) - Core client methods

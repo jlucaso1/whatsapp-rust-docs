@@ -1,0 +1,272 @@
+---
+title: "Chat actions"
+description: "Archive, pin, mute, and star messages in chats"
+---
+
+The `ChatActions` feature provides APIs for managing chat organization: archiving, pinning, muting notifications, and starring messages.
+
+## Overview
+
+Access chat actions via `client.chat_actions()`:
+
+```rust
+// Archive a chat
+client.chat_actions().archive_chat(&jid).await?;
+
+// Pin a chat to top
+client.chat_actions().pin_chat(&jid).await?;
+
+// Mute notifications
+client.chat_actions().mute_chat(&jid).await?;
+
+// Star a message
+client.chat_actions().star_message(&chat_jid, None, "MSG_ID", true).await?;
+```
+
+<Note>
+These actions sync across all your linked devices via WhatsApp's app state sync mechanism.
+</Note>
+
+---
+
+## Archive
+
+### archive_chat
+
+```rust
+pub async fn archive_chat(&self, jid: &Jid) -> Result<()>
+```
+
+Archives a chat, moving it to the archived chats section.
+
+<ParamField path="jid" type="&Jid" required>
+  The chat JID to archive
+</ParamField>
+
+**Example:**
+```rust
+let chat_jid: Jid = "1234567890@s.whatsapp.net".parse()?;
+client.chat_actions().archive_chat(&chat_jid).await?;
+```
+
+### unarchive_chat
+
+```rust
+pub async fn unarchive_chat(&self, jid: &Jid) -> Result<()>
+```
+
+Unarchives a chat, returning it to the main chat list.
+
+<ParamField path="jid" type="&Jid" required>
+  The chat JID to unarchive
+</ParamField>
+
+---
+
+## Pin
+
+### pin_chat
+
+```rust
+pub async fn pin_chat(&self, jid: &Jid) -> Result<()>
+```
+
+Pins a chat to the top of the chat list.
+
+<ParamField path="jid" type="&Jid" required>
+  The chat JID to pin
+</ParamField>
+
+**Example:**
+```rust
+// Pin an important chat
+client.chat_actions().pin_chat(&important_chat).await?;
+```
+
+<Note>
+WhatsApp allows a maximum of 3 pinned chats. Pinning a 4th chat may unpin the oldest one.
+</Note>
+
+### unpin_chat
+
+```rust
+pub async fn unpin_chat(&self, jid: &Jid) -> Result<()>
+```
+
+Unpins a chat from the top of the chat list.
+
+<ParamField path="jid" type="&Jid" required>
+  The chat JID to unpin
+</ParamField>
+
+---
+
+## Mute
+
+### mute_chat
+
+```rust
+pub async fn mute_chat(&self, jid: &Jid) -> Result<()>
+```
+
+Mutes a chat indefinitely. You won't receive notifications for new messages.
+
+<ParamField path="jid" type="&Jid" required>
+  The chat JID to mute
+</ParamField>
+
+**Example:**
+```rust
+// Mute a noisy group chat
+client.chat_actions().mute_chat(&group_jid).await?;
+```
+
+### mute_chat_until
+
+```rust
+pub async fn mute_chat_until(
+    &self,
+    jid: &Jid,
+    mute_end_timestamp_ms: i64
+) -> Result<()>
+```
+
+Mutes a chat until a specific time.
+
+<ParamField path="jid" type="&Jid" required>
+  The chat JID to mute
+</ParamField>
+
+<ParamField path="mute_end_timestamp_ms" type="i64" required>
+  Unix timestamp in milliseconds when the mute should end. Must be in the future.
+</ParamField>
+
+**Example:**
+```rust
+use chrono::{Utc, Duration};
+
+// Mute for 8 hours
+let mute_until = Utc::now() + Duration::hours(8);
+client.chat_actions()
+    .mute_chat_until(&jid, mute_until.timestamp_millis())
+    .await?;
+```
+
+### unmute_chat
+
+```rust
+pub async fn unmute_chat(&self, jid: &Jid) -> Result<()>
+```
+
+Unmutes a chat, restoring notifications.
+
+<ParamField path="jid" type="&Jid" required>
+  The chat JID to unmute
+</ParamField>
+
+---
+
+## Star messages
+
+### star_message
+
+```rust
+pub async fn star_message(
+    &self,
+    chat_jid: &Jid,
+    participant_jid: Option<&Jid>,
+    message_id: &str,
+    from_me: bool
+) -> Result<()>
+```
+
+Stars a message for easy access later.
+
+<ParamField path="chat_jid" type="&Jid" required>
+  The chat containing the message
+</ParamField>
+
+<ParamField path="participant_jid" type="Option<&Jid>">
+  For group messages from others, pass `Some(&sender_jid)`. For 1-on-1 chats or your own messages, pass `None`.
+</ParamField>
+
+<ParamField path="message_id" type="&str" required>
+  The ID of the message to star
+</ParamField>
+
+<ParamField path="from_me" type="bool" required>
+  Whether the message was sent by you
+</ParamField>
+
+**Example:**
+```rust
+// Star your own message in a 1-on-1 chat
+client.chat_actions()
+    .star_message(&chat_jid, None, "3EB0ABC123", true)
+    .await?;
+
+// Star someone else's message in a group
+client.chat_actions()
+    .star_message(&group_jid, Some(&sender_jid), "3EB0DEF456", false)
+    .await?;
+```
+
+<Warning>
+When starring a group message not sent by you, `participant_jid` is required.
+</Warning>
+
+### unstar_message
+
+```rust
+pub async fn unstar_message(
+    &self,
+    chat_jid: &Jid,
+    participant_jid: Option<&Jid>,
+    message_id: &str,
+    from_me: bool
+) -> Result<()>
+```
+
+Removes the star from a message.
+
+Parameters are the same as [`star_message`](#star_message).
+
+---
+
+## Events
+
+Chat action changes (from this device or other linked devices) emit events:
+
+| Action | Event |
+|--------|-------|
+| Archive/Unarchive | `Event::ArchiveUpdate` |
+| Pin/Unpin | `Event::PinUpdate` |
+| Mute/Unmute | `Event::MuteUpdate` |
+| Star/Unstar | `Event::StarUpdate` |
+
+**Example handler:**
+```rust
+use wacore::types::events::Event;
+
+.on_event(|event, _client| async move {
+    match event {
+        Event::PinUpdate(update) => {
+            let action = if update.action.pinned.unwrap_or(false) { "pinned" } else { "unpinned" };
+            println!("Chat {} was {}", update.jid, action);
+        }
+        Event::MuteUpdate(update) => {
+            let action = if update.action.muted.unwrap_or(false) { "muted" } else { "unmuted" };
+            println!("Chat {} was {}", update.jid, action);
+        }
+        _ => {}
+    }
+})
+```
+
+---
+
+## See also
+
+- [Events](/concepts/events) - All event types including chat action updates
+- [Client](/api/client) - Core client API
+- [Groups](/api/groups) - Group management operations

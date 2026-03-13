@@ -1,0 +1,166 @@
+---
+title: Profile
+description: Manage your WhatsApp profile settings
+---
+
+The `Profile` API provides methods for managing your WhatsApp profile, including your display name, status text (about), and profile picture.
+
+## Access
+
+Access profile operations through an `Arc<Client>`:
+
+```rust
+let profile = client.profile();
+```
+
+<Note>
+Profile operations require `Arc<Client>` because some methods use app state synchronization.
+</Note>
+
+## Methods
+
+### set_push_name
+
+Set your display name (push name) visible to contacts.
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<()>
+```
+
+**Parameters:**
+- `name` - Your new display name (cannot be empty)
+
+**Behavior:**
+1. Sends a presence stanza with the new name
+2. Syncs via app state to all linked devices
+3. Persists to local storage
+
+**Example:**
+
+```rust
+client.profile().set_push_name("Alice").await?;
+```
+
+### set_status_text
+
+Set your profile "About" text.
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<()>
+```
+
+**Parameters:**
+- `text` - Your new status text
+
+<Note>
+This sets the persistent "About" text in your profile, not ephemeral text status updates. For posting status updates, see the [Status API](/api/status).
+</Note>
+
+**Example:**
+
+```rust
+client.profile().set_status_text("Available").await?;
+```
+
+### set_profile_picture
+
+Set your profile picture.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    image_data: Vec<u8>,
+) -> Result<SetProfilePictureResponse>
+```
+
+**Parameters:**
+- `image_data` - JPEG image bytes (recommended: 640x640 pixels)
+
+**Returns:**
+- `SetProfilePictureResponse` with the new picture ID
+
+**Example:**
+
+```rust
+let image_bytes = std::fs::read("profile.jpg")?;
+let response = client.profile().set_profile_picture(image_bytes).await?;
+println!("Picture ID: {:?}", response.picture_id);
+```
+
+### remove_profile_picture
+
+Remove your profile picture.
+
+```rust
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse>
+```
+
+**Example:**
+
+```rust
+client.profile().remove_profile_picture().await?;
+```
+
+## SetProfilePictureResponse
+
+```rust
+pub struct SetProfilePictureResponse {
+    pub picture_id: Option<String>,
+}
+```
+
+## Complete example
+
+```rust
+use std::sync::Arc;
+
+async fn update_profile(client: Arc<Client>) -> anyhow::Result<()> {
+    // Update display name
+    client.profile().set_push_name("Alice Smith").await?;
+    
+    // Update about text
+    client.profile().set_status_text("Building with whatsapp-rust 🚀").await?;
+    
+    // Update profile picture
+    let image = std::fs::read("new_profile.jpg")?;
+    let result = client.profile().set_profile_picture(image).await?;
+    
+    if let Some(id) = result.picture_id {
+        println!("New profile picture ID: {}", id);
+    }
+    
+    Ok(())
+}
+```
+
+## Wire format
+
+### Set push name
+
+```xml
+<presence name="Alice"/>
+```
+
+Plus an app state mutation to `critical_block` collection for cross-device sync.
+
+### Set status text
+
+```xml
+<iq type="set" xmlns="status" to="s.whatsapp.net">
+  <status>Available</status>
+</iq>
+```
+
+### Set profile picture
+
+```xml
+<iq type="set" xmlns="w:profile:picture" to="s.whatsapp.net">
+  <picture type="image">{jpeg bytes}</picture>
+</iq>
+```
+
+## Cross-device sync
+
+Push name changes sync automatically to all linked devices via WhatsApp's app state mechanism. The `setting_pushName` mutation is written to the `critical_block` collection.
+
+If app state sync fails (for example, right after pairing before sync keys are available), the presence update still takes effect immediately on the current session.

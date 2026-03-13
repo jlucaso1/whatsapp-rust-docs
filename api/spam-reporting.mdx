@@ -1,0 +1,161 @@
+---
+title: Spam reporting
+description: Report messages and contacts as spam
+---
+
+The spam reporting API allows you to report messages, contacts, and groups as spam to WhatsApp.
+
+## Method
+
+### send_spam_report
+
+Report a message or contact as spam.
+
+```rust
+pub async fn send_spam_report(
+    &self,
+    request: SpamReportRequest,
+) -> Result<SpamReportResult, IqError>
+```
+
+**Parameters:**
+- `request` - The spam report details
+
+**Returns:**
+- `SpamReportResult` containing the server-assigned report ID
+
+## SpamReportRequest
+
+```rust
+pub struct SpamReportRequest {
+    pub message_id: String,
+    pub message_timestamp: u64,
+    pub from_jid: Option<Jid>,
+    pub participant_jid: Option<Jid>,
+    pub group_jid: Option<Jid>,
+    pub group_subject: Option<String>,
+    pub spam_flow: SpamFlow,
+    pub raw_message: Option<Vec<u8>>,
+    pub media_type: Option<String>,
+    pub local_message_type: Option<String>,
+}
+```
+
+**Fields:**
+- `message_id` - ID of the message being reported
+- `message_timestamp` - Unix timestamp of the message
+- `from_jid` - Sender's JID (for 1-on-1 messages)
+- `participant_jid` - Sender's JID (for group messages)
+- `group_jid` - Group JID (for group reports)
+- `group_subject` - Group name (for group reports)
+- `spam_flow` - Where the report was triggered from
+- `raw_message` - Optional protobuf-encoded message content
+- `media_type` - Media type if the message contains media
+- `local_message_type` - Local message type identifier
+
+## SpamFlow
+
+Indicates where the spam report was initiated.
+
+```rust
+pub enum SpamFlow {
+    MessageMenu,           // From message context menu (default)
+    ContactInfo,           // From contact info screen
+    StatusReport,          // From status view
+    GroupInfoReport,       // From group info screen
+    GroupSpamBannerReport, // From group spam banner
+}
+```
+
+## SpamReportResult
+
+```rust
+pub struct SpamReportResult {
+    pub report_id: Option<String>,
+}
+```
+
+## Examples
+
+### Report a message from contact
+
+```rust
+use whatsapp_rust::{SpamFlow, SpamReportRequest};
+
+let sender: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let result = client.send_spam_report(SpamReportRequest {
+    message_id: "MSG_ID_123".to_string(),
+    message_timestamp: 1640000000,
+    from_jid: Some(sender),
+    spam_flow: SpamFlow::MessageMenu,
+    ..Default::default()
+}).await?;
+
+if let Some(report_id) = result.report_id {
+    println!("Spam reported: {}", report_id);
+}
+```
+
+### Report a group message
+
+```rust
+use whatsapp_rust::{SpamFlow, SpamReportRequest};
+
+let group: Jid = "120363025918861132@g.us".parse()?;
+let sender: Jid = "15559876543@s.whatsapp.net".parse()?;
+
+let result = client.send_spam_report(SpamReportRequest {
+    message_id: "MSG_ID_456".to_string(),
+    message_timestamp: 1640000000,
+    group_jid: Some(group),
+    group_subject: Some("Spam Group".to_string()),
+    participant_jid: Some(sender),
+    spam_flow: SpamFlow::GroupInfoReport,
+    ..Default::default()
+}).await?;
+```
+
+### Report with message content
+
+Include the raw message for more detailed reporting:
+
+```rust
+use whatsapp_rust::{SpamFlow, SpamReportRequest};
+
+let sender: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let result = client.send_spam_report(SpamReportRequest {
+    message_id: "MSG_ID_789".to_string(),
+    message_timestamp: 1640000000,
+    from_jid: Some(sender),
+    spam_flow: SpamFlow::MessageMenu,
+    raw_message: Some(message_bytes),
+    media_type: Some("image".to_string()),
+    ..Default::default()
+}).await?;
+```
+
+## Wire format
+
+The spam report is sent as an IQ stanza:
+
+```xml
+<iq type="set" xmlns="privacy" to="s.whatsapp.net">
+  <spam_list spam_flow="MessageMenu">
+    <message id="MSG_ID" t="1640000000" from="15551234567@s.whatsapp.net">
+      <raw v="3" mediatype="image">{bytes}</raw>
+    </message>
+  </spam_list>
+</iq>
+```
+
+For group reports:
+
+```xml
+<iq type="set" xmlns="privacy" to="s.whatsapp.net">
+  <spam_list spam_flow="GroupInfoReport" jid="120363025918861132@g.us" subject="Group Name">
+    <message id="MSG_ID" t="1640000000" participant="15559876543@s.whatsapp.net"/>
+  </spam_list>
+</iq>
+```

@@ -152,14 +152,15 @@ Returns `true` if authenticated with WhatsApp servers.
 
 ## Auto-Reconnection
 
-The client includes automatic reconnection handling with exponential backoff.
+The client includes automatic reconnection with Fibonacci backoff, matching WhatsApp Web behavior.
 
 ### How it works
 
 1. **On disconnect**: The client detects unexpected disconnections and automatically attempts to reconnect
-2. **Backoff delay**: Each failed attempt increases the delay (2s, 4s, 6s... up to 30s max)
+2. **Fibonacci backoff**: Each failed attempt increases the delay following a Fibonacci sequence with 10% jitter: 1s, 1s, 2s, 3s, 5s, 8s... up to a maximum of 900s (15 minutes)
 3. **Expected disconnects**: Protocol-expected disconnects (e.g., 515 stream error after pairing) trigger immediate reconnection without backoff
-4. **Keepalive monitoring**: A keepalive loop sends periodic pings (every 20-30s) and forces reconnection if no response is received for 180 seconds
+4. **Keepalive monitoring**: A keepalive loop sends periodic pings every 15-30s (randomized). If a ping fails, it counts as a transient error; fatal errors (socket closed, disconnected) exit the loop immediately
+5. **Dead socket detection**: If data was sent but no response received within 20s, the socket is considered dead and the client forces an immediate reconnect
 
 ### Controlling auto-reconnect
 
@@ -171,15 +172,48 @@ client.enable_auto_reconnect.store(false, Ordering::Relaxed);
 let enabled = client.enable_auto_reconnect.load(Ordering::Relaxed);
 ```
 
+### reconnect
+
+```rust
+pub async fn reconnect(self: &Arc<Self>)
+```
+
+Drops the current connection and triggers the auto-reconnect loop with a backoff delay. Unlike `disconnect()`, this does **not** stop the run loop — the client will reconnect automatically using the same persisted identity/store. Use `wait_for_connected` to wait for the new connection.
+
+Useful for:
+- Handling network changes (e.g., Wi-Fi to cellular)
+- Forcing a fresh server session
+- Testing offline message delivery
+
+### reconnect_immediately
+
+```rust
+pub async fn reconnect_immediately(self: &Arc<Self>)
+```
+
+Drops the current connection and reconnects with no delay. Sets the `expected_disconnect` flag so the run loop skips the backoff entirely. Used internally by the dead socket detector.
+
 ### Reconnection behavior
 
 | Scenario | Behavior |
 |----------|----------|
-| Unexpected disconnect | Reconnect with exponential backoff |
-| 515 stream error (after pairing) | Immediate reconnect |
-| Keepalive timeout (180s) | Force disconnect and reconnect |
+| Unexpected disconnect | Reconnect with Fibonacci backoff (1s, 1s, 2s, 3s, 5s... max 900s) |
+| 515 stream error (after pairing) | Immediate reconnect, no backoff |
+| Dead socket (no data received 20s after send) | Immediate reconnect via `reconnect_immediately` |
+| Keepalive ping failure (transient) | Error counter incremented, loop continues |
+| Keepalive ping failure (fatal) | Loop exits, triggers reconnect |
 | `disconnect()` called | No reconnect attempt |
 | Auto-reconnect disabled | No reconnect attempt |
+
+### Keepalive loop
+
+The keepalive loop runs as a background task after each connection and mirrors WhatsApp Web's `healthCheckTimer` and `deadSocketTimer` behavior:
+
+- **Ping interval**: Randomized between 15-30s (WA Web: `healthCheckInterval = 15`, formula `15 * (1 + random())`)
+- **Response deadline**: 20s timeout for each ping
+- **Activity detection**: If data was recently received (within 15s), the ping is skipped — the connection is proven alive
+- **Dead socket timer**: Tracks `last_data_sent_ms` and `last_data_received_ms`. If data was sent but nothing received for 20s, forces an immediate reconnect
+- **Pending IQ skip**: If there are pending IQ responses, the ping is skipped to avoid unnecessary traffic
 
 ---
 

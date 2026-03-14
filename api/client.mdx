@@ -53,6 +53,28 @@ let (client, sync_receiver) = Client::new(
   Returns the client Arc and a receiver for history/app state sync tasks
 </ParamField>
 
+### Creating with custom cache configuration
+
+```rust
+use whatsapp_rust::{Client, CacheConfig, CacheEntryConfig};
+use std::time::Duration;
+
+let cache_config = CacheConfig {
+    group_cache: CacheEntryConfig::new(None, 500), // No TTL
+    ..Default::default()
+};
+
+let (client, sync_receiver) = Client::new_with_cache_config(
+    persistence_manager,
+    transport_factory,
+    http_client,
+    None,
+    cache_config,
+).await;
+```
+
+See [Bot - Cache Configuration Reference](/api/bot#cache-configuration-reference) for available cache options.
+
 ---
 
 ## Connection Management

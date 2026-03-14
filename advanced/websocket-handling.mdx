@@ -661,28 +661,169 @@ impl EncryptSendError {
 
 Location: `src/socket/error.rs`
 
-### Retry Strategy
+### Reconnection
+
+The `run()` loop handles reconnection automatically with Fibonacci backoff matching WhatsApp Web's algorithm:
 
 ```rust
-impl Client {
-    pub async fn connect_with_retry(&self, max_attempts: u32) -> Result<()> {
-        let mut attempt = 0;
-        
-        loop {
-            match self.connect().await {
-                Ok(()) => return Ok(()),
-                Err(e) if attempt < max_attempts => {
-                    attempt += 1;
-                    let backoff = Duration::from_secs(2u64.pow(attempt));
-                    warn!("Connection failed (attempt {attempt}): {e}");
-                    sleep(backoff).await;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+// WA Web: Fibonacci backoff with 10% jitter, max 900s.
+// algo: { type: "fibonacci", first: 1000, second: 1000 }
+// jitter: 0.1, max: 9e5
+fn fibonacci_backoff(attempt: u32) -> Duration {
+    const MAX_MS: u64 = 900_000;
+    let mut a: u64 = 1000;
+    let mut b: u64 = 1000;
+    for _ in 0..attempt {
+        let next = a.saturating_add(b).min(MAX_MS);
+        a = b;
+        b = next;
     }
+    let base = a.min(MAX_MS);
+    // ±10% jitter
+    let jitter_range = base / 10;
+    // ...apply jitter...
+    Duration::from_millis(base)
 }
 ```
+
+Location: `src/client.rs:2916-2937`
+
+Two reconnect methods are available:
+
+- **`reconnect()`** — Drops the connection and re-enters the run loop with a backoff delay. Creates an offline window useful for testing offline message delivery.
+- **`reconnect_immediately()`** — Sets the `expected_disconnect` flag so the run loop skips backoff entirely. Used by the dead socket detector and 515 reconnect cycles.
+
+Location: `src/client.rs:798-818`
+
+## Keepalive & dead socket detection
+
+The keepalive system matches WhatsApp Web's `healthCheckTimer` and `deadSocketTimer` behavior.
+
+### Architecture
+
+```
+src/
+├── keepalive.rs    # Keepalive loop, dead socket detection, ping logic
+└── client.rs       # last_data_sent_ms, last_data_received_ms timestamps
+```
+
+### Data tracking timestamps
+
+The client tracks two atomic timestamps for connection health:
+
+```rust
+/// Timestamp (ms) of the last received WebSocket data.
+/// Updated on every DataReceived transport event.
+/// WA Web: parseAndHandleStanza → deadSocketTimer.cancel()
+pub(crate) last_data_received_ms: Arc<AtomicU64>,
+
+/// Timestamp (ms) of the last sent WebSocket data.
+/// Updated on every send_node call.
+/// WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime)
+pub(crate) last_data_sent_ms: Arc<AtomicU64>,
+```
+
+Location: `src/client.rs:147-154`
+
+### Keepalive loop
+
+The keepalive loop runs as a background task spawned after each successful connection:
+
+```rust
+let client_clone = self.clone();
+tokio::spawn(async move { client_clone.keepalive_loop().await });
+```
+
+Location: `src/client.rs:760-761`
+
+**Loop behavior on each tick:**
+
+1. **Sleep** for a random interval between 15-30s (WA Web: `healthCheckInterval = 15`, formula `15 * (1 + random())`)
+2. **Dead socket check** — If data was sent but nothing received for 20s, force immediate reconnect
+3. **Activity skip** — If data was recently received (within 15s), skip the ping — the connection is proven alive
+4. **Send ping** — Send a keepalive IQ with a 20s response deadline
+5. **Classify result** — `Ok` resets error count, `TransientFailure` increments it, `FatalFailure` exits the loop
+
+### Dead socket detection
+
+The dead socket detector mirrors WhatsApp Web's `deadSocketTimer`:
+
+```rust
+// WA Web: deadSocketTime = 20_000
+const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
+
+fn is_dead_socket(last_sent_ms: u64, last_received_ms: u64) -> bool {
+    if last_sent_ms == 0 { return false; }          // Never sent → not armed
+    if last_received_ms >= last_sent_ms { return false; } // Reply received → cancelled
+    // Check if DEAD_SOCKET_TIME has elapsed since the send
+    ms_since(last_sent_ms)
+        .map(|elapsed| elapsed > DEAD_SOCKET_TIME.as_millis() as u64)
+        .unwrap_or(false)
+}
+```
+
+Location: `src/keepalive.rs:26-39`
+
+When triggered, it calls `reconnect_immediately()` to skip backoff and restore the connection as fast as possible.
+
+### Constants
+
+| Constant | Value | WA Web equivalent |
+|----------|-------|-------------------|
+| `KEEP_ALIVE_INTERVAL_MIN` | 15s | `healthCheckInterval = 15` |
+| `KEEP_ALIVE_INTERVAL_MAX` | 30s | `15 * (1 + random())` upper bound |
+| `KEEP_ALIVE_RESPONSE_DEADLINE` | 20s | Ping timeout |
+| `DEAD_SOCKET_TIME` | 20s | `deadSocketTime = 20_000` |
+
+Location: `src/keepalive.rs:42-47`
+
+### Error classification
+
+Keepalive errors are classified to determine whether to continue monitoring or exit:
+
+```rust
+enum KeepaliveResult {
+    Ok,                // Server responded to the ping
+    TransientFailure,  // Timeout/server error — may recover
+    FatalFailure,      // Connection is dead — exit immediately
+}
+```
+
+| Error type | Classification | Rationale |
+|-----------|---------------|-----------|
+| `IqError::Timeout` | Transient | Server may be slow |
+| `IqError::ServerError` | Transient | Server may recover |
+| `IqError::ParseError` | Transient | Bad response, not a dead connection |
+| `IqError::Socket` | Fatal | Connection already gone |
+| `IqError::Disconnected` | Fatal | Connection already gone |
+| `IqError::NotConnected` | Fatal | No active connection |
+| `IqError::InternalChannelClosed` | Fatal | Internal state broken |
+
+Location: `src/keepalive.rs:49-77`
+
+### Clock skew correction
+
+The keepalive ping also updates the server time offset using RTT-adjusted midpoint calculation, matching WhatsApp Web's `onClockSkewUpdate`:
+
+```rust
+// WA Web: onClockSkewUpdate(Math.round((start + rtt/2) / 1000 - serverTime))
+self.unified_session.update_server_time_offset_with_rtt(
+    &response_node, start_ms, rtt_ms,
+);
+```
+
+Location: `src/keepalive.rs:107-112`
+
+### Connection cleanup
+
+On disconnect, timestamps and keepalive state are reset to prevent stale values from triggering false dead socket detections on the next connection:
+
+```rust
+self.last_data_received_ms.store(0, Ordering::Relaxed);
+self.last_data_sent_ms.store(0, Ordering::Relaxed);
+```
+
+Location: `src/client.rs:839-840`
 
 ## Performance Considerations
 

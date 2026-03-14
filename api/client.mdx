@@ -382,6 +382,26 @@ Access trust/privacy token operations.
 - `request_tokens(jids: &[Jid])` - Request tokens for contacts
 - `prune_expired()` - Remove expired tokens
 
+### profile
+
+```rust
+pub fn profile(self: &Arc<Self>) -> Profile<'_>
+```
+
+Access profile management operations for your own account.
+
+**Methods:**
+- `set_push_name(name: &str)` - Set your display name
+- `set_status_text(text: &str)` - Set your about/status text
+- `set_profile_picture(image_data: Vec<u8>)` - Set your profile picture
+- `remove_profile_picture()` - Remove your profile picture
+
+**Example:**
+```rust
+client.profile().set_push_name("My Bot").await?;
+client.profile().set_status_text("Available").await?;
+```
+
 ---
 
 ## Device State

@@ -88,6 +88,7 @@
               "api/presence",
               "api/chatstate",
               "api/blocking",
+              "api/profile",
               "api/status",
               "api/mex",
               "api/tctoken"

@@ -760,6 +760,83 @@ async fn test_handshake_with_edge_routing()
 
 Location: `src/socket/noise_socket.rs:219-459`
 
+## Keepalive Loop
+
+The client maintains connection health through a keepalive loop that sends periodic pings and monitors responses.
+
+### Configuration
+
+```rust
+const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
+const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
+const KEEP_ALIVE_MAX_FAIL_TIME: Duration = Duration::from_secs(180);
+const KEEP_ALIVE_RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
+```
+
+Location: `src/keepalive.rs:10-13`
+
+### Loop Implementation
+
+```rust
+pub(crate) async fn keepalive_loop(self: Arc<Self>) {
+    let mut last_success = chrono::Utc::now();
+    let mut error_count = 0u32;
+
+    loop {
+        let interval = Duration::from_millis(
+            rand::rng().random_range(
+                KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis()
+            ) as u64
+        );
+
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {
+                if !self.is_connected() {
+                    return;
+                }
+
+                let is_success = self.send_keepalive().await;
+                
+                if is_success {
+                    error_count = 0;
+                    last_success = chrono::Utc::now();
+                } else {
+                    error_count += 1;
+                    
+                    // Force reconnect after 180s of failures
+                    if self.enable_auto_reconnect.load(Ordering::Relaxed)
+                        && chrono::Utc::now().signed_duration_since(last_success)
+                            > chrono::Duration::from_std(KEEP_ALIVE_MAX_FAIL_TIME).unwrap()
+                    {
+                        self.disconnect().await;
+                        return;
+                    }
+                }
+            },
+            _ = self.shutdown_notifier.notified() => {
+                // Clean shutdown signaled
+                return;
+            }
+        }
+    }
+}
+```
+
+Location: `src/keepalive.rs:38-84`
+
+### Shutdown Handling
+
+The keepalive loop uses `tokio::select!` to listen for a shutdown notification alongside the sleep interval. When the connection is cleaned up, the `shutdown_notifier` signals the loop to exit gracefully, preventing:
+
+- Orphaned background tasks
+- Resource leaks
+- Unnecessary keepalive pings after disconnection
+
+```rust
+// During connection cleanup
+self.shutdown_notifier.notify_waiters();  // Signal all background tasks
+```
+
 ## Related Components
 
 - [Signal Protocol](/advanced/signal-protocol) - Message-level encryption

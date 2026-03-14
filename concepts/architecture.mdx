@@ -290,6 +290,11 @@ const KEEP_ALIVE_RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
 - Sends ping every 20-30 seconds (randomized)
 - Waits up to 20s for response
 - Forces reconnect after 180s of consecutive failures
+- Gracefully exits when connection is cleaned up via shutdown notification
+
+**Shutdown handling:**
+
+The keepalive loop uses `tokio::select!` to listen for both the sleep interval and a shutdown signal. When the connection is cleaned up, the shutdown notifier signals the keepalive loop to exit immediately, preventing resource leaks and orphaned tasks.
 
 ### Offline Sync
 

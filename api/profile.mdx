@@ -1,0 +1,164 @@
+---
+title: Profile
+description: Manage your own profile - push name, status text, and profile picture
+---
+
+The `Profile` feature provides methods for managing your own account's display name, status text (about), and profile picture.
+
+## Access
+
+Access profile operations through the client (requires `Arc<Client>`):
+
+```rust
+let profile = client.profile();
+```
+
+## Methods
+
+### set_push_name
+
+Set your display name (push name).
+
+```rust
+pub async fn set_push_name(&self, name: &str) -> Result<()>
+```
+
+**Parameters:**
+- `name` - The new display name (cannot be empty)
+
+Updates the local device store, sends a presence stanza with the new name, and propagates the change via app state sync for cross-device synchronization.
+
+**Example:**
+```rust
+client.profile().set_push_name("My Bot").await?;
+```
+
+<Note>
+The push name change takes effect immediately via presence, but app state sync may fail if keys aren't available yet (e.g., right after pairing before initial sync completes).
+</Note>
+
+### set_status_text
+
+Set your status text (about).
+
+```rust
+pub async fn set_status_text(&self, text: &str) -> Result<()>
+```
+
+**Parameters:**
+- `text` - The new status text
+
+Sets the profile "About" text. This is different from ephemeral text status updates.
+
+**Example:**
+```rust
+client.profile().set_status_text("Available 24/7").await?;
+```
+
+### set_profile_picture
+
+Set your profile picture.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    image_data: Vec<u8>
+) -> Result<SetProfilePictureResponse>
+```
+
+**Parameters:**
+- `image_data` - JPEG image bytes
+
+**Returns:**
+- `SetProfilePictureResponse` - Contains the new picture ID
+
+The image should already be properly sized/cropped by the caller. WhatsApp typically uses 640x640 images.
+
+**Example:**
+```rust
+use std::fs;
+
+let image_bytes = fs::read("profile.jpg")?;
+let response = client.profile().set_profile_picture(image_bytes).await?;
+println!("New picture ID: {:?}", response.id);
+```
+
+<Warning>
+The image must be a valid JPEG. Other formats are not supported.
+</Warning>
+
+### remove_profile_picture
+
+Remove your profile picture.
+
+```rust
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse>
+```
+
+**Returns:**
+- `SetProfilePictureResponse` - Confirmation of removal
+
+**Example:**
+```rust
+client.profile().remove_profile_picture().await?;
+```
+
+## Types
+
+### SetProfilePictureResponse
+
+Response from profile picture operations.
+
+```rust
+pub struct SetProfilePictureResponse {
+    /// The new picture ID (or None if removed)
+    pub id: Option<String>,
+}
+```
+
+## Complete example
+
+```rust
+use whatsapp_rust::Client;
+use std::sync::Arc;
+use std::fs;
+
+async fn setup_profile(client: &Arc<Client>) -> anyhow::Result<()> {
+    // Set display name
+    client.profile().set_push_name("My WhatsApp Bot").await?;
+    
+    // Set status text
+    client.profile().set_status_text("Automated responses").await?;
+    
+    // Set profile picture
+    let image_bytes = fs::read("bot_avatar.jpg")?;
+    let response = client.profile().set_profile_picture(image_bytes).await?;
+    
+    if let Some(id) = response.id {
+        println!("Profile picture updated: {}", id);
+    }
+    
+    Ok(())
+}
+```
+
+## Error handling
+
+All methods return `Result<T, anyhow::Error>`. Common errors:
+
+- Empty push name
+- Invalid image format
+- Network errors
+- Not authenticated
+
+```rust
+match client.profile().set_push_name("").await {
+    Ok(_) => println!("Name updated"),
+    Err(e) => eprintln!("Failed: {}", e), // "Push name cannot be empty"
+}
+```
+
+## See also
+
+- [Contacts](/api/contacts) - Get profile pictures for other users
+- [Presence](/api/presence) - Set online/offline status

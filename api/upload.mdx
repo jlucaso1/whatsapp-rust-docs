@@ -182,6 +182,41 @@ let message_id = client.send_message(chat_jid, message).await?;
 
 ---
 
+## Resumable uploads
+
+For files 5 MiB (5,242,880 bytes) or larger, the client automatically probes the CDN to check for a previous partial or complete upload of the same file before sending the full payload.
+
+### Resume check flow
+
+1. A `POST` request is sent to the upload URL with `?resume=1` appended
+2. The server responds with one of three states:
+   - **Complete** — the file already exists on the CDN. The existing `url` and `direct_path` are returned immediately with no upload
+   - **Resume** — a partial upload exists. The client resumes from the given `byte_offset`, appending `&file_offset={offset}` to the URL and sending only the remaining bytes
+   - **Not found** — no previous upload exists. A full upload proceeds normally
+
+<Note>
+The resume check is non-fatal. If the probe request itself fails (network error, unexpected response), the client silently falls back to a full upload. No special handling is needed in your code.
+</Note>
+
+### Resume check endpoint
+
+```
+POST https://{media_host}/mms/{type}/{token}?auth={auth}&token={token}&resume=1
+Origin: https://web.whatsapp.com
+```
+
+### Resumed upload endpoint
+
+When a partial upload is detected at byte offset `N`:
+
+```
+POST https://{media_host}/mms/{type}/{token}?auth={auth}&token={token}&file_offset=N
+Content-Type: application/octet-stream
+Body: [encrypted bytes from offset N onward]
+```
+
+---
+
 ## Media Encryption
 
 All media uploaded to WhatsApp is end-to-end encrypted before transmission:
@@ -292,16 +327,20 @@ https://{media_host}/mms/{mms_type}/{token}?auth={auth}&token={token}
 ```
 
 Where:
-- `{media_host}` - CDN hostname from media connection
-- `{mms_type}` - Media type endpoint (e.g., `"image"`, `"video"`, `"document"`)
-- `{token}` - Base64url-encoded `file_enc_sha256`
-- `{auth}` - Media connection auth token
+- `{media_host}` — CDN hostname from media connection (primary hosts tried first)
+- `{mms_type}` — Media type endpoint (e.g., `"image"`, `"video"`, `"document"`)
+- `{token}` — Base64url-encoded `file_enc_sha256`
+- `{auth}` — Media connection auth token
+
+Optional query parameters (added automatically for resumable uploads):
+- `resume=1` — probe for existing upload (resume check request)
+- `file_offset={N}` — resume upload from byte offset `N`
 
 The request uses:
 - **Method**: `POST`
 - **Content-Type**: `application/octet-stream`
 - **Origin**: `https://web.whatsapp.com`
-- **Body**: Encrypted media bytes
+- **Body**: Encrypted media bytes (or remaining bytes when resuming)
 
 <Note>
   The upload automatically handles media connection refresh. If the connection is expired, it's renewed before uploading. If the CDN returns HTTP 401 or 403, the client invalidates the cached credentials, fetches a fresh auth token, and retries the upload once.
@@ -315,7 +354,7 @@ The request uses:
 
 The upload method automatically retries when WhatsApp's CDN returns HTTP 401 or 403. On an auth error, the client invalidates the cached media connection, fetches fresh credentials from WhatsApp's servers, and retries the upload once. If the retry also fails with an auth error, the error is returned to the caller.
 
-For non-auth HTTP errors (such as 500), the client tries the next available CDN host without refreshing credentials.
+For non-auth HTTP errors (such as 500), the client tries the next available CDN host without refreshing credentials. Hosts are tried in priority order — primary hosts first, then fallback hosts.
 
 ### Common upload errors
 

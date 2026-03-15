@@ -117,6 +117,13 @@ if message.is_ephemeral() {
 if message.is_view_once() {
     println!("This is a view-once message");
 }
+
+// Access message context info (thread metadata, bot info, etc.)
+if let Some(ctx_info) = &message.message_context_info {
+    if let Some(thread_id) = &ctx_info.thread_id {
+        println!("Thread: {}", thread_id);
+    }
+}
 ```
 
 See `\1`
@@ -218,9 +225,40 @@ if let Some(ext) = &message.extended_text_message {
 }
 ```
 
+## Message Unwrapping
+
+### DeviceSentMessage handling
+
+When you send a message from one device, other devices receive it as a `DeviceSentMessage` wrapper. The library automatically unwraps this and merges `messageContextInfo` from both the outer envelope and inner message:
+
+```rust
+// The library handles this automatically - you receive the inner message directly
+match event {
+    Event::Message(message, info) => {
+        // If this was originally a DeviceSentMessage, the library has:
+        // 1. Extracted the inner message content
+        // 2. Merged message_context_info from outer + inner
+        //    - message_secret: inner value, fallback to outer
+        //    - limit_sharing_v2: always from outer
+        //    - thread_id: inner if non-empty, otherwise outer
+        //    - bot_metadata: inner value, fallback to outer
+        
+        // You can safely access the merged context
+        if let Some(ctx) = &message.message_context_info {
+            println!("Thread: {:?}", ctx.thread_id);
+        }
+    }
+    _ => {}
+}
+```
+
+<Note>
+Self-sent messages synced from your primary device are automatically unwrapped. The `messageContextInfo` is merged following WhatsApp Web's logic, ensuring metadata like thread IDs and bot metadata are preserved correctly.
+</Note>
+
 ## Decryption
 
-### Automatic Decryption
+### Automatic decryption
 
 Messages are automatically decrypted by the client:
 

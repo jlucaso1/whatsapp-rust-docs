@@ -163,6 +163,28 @@ let message = wa::Message {
 let message_id = client.send_message(to, message).await?;
 ```
 
+### Resumable uploads
+
+For files 5 MiB or larger, the client automatically checks whether a previous upload of the same file exists on the CDN before uploading the full payload. This avoids re-uploading data that the server already has.
+
+The resume check flow works as follows:
+
+1. The client sends a `?resume=1` probe to the CDN for each host
+2. If the server responds with **complete**, the existing URL is returned immediately — no upload occurs
+3. If the server responds with a **byte offset**, only the remaining bytes are uploaded using the `file_offset` query parameter
+4. If the server responds with **not found** (or the check fails), a full upload proceeds
+
+<Note>
+Resumable upload detection is fully transparent. You call `client.upload()` the same way regardless of file size. The resume check is non-fatal — if it fails for any reason, the client falls back to a full upload.
+</Note>
+
+```rust
+// Large files automatically use resumable upload logic
+let video_bytes = std::fs::read("large_video.mp4")?; // e.g., 50 MiB
+let upload = client.upload(video_bytes, MediaType::Video).await?;
+// If a partial upload existed, only the remaining bytes were sent
+```
+
 ## Media Types
 
 ### Available Media Types
@@ -173,9 +195,11 @@ pub enum MediaType {
     Video,
     Audio,
     Document,
+    History,
+    AppState,
     Sticker,
-    Thumbnail,
-    PTT,  // Push-to-Talk (voice messages)
+    StickerPack,
+    LinkThumbnail,
 }
 ```
 
@@ -188,8 +212,8 @@ use wacore::download::MediaType;
 let mms_type = MediaType::Image.mms_type();
 // Returns: "image", "video", "audio", "document"
 
-// Get HKDF info for encryption
-let info = MediaType::Video.hkdf_info();
+// Get app info string for HKDF key derivation
+let info = MediaType::Video.app_info();
 // Returns: b"WhatsApp Video Keys"
 ```
 
@@ -351,21 +375,18 @@ let progress_writer = ProgressWriter {
 let _file = client.download_to_writer(video.as_ref(), progress_writer).await?;
 ```
 
-### Automatic retry on auth errors
+### Automatic retry and failover
 
-Both `download` and `upload` methods automatically retry when WhatsApp's CDN returns HTTP 401 or 403. This typically happens when the cached media connection auth token has expired or been invalidated.
+Both `download` and `upload` methods automatically retry when WhatsApp's CDN returns certain HTTP errors. The client handles three categories of errors:
 
-The retry flow works as follows:
+**Auth errors (401/403):** The client invalidates the cached `MediaConn`, fetches fresh credentials from WhatsApp's servers, and retries the operation once with new auth tokens.
 
-1. The client attempts the request using the cached media connection credentials
-2. If the CDN returns 401 or 403, the client invalidates the cached `MediaConn` and forces a fresh auth token request to WhatsApp's servers
-3. The operation is retried once with the new credentials
-4. If the retry also fails with an auth error, the error is returned to the caller
+**Media not found (404/410):** When a download URL has expired or the media has been moved, the CDN returns 404 or 410. The client treats this the same as an auth error — it invalidates the cached media connection, re-derives download URLs with fresh credentials and hosts, and retries once. This matches WhatsApp Web's `MediaNotFoundError` handling.
 
-For non-auth errors (such as 500), the client tries the next available CDN host without refreshing credentials.
+**Other errors (e.g., 500):** The client tries the next available CDN host without refreshing credentials. Media connections include multiple hosts sorted by priority (primary hosts first, then fallback hosts), and the client iterates through them sequentially.
 
 <Note>
-This retry behavior is fully transparent — no changes are needed in your code. Both `download` and `upload` handle auth refresh automatically, with a maximum of one retry per operation.
+This retry behavior is fully transparent — no changes are needed in your code. Both `download` and `upload` handle auth refresh, URL re-derivation, and host failover automatically, with a maximum of one credential refresh per operation.
 </Note>
 
 For streaming downloads (`download_to_writer`), the writer is automatically seeked back to position 0 before each retry so partial writes don't corrupt the output.
@@ -397,11 +418,11 @@ async fn download_with_retry(
 }
 ```
 
-## Media Connection
+## Media connection
 
 ### Automatic management
 
-The client automatically manages media connection tokens, including refreshing them when they expire or when the CDN rejects them with 401/403:
+The client automatically manages media connection tokens, including refreshing them when they expire or when the CDN rejects them with 401/403/404/410:
 
 ```rust
 // Automatically refreshed when expired or rejected
@@ -410,6 +431,19 @@ let download = client.download(downloadable).await?;
 
 // No manual token management needed!
 ```
+
+### Host types and failover order
+
+Each media connection includes multiple CDN hosts with a `host_type` field indicating whether the host is `"primary"` or `"fallback"`. The client sorts hosts with primary hosts first, so uploads and downloads always try the fastest hosts before falling back to alternatives. Each host may also include a `fallback_hostname` for additional resilience.
+
+### Token expiration
+
+Media connections have two TTL values:
+
+- **`ttl`** — how long the route/host information is valid
+- **`auth_ttl`** — how long the auth token specifically is valid (may be shorter than `ttl`)
+
+The client uses the minimum of these two values to determine when the cached connection has expired. When expired, the next media operation automatically fetches fresh credentials.
 
 ### Manual refresh
 

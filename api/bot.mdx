@@ -614,20 +614,47 @@ pub struct CacheEntryConfig {
 
 ### Available Caches
 
+#### Timed caches
+
 | Cache | Default TTL | Default Capacity | Description |
 |-------|-------------|------------------|-------------|
-| `group_cache` | 1 hour | 1,000 | Group metadata |
+| `group_cache` | 1 hour | 250 | Group metadata |
 | `device_cache` | 1 hour | 5,000 | Device lists |
 | `device_registry_cache` | 1 hour | 5,000 | Device registry |
 | `lid_pn_cache` | 1 hour (TTI) | 10,000 | LID-to-phone mapping |
 | `retried_group_messages` | 5 minutes | 2,000 | Retry tracking |
-| `recent_messages` | 5 minutes | 1,000 | Recent messages for retry |
-| `message_retry_counts` | 5 minutes | 5,000 | Retry count tracking |
+| `recent_messages` | 5 minutes | 0 (disabled) | Optional L1 in-memory cache for sent messages (retry support) |
+| `message_retry_counts` | 5 minutes | 1,000 | Retry count tracking |
 | `pdo_pending_requests` | 30 seconds | 500 | PDO pending requests |
 
 <Note>
-The `lid_pn_cache` uses time-to-idle (TTI) semantics—entries expire after being idle for the timeout period. All other caches use time-to-live (TTL) semantics.
+The `lid_pn_cache` uses time-to-idle (TTI) semantics — entries expire after being idle for the timeout period. All other caches use time-to-live (TTL) semantics.
 </Note>
+
+<Note>
+The `recent_messages` cache is disabled by default (capacity 0), meaning sent messages are stored only in the database for retry handling — matching WhatsApp Web's behavior. Set capacity greater than 0 to enable a fast in-memory L1 cache in front of the database. See [DB-backed sent message retry](#db-backed-sent-message-retry) for details.
+</Note>
+
+#### Coordination caches (capacity-only, no TTL)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `session_locks_capacity` | 2,000 | Per-device Signal session lock capacity |
+| `message_queues_capacity` | 2,000 | Per-chat message processing queue capacity |
+| `message_enqueue_locks_capacity` | 2,000 | Per-chat message enqueue lock capacity |
+
+#### Buffer pool
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `max_pooled_buffers` | 8 | Max number of reusable plaintext marshal buffers |
+| `max_pooled_buffer_capacity` | 256 KiB | Max byte capacity per pooled buffer |
+
+#### Sent message DB cleanup
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `sent_message_ttl_secs` | 300 (5 min) | TTL in seconds for sent messages in DB before periodic cleanup. Set to 0 to disable automatic cleanup. |
 
 ### Custom Configuration Example
 
@@ -637,9 +664,11 @@ use std::time::Duration;
 
 let config = CacheConfig {
     // Disable TTL for group cache (entries only evicted by capacity)
-    group_cache: CacheEntryConfig::new(None, 1_000),
+    group_cache: CacheEntryConfig::new(None, 500),
     // Shorter TTL for device cache
     device_cache: CacheEntryConfig::new(Some(Duration::from_secs(1800)), 3_000),
+    // Enable L1 in-memory cache for sent messages (faster retry lookups)
+    recent_messages: CacheEntryConfig::new(Some(Duration::from_secs(300)), 1_000),
     // Use defaults for everything else
     ..Default::default()
 };
@@ -647,6 +676,27 @@ let config = CacheConfig {
 let bot = Bot::builder()
     .with_cache_config(config)
     // ...
+```
+
+### DB-backed sent message retry
+
+Sent messages are persisted to the database for retry handling, matching WhatsApp Web's `getMessageTable` pattern. When a retry receipt arrives, the client looks up the original message payload from the database, re-encrypts it, and resends.
+
+**How it works:**
+1. Every `send_message()` call stores the serialized message payload in the `sent_messages` table
+2. On retry receipt, the client retrieves and consumes the payload (atomic take)
+3. Expired entries are periodically cleaned up based on `sent_message_ttl_secs`
+
+**Optional L1 cache:** By default, the `recent_messages` cache capacity is 0 (DB-only mode). If you set capacity greater than 0, sent messages are also cached in memory for faster retrieval. In L1 mode, the DB write is backgrounded since the cache serves reads immediately. In DB-only mode, the write is awaited to guarantee persistence.
+
+```rust
+let config = CacheConfig {
+    // Enable L1 in-memory cache for faster retry lookups
+    recent_messages: CacheEntryConfig::new(Some(Duration::from_secs(300)), 1_000),
+    // Keep sent messages in DB for 10 minutes before cleanup
+    sent_message_ttl_secs: 600,
+    ..Default::default()
+};
 ```
 
 ---

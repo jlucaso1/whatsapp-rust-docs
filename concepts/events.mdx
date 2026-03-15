@@ -239,13 +239,68 @@ Event::TemporaryBan(ban) => {
 
 ### StreamReplaced
 
-**Emitted:** When another device connects with the same credentials
+**Emitted:** When another device connects with the same credentials (stream error code 409 or `<conflict type="replaced">`)
 
 ```rust
 Event::StreamReplaced(_) => {
     println!("⚠️ Another instance connected - disconnecting");
+    // Auto-reconnect is disabled — reconnecting would displace the other client
 }
 ```
+
+**Behavior:** Auto-reconnect is disabled. The client stops permanently.
+
+### LoggedOut
+
+**Emitted:** When the session is invalidated by the server (stream error code 401 or 516)
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct LoggedOut {
+    pub on_connect: bool,
+    pub reason: ConnectFailureReason,
+}
+```
+
+**Usage:**
+```rust
+Event::LoggedOut(logout) => {
+    eprintln!("Logged out (reason: {:?})", logout.reason);
+    // Session is invalid — you must re-pair the device
+    // Auto-reconnect is disabled
+}
+```
+
+**Behavior:** Auto-reconnect is disabled. The application must re-pair the device to establish a new session.
+
+### StreamError
+
+**Emitted:** For unrecognized stream error codes (codes not matching 401, 409, 429, 503, 515, or 516)
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamError {
+    pub code: String,
+    pub raw: Option<Node>,
+}
+```
+
+**Usage:**
+```rust
+Event::StreamError(err) => {
+    eprintln!("Unknown stream error: {} (raw: {:?})", err.code, err.raw);
+}
+```
+
+<Note>
+Recognized stream error codes emit specific events instead of `StreamError`:
+- **401** → `LoggedOut` (session invalidated)
+- **409** → `StreamReplaced` (another client connected)
+- **429** → No event emitted (reconnects with extended backoff)
+- **503** → No event emitted (reconnects with normal backoff)
+- **515** → No event emitted (immediate reconnect, e.g., after pairing)
+- **516** → `LoggedOut` (device removed)
+</Note>
 
 ## Pairing Events
 

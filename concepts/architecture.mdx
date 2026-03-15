@@ -258,7 +258,7 @@ impl NoiseSocket {
 
 ### Auto-Reconnection
 
-The client implements robust reconnection handling:
+The client implements robust reconnection handling with stream error awareness:
 
 ```rust
 // Client fields for reconnection management
@@ -268,28 +268,36 @@ pub(crate) expected_disconnect: Arc<AtomicBool>,  // Expected vs unexpected
 pub(crate) connection_generation: Arc<AtomicU64>, // Detect stale tasks
 ```
 
-**Reconnection Flow:**
+**Reconnection flow:**
 1. Connection lost → `cleanup_connection_state()`
-2. Check `enable_auto_reconnect` → exit if disabled
+2. Check `enable_auto_reconnect` → exit if disabled (401, 409, 516 disable this)
 3. Check `expected_disconnect` → immediate reconnect if expected (e.g., 515)
-4. Calculate backoff delay (2s × error_count, max 30s)
+4. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
 5. Wait → attempt reconnection
+
+**Stream error behavior:**
+- **401 (unauthorized)**: Disables auto-reconnect, emits `LoggedOut`
+- **409 (conflict)**: Disables auto-reconnect, emits `StreamReplaced`
+- **429 (rate limited)**: Adds 5 extra Fibonacci steps to backoff, then reconnects
+- **515 (expected)**: Immediate reconnect without backoff
+- **516 (device removed)**: Disables auto-reconnect, emits `LoggedOut`
 
 ### Keepalive Loop
 
 Monitors connection health with periodic pings:
 
 ```rust
-const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
+const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(15);
 const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
-const KEEP_ALIVE_MAX_FAIL_TIME: Duration = Duration::from_secs(180);
 const KEEP_ALIVE_RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
+const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
 ```
 
 **Behavior:**
-- Sends ping every 20-30 seconds (randomized)
+- Sends ping every 15-30 seconds (randomized)
 - Waits up to 20s for response
-- Forces reconnect after 180s of consecutive failures
+- Detects dead socket if no data received for 20s after a send, triggering immediate reconnection
+- Fatal errors (`SocketClosed`, `Disconnected`, `NotConnected`) cause the keepalive loop to exit immediately
 
 ### Offline Sync
 

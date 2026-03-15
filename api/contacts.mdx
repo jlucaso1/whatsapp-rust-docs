@@ -268,7 +268,29 @@ let jids = vec![
 let user_info = client.contacts().get_user_info(&jids).await?;
 ```
 
-## Empty Input Handling
+## Contact notification events
+
+The server sends `contacts` notifications when contact data changes. These are emitted as events you can subscribe to:
+
+- **`ContactUpdated`** — a contact's profile changed (invalidate cached presence/profile picture)
+- **`ContactNumberChanged`** — a contact changed their phone number (includes old/new JID and optional LID mappings)
+- **`ContactSyncRequested`** — the server requests a full contact re-sync
+
+```rust
+Event::ContactUpdated(update) => {
+    // Refresh cached profile data for update.jid
+}
+Event::ContactNumberChanged(change) => {
+    // Migrate chat data from change.old_jid to change.new_jid
+}
+Event::ContactSyncRequested(sync) => {
+    // Re-sync contacts (optionally filtered by sync.after timestamp)
+}
+```
+
+See the [events reference](/concepts/events#contact-notification-events) for full struct definitions and wire format details.
+
+## Empty input handling
 
 Passing empty arrays returns empty results without making network requests:
 

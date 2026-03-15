@@ -108,6 +108,9 @@ pub enum Event {
     GroupUpdate(GroupUpdate),
 
     // Contact Updates
+    ContactUpdated(ContactUpdated),
+    ContactNumberChanged(ContactNumberChanged),
+    ContactSyncRequested(ContactSyncRequested),
     ContactUpdate(ContactUpdate),
 
     // Chat State
@@ -723,6 +726,99 @@ Event::GroupUpdate(update) => {
         update.group_jid, update.participant, update.action);
 }
 ```
+
+## Contact Notification Events
+
+These events are emitted from `<notification type="contacts">` stanzas sent by the server. They are distinct from `ContactUpdate`, which comes from app-state sync mutations.
+
+### ContactUpdated
+
+**Emitted:** When a contact's profile changes (server notification)
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactUpdated {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+}
+```
+
+**Wire format:** `<notification type="contacts"><update jid="..."/>`
+
+When you receive this event, you should invalidate any cached presence or profile picture data for the contact. WhatsApp Web resets its `PresenceCollection` and refreshes the profile picture thumbnail on this event.
+
+**Example:**
+```rust
+Event::ContactUpdated(update) => {
+    println!("Contact {} profile changed at {}", update.jid, update.timestamp);
+    // Invalidate cached presence/profile data
+    // Re-fetch profile picture if needed
+}
+```
+
+### ContactNumberChanged
+
+**Emitted:** When a contact changes their phone number
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactNumberChanged {
+    /// Old phone number JID.
+    pub old_jid: Jid,
+    /// New phone number JID.
+    pub new_jid: Jid,
+    /// Old LID (if provided by server).
+    pub old_lid: Option<Jid>,
+    /// New LID (if provided by server).
+    pub new_lid: Option<Jid>,
+    pub timestamp: DateTime<Utc>,
+}
+```
+
+**Wire format:** `<notification type="contacts"><modify old="..." new="..." old_lid="..." new_lid="..."/>`
+
+The library automatically creates LID-PN mappings when LID attributes are present (`old_lid→old_jid` and `new_lid→new_jid`). WhatsApp Web generates a system notification message in both the old and new chats.
+
+**Example:**
+```rust
+Event::ContactNumberChanged(change) => {
+    println!("Contact changed number: {} -> {}", change.old_jid, change.new_jid);
+    if let Some(new_lid) = &change.new_lid {
+        println!("New LID: {}", new_lid);
+    }
+    // Update your contact records to use the new JID
+}
+```
+
+### ContactSyncRequested
+
+**Emitted:** When the server requests a full contact re-sync
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactSyncRequested {
+    /// If present, only sync contacts modified after this timestamp.
+    pub after: Option<DateTime<Utc>>,
+    pub timestamp: DateTime<Utc>,
+}
+```
+
+**Wire format:** `<notification type="contacts"><sync after="..."/>`
+
+**Example:**
+```rust
+Event::ContactSyncRequested(sync) => {
+    if let Some(after) = sync.after {
+        println!("Server requests contact sync for changes after {}", after);
+    } else {
+        println!("Server requests full contact sync");
+    }
+}
+```
+
+<Note>
+The server may also send `<add/>` and `<remove/>` child actions in contacts notifications for lightweight roster changes. These are acknowledged automatically and do not emit events.
+</Note>
 
 ## Chat State Events
 

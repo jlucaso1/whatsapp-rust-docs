@@ -83,6 +83,7 @@ pub async fn subscribe(&self, jid: &Jid) -> Result<(), anyhow::Error>
 **Behavior:**
 - Sends a `<presence type="subscribe">` stanza
 - Automatically includes TC token if available for the contact
+- Tracks the subscription internally so it can be restored on reconnect
 - Used to receive notifications when the contact goes online/offline
 
 **Example:**
@@ -90,6 +91,29 @@ pub async fn subscribe(&self, jid: &Jid) -> Result<(), anyhow::Error>
 let contact_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
 client.presence().subscribe(&contact_jid).await?;
 println!("Subscribed to {}'s presence", contact_jid);
+```
+
+### unsubscribe
+
+Unsubscribe from a contact's presence updates.
+
+```rust
+pub async fn unsubscribe(&self, jid: &Jid) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Contact JID to unsubscribe from
+
+**Behavior:**
+- Sends a `<presence type="unsubscribe">` stanza
+- Removes the contact from the internal subscription tracker
+- You will no longer receive presence updates for this contact
+
+**Example:**
+```rust
+let contact_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.presence().unsubscribe(&contact_jid).await?;
+println!("Unsubscribed from {}'s presence", contact_jid);
 ```
 
 ## PresenceStatus Enum
@@ -152,6 +176,12 @@ The push name is typically set during the pairing/connection process from app st
 </presence>
 ```
 
+### Unsubscribing from Presence
+
+```xml
+<presence type="unsubscribe" to="15551234567@s.whatsapp.net"/>
+```
+
 ## TC Token Handling
 
 When subscribing to presence, the library automatically:
@@ -160,6 +190,44 @@ When subscribing to presence, the library automatically:
 - Skips token if not found (non-error)
 
 This matches WhatsApp Web's privacy gating behavior.
+
+## Subscription Tracking
+
+The library automatically tracks which contacts you have subscribed to. This enables automatic re-subscription after a reconnect, so you don't lose presence updates when the connection drops.
+
+### How it works
+
+- Calling `subscribe(jid)` adds the contact to an internal tracked set
+- Calling `unsubscribe(jid)` removes the contact from the tracked set
+- Duplicate subscriptions are deduplicated automatically
+- On reconnect, the library re-subscribes to all tracked contacts
+
+### Client-level tracking methods
+
+These methods are available directly on the `Client` for advanced use cases:
+
+```rust
+// Track a presence subscription manually
+client.track_presence_subscription(jid.clone()).await;
+
+// Remove a JID from tracking
+client.untrack_presence_subscription(&jid).await;
+
+// Get all tracked subscriptions
+let tracked: Vec<Jid> = client.tracked_presence_subscriptions().await;
+```
+
+### Automatic re-subscription on reconnect
+
+When the client reconnects after a connection drop, it automatically calls `resubscribe_presence_subscriptions()` to restore all tracked presence subscriptions. This happens transparently — you don't need to manually re-subscribe after a reconnect.
+
+The re-subscription process includes safety checks:
+- Bails out early if the connection generation changes (a new reconnect occurred)
+- Skips re-subscription if the client is no longer connected
+
+<Note>
+This matches WhatsApp Web behavior, which re-subscribes to all active presence subscriptions after reconnecting.
+</Note>
 
 ## Behavior Notes
 
@@ -208,17 +276,23 @@ use whatsapp_rust::features::presence::PresenceStatus;
 client.presence().set_available().await?;
 
 // Subscribe to contacts' presence
-let contacts = vec![
+let contacts: Vec<Jid> = vec![
     "15551111111@s.whatsapp.net".parse()?,
     "15552222222@s.whatsapp.net".parse()?,
 ];
 
-for contact in contacts {
-    client.presence().subscribe(&contact).await?;
+for contact in &contacts {
+    client.presence().subscribe(contact).await?;
     println!("Subscribed to {}", contact);
 }
 
 // Do work while online...
+// If the connection drops, tracked subscriptions are
+// automatically re-subscribed on reconnect.
+
+// Unsubscribe from a specific contact
+client.presence().unsubscribe(&contacts[0]).await?;
+println!("Unsubscribed from {}", contacts[0]);
 
 // Set yourself offline when done
 client.presence().set_unavailable().await?;

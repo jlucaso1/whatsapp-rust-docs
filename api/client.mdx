@@ -434,11 +434,17 @@ Access presence operations.
 - `set_available()` - Set status to available/online
 - `set_unavailable()` - Set status to unavailable/offline
 - `subscribe(jid: &Jid)` - Subscribe to contact's presence updates
+- `unsubscribe(jid: &Jid)` - Unsubscribe from contact's presence updates
+
+Subscriptions are automatically tracked and re-subscribed on reconnect.
 
 **Example:**
 ```rust
 client.presence().set_available().await?;
 client.presence().subscribe(&jid).await?;
+
+// Later, stop receiving updates
+client.presence().unsubscribe(&jid).await?;
 ```
 
 ### contacts

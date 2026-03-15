@@ -184,7 +184,26 @@ pub async fn wait_for_connected(
 ) -> Result<(), anyhow::Error>
 ```
 
-Waits for full connection and authentication to complete.
+Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
+
+### wait_for_offline_delivery_end
+
+```rust
+pub(crate) async fn wait_for_offline_delivery_end(&self)
+```
+
+Waits for offline message delivery to finish before proceeding. Uses a 60-second timeout (matching WhatsApp Web's `OFFLINE_STANZA_TIMEOUT_MS` constant) to prevent indefinite blocking if the server never sends the completion marker.
+
+**Behavior:**
+- **Fast path:** Returns immediately if offline sync is already complete
+- **Normal path:** Waits for the server to send `<ib><offline/>` or for all expected items to arrive
+- **Timeout path:** After 60 seconds, logs a warning with progress details, marks sync complete, and re-enables parallel message processing (64 concurrent tasks)
+
+A stale-connection guard prevents the timeout from completing sync for a connection that was already replaced by a reconnect.
+
+<Note>
+This method is used internally by the client. Post-login tasks, session establishment, and dirty-bit handlers all wait for offline delivery to complete before proceeding.
+</Note>
 
 ---
 
@@ -527,6 +546,31 @@ pub fn skip_history_sync_enabled(&self) -> bool
 ```
 
 Returns `true` if history sync is currently being skipped.
+
+---
+
+## Offline sync
+
+The client automatically manages offline message sync when reconnecting. During sync, message processing is restricted to sequential mode (1 concurrent task) to preserve ordering.
+
+### Timeout fallback
+
+If the server advertises offline messages but never completes delivery, a 60-second timeout ensures startup is not blocked indefinitely. On timeout:
+
+1. A warning is logged with the number of processed vs. expected items
+2. Offline sync is marked complete
+3. `OfflineSyncCompleted` event is emitted
+4. Message processing switches from sequential to parallel (64 concurrent tasks)
+
+### Sequence validation
+
+The client tracks the expected sequence number for offline stanzas and logs a warning if delivery arrives out of order. This provides observability without altering processing behavior — messages are still processed in arrival order.
+
+### State reset on reconnect
+
+All offline sync state (counters, sequence tracker, timing, concurrency semaphore) is fully reset on reconnect so stale state does not carry over to the next connection.
+
+**Related events:** [`OfflineSyncPreview`](/concepts/events#offlinesyncpreview), [`OfflineSyncCompleted`](/concepts/events#offlinesynccompleted)
 
 ---
 

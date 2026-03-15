@@ -105,7 +105,7 @@ pub enum Event {
 
     // Group Updates
     JoinedGroup(LazyConversation),
-    GroupInfoUpdate { jid: Jid, update: Box<wa::SyncActionValue> },
+    GroupUpdate(GroupUpdate),
 
     // Contact Updates
     ContactUpdate(ContactUpdate),
@@ -114,6 +114,7 @@ pub enum Event {
     PinUpdate(PinUpdate),
     MuteUpdate(MuteUpdate),
     ArchiveUpdate(ArchiveUpdate),
+    StarUpdate(StarUpdate),
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
 
     // History Sync
@@ -124,6 +125,9 @@ pub enum Event {
     // Device Updates
     DeviceListUpdate(DeviceListUpdate),
     BusinessStatusUpdate(BusinessStatusUpdate),
+
+    // Notification Updates
+    DisappearingModeChanged(DisappearingModeChanged),
 }
 ```
 
@@ -614,23 +618,34 @@ Event::JoinedGroup(lazy_conv) => {
 }
 ```
 
-### GroupInfoUpdate
+### GroupUpdate
 
-**Emitted:** When group metadata changes (subject, participants, etc.)
+**Emitted:** For each action in a group notification (subject changes, participant changes, settings updates, etc.). A single notification may produce multiple `GroupUpdate` events.
 
 ```rust
-Event::GroupInfoUpdate {
-    jid: Jid,
-    update: Box<wa::SyncActionValue>,
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupUpdate {
+    pub group_jid: Jid,
+    pub participant: Option<Jid>,
+    pub participant_pn: Option<Jid>,
+    pub timestamp: DateTime<Utc>,
+    pub is_lid_addressing_mode: bool,
+    pub action: GroupNotificationAction,
 }
 ```
 
+**Fields:**
+- `group_jid` - The group this update applies to
+- `participant` - The admin/user who triggered the change
+- `participant_pn` - Phone number JID of the participant (for LID-addressed groups)
+- `is_lid_addressing_mode` - Whether the group uses LID addressing mode
+- `action` - The specific group notification action (subject change, participant add/remove/promote/demote, description change, etc.)
+
 **Example:**
 ```rust
-Event::GroupInfoUpdate { jid, update } => {
-    if let Some(action) = &update.group_action {
-        println!("Group {} updated: {:?}", jid, action);
-    }
+Event::GroupUpdate(update) => {
+    println!("Group {} updated by {:?}: {:?}", 
+        update.group_jid, update.participant, update.action);
 }
 ```
 
@@ -675,6 +690,39 @@ pub struct ArchiveUpdate {
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ArchiveChatAction>,
     pub from_full_sync: bool,
+}
+```
+
+### StarUpdate
+
+**Emitted:** When a message is starred or unstarred
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct StarUpdate {
+    pub chat_jid: Jid,
+    pub participant_jid: Option<Jid>,
+    pub message_id: String,
+    pub from_me: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::StarAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `chat_jid` - The chat containing the starred message
+- `participant_jid` - The sender of the message (only for group messages from others; `None` for self-authored or 1-on-1 messages)
+- `message_id` - The ID of the starred/unstarred message
+- `from_me` - Whether the starred message was sent by you
+
+**Example:**
+```rust
+Event::StarUpdate(update) => {
+    println!("Message {} in {} was {}starred",
+        update.message_id, update.chat_jid,
+        if update.action.starred.unwrap_or(false) { "" } else { "un" }
+    );
 }
 ```
 
@@ -801,6 +849,42 @@ pub enum BusinessUpdateType {
     CollectionsUpdated,
     SubscriptionsUpdated,
     Unknown,
+}
+```
+
+## Notification Events
+
+### DisappearingModeChanged
+
+**Emitted:** When a contact changes their default disappearing messages setting. Sent by the server as a `<notification type="disappearing_mode">` stanza.
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct DisappearingModeChanged {
+    pub from: Jid,
+    pub duration: u32,
+    pub setting_timestamp: u64,
+}
+```
+
+**Fields:**
+- `from` - The contact whose disappearing messages setting changed
+- `duration` - New duration in seconds (`0` = disabled, `86400` = 24 hours, `604800` = 7 days, etc.)
+- `setting_timestamp` - Unix timestamp (seconds) when the setting was changed
+
+<Note>
+You should only apply this update if `setting_timestamp` is newer than your previously stored value for this contact. This prevents out-of-order updates from overwriting newer settings.
+</Note>
+
+**Example:**
+```rust
+Event::DisappearingModeChanged(change) => {
+    let status = if change.duration == 0 {
+        "disabled".to_string()
+    } else {
+        format!("enabled ({}s)", change.duration)
+    };
+    println!("Contact {} changed disappearing messages: {}", change.from, status);
 }
 ```
 

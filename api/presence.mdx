@@ -20,7 +20,7 @@ let presence = client.presence();
 Set your presence status (online or offline).
 
 ```rust
-pub async fn set(&self, status: PresenceStatus) -> Result<(), anyhow::Error>
+pub async fn set(&self, status: PresenceStatus) -> Result<(), PresenceError>
 ```
 
 **Parameters:**
@@ -46,7 +46,7 @@ client.presence().set(PresenceStatus::Unavailable).await?;
 Convenience method to set status to available (online).
 
 ```rust
-pub async fn set_available(&self) -> Result<(), anyhow::Error>
+pub async fn set_available(&self) -> Result<(), PresenceError>
 ```
 
 **Example:**
@@ -60,7 +60,7 @@ println!("Now online");
 Convenience method to set status to unavailable (offline).
 
 ```rust
-pub async fn set_unavailable(&self) -> Result<(), anyhow::Error>
+pub async fn set_unavailable(&self) -> Result<(), PresenceError>
 ```
 
 **Example:**
@@ -140,10 +140,12 @@ WhatsApp requires a push name (display name) to be set before sending presence u
 
 **Error example:**
 ```rust
+use whatsapp_rust::features::presence::PresenceError;
+
 // If push name not set
 match client.presence().set_available().await {
     Ok(_) => println!("Presence set"),
-    Err(e) if e.to_string().contains("push name") => {
+    Err(PresenceError::PushNameEmpty) => {
         eprintln!("Cannot send presence without a push name set");
     }
     Err(e) => eprintln!("Other error: {}", e),
@@ -202,21 +204,6 @@ The library automatically tracks which contacts you have subscribed to. This ena
 - Duplicate subscriptions are deduplicated automatically
 - On reconnect, the library re-subscribes to all tracked contacts
 
-### Client-level tracking methods
-
-These methods are available directly on the `Client` for advanced use cases:
-
-```rust
-// Track a presence subscription manually
-client.track_presence_subscription(jid.clone()).await;
-
-// Remove a JID from tracking
-client.untrack_presence_subscription(&jid).await;
-
-// Get all tracked subscriptions
-let tracked: Vec<Jid> = client.tracked_presence_subscriptions().await;
-```
-
 ### Automatic re-subscription on reconnect
 
 When the client reconnects after a connection drop, it automatically calls `resubscribe_presence_subscriptions()` to restore all tracked presence subscriptions. This happens transparently — you don't need to manually re-subscribe after a reconnect.
@@ -246,26 +233,39 @@ When setting status to `Unavailable`:
 
 Note: This marks you as offline but doesn't disconnect the client.
 
-## Error Handling
+## PresenceError
 
-All methods return `Result<(), anyhow::Error>`. Common errors:
-
-- **Push name not set**: "Cannot send presence without a push name set"
-- **Not connected**: Connection-related errors
-- **Network errors**: Timeout, connection lost, etc.
+The `set`, `set_available`, and `set_unavailable` methods return `Result<(), PresenceError>`:
 
 ```rust
+#[derive(Debug, Error)]
+pub enum PresenceError {
+    #[error("cannot send presence without a push name set")]
+    PushNameEmpty,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+```
+
+**Variants:**
+- `PushNameEmpty` - Push name must be set before sending presence
+- `Other` - Wraps any other error (network, connection, etc.)
+
+## Error handling
+
+```rust
+use whatsapp_rust::features::presence::PresenceError;
+
 match client.presence().set_available().await {
     Ok(_) => println!("Successfully set to online"),
-    Err(e) if e.to_string().contains("push name") => {
+    Err(PresenceError::PushNameEmpty) => {
         eprintln!("Need to set push name first");
-    }
-    Err(e) if e.to_string().contains("not connected") => {
-        eprintln!("Client not connected");
     }
     Err(e) => eprintln!("Unexpected error: {}", e),
 }
 ```
+
+The `subscribe` and `unsubscribe` methods return `Result<(), anyhow::Error>`.
 
 ## Complete Example
 

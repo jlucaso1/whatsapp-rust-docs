@@ -629,9 +629,10 @@ impl Client {
 
 ```rust
 pub enum SocketError {
+    SocketClosed,
+    NoiseHandshake(String),
+    Io(String),
     Crypto(String),
-    Transport(#[from] anyhow::Error),
-    Framing(#[from] FramingError),
 }
 
 pub enum EncryptSendError {
@@ -661,26 +662,69 @@ impl EncryptSendError {
 
 Location: `src/socket/error.rs`
 
-### Retry Strategy
+### Stream error handling
+
+When the server sends a `<stream:error>` stanza, it is processed inline (not spawned concurrently) because stream errors are critical for connection state. The `StanzaRouter` dispatches the node to a `StreamErrorHandler`, which calls `Client::handle_stream_error()`.
+
+Each stream error sets `is_logged_in = false` and fires the `shutdown_notifier` to exit the keepalive loop and other background tasks.
+
+**Error code behavior:**
+
+| Code | Action | Event | Reconnects? |
+|------|--------|-------|-------------|
+| **401** | Disables auto-reconnect | `LoggedOut` | No — session invalid, must re-pair |
+| **409** | Disables auto-reconnect | `StreamReplaced` | No — prevents displacement loop |
+| **429** | Adds 5 to backoff counter | None | Yes — extended Fibonacci backoff |
+| **503** | Normal handling | None | Yes — standard backoff |
+| **515** | Marks as expected disconnect | None | Yes — immediate, no backoff |
+| **516** | Disables auto-reconnect | `LoggedOut` | No — device removed |
+| Unknown | Disables auto-reconnect | `StreamError` | No |
+
+**Processing pipeline:**
+```
+Server sends <stream:error code="..."/>
+  → read_messages_loop (inline, not spawned)
+  → StanzaRouter → StreamErrorHandler
+  → Client::handle_stream_error()
+  → is_logged_in = false
+  → Code-specific handling (see table above)
+  → shutdown_notifier fires → keepalive exits
+  → run() loop checks enable_auto_reconnect
+```
+
+### Fibonacci backoff
+
+The reconnection backoff follows the Fibonacci sequence, matching WhatsApp Web's behavior:
+
+```
+Sequence: 1s, 1s, 2s, 3s, 5s, 8s, 13s, 21s, 34s, 55s, 89s, 144s, ...
+Maximum:  900s (15 minutes)
+Jitter:   ±10%
+```
+
+For rate-limited errors (429), the backoff counter is incremented by 5 before the normal increment, causing the delay to jump significantly on the next reconnection attempt.
+
+### Retry strategy
+
+The `run()` method handles reconnection automatically:
 
 ```rust
-impl Client {
-    pub async fn connect_with_retry(&self, max_attempts: u32) -> Result<()> {
-        let mut attempt = 0;
-        
-        loop {
-            match self.connect().await {
-                Ok(()) => return Ok(()),
-                Err(e) if attempt < max_attempts => {
-                    attempt += 1;
-                    let backoff = Duration::from_secs(2u64.pow(attempt));
-                    warn!("Connection failed (attempt {attempt}): {e}");
-                    sleep(backoff).await;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+// Simplified reconnection logic in run()
+loop {
+    self.connect().await;
+    self.read_messages_loop().await;
+
+    if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
+        break; // 401, 409, 516 — stop permanently
     }
+
+    if self.expected_disconnect.load(Ordering::Relaxed) {
+        continue; // 515 — reconnect immediately
+    }
+
+    let errors = self.auto_reconnect_errors.fetch_add(1, Ordering::Relaxed);
+    let delay = fibonacci_backoff(errors + 1);
+    sleep(delay).await;
 }
 ```
 

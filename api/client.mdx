@@ -68,7 +68,7 @@ Main event loop that manages connection lifecycle with automatic reconnection.
 Runs indefinitely until:
 - `disconnect()` is called
 - Auto-reconnect is disabled and connection fails
-- Client receives a logout/removal event (516 stream error)
+- Client receives a fatal stream error (401 unauthorized, 409 conflict, or 516 device removed)
 
 **Example:**
 ```rust
@@ -152,14 +152,14 @@ Returns `true` if authenticated with WhatsApp servers.
 
 ## Auto-Reconnection
 
-The client includes automatic reconnection handling with exponential backoff.
+The client includes automatic reconnection handling with Fibonacci backoff.
 
 ### How it works
 
 1. **On disconnect**: The client detects unexpected disconnections and automatically attempts to reconnect
-2. **Backoff delay**: Each failed attempt increases the delay (2s, 4s, 6s... up to 30s max)
+2. **Fibonacci backoff**: Each failed attempt increases the delay following the Fibonacci sequence (1s, 1s, 2s, 3s, 5s, 8s, 13s, 21s...) with a maximum of 900 seconds (15 minutes) and +/-10% jitter
 3. **Expected disconnects**: Protocol-expected disconnects (e.g., 515 stream error after pairing) trigger immediate reconnection without backoff
-4. **Keepalive monitoring**: A keepalive loop sends periodic pings (every 20-30s) and forces reconnection if no response is received for 180 seconds
+4. **Keepalive monitoring**: A keepalive loop sends periodic pings (every 15-30s) and forces reconnection if the socket appears dead (no data received for 20s after a send)
 
 ### Controlling auto-reconnect
 
@@ -171,13 +171,35 @@ client.enable_auto_reconnect.store(false, Ordering::Relaxed);
 let enabled = client.enable_auto_reconnect.load(Ordering::Relaxed);
 ```
 
-### Reconnection behavior
+### Stream error handling
+
+The client handles specific `<stream:error>` codes from the WhatsApp server:
+
+| Stream error code | Meaning | Event emitted | Auto-reconnect |
+|-------------------|---------|---------------|----------------|
+| **401** | Session invalidated (unauthorized) | `LoggedOut` | Disabled — must re-pair |
+| **409** | Another client connected (conflict) | `StreamReplaced` | Disabled — prevents displacement loop |
+| **429** | Rate limited (too many connections) | None (emits `Disconnected`) | Yes, with extended backoff (+5 steps) |
+| **503** | Service unavailable | None | Yes, normal backoff |
+| **515** | Expected disconnect (e.g., post-pairing) | None | Yes, immediate (no backoff) |
+| **516** | Device removed | `LoggedOut` | Disabled — must re-pair |
+| Unknown | Unrecognized code | `StreamError` | Disabled |
+
+<Warning>
+When you receive a `LoggedOut` or `StreamReplaced` event, auto-reconnect is permanently disabled for that session. You must create a new client and re-pair to continue.
+</Warning>
+
+### Rate limiting (429)
+
+When the server returns a 429 stream error, the client bumps the internal backoff counter by 5 Fibonacci steps before reconnecting. This means the reconnection delay jumps significantly (e.g., from ~1s to ~13s on the first rate limit) to respect the server's throttling.
+
+### General reconnection behavior
 
 | Scenario | Behavior |
 |----------|----------|
-| Unexpected disconnect | Reconnect with exponential backoff |
+| Unexpected disconnect | Reconnect with Fibonacci backoff |
 | 515 stream error (after pairing) | Immediate reconnect |
-| Keepalive timeout (180s) | Force disconnect and reconnect |
+| Keepalive dead socket (20s) | Force disconnect and reconnect |
 | `disconnect()` called | No reconnect attempt |
 | Auto-reconnect disabled | No reconnect attempt |
 

@@ -35,9 +35,15 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 ### Contacts and groups
 
 - **Phone number validation** - Check if phone numbers are on WhatsApp
-- **Profile information** - Fetch profile pictures and user info
-- **Group management** - Query metadata, participants, and manage groups
+- **Profile management** - Get/set profile pictures, push name, and status text
+- **Group management** - Create, query, and manage groups with full settings control
 - **Group listing** - List all groups you're participating in
+
+### Status updates
+
+- **Text, image, and video** - Post status updates with background colors and fonts
+- **Privacy controls** - Send to all contacts, allow lists, or deny lists
+- **Revocation** - Delete posted status updates
 
 ### Presence and chat state
 
@@ -45,10 +51,16 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 - **Typing indicators** - Show composing, recording, and paused states
 - **Contact management** - Block and unblock contacts
 
+### Chat organization
+
+- **Archive/pin/mute** - Organize chats with archive, pin, and mute actions
+- **Star messages** - Star and unstar individual messages
+- **App state sync** - Actions sync across all linked devices
+
 ### Architecture
 
 - **Modular design** - Pluggable storage, transport, and HTTP clients
-- **Runtime agnostic** - Works with Tokio, async-std, or WASM
+- **Tokio-powered** - Built on Tokio with a runtime-agnostic core (`wacore`)
 - **SQLite included** - Default storage backend, easily swappable
 
 ## Getting started

@@ -268,6 +268,29 @@ Bot::builder()
 The `platform_type` determines what device name is shown on the phone's "Linked Devices" list. Common values: `Chrome`, `Firefox`, `Safari`, `Desktop`.
 </Tip>
 
+### with_push_name
+
+```rust
+pub fn with_push_name(self, name: impl Into<String>) -> Self
+```
+
+Sets an initial push name on the device before connecting.
+
+<ParamField path="name" type="String" required>
+  Display name to set on the device
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_push_name("My Bot")
+    // ...
+```
+
+<Note>
+The push name is included in the `ClientPayload` during registration. This is useful for testing scenarios where the server assigns phone numbers based on push name.
+</Note>
+
 ---
 
 ## Authentication

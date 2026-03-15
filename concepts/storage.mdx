@@ -378,6 +378,11 @@ pub trait ProtocolStore: Send + Sync {
     async fn delete_tc_token(&self, jid: &str) -> Result<()>;
     async fn get_all_tc_token_jids(&self) -> Result<Vec<String>>;
     async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
+
+    // Sent Message Store (retry support, matches WA Web's getMessageTable)
+    async fn store_sent_message(&self, chat_jid: &str, message_id: &str, payload: &[u8]) -> Result<()>;
+    async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>>;
+    async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32>;
 }
 ```
 
@@ -618,6 +623,18 @@ CREATE TABLE tc_tokens (
     sender_timestamp INTEGER,
     PRIMARY KEY (device_id, jid)
 );
+
+-- Sent message store for retry handling
+CREATE TABLE sent_messages (
+    chat_jid TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    PRIMARY KEY (chat_jid, message_id, device_id)
+);
+
+CREATE INDEX idx_sent_messages_created ON sent_messages (created_at, device_id);
 ```
 
 ### Multi-Account Support

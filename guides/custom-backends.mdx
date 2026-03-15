@@ -394,6 +394,42 @@ impl ProtocolStore for MyCustomStore {
         }).collect())
     }
     
+    // --- Sent Message Store (retry support) ---
+
+    async fn store_sent_message(
+        &self,
+        chat_jid: &str,
+        message_id: &str,
+        payload: &[u8],
+    ) -> Result<()> {
+        self.connection.execute(
+            "INSERT OR REPLACE INTO sent_messages (chat_jid, message_id, payload, created_at) VALUES (?, ?, ?, strftime('%s', 'now'))",
+            &[chat_jid, message_id, payload],
+        ).await?;
+        Ok(())
+    }
+
+    async fn take_sent_message(
+        &self,
+        chat_jid: &str,
+        message_id: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        // Atomic read-and-delete
+        let row = self.connection.query_optional(
+            "DELETE FROM sent_messages WHERE chat_jid = ? AND message_id = ? RETURNING payload",
+            &[chat_jid, message_id],
+        ).await?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32> {
+        let count = self.connection.execute(
+            "DELETE FROM sent_messages WHERE created_at < ?",
+            &[&cutoff_timestamp],
+        ).await?;
+        Ok(count as u32)
+    }
+
     // ... Implement remaining methods (base_key, device_list, forget_marks, tc_token)
 }
 ```

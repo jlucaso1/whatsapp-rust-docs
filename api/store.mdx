@@ -245,6 +245,40 @@ async fn get_all_tc_token_jids(&self) -> Result<Vec<String>>;
 async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
 ```
 
+### Sent message store
+
+Persists sent message payloads for retry handling. Matches WhatsApp Web's `getMessageTable` pattern where retry receipts look up the original message from storage.
+
+```rust
+/// Store a sent message's serialized payload for retry handling.
+/// Called after each send_message(); the payload is the protobuf-encoded Message.
+async fn store_sent_message(
+    &self,
+    chat_jid: &str,
+    message_id: &str,
+    payload: &[u8],
+) -> Result<()>;
+
+/// Retrieve and delete a sent message (atomic take). Returns serialized payload.
+/// Called when a retry receipt arrives; consuming prevents double-retry.
+async fn take_sent_message(
+    &self,
+    chat_jid: &str,
+    message_id: &str,
+) -> Result<Option<Vec<u8>>>;
+
+/// Delete sent messages older than cutoff (unix timestamp seconds).
+/// Returns count deleted.
+async fn delete_expired_sent_messages(
+    &self,
+    cutoff_timestamp: i64,
+) -> Result<u32>;
+```
+
+<Note>
+The `take_sent_message` method is an atomic read-and-delete operation. Once a message payload is taken for retry, it is removed from storage to prevent double-retry. For status broadcasts where multiple devices may retry, the client re-adds the message after taking it.
+</Note>
+
 ## DeviceStore Trait
 
 Handles device data persistence:

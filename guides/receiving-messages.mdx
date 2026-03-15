@@ -316,7 +316,20 @@ enum RetryReason {
 }
 ```
 
-See `\1`
+### Sent message retry (outbound)
+
+When a recipient's device cannot decrypt your message, it sends a retry receipt. The client handles this automatically using DB-backed sent message storage:
+
+1. Every `send_message()` persists the serialized message payload to the `sent_messages` database table
+2. On retry receipt, the client retrieves the original payload, re-encrypts it for the requesting device, and resends
+3. The payload is consumed (deleted) on retrieval to prevent double-retry
+4. Expired entries are periodically cleaned up based on `sent_message_ttl_secs` (default: 5 minutes)
+
+This matches WhatsApp Web's `getMessageTable` pattern of reading from persistent storage on retry receipt.
+
+<Note>
+An optional in-memory L1 cache (`recent_messages` in `CacheConfig`) can be enabled for faster retry lookups. When disabled (default, capacity 0), all retry lookups go directly to the database. See [Bot - Cache Configuration Reference](/api/bot#cache-configuration-reference) for details.
+</Note>
 
 ## Receipts
 

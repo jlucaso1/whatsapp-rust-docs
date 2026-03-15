@@ -391,22 +391,35 @@ Event::Message(Box<wa::Message>, MessageInfo)
 
 **MessageInfo structure:**
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MessageInfo {
-    pub id: MessageId,
     pub source: MessageSource,
-    pub timestamp: DateTime<Utc>,
+    pub id: MessageId,
+    pub server_id: MessageServerId,
+    pub r#type: String,
     pub push_name: String,
-    pub is_group: bool,
+    pub timestamp: DateTime<Utc>,
     pub category: String,
+    pub multicast: bool,
+    pub media_type: String,
+    pub edit: EditAttribute,
+    pub bot_info: Option<MsgBotInfo>,
+    pub meta_info: MsgMetaInfo,
+    pub verified_name: Option<wa::VerifiedNameCertificate>,
+    pub device_sent_meta: Option<DeviceSentMeta>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MessageSource {
-    pub sender: Jid,        // Who sent the message
-    pub chat: Jid,          // Where it was sent (group or DM)
+    pub chat: Jid,             // Where it was sent (group or DM)
+    pub sender: Jid,           // Who sent the message
     pub is_from_me: bool,
-    pub is_bot: bool,
+    pub is_group: bool,
+    pub addressing_mode: Option<AddressingMode>,
+    pub sender_alt: Option<Jid>,
+    pub recipient_alt: Option<Jid>,
+    pub broadcast_list_owner: Option<Jid>,
+    pub recipient: Option<Jid>,
 }
 ```
 
@@ -607,11 +620,18 @@ Event::Presence(update) => {
 #[derive(Debug, Clone, Serialize)]
 pub struct PictureUpdate {
     pub jid: Jid,
-    pub author: Jid,
+    pub author: Option<Jid>,
     pub timestamp: DateTime<Utc>,
-    pub photo_change: Option<wa::PhotoChange>,
+    pub removed: bool,
+    pub picture_id: Option<String>,
 }
 ```
+
+**Fields:**
+- `jid` - The JID whose picture changed (user or group)
+- `author` - The user who made the change. Present for group picture changes (the admin who changed it). `None` for personal picture updates.
+- `removed` - Whether the picture was removed (`true`) or set/updated (`false`)
+- `picture_id` - The server-assigned picture ID. `None` for deletions.
 
 ### UserAboutUpdate
 

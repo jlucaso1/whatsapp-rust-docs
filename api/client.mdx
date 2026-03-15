@@ -120,6 +120,42 @@ pub async fn disconnect(self: &Arc<Self>)
 
 Disconnects gracefully and disables auto-reconnect.
 
+### reconnect
+
+```rust
+pub async fn reconnect(self: &Arc<Self>)
+```
+
+Drops the current connection and triggers auto-reconnect with a deliberate ~5s offline window (Fibonacci backoff step 4). The run loop stays active.
+
+Use this for:
+- Handling network changes (e.g., Wi-Fi to cellular)
+- Forcing a fresh server session
+- Testing offline message delivery
+
+**Example:**
+```rust
+// Force reconnection with backoff delay
+client.reconnect().await;
+
+// Wait for the new connection to be ready
+client.wait_for_connected(Duration::from_secs(30)).await?;
+```
+
+### reconnect_immediately
+
+```rust
+pub async fn reconnect_immediately(self: &Arc<Self>)
+```
+
+Drops the current connection and reconnects immediately with no delay. Unlike `reconnect()`, this sets the expected disconnect flag so the run loop skips the backoff delay.
+
+**Example:**
+```rust
+// Force immediate reconnection (no backoff)
+client.reconnect_immediately().await;
+```
+
 ### wait_for_socket
 
 ```rust
@@ -369,6 +405,10 @@ Access group management operations.
 - `promote_participants(jid: &Jid, participants: &[Jid])` - Make members admins
 - `demote_participants(jid: &Jid, participants: &[Jid])` - Remove admin status
 - `get_invite_link(jid: &Jid, reset: bool)` - Get/reset invite link
+- `set_locked(jid: &Jid, locked: bool)` - Lock/unlock group info editing
+- `set_announce(jid: &Jid, announce: bool)` - Enable/disable announcement mode
+- `set_ephemeral(jid: &Jid, expiration: u32)` - Set disappearing messages timer
+- `set_membership_approval(jid: &Jid, mode: MembershipApprovalMode)` - Require admin approval
 
 **Example:**
 ```rust
@@ -533,6 +573,107 @@ Sends a raw protocol node (advanced usage).
 **Errors:**
 - `ClientError::NotConnected` - Not connected
 - `ClientError::EncryptSend` - Encryption/send failure
+
+### generate_message_id
+
+```rust
+pub async fn generate_message_id(&self) -> String
+```
+
+Generates a unique WhatsApp-protocol-conformant message ID. Combines timestamp, user JID, and random components for uniqueness.
+
+<Note>
+This is intended for advanced users who need to build custom protocol interactions or manage message IDs manually. Most users should use `send_message` which handles ID generation automatically.
+</Note>
+
+### send_iq
+
+```rust
+pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError>
+```
+
+Sends a custom IQ (Info/Query) stanza to the WhatsApp server.
+
+<ParamField path="query" type="InfoQuery" required>
+  IQ query containing stanza type, namespace, content, and optional timeout
+</ParamField>
+
+**Example:**
+```rust
+use wacore::request::{InfoQuery, InfoQueryType};
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::node::NodeContent;
+use wacore_binary::jid::{Jid, SERVER_JID};
+
+let query_node = NodeBuilder::new("presence")
+    .attr("type", "available")
+    .build();
+
+let server_jid = Jid::new("", SERVER_JID);
+
+let query = InfoQuery {
+    query_type: InfoQueryType::Set,
+    namespace: "presence",
+    to: server_jid,
+    target: None,
+    content: Some(NodeContent::Nodes(vec![query_node])),
+    id: None,
+    timeout: None,
+};
+
+let response = client.send_iq(query).await?;
+```
+
+<Warning>
+This bypasses higher-level abstractions and safety checks. You should be familiar with the WhatsApp protocol and IQ stanza format before using this.
+</Warning>
+
+### wait_for_node
+
+```rust
+pub fn wait_for_node(&self, filter: NodeFilter) -> oneshot::Receiver<Arc<Node>>
+```
+
+Waits for a specific incoming protocol node matching the given filter. Returns a receiver that resolves when a matching node arrives.
+
+<ParamField path="filter" type="NodeFilter" required>
+  Filter specifying which node to wait for (by tag and attributes)
+</ParamField>
+
+**Example:**
+```rust
+// Wait for a group notification
+let waiter = client.wait_for_node(
+    NodeFilter::tag("notification").attr("type", "w:gp2"),
+);
+
+// Perform the action that triggers the node
+client.groups().add_participants(&group_jid, &[jid]).await?;
+
+// Receive the notification
+let node = waiter.await.expect("notification arrived");
+```
+
+<Note>
+Register the waiter **before** performing the action that triggers the expected node. When no waiters are active, this has zero cost (single atomic load per incoming node).
+</Note>
+
+#### NodeFilter
+
+Builder for matching incoming protocol nodes:
+
+```rust
+// Match by tag
+let filter = NodeFilter::tag("notification");
+
+// Match by tag and attributes
+let filter = NodeFilter::tag("notification")
+    .attr("type", "w:gp2");
+
+// Match by tag and source JID
+let filter = NodeFilter::tag("notification")
+    .from_jid(&group_jid);
+```
 
 ### register_handler
 

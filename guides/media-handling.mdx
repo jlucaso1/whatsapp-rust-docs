@@ -351,7 +351,28 @@ let progress_writer = ProgressWriter {
 let _file = client.download_to_writer(video.as_ref(), progress_writer).await?;
 ```
 
-### Retry Logic
+### Automatic retry on auth errors
+
+Both `download` and `upload` methods automatically retry when WhatsApp's CDN returns HTTP 401 or 403. This typically happens when the cached media connection auth token has expired or been invalidated.
+
+The retry flow works as follows:
+
+1. The client attempts the request using the cached media connection credentials
+2. If the CDN returns 401 or 403, the client invalidates the cached `MediaConn` and forces a fresh auth token request to WhatsApp's servers
+3. The operation is retried once with the new credentials
+4. If the retry also fails with an auth error, the error is returned to the caller
+
+For non-auth errors (such as 500), the client tries the next available CDN host without refreshing credentials.
+
+<Note>
+This retry behavior is fully transparent — no changes are needed in your code. Both `download` and `upload` handle auth refresh automatically, with a maximum of one retry per operation.
+</Note>
+
+For streaming downloads (`download_to_writer`), the writer is automatically seeked back to position 0 before each retry so partial writes don't corrupt the output.
+
+### Additional retry logic
+
+For transient errors beyond auth failures, you can implement your own retry wrapper:
 
 ```rust
 use tokio::time::{sleep, Duration};
@@ -378,19 +399,19 @@ async fn download_with_retry(
 
 ## Media Connection
 
-### Automatic Refresh
+### Automatic management
 
-The client automatically manages media connection tokens:
+The client automatically manages media connection tokens, including refreshing them when they expire or when the CDN rejects them with 401/403:
 
 ```rust
-// Automatically refreshed when expired
+// Automatically refreshed when expired or rejected
 let upload = client.upload(data, MediaType::Image).await?;
 let download = client.download(downloadable).await?;
 
 // No manual token management needed!
 ```
 
-### Manual Refresh
+### Manual refresh
 
 For advanced use cases:
 
@@ -400,6 +421,9 @@ let media_conn = client.refresh_media_conn(true).await?;
 
 println!("Auth token: {}", media_conn.auth);
 println!("Hosts: {:?}", media_conn.hosts);
+
+// Invalidate cached connection (next operation will fetch fresh credentials)
+client.invalidate_media_conn().await;
 ```
 
 ## Best Practices

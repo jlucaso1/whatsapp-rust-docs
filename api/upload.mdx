@@ -304,17 +304,23 @@ The request uses:
 - **Body**: Encrypted media bytes
 
 <Note>
-  The upload automatically handles media connection refresh. If the connection is expired, it's renewed before uploading.
+  The upload automatically handles media connection refresh. If the connection is expired, it's renewed before uploading. If the CDN returns HTTP 401 or 403, the client invalidates the cached credentials, fetches a fresh auth token, and retries the upload once.
 </Note>
 
 ---
 
 ## Error Handling
 
-### Common Upload Errors
+### Automatic retry on auth errors
+
+The upload method automatically retries when WhatsApp's CDN returns HTTP 401 or 403. On an auth error, the client invalidates the cached media connection, fetches fresh credentials from WhatsApp's servers, and retries the upload once. If the retry also fails with an auth error, the error is returned to the caller.
+
+For non-auth HTTP errors (such as 500), the client tries the next available CDN host without refreshing credentials.
+
+### Common upload errors
 
 <ParamField path="HTTP 4xx/5xx" type="error">
-  CDN returned error status. The response body may contain error details.
+  CDN returned error status. Auth errors (401/403) are retried automatically with fresh credentials. Other errors are tried against alternate CDN hosts.
   
   ```rust
   match client.upload(data, media_type).await {
@@ -349,7 +355,9 @@ The request uses:
   ```
 </ParamField>
 
-### Example: Upload with Retry
+### Example: Upload with additional retry
+
+Auth errors (401/403) are retried automatically. For other transient failures, you can add your own retry logic:
 
 ```rust
 use std::time::Duration;

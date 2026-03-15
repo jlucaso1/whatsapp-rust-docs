@@ -56,6 +56,12 @@ match client.download(downloadable).await {
 }
 ```
 
+### Automatic retry on auth errors
+
+All download methods automatically retry when WhatsApp's CDN returns HTTP 401 or 403. On an auth error, the client invalidates the cached media connection, fetches fresh credentials, and retries the download once. Non-auth HTTP errors (such as 500) cause the client to try the next available CDN host without refreshing credentials.
+
+For streaming downloads, the writer is seeked back to position 0 before retrying so partial writes are overwritten.
+
 ---
 
 ## download_to_file

@@ -31,8 +31,8 @@ let bot = Bot::builder()
     .with_http_client(http_client)
     .on_event(|event, client| async move {
         match event {
-            Event::Message(msg) => {
-                println!("Message from {}: {:?}", msg.info.source.sender, msg.message);
+            Event::Message(msg, info) => {
+                println!("Message from {}: {:?}", info.source.sender, msg);
             }
             Event::Connected(_) => {
                 println!("Connected to WhatsApp!");
@@ -157,13 +157,13 @@ use waproto::whatsapp as wa;
 Bot::builder()
     .on_event(|event, client| async move {
         match event {
-            Event::Message(msg) => {
+            Event::Message(msg, info) => {
                 // Reply to messages
                 let reply = wa::Message {
                     conversation: Some("Hello back!".to_string()),
                     ..Default::default()
                 };
-                let _ = client.send_message(msg.info.source.chat, reply).await;
+                let _ = client.send_message(info.source.chat, reply).await;
             }
             Event::Connected(_) => {
                 println!("Bot online!");
@@ -463,9 +463,9 @@ You must call `.await?` on the returned handle to keep the bot running. If you d
 
 ---
 
-## Message Context
+## MessageContext
 
-When handling message events, you get a `MessageContext` helper:
+A convenience helper for message handling. You can construct it from the `Event::Message` components:
 
 ```rust
 pub struct MessageContext {
@@ -499,9 +499,11 @@ Handles:
 **Example:**
 ```rust
 use waproto::whatsapp as wa;
+use whatsapp_rust::bot::MessageContext;
 
-.on_event(|event, _client| async move {
-    if let Event::Message(ctx) = event {
+.on_event(|event, client| async move {
+    if let Event::Message(msg, info) = event {
+        let ctx = MessageContext { message: msg, info, client };
         let reply = wa::Message {
             conversation: Some("Quoted reply!".to_string()),
             context_info: Some(ctx.build_quote_context()),
@@ -562,14 +564,14 @@ async fn main() -> anyhow::Result<()> {
         .skip_history_sync() // Bot only needs new messages
         .on_event(|event, client| async move {
             match event {
-                Event::Message(ctx) => {
+                Event::Message(msg, info) => {
                     // Echo messages back
-                    if let Some(text) = &ctx.message.conversation {
+                    if let Some(text) = &msg.conversation {
                         let reply = wa::Message {
                             conversation: Some(format!("You said: {}", text)),
                             ..Default::default()
                         };
-                        let _ = ctx.send_message(reply).await;
+                        let _ = client.send_message(info.source.chat, reply).await;
                     }
                 }
                 Event::Connected(_) => {
@@ -577,11 +579,9 @@ async fn main() -> anyhow::Result<()> {
                     // Set status
                     let _ = client.presence().set_available().await;
                 }
-                Event::QRCode(qr) => {
+                Event::PairingQrCode { code, .. } => {
                     println!("Scan this QR code:");
-                    for line in qr.lines() {
-                        println!("{}", line);
-                    }
+                    println!("{}", code);
                 }
                 _ => {}
             }

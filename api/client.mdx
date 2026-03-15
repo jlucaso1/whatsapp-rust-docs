@@ -186,6 +186,39 @@ pub async fn wait_for_connected(
 
 Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
 
+### wait_for_startup_sync
+
+```rust
+pub async fn wait_for_startup_sync(
+    &self,
+    timeout: std::time::Duration
+) -> Result<(), anyhow::Error>
+```
+
+Waits for both offline sync completion AND all in-flight history sync tasks to finish. This is more comprehensive than `wait_for_connected`, which only gates on the initial offline delivery.
+
+<ParamField path="timeout" type="Duration" required>
+  Maximum time to wait for all sync operations
+</ParamField>
+
+**Behavior:**
+- First waits for offline sync to complete
+- Then waits for all history sync tasks to become idle (zero in-flight tasks)
+- Returns error on timeout at either stage
+
+**Example:**
+```rust
+use std::time::Duration;
+
+// Wait for all startup sync to complete (offline + history)
+client.wait_for_startup_sync(Duration::from_secs(60)).await?;
+println!("All sync complete, safe to query state");
+```
+
+<Note>
+Use this when you need to ensure all historical data has been synced before proceeding, such as when accessing chat history or contact lists.
+</Note>
+
 ### wait_for_offline_delivery_end
 
 ```rust
@@ -371,10 +404,10 @@ pub async fn revoke_message(
 ) -> Result<(), anyhow::Error>
 ```
 
-Deletes a message for everyone or just for yourself.
+Deletes a message. Use `Sender` to revoke your own message, or `Admin` to revoke another user's message as group admin.
 
 <ParamField path="revoke_type" type="RevokeType" required>
-  `RevokeType::Everyone` or `RevokeType::Me`
+  `RevokeType::Sender` (delete your own message) or `RevokeType::Admin { original_sender: Jid }` (admin revoke in groups)
 </ParamField>
 
 ---
@@ -476,8 +509,8 @@ Access contact operations.
 
 **Methods:**
 - `get_user_info(jids: &[Jid])` - Get profile info for users
-- `get_profile_picture(jid: &Jid)` - Get profile picture URL
-- `is_on_whatsapp(phones: &[String])` - Check phone numbers
+- `get_profile_picture(jid: &Jid, preview: bool)` - Get profile picture URL (preview or full size)
+- `is_on_whatsapp(phones: &[&str])` - Check phone numbers
 
 ### tc_token
 
@@ -488,8 +521,20 @@ pub fn tc_token(&self) -> TcToken<'_>
 Access trust/privacy token operations.
 
 **Methods:**
-- `request_tokens(jids: &[Jid])` - Request tokens for contacts
+- `issue_tokens(jids: &[Jid])` - Request tokens for contacts
 - `prune_expired()` - Remove expired tokens
+
+---
+
+## Public fields
+
+### http_client
+
+```rust
+pub http_client: Arc<dyn HttpClient>
+```
+
+The HTTP client used for media operations, version fetching, and other HTTP requests. This field is public and can be used directly for custom HTTP operations that share the same client configuration.
 
 ---
 
@@ -746,7 +791,7 @@ struct MyHandler;
 impl EventHandler for MyHandler {
     fn handle_event(&self, event: &Event) {
         match event {
-            Event::Message(msg) => println!("New message: {:?}", msg),
+            Event::Message(msg, info) => println!("New message from {}: {:?}", info.source.sender, msg),
             Event::Connected(_) => println!("Connected!"),
             _ => {}
         }
@@ -789,9 +834,11 @@ Send a spam report to WhatsApp for messages or groups.
   - `spam_flow` - Context where report was initiated (MessageMenu, GroupInfoReport, etc.)
   - `from_jid` - Optional sender JID
   - `group_jid` - Optional group JID for group spam
+  - `group_subject` - Optional group name/subject for group reports
   - `participant_jid` - Optional participant JID in group context
   - `raw_message` - Optional raw message bytes
   - `media_type` - Optional media type if reporting media
+  - `local_message_type` - Optional local message type
 </ParamField>
 
 **Returns:** `SpamReportResult` indicating success or failure

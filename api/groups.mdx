@@ -123,11 +123,12 @@ pub async fn create_group(
 
 **Parameters:**
 - `options: GroupCreateOptions` - Group creation options
-  - `subject: GroupSubject` - Group name (max 100 characters)
+  - `subject: String` - Group name (max 100 characters)
   - `participants: Vec<GroupParticipantOptions>` - Initial participants
-  - `description: Option<GroupDescription>` - Optional description (max 2048 characters)
-  - `member_add_mode: MemberAddMode` - Who can add members
-  - `membership_approval_mode: MembershipApprovalMode` - Require admin approval
+  - `member_link_mode: Option<MemberLinkMode>` - Who can use invite links (default: `AdminLink`)
+  - `member_add_mode: Option<MemberAddMode>` - Who can add members (default: `AllMemberAdd`)
+  - `membership_approval_mode: Option<MembershipApprovalMode>` - Require admin approval (default: `Off`)
+  - `ephemeral_expiration: Option<u32>` - Disappearing messages timer in seconds (default: `0`)
 
 **Returns:**
 - `CreateGroupResult` with `gid: Jid` field
@@ -481,6 +482,17 @@ pub enum MemberAddMode {
 }
 ```
 
+### MemberLinkMode
+
+Controls who can use invite links to join the group.
+
+```rust
+pub enum MemberLinkMode {
+    AdminLink,      // Only admins can share invite links
+    AllMemberLink,  // All members can share invite links
+}
+```
+
 ### MembershipApprovalMode
 
 ```rust
@@ -488,6 +500,30 @@ pub enum MembershipApprovalMode {
     Off,  // No approval required
     On,   // Admin approval required
 }
+```
+
+### GroupParticipantOptions
+
+Options for specifying a participant when creating a group.
+
+```rust
+pub struct GroupParticipantOptions {
+    pub jid: Jid,
+    pub phone_number: Option<Jid>,
+    pub privacy: Option<Vec<u8>>,
+}
+```
+
+**Constructors:**
+- `GroupParticipantOptions::new(jid)` - Create from a JID
+- `GroupParticipantOptions::from_phone(phone_number)` - Create from a phone number JID
+- `GroupParticipantOptions::from_lid_and_phone(lid, phone_number)` - Create from a LID and phone number
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::GroupParticipantOptions;
+
+let participant = GroupParticipantOptions::new("15551234567@s.whatsapp.net".parse()?);
 ```
 
 ### AddressingMode

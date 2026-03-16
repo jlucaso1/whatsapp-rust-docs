@@ -692,6 +692,38 @@ Server sends <stream:error code="..."/>
   → run() loop checks enable_auto_reconnect
 ```
 
+### Stanza acknowledgment
+
+The client automatically sends `<ack/>` nodes in response to incoming stanzas (messages, receipts, notifications, calls). The ack construction follows WhatsApp Web and whatsmeow behavior:
+
+**Ack attributes:**
+
+| Attribute | Value |
+|-----------|-------|
+| `class` | Original stanza tag (e.g., `"message"`, `"receipt"`, `"notification"`) |
+| `id` | Copied from the incoming stanza |
+| `to` | Flipped from the incoming `from` attribute |
+| `participant` | Copied from the incoming stanza (when present) |
+| `from` | Own device phone number JID — only included for message acks |
+
+**`type` attribute rules:**
+
+The `type` attribute is handled differently depending on the stanza:
+
+| Stanza | `type` in ack | Reason |
+|--------|---------------|--------|
+| `message` | **Never included** | Matches whatsmeow: `node.Tag != "message"` guard skips type for messages |
+| `receipt` (with type, e.g. `"read"`) | **Echoed** | WA Web echoes `type` when explicitly present |
+| `receipt` (without type, i.e. delivery) | **Omitted** | Delivery receipts have no `type`; including one (e.g., `type="delivery"`) causes `<stream:error>` disconnections |
+| `notification` | **Echoed** | Type is echoed for most notifications |
+| `notification type="encrypt"` with `<identity/>` child | **Omitted** | WA Web specifically drops `type` for identity-change notifications |
+
+<Warning>
+  Sending incorrect `type` attributes in ack stanzas can cause the server to issue `<stream:error>` disconnections. The library handles this automatically — you don't need to build ack nodes manually.
+</Warning>
+
+Location: `src/client.rs` (`build_ack_node`, `is_encrypt_identity_notification`)
+
 ### Fibonacci backoff
 
 The reconnection backoff follows the Fibonacci sequence, matching WhatsApp Web's behavior:

@@ -115,7 +115,7 @@ Delivery receipts are automatically sent for all incoming messages **except**:
 For group messages, the receipt includes a `participant` attribute identifying the sender.
 
 <Note>
-  Delivery receipts (type=`"delivery"`) are sent automatically. This is different from read receipts (type=`"read"`), which you send manually with `mark_as_read()`.
+  Delivery receipts are sent automatically. Unlike other receipt types (e.g., `type="read"`, `type="played"`), delivery receipts have **no `type` attribute** on the wire — delivery is the implicit default. The library omits the `type` attribute from ack responses to delivery receipts accordingly, since including an explicit `type="delivery"` would cause `<stream:error>` disconnections from the server. This is different from read receipts (type=`"read"`), which you send manually with `mark_as_read()`.
 </Note>
 
 ---

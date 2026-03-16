@@ -323,6 +323,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Configuring log targets
+
+whatsapp-rust uses the `log` crate with module-specific targets for fine-grained filtering. You can use `RUST_LOG` to control which components emit log output.
+
+### Available log targets
+
+| Target | Description |
+|--------|-------------|
+| `Client/Keepalive` | Keepalive ping/pong and dead socket detection |
+| `Client/Recv` | Incoming frame processing (unmarshal, decompress) |
+| `Client/Send` | Outgoing message encryption and dispatch |
+| `Client/OfflineSync` | Offline message sync progress and timing |
+| `Client/AppState` | App state sync (contacts, settings, etc.) |
+| `Client/AccountSync` | Account-level sync operations |
+| `Client/PairCode` | Pair code authentication flow |
+| `Client/Pair` | QR code pairing flow |
+| `Client/Receipt` | Receipt processing (read, delivered, played) |
+| `Client/TcToken` | Trusted contact token operations |
+| `Client/Group` | Group metadata and participant operations |
+| `Client/Contacts` | Contact sync and lookup |
+| `Client/Business` | Business profile updates |
+| `Client/PDO` | Pre-delivery operations and retry |
+| `Client/IQ` | IQ stanza send/receive |
+| `Client/Ack` | Stanza acknowledgment |
+| `Client/Status` | Status/story operations |
+| `Client/Picture` | Profile picture updates |
+| `Client/UnifiedSession` | Session establishment |
+| `Blocking` | Block/unblock operations |
+| `Chatstate` | Typing indicator events |
+| `PresenceHandler` | Presence update processing |
+| `AppState` | App state patch encoding/decoding |
+| `Bot/PairCode` | Bot-level pair code handling |
+
+### Filtering examples
+
+```bash
+# Show only connection and messaging logs
+RUST_LOG="Client/Keepalive=debug,Client/Send=debug,Client/Recv=trace" cargo run
+
+# Debug offline sync issues
+RUST_LOG="Client/OfflineSync=debug" cargo run
+
+# Quiet mode: only errors and warnings
+RUST_LOG="warn" cargo run
+
+# Verbose: all client internals at debug level
+RUST_LOG="debug" cargo run
+```
+
+<Note>
+During shutdown or disconnect, the client automatically downgrades sync errors from `error` to `debug` level to reduce noise. This means you won't see spurious error logs when the client is intentionally disconnecting.
+</Note>
+
 ## Next steps
 
 <CardGroup cols={2}>

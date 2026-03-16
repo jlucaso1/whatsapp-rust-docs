@@ -403,8 +403,8 @@ Edits a previously sent message.
 ```rust
 pub async fn revoke_message(
     &self,
-    chat: Jid,
-    message_id: String,
+    to: Jid,
+    message_id: impl Into<String>,
     revoke_type: RevokeType
 ) -> Result<(), anyhow::Error>
 ```
@@ -502,6 +502,32 @@ client.presence().subscribe(&jid).await?;
 
 // Later, stop receiving updates
 client.presence().unsubscribe(&jid).await?;
+```
+
+### chatstate
+
+```rust
+pub fn chatstate(&self) -> Chatstate<'_>
+```
+
+Access chat state (typing indicator) operations.
+
+**Methods:**
+- `send(to: &Jid, state: ChatStateType)` - Send a chat state update
+- `send_composing(to: &Jid)` - Send typing indicator
+- `send_recording(to: &Jid)` - Send recording indicator
+- `send_paused(to: &Jid)` - Send paused/stopped typing indicator
+
+**Example:**
+```rust
+// Send typing indicator
+client.chatstate().send_composing(&jid).await?;
+
+// Send recording indicator
+client.chatstate().send_recording(&jid).await?;
+
+// Stop typing indicator
+client.chatstate().send_paused(&jid).await?;
 ```
 
 ### contacts
@@ -943,6 +969,7 @@ let result = client.send_spam_report(SpamReportRequest {
 - `GroupInfoReport` - Reported from group info screen
 - `GroupSpamBannerReport` - Reported from group spam banner
 - `ContactInfo` - Reported from contact info screen
+- `StatusReport` - Reported from status view
 
 ---
 

@@ -106,10 +106,15 @@ tokio::spawn(async move {
 pub async fn connect(self: &Arc<Self>) -> Result<(), anyhow::Error>
 ```
 
-Establishes WebSocket connection and performs Noise Protocol handshake.
+Establishes WebSocket connection and performs Noise Protocol handshake. Both the transport connection and the version fetch run in parallel under a **20-second timeout** (`TRANSPORT_CONNECT_TIMEOUT`), matching WhatsApp Web's MQTT and DGW connect timeout defaults. Without this, a dead network would block on the OS TCP SYN timeout (~60-75s).
+
+The Noise handshake response also has a separate **20-second timeout** (`NOISE_HANDSHAKE_RESPONSE_TIMEOUT`).
 
 **Errors:**
 - `ClientError::AlreadyConnected` - Already connected
+- Transport connect timeout (20s exceeded)
+- Version fetch timeout (20s exceeded)
+- Noise handshake timeout or failure
 - Connection/handshake failures
 
 ### disconnect

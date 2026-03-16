@@ -477,16 +477,20 @@ pub struct Receipt {
     pub message_sender: Jid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ReceiptType {
-    Delivery,
+    Delivered,
+    Sender,
+    Retry,
     Read,
     ReadSelf,
     Played,
-    Sender,
-    Retry,
+    PlayedSelf,
     ServerError,
     Inactive,
+    PeerMsg,
+    HistorySync,
+    Other(String),
 }
 ```
 
@@ -497,7 +501,7 @@ Event::Receipt(receipt) => {
         ReceiptType::Read => {
             println!("✓✓ Read by {}", receipt.source.sender);
         }
-        ReceiptType::Delivery => {
+        ReceiptType::Delivered => {
             println!("✓ Delivered to {}", receipt.source.sender);
         }
         _ => {}

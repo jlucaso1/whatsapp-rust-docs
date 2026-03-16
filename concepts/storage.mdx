@@ -14,6 +14,8 @@ graph TB
     A[Client] --> B[PersistenceManager]
     B --> C[Device State]
     B --> D[Backend Trait]
+    B --> K[SignalStoreCache]
+    K --> D
     D --> E[SignalStore]
     D --> F[AppSyncStore]
     D --> G[ProtocolStore]
@@ -24,6 +26,72 @@ graph TB
     H --> I
     I --> J[SQLite Database]
 ```
+
+## Signal store cache
+
+**Location:** `src/store/signal_cache.rs`
+
+The `SignalStoreCache` provides an in-memory cache layer for Signal Protocol state, matching WhatsApp Web's `SignalStoreCache` pattern. All cryptographic operations read/write through this cache, with database writes deferred to explicit `flush()` calls.
+
+### Purpose
+
+- **Faster decryption**: Avoids repeated database queries during message processing
+- **Batched writes**: Defers persistence until `flush()` for better throughput
+- **Reconnect safety**: Automatically clears on disconnect to prevent stale state
+
+### Structure
+
+```rust
+pub struct SignalStoreCache {
+    sessions: Mutex<StoreState>,
+    identities: Mutex<StoreState>,
+    sender_keys: Mutex<StoreState>,
+}
+
+struct StoreState {
+    cache: HashMap<String, Option<Vec<u8>>>,  // None = negative cache
+    dirty: HashSet<String>,                    // Modified keys
+    deleted: HashSet<String>,                  // Deleted keys
+}
+```
+
+Each store type (sessions, identities, sender keys) has its own mutex for independent locking.
+
+### Key operations
+
+**Reading through cache:**
+```rust
+// Cache hit returns immediately; cache miss queries backend and caches result
+let session = cache.get_session(address, &backend).await?;
+```
+
+**Writing to cache:**
+```rust
+// Marks entry as dirty; no database write yet
+cache.put_session(address, &data).await;
+```
+
+**Flushing to database:**
+```rust
+// Persists all dirty/deleted entries atomically
+cache.flush(&backend).await?;
+```
+
+**Clearing on disconnect:**
+```rust
+// Called on reconnect to prevent stale crypto state
+cache.clear().await;
+```
+
+### Flush semantics
+
+The `flush()` method acquires all three mutexes to ensure consistency:
+
+1. Snapshots dirty/deleted sets without draining (preserves on failure)
+2. Persists all dirty sessions, identities, and sender keys
+3. Clears dirty sets only after all writes succeed
+
+If any write fails, dirty tracking is preserved so the next flush retries everything.
 
 ## PersistenceManager
 

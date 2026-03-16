@@ -313,24 +313,21 @@ pub(crate) struct OfflineSyncMetrics {
     pub active: AtomicBool,
     pub total_messages: AtomicUsize,
     pub processed_messages: AtomicUsize,
-    pub next_expected_sequence: AtomicUsize,
     pub start_time: Mutex<Option<Instant>>,
 }
 ```
 
 **Sync flow:**
-1. Receive `<ib><offline_preview count="N"/>` → start tracking, reset counters and sequence tracker
-2. Process messages with `offline` attribute → increment counter, validate sequence order
+1. Receive `<ib><offline_preview count="N"/>` → start tracking, reset counters
+2. Process messages with `offline` attribute → increment counter
 3. Receive `<ib><offline/>` → sync complete
 4. Emit `OfflineSyncCompleted` event
 
 **Timeout fallback:** If the server advertises offline messages via `offline_preview` but never sends the end marker (`<ib><offline/>`), the client applies a 60-second timeout (matching WhatsApp Web's `OFFLINE_STANZA_TIMEOUT_MS`). On timeout, the client logs a warning, marks sync as complete, and resumes normal operation so startup is not blocked indefinitely.
 
-**Sequence validation:** Each offline stanza carries a numeric `offline` attribute indicating its position in the delivery sequence. The client tracks the next expected sequence number and logs a warning if a stanza arrives out of order. This provides visibility into delivery ordering issues without altering processing behavior.
-
 **Concurrency gating:** During offline sync, the client restricts message processing to a single concurrent task (1 semaphore permit) to preserve ordering. Once sync completes — either by the server end marker, all expected items arriving, or timeout — the semaphore is expanded to 64 permits, switching to parallel message processing.
 
-**State reset:** On reconnect or cleanup, all offline sync state is reset (counters, sequence tracker, timing, and the semaphore is replaced with a fresh single-permit instance) so stale state does not leak into the next connection attempt.
+**State reset:** On reconnect or cleanup, all offline sync state is reset (counters, timing, and the semaphore is replaced with a fresh single-permit instance) so stale state does not leak into the next connection attempt.
 
 ## History Sync Pipeline
 

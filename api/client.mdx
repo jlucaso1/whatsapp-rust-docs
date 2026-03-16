@@ -623,13 +623,9 @@ If the server advertises offline messages but never completes delivery, a 60-sec
 3. `OfflineSyncCompleted` event is emitted
 4. Message processing switches from sequential to parallel (64 concurrent tasks)
 
-### Sequence validation
-
-The client tracks the expected sequence number for offline stanzas and logs a warning if delivery arrives out of order. This provides observability without altering processing behavior — messages are still processed in arrival order.
-
 ### State reset on reconnect
 
-All offline sync state (counters, sequence tracker, timing, concurrency semaphore) is fully reset on reconnect so stale state does not carry over to the next connection.
+All offline sync state (counters, timing, concurrency semaphore) is fully reset on reconnect so stale state does not carry over to the next connection.
 
 **Related events:** [`OfflineSyncPreview`](/concepts/events#offlinesyncpreview), [`OfflineSyncCompleted`](/concepts/events#offlinesynccompleted)
 

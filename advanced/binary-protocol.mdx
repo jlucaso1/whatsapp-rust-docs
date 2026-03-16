@@ -583,15 +583,54 @@ use wacore_binary::builder::NodeBuilder;
 
 ## Error Handling
 
+The binary protocol uses typed errors for parsing and encoding failures:
+
 ```rust
+#[derive(Debug)]
 pub enum BinaryError {
-    UnexpectedEof,
-    InvalidToken(u8),
-    InvalidListSize,
-    AttrParse(String),
-    LeftoverData(usize),
     Io(std::io::Error),
+    InvalidToken(u8),
+    InvalidNode,
+    NonStringKey,
+    AttrParse(String),
+    MissingAttr(String),
+    InvalidUtf8(std::str::Utf8Error),
+    Zlib(String),
+    Jid(JidError),
+    UnexpectedEof,
+    EmptyData,
+    LeftoverData(usize),
+    AttrList(Vec<BinaryError>),
 }
+
+pub type Result<T> = std::result::Result<T, BinaryError>;
+```
+
+### Error Descriptions
+
+| Variant | Cause |
+|---------|-------|
+| `InvalidToken(u8)` | Unknown token byte in stream |
+| `InvalidNode` | Malformed node structure |
+| `NonStringKey` | Attribute key was not a string |
+| `AttrParse(String)` | Attribute value parsing failed |
+| `MissingAttr(String)` | Required attribute missing |
+| `InvalidUtf8` | Binary data not valid UTF-8 |
+| `Zlib(String)` | Decompression error |
+| `Jid(JidError)` | Invalid JID format |
+| `UnexpectedEof` | Premature end of data |
+| `EmptyData` | Expected payload was empty |
+| `LeftoverData(usize)` | Extra bytes after decoding |
+| `AttrList(Vec)` | Multiple attribute errors |
+
+### Error Conversion
+
+`BinaryError` implements `From` for common error types:
+
+```rust
+impl From<std::io::Error> for BinaryError { /* ... */ }
+impl From<std::str::Utf8Error> for BinaryError { /* ... */ }
+impl From<JidError> for BinaryError { /* ... */ }
 ```
 
 Location: `wacore/binary/src/error.rs`

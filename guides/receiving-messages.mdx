@@ -468,6 +468,8 @@ See `\1`
 
 ## Error Handling
 
+### Event-Level Errors
+
 ```rust
 .on_event(|event, client| async move {
     match event {
@@ -493,6 +495,43 @@ async fn process_message(
 ) -> Result<()> {
     // Your message processing logic
     Ok(())
+}
+```
+
+### Signal Protocol Errors
+
+The library uses typed errors for decryption failures:
+
+```rust
+use wacore_libsignal::protocol::SignalProtocolError;
+
+// Common decryption errors (handled automatically by the library):
+// - SessionNotFound: No session exists for the sender
+// - UntrustedIdentity: Identity key changed (auto-cleared and retried)
+// - DuplicatedMessage: Message counter already seen (replay protection)
+// - InvalidMessage: Malformed ciphertext
+```
+
+### Retry Mechanism
+
+For messages that fail decryption, the library automatically:
+1. Detects retry-eligible errors (no session, untrusted identity)
+2. Sends retry receipt to sender
+3. Waits for re-encrypted message
+4. Processes the retry
+
+```rust
+Event::UndecryptableMessage(undec) => {
+    match undec.decrypt_fail_mode {
+        DecryptFailMode::Show => {
+            // Show placeholder to user
+            println!("Message from {} could not be decrypted", 
+                undec.info.source.sender);
+        }
+        DecryptFailMode::Hide => {
+            // Silently ignore (e.g., view-once already consumed)
+        }
+    }
 }
 ```
 

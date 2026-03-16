@@ -129,6 +129,7 @@ pub enum ReceiptType {
     Delivered,      // Message delivered to device
     Sender,         // Sender receipt
     Retry,          // Decryption retry request
+    EncRekeyRetry,  // VoIP call encryption re-keying retry
     Read,           // Message read by recipient
     ReadSelf,       // Message read on another device
     Played,         // Media played by recipient
@@ -163,6 +164,10 @@ pub enum ReceiptType {
 
 <ParamField path="Retry" type="variant">
   Retry receipt (type=`"retry"`). Recipient failed to decrypt the message and is requesting a retry. Automatically handled by the library.
+</ParamField>
+
+<ParamField path="EncRekeyRetry" type="variant">
+  VoIP call encryption re-keying retry receipt (type=`"enc_rekey_retry"`). Sent when a peer fails to decrypt VoIP call encryption data and needs the sender to re-key. Uses an `<enc_rekey>` child element (with `call-creator`, `call-id`, `count` attributes) instead of the standard `<retry>` child. Automatically handled by the library.
 </ParamField>
 
 <ParamField path="Sender" type="variant">

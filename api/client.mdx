@@ -513,9 +513,10 @@ pub fn contacts(&self) -> Contacts<'_>
 Access contact operations.
 
 **Methods:**
-- `get_user_info(jids: &[Jid])` - Get profile info for users
+- `is_on_whatsapp(phones: &[&str])` - Check phone numbers on WhatsApp
+- `get_info(phones: &[&str])` - Get contact info for phone numbers (LID, business status, picture ID)
+- `get_user_info(jids: &[Jid])` - Get profile info for users by JID
 - `get_profile_picture(jid: &Jid, preview: bool)` - Get profile picture URL (preview or full size)
-- `is_on_whatsapp(phones: &[&str])` - Check phone numbers
 
 ### tc_token
 
@@ -528,6 +529,68 @@ Access trust/privacy token operations.
 **Methods:**
 - `issue_tokens(jids: &[Jid])` - Request tokens for contacts
 - `prune_expired()` - Remove expired tokens
+- `get(jid: &str)` - Get a stored token by JID
+- `get_all_jids()` - List all JIDs with stored tokens
+
+### chat_actions
+
+```rust
+pub fn chat_actions(self: &Arc<Self>) -> ChatActions<'_>
+```
+
+Access chat management actions. Requires `Arc<Client>` because app state mutations need key access.
+
+**Methods:**
+- `archive_chat(jid: &Jid)` - Archive a chat
+- `unarchive_chat(jid: &Jid)` - Unarchive a chat
+- `pin_chat(jid: &Jid)` - Pin a chat
+- `unpin_chat(jid: &Jid)` - Unpin a chat
+- `mute_chat(jid: &Jid)` - Mute a chat indefinitely
+- `mute_chat_until(jid: &Jid, mute_end_timestamp_ms: i64)` - Mute until a specific time
+- `unmute_chat(jid: &Jid)` - Unmute a chat
+- `star_message(chat_jid: &Jid, participant_jid: Option<&Jid>, message_id: &str, from_me: bool)` - Star a message
+- `unstar_message(chat_jid: &Jid, participant_jid: Option<&Jid>, message_id: &str, from_me: bool)` - Unstar a message
+
+### status
+
+```rust
+pub fn status(&self) -> Status<'_>
+```
+
+Access status/story operations.
+
+**Methods:**
+- `send_text(text, background_argb, font, recipients, options)` - Post a text status
+- `send_image(upload, thumbnail, caption, recipients, options)` - Post an image status
+- `send_video(upload, thumbnail, duration_seconds, caption, recipients, options)` - Post a video status
+- `send_raw(message, recipients, options)` - Post any message type as a status
+- `revoke(message_id, recipients, options)` - Delete a posted status
+
+### mex
+
+```rust
+pub fn mex(&self) -> Mex<'_>
+```
+
+Access Meta Exchange (GraphQL) operations.
+
+**Methods:**
+- `query(request: MexRequest)` - Execute a GraphQL query
+- `mutate(request: MexRequest)` - Execute a GraphQL mutation
+
+### profile
+
+```rust
+pub fn profile(self: &Arc<Self>) -> Profile<'_>
+```
+
+Access profile operations. Requires `Arc<Client>` because push name updates need app state sync.
+
+**Methods:**
+- `set_push_name(name: &str)` - Set display name (syncs across devices)
+- `set_status_text(text: &str)` - Set profile "About" text
+- `set_profile_picture(image_data: Vec<u8>)` - Set profile picture (JPEG)
+- `remove_profile_picture()` - Remove profile picture
 
 ---
 

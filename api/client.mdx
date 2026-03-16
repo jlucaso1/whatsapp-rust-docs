@@ -398,8 +398,8 @@ Edits a previously sent message.
 ```rust
 pub async fn revoke_message(
     &self,
-    chat: Jid,
-    message_id: String,
+    to: Jid,
+    message_id: impl Into<String>,
     revoke_type: RevokeType
 ) -> Result<(), anyhow::Error>
 ```
@@ -508,9 +508,65 @@ pub fn contacts(&self) -> Contacts<'_>
 Access contact operations.
 
 **Methods:**
+- `is_on_whatsapp(phones: &[&str])` - Check phone numbers
+- `get_info(phones: &[&str])` - Get contact info for phone numbers
 - `get_user_info(jids: &[Jid])` - Get profile info for users
 - `get_profile_picture(jid: &Jid, preview: bool)` - Get profile picture URL (preview or full size)
-- `is_on_whatsapp(phones: &[&str])` - Check phone numbers
+
+### chatstate
+
+```rust
+pub fn chatstate(&self) -> Chatstate<'_>
+```
+
+Access typing indicator operations.
+
+**Methods:**
+- `send(to: &Jid, state: ChatStateType)` - Send chat state
+- `send_composing(to: &Jid)` - Send typing indicator
+- `send_recording(to: &Jid)` - Send recording indicator
+- `send_paused(to: &Jid)` - Send paused indicator
+
+### status
+
+```rust
+pub fn status(&self) -> Status<'_>
+```
+
+Access status/story operations.
+
+**Methods:**
+- `send_text(text, background_argb, font, recipients, options)` - Post text status
+- `send_image(upload, thumbnail, caption, recipients, options)` - Post image status
+- `send_video(upload, thumbnail, duration, caption, recipients, options)` - Post video status
+- `send_raw(message, recipients, options)` - Post custom status
+- `revoke(message_id, recipients, options)` - Delete a status
+
+### profile
+
+```rust
+pub fn profile(&self) -> Profile<'_>
+```
+
+Access profile management operations.
+
+**Methods:**
+- `set_push_name(name)` - Update display name
+- `set_status_text(text)` - Update "About" text
+- `set_profile_picture(data)` - Update profile picture
+- `remove_profile_picture()` - Remove profile picture
+
+### mex
+
+```rust
+pub fn mex(&self) -> Mex<'_>
+```
+
+Access Meta Exchange GraphQL operations.
+
+**Methods:**
+- `query(request: MexRequest)` - Execute a GraphQL query
+- `mutate(request: MexRequest)` - Execute a GraphQL mutation
 
 ### tc_token
 

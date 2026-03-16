@@ -138,10 +138,13 @@ Returned by `block()` and `unblock()` operations:
 
 ```rust
 pub enum IqError {
-    // Network/protocol errors
     Timeout,
-    InvalidResponse,
-    // ... other variants
+    NotConnected,
+    Socket(SocketError),
+    Disconnected(Node),
+    ServerError { code: u16, text: String },
+    InternalChannelClosed,
+    ParseError(anyhow::Error),
 }
 ```
 

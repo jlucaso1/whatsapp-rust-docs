@@ -22,10 +22,10 @@ The Bot is the **recommended way** to use whatsapp-rust. It provides sensible de
 ## Basic Usage
 
 ```rust
-use whatsapp_rust::Bot;
-use whatsapp_rust::types::events::Event;
+use whatsapp_rust::bot::Bot;
+use wacore::types::events::Event;
 
-let bot = Bot::builder()
+let mut bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport)
     .with_http_client(http_client)
@@ -43,8 +43,8 @@ let bot = Bot::builder()
     .build()
     .await?;
 
-let mut bot_handle = bot.run().await?;
-bot_handle.await?;
+let handle = bot.run().await?;
+handle.await?;
 ```
 
 ---
@@ -310,7 +310,7 @@ Configures pair code authentication to run automatically after connecting.
 **Example:**
 ```rust
 use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
-use whatsapp_rust::types::events::Event;
+use wacore::types::events::Event;
 
 Bot::builder()
     .with_pair_code(PairCodeOptions {
@@ -418,14 +418,16 @@ For bots that only need to respond to new messages, enabling this can significan
 ### build
 
 ```rust
-pub async fn build(self) -> Result<Bot>
+pub async fn build(self) -> Result<Bot, BotBuilderError>
 ```
 
 Builds the bot with the configured options.
 
-**Errors:**
-- Missing required fields (backend, transport_factory, http_client)
-- Backend initialization failures
+**Errors (`BotBuilderError`):**
+- `MissingBackend` - No storage backend provided
+- `MissingTransport` - No transport factory provided
+- `MissingHttpClient` - No HTTP client provided
+- `Other(anyhow::Error)` - Backend initialization or other failures
 
 ### client
 
@@ -519,8 +521,11 @@ use whatsapp_rust::bot::MessageContext;
     if let Event::Message(msg, info) = event {
         let ctx = MessageContext { message: msg, info, client };
         let reply = wa::Message {
-            conversation: Some("Quoted reply!".to_string()),
-            context_info: Some(ctx.build_quote_context()),
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Quoted reply!".to_string()),
+                context_info: Some(Box::new(ctx.build_quote_context())),
+                ..Default::default()
+            })),
             ..Default::default()
         };
         let _ = ctx.send_message(reply).await;
@@ -557,9 +562,9 @@ Deletes a message in the same chat.
 ## Complete Example
 
 ```rust
-use whatsapp_rust::Bot;
+use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust::types::events::Event;
+use wacore::types::events::Event;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use waproto::whatsapp as wa;

@@ -66,11 +66,19 @@ async fn has_session(&self, address: &str) -> Result<bool>;
 /// Store a pre-key
 async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()>;
 
+/// Store multiple pre-keys in a single batch operation.
+/// Default implementation falls back to individual store_prekey calls.
+async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()>;
+
 /// Load a pre-key by ID
 async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
 
 /// Remove a pre-key
 async fn remove_prekey(&self, id: u32) -> Result<()>;
+
+/// Get the maximum pre-key ID currently stored, or 0 if none exist.
+/// Used for migration when next_pre_key_id counter is not yet initialized.
+async fn get_max_prekey_id(&self) -> Result<u32>;
 ```
 
 ### Signed PreKey Operations
@@ -144,6 +152,9 @@ async fn get_mutation_mac(&self, name: &str, index_mac: &[u8]) -> Result<Option<
 
 /// Delete mutation MACs by their index MACs
 async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
+
+/// Get the most recently stored app state sync key ID
+async fn get_latest_sync_key_id(&self) -> Result<Option<Vec<u8>>>;
 ```
 
 ## ProtocolStore Trait
@@ -354,21 +365,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create store
     let store = Arc::new(SqliteStore::new("whatsapp.db").await?);
     
-    // Use with client
-    let mut client = Client::new();
-    client.set_store(store.clone());
-    
+    // Use with Bot builder (recommended)
+    let mut bot = whatsapp_rust::bot::Bot::builder()
+        .with_backend(store.clone())
+        // ... transport and http client
+        .build()
+        .await?;
+
     // Store implements all traits
     // SignalStore
     store.put_identity("address@s.whatsapp.net", [0u8; 32]).await?;
     let identity = store.load_identity("address@s.whatsapp.net").await?;
-    
+
     // AppSyncStore
     let version = store.get_version("regular").await?;
-    
+
     // ProtocolStore
     let devices = store.get_skdm_recipients("group@g.us").await?;
-    
+
     // DeviceStore
     if store.exists().await? {
         let device = store.load().await?;

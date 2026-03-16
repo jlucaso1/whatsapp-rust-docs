@@ -70,7 +70,7 @@ For streaming downloads, the writer is seeked back to position 0 before retrying
 
 ## download_to_file
 
-Download media and write directly to a file.
+Download media and write to a file. Note that this method buffers the entire file in memory before writing (it calls `download()` internally). For true streaming downloads, use `download_to_writer` instead.
 
 ```rust
 pub async fn download_to_file<W: Write + Seek + Send + Unpin>(

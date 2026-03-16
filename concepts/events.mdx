@@ -479,14 +479,18 @@ pub struct Receipt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ReceiptType {
-    Delivery,
+    Delivered,
+    Sender,
+    Retry,
     Read,
     ReadSelf,
     Played,
-    Sender,
-    Retry,
+    PlayedSelf,
     ServerError,
     Inactive,
+    PeerMsg,
+    HistorySync,
+    Other(String),
 }
 ```
 

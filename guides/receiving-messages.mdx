@@ -347,15 +347,18 @@ See `\1`
 ### Sending Read Receipts
 
 ```rust
-// Mark a message as read
-client.send_read_receipt(&message_info).await?;
-
-// Mark multiple messages as read
-let message_ids = vec!["msg1", "msg2", "msg3"];
-client.send_read_receipts(
+// Mark a single message as read (DM)
+client.mark_as_read(
     &chat_jid,
-    &message_ids,
-    &sender_jid,
+    None, // No sender for DMs
+    vec!["msg1".to_string()],
+).await?;
+
+// Mark multiple messages as read (group)
+client.mark_as_read(
+    &group_jid,
+    Some(&sender_jid), // Must specify sender in groups
+    vec!["msg1".to_string(), "msg2".to_string(), "msg3".to_string()],
 ).await?;
 ```
 
@@ -408,8 +411,12 @@ impl EncHandler for CustomEncHandler {
     }
 }
 
-// Register the handler
-client.register_enc_handler("custom_type", Arc::new(CustomEncHandler));
+// Register the handler via BotBuilder
+let bot = Bot::builder()
+    .with_enc_handler("custom_type", CustomEncHandler)
+    // ... other configuration
+    .build()
+    .await?;
 ```
 
 See `\1`

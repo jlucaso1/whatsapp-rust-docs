@@ -490,24 +490,20 @@ The HTTP client is primarily used for media operations in whatsapp-rust:
 
 ### Media Upload Flow
 
+The client manages media connections internally. Use the high-level `upload` method instead of building requests manually:
+
 ```rust
-// 1. Get media upload token
-let media_conn = client.refresh_media_conn().await?;
+use whatsapp_rust::download::MediaType;
 
-// 2. Encrypt media
-let (encrypted, media_key, file_enc_sha256, file_sha256) = encrypt_media(&media_bytes)?;
-
-// 3. Upload to WhatsApp servers
-let request = HttpRequest::post(&media_conn.upload_url)
-    .with_header("Authorization", &media_conn.auth)
-    .with_header("Content-Type", "application/octet-stream")
-    .with_body(encrypted);
-
-let response = http_client.execute(request).await?;
-
-// 4. Parse response for direct_path and handle
-let upload_result = parse_upload_response(&response.body)?;
+// Upload handles encryption, auth, and CDN host selection automatically
+let upload_response = client.upload(media_bytes, MediaType::Image).await?;
 ```
+
+Under the hood, the client uses the HTTP client to:
+1. Fetch media connection credentials from WhatsApp servers
+2. Encrypt the media with AES-256-CBC
+3. Upload to the CDN with proper auth headers
+4. Parse the response for `direct_path` and file hashes
 
 ### Media Download Flow
 

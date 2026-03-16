@@ -445,20 +445,9 @@ Media connections have two TTL values:
 
 The client uses the minimum of these two values to determine when the cached connection has expired. When expired, the next media operation automatically fetches fresh credentials.
 
-### Manual refresh
+### Internal refresh
 
-For advanced use cases:
-
-```rust
-// Force refresh media connection
-let media_conn = client.refresh_media_conn(true).await?;
-
-println!("Auth token: {}", media_conn.auth);
-println!("Hosts: {:?}", media_conn.hosts);
-
-// Invalidate cached connection (next operation will fetch fresh credentials)
-client.invalidate_media_conn().await;
-```
+Media connection refresh and invalidation are managed internally by the client. When the CDN rejects a request (401/403/404/410), the client automatically invalidates the cached connection and fetches fresh credentials before retrying. You don't need to manage this manually.
 
 ## Best Practices
 

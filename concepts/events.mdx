@@ -923,6 +923,10 @@ Event::HistorySync(HistorySync)
 
 **HistorySync:** Protobuf message containing chat history
 
+<Note>
+History sync data is processed through a RAM-optimized pipeline. The raw protobuf is parsed with a hand-rolled field walker (not a full decode) and conversations are streamed through a bounded channel (capacity 4) as zero-copy `Bytes` slices. If no event handlers are registered, conversation extraction is skipped entirely at the protobuf level.
+</Note>
+
 ### OfflineSyncPreview
 
 **Emitted:** Preview of pending offline sync data when reconnecting
@@ -1144,25 +1148,32 @@ tokio::spawn(async move {
 
 ### LazyConversation
 
-**Purpose:** Avoid parsing large protobuf messages unless needed
+**Purpose:** Avoid parsing large protobuf messages unless needed. This is a key part of the history sync RAM optimization — raw conversation bytes flow through the pipeline as zero-copy `Bytes` slices, and protobuf decoding only happens if your code actually accesses the data.
 
 ```rust
-// wacore/src/types/events.rs:42-97
 pub struct LazyConversation {
-    raw_bytes: Bytes,                    // Zero-copy bytes
-    parsed: Arc<OnceLock<wa::Conversation>>,  // Parse once
+    raw_bytes: Bytes,                          // Zero-copy reference-counted bytes
+    parsed: Arc<OnceLock<wa::Conversation>>,   // Parsed on first access
 }
 
 impl LazyConversation {
-    pub fn get(&self) -> Option<&wa::Conversation> {
-        // Parse on first access
-        let conv = self.parsed.get_or_init(|| 
-            wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default()
-        );
-        if conv.id.is_empty() { None } else { Some(conv) }
-    }
+    /// Creates from owned bytes
+    pub fn new(raw_bytes: Vec<u8>) -> Self;
+
+    /// True zero-copy from existing Bytes (used by history sync pipeline)
+    pub fn from_bytes(raw_bytes: Bytes) -> Self;
+
+    /// Parse on first access, returns None if conversation ID is empty
+    pub fn get(&self) -> Option<&wa::Conversation>;
+
+    /// Parse on first access, panics on failure
+    pub fn conversation(&self) -> &wa::Conversation;
 }
 ```
+
+**Memory optimization:** On first parse, the `messages` field is immediately cleared and shrunk (`messages.clear()` + `messages.shrink_to_fit()`) because history sync conversations embed full `WebMessageInfo` arrays that can be very large. This prevents parsed conversations from retaining message data in memory.
+
+**Cloning is O(1)** — both `Bytes` and `Arc<OnceLock<...>>` are reference-counted, so cloning a `LazyConversation` only increments atomic counters.
 
 **Usage:**
 ```rust
@@ -1170,10 +1181,11 @@ Event::JoinedGroup(lazy_conv) => {
     // No parsing cost unless you access it
     if interested_in_group() {
         if let Some(conv) = lazy_conv.get() {
-            // Parse happens here
+            // Parse happens here (only once, then cached)
             process_group(conv);
         }
     }
+    // If you never call .get(), the raw bytes are never decoded
 }
 ```
 

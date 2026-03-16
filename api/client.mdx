@@ -576,6 +576,20 @@ Access to the persistence manager for multi-account scenarios.
 
 ## History Sync
 
+History sync transfers chat history from the phone to the linked device. The client processes history sync notifications through a RAM-optimized pipeline that minimizes peak memory usage.
+
+### Processing pipeline
+
+When a history sync notification arrives, the client:
+
+1. Sends a `HistorySync` receipt immediately (so the phone knows delivery succeeded)
+2. Retrieves the data — either from an inline payload (moved via `.take()`, not cloned) or by stream-decrypting an external blob in 8KB chunks
+3. Runs decompression and protobuf parsing on a blocking thread (`tokio::task::spawn_blocking`) to avoid stalling the async runtime
+4. Streams conversation bytes through a bounded channel (capacity 4) to the event dispatcher
+5. Wraps each conversation in a `LazyConversation` for zero-copy delivery to event handlers
+
+If no event handlers are registered, the callback is `None` and conversation extraction is skipped entirely at the protobuf level — only the pushname field is extracted.
+
 ### set_skip_history_sync
 
 ```rust
@@ -583,6 +597,8 @@ pub fn set_skip_history_sync(&self, enabled: bool)
 ```
 
 Enable or disable skipping of history sync notifications at runtime.
+
+When skipping is enabled, the client sends a receipt (so the phone stops retrying uploads) but does not download or process any data.
 
 ### skip_history_sync_enabled
 

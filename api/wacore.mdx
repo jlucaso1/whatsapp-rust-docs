@@ -186,6 +186,10 @@ wacore is split into several workspace crates:
 
 Binary protocol encoding/decoding using WhatsApp's custom format.
 
+<Note>
+  `wacore-binary` supports both **nightly** (with SIMD) and **stable** Rust. The `simd` feature is enabled by default and uses `portable_simd` for optimized encoding/decoding. Disable it for stable Rust compatibility.
+</Note>
+
 ```rust
 use wacore_binary::{
     jid::Jid,
@@ -201,6 +205,19 @@ let node = NodeBuilder::new("message")
 
 let bytes = marshal(&node)?;
 let decoded = unmarshal_ref(&bytes)?;
+```
+
+**Feature flags:**
+
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `simd` | SIMD-accelerated encoding/decoding (requires nightly) | ✅ Yes |
+| `serde` | Serde serialization support | ❌ No |
+
+To build on stable Rust:
+
+```bash
+cargo build -p wacore-binary --no-default-features
 ```
 
 **Key exports:**

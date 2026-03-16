@@ -77,6 +77,19 @@ whatsapp-rust-sqlite-storage = { version = "0.3", default-features = false }
   The default features provide everything needed for most use cases. Only customize features if you have specific requirements.
 </Note>
 
+### wacore-binary features
+
+The `wacore-binary` crate has its own feature flags:
+
+| Feature | Description | Included by default |
+|---------|-------------|--------------------|
+| `simd` | SIMD-accelerated encoding/decoding (requires nightly Rust) | ✅ Yes |
+| `serde` | Serde serialization support | ❌ No |
+
+<Tip>
+  To use `wacore-binary` on **stable Rust**, disable the `simd` feature: `cargo build -p wacore-binary --no-default-features`. A scalar fallback provides equivalent functionality.
+</Tip>
+
 ## Custom features example
 
 If you want to use only specific features:

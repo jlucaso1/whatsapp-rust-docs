@@ -224,9 +224,14 @@ Location: `wacore/binary/src/encoder.rs:780-787`
 
 #### SIMD Optimization
 
-The encoder uses SIMD instructions for fast packing of long strings:
+The encoder can use SIMD instructions for fast packing of long strings when the `simd` feature is enabled (default). On stable Rust or when SIMD is disabled, a scalar fallback is used automatically.
+
+<Note>
+  The `simd` feature requires nightly Rust for `portable_simd`. When disabled, `wacore-binary` compiles on stable Rust with equivalent scalar implementations.
+</Note>
 
 ```rust
+#[cfg(feature = "simd")]
 while input_bytes.len() >= 16 {
     let input = u8x16::from_slice(chunk);
     let indices = input.saturating_sub(nibble_base);
@@ -238,6 +243,12 @@ while input_bytes.len() >= 16 {
     let packed = (evens << Simd::splat(4)) | odds;
     self.write_raw_bytes(&packed.to_array()[..8])?;
 }
+```
+
+To build without SIMD (stable Rust compatible):
+
+```bash
+cargo build -p wacore-binary --no-default-features
 ```
 
 Location: `wacore/binary/src/encoder.rs:809-824`

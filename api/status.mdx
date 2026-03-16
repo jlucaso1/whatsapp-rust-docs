@@ -90,7 +90,7 @@ use whatsapp_rust::upload::MediaType;
 
 // Upload the image first
 let image_data = std::fs::read("photo.jpg")?;
-let upload = client.upload(&image_data, MediaType::Image).await?;
+let upload = client.upload(image_data, MediaType::Image).await?;
 
 // Create thumbnail (simplified - use proper JPEG encoding)
 let thumbnail = create_thumbnail(&image_data)?;
@@ -137,7 +137,7 @@ pub async fn send_video(
 use whatsapp_rust::upload::MediaType;
 
 let video_data = std::fs::read("video.mp4")?;
-let upload = client.upload(&video_data, MediaType::Video).await?;
+let upload = client.upload(video_data.clone(), MediaType::Video).await?;
 let thumbnail = extract_video_thumbnail(&video_data)?;
 
 let recipients = vec![Jid::pn("15551234567")];

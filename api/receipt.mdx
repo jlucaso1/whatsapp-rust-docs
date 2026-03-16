@@ -108,9 +108,10 @@ pub(crate) async fn send_delivery_receipt(
 
 Delivery receipts are automatically sent for all incoming messages **except**:
 
-- Your own messages (`is_from_me = true`)
+- Your own messages (`is_from_me = true`), unless the message category is `"peer"`
 - Messages without an ID
 - Status broadcast messages (`status@broadcast`)
+- Newsletter messages
 
 For group messages, the receipt includes a `participant` attribute identifying the sender.
 
@@ -180,17 +181,16 @@ pub enum ReceiptType {
 You can listen for receipt events to track message delivery and read status:
 
 ```rust
-use whatsapp_rust::types::events::Event;
+use wacore::types::events::Event;
 
-let mut events = client.subscribe();
-
-while let Some(event) = events.recv().await {
-    match event {
-        Event::Receipt(receipt) => {
+Bot::builder()
+    // ... configuration
+    .on_event(|event, client| async move {
+        if let Event::Receipt(receipt) = event {
             println!("Receipt type: {:?}", receipt.r#type);
             println!("From: {}", receipt.source.sender);
             println!("Message IDs: {:?}", receipt.message_ids);
-            
+
             match receipt.r#type {
                 ReceiptType::Delivered => {
                     println!("Message delivered");
@@ -204,9 +204,8 @@ while let Some(event) = events.recv().await {
                 _ => {}
             }
         }
-        _ => {}
-    }
-}
+    })
+    // ...
 ```
 
 ### Receipt Event Structure
@@ -252,7 +251,9 @@ Track message delivery and read status:
 
 ```rust
 use std::collections::HashMap;
-use whatsapp_rust::types::events::{Event, ReceiptType};
+use wacore::types::events::{Event, ReceiptType};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Default)]
 struct MessageTracker {
@@ -284,14 +285,19 @@ impl MessageTracker {
     }
 }
 
-let mut tracker = MessageTracker::default();
-let mut events = client.subscribe();
+let tracker = Arc::new(Mutex::new(MessageTracker::default()));
 
-while let Some(event) = events.recv().await {
-    if let Event::Receipt(receipt) = event {
-        tracker.track_receipt(&receipt);
-    }
-}
+Bot::builder()
+    // ... configuration
+    .on_event(move |event, _client| {
+        let tracker = tracker.clone();
+        async move {
+            if let Event::Receipt(receipt) = event {
+                tracker.lock().await.track_receipt(&receipt);
+            }
+        }
+    })
+    // ...
 ```
 
 ---

@@ -36,7 +36,7 @@ pub async fn send(
 
 **Example:**
 ```rust
-use whatsapp_rust::features::chatstate::ChatStateType;
+use whatsapp_rust::ChatStateType;
 
 let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
 
@@ -109,7 +109,7 @@ pub enum ChatStateType {
 
 **String conversion:**
 ```rust
-use whatsapp_rust::features::chatstate::ChatStateType;
+use whatsapp_rust::ChatStateType;
 
 let state = ChatStateType::Composing;
 assert_eq!(state.as_str(), "composing");
@@ -153,7 +153,7 @@ Note: Recording uses `<composing media="audio">` rather than a separate tag.
 ### Typing Indicator Lifecycle
 
 ```rust
-use whatsapp_rust::features::chatstate::ChatStateType;
+use whatsapp_rust::ChatStateType;
 
 let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
 
@@ -276,7 +276,7 @@ match client.chatstate().send_composing(&recipient).await {
 ## Complete Example
 
 ```rust
-use whatsapp_rust::features::chatstate::ChatStateType;
+use whatsapp_rust::ChatStateType;
 use std::time::Duration;
 
 let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;

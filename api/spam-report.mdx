@@ -1,0 +1,182 @@
+---
+title: Spam report
+description: Report messages and users as spam to WhatsApp
+---
+
+The spam reporting feature allows you to report messages, users, or groups as spam to WhatsApp.
+
+## Usage
+
+Report spam directly through the client:
+
+```rust
+use whatsapp_rust::{SpamReportRequest, SpamFlow};
+
+let result = client.send_spam_report(SpamReportRequest {
+    message_id: "MSG_ID".to_string(),
+    message_timestamp: 1234567890,
+    from_jid: Some(sender_jid),
+    spam_flow: SpamFlow::MessageMenu,
+    ..Default::default()
+}).await?;
+
+if let Some(report_id) = result.report_id {
+    println!("Spam reported: {}", report_id);
+}
+```
+
+## Method
+
+### send_spam_report
+
+Send a spam report to WhatsApp.
+
+```rust
+pub async fn send_spam_report(
+    &self,
+    request: SpamReportRequest,
+) -> Result<SpamReportResult, IqError>
+```
+
+**Parameters:**
+- `request` - The spam report request containing message details
+
+**Returns:**
+- `SpamReportResult` - Contains the report ID if successful
+
+## Types
+
+### SpamReportRequest
+
+Request structure for spam reports.
+
+```rust
+pub struct SpamReportRequest {
+    /// The message ID being reported
+    pub message_id: String,
+    /// The timestamp of the message
+    pub message_timestamp: u64,
+    /// The JID the message was from (sender)
+    pub from_jid: Option<Jid>,
+    /// For group messages, the participant JID
+    pub participant_jid: Option<Jid>,
+    /// For group reports, the group JID
+    pub group_jid: Option<Jid>,
+    /// For group reports, the group subject/name
+    pub group_subject: Option<String>,
+    /// The type of spam flow
+    pub spam_flow: SpamFlow,
+    /// Raw message bytes (protobuf encoded)
+    pub raw_message: Option<Vec<u8>>,
+    /// Media type of the message (if applicable)
+    pub media_type: Option<String>,
+    /// Local message type
+    pub local_message_type: Option<String>,
+}
+```
+
+### SpamFlow
+
+The type of spam flow indicating the source of the report.
+
+```rust
+pub enum SpamFlow {
+    /// Report triggered from group spam banner
+    GroupSpamBannerReport,
+    /// Report triggered from group info screen
+    GroupInfoReport,
+    /// Report triggered from message context menu (default)
+    MessageMenu,
+    /// Report triggered from contact info screen
+    ContactInfo,
+    /// Report triggered from status view
+    StatusReport,
+}
+```
+
+### SpamReportResult
+
+Result from a spam report submission.
+
+```rust
+pub struct SpamReportResult {
+    /// The report ID returned by the server
+    pub report_id: Option<String>,
+}
+```
+
+## Examples
+
+### Report a message from context menu
+
+```rust
+use whatsapp_rust::{SpamReportRequest, SpamFlow, Jid};
+
+let request = SpamReportRequest {
+    message_id: "3EB0A1B2C3D4E5F6".to_string(),
+    message_timestamp: 1709234567,
+    from_jid: Some(Jid::pn("15551234567")),
+    spam_flow: SpamFlow::MessageMenu,
+    ..Default::default()
+};
+
+let result = client.send_spam_report(request).await?;
+```
+
+### Report a group message
+
+```rust
+use whatsapp_rust::{SpamReportRequest, SpamFlow, Jid};
+
+let request = SpamReportRequest {
+    message_id: "3EB0A1B2C3D4E5F6".to_string(),
+    message_timestamp: 1709234567,
+    group_jid: Some(Jid::group("120363025918861132")),
+    group_subject: Some("Spam Group".to_string()),
+    participant_jid: Some(Jid::pn("15551234567")),
+    spam_flow: SpamFlow::GroupInfoReport,
+    ..Default::default()
+};
+
+let result = client.send_spam_report(request).await?;
+```
+
+### Report with raw message data
+
+Include the raw message bytes for more detailed reporting:
+
+```rust
+use whatsapp_rust::{SpamReportRequest, SpamFlow, Jid};
+
+let request = SpamReportRequest {
+    message_id: "3EB0A1B2C3D4E5F6".to_string(),
+    message_timestamp: 1709234567,
+    from_jid: Some(Jid::pn("15551234567")),
+    spam_flow: SpamFlow::MessageMenu,
+    raw_message: Some(message_bytes),
+    media_type: Some("image".to_string()),
+    ..Default::default()
+};
+
+let result = client.send_spam_report(request).await?;
+```
+
+### Report from status view
+
+```rust
+use whatsapp_rust::{SpamReportRequest, SpamFlow, Jid};
+
+let request = SpamReportRequest {
+    message_id: status_message_id,
+    message_timestamp: status_timestamp,
+    from_jid: Some(status_sender_jid),
+    spam_flow: SpamFlow::StatusReport,
+    ..Default::default()
+};
+
+let result = client.send_spam_report(request).await?;
+```
+
+<Note>
+Spam reports are sent to WhatsApp's servers for review. Use this feature responsibly and only for legitimate spam or abuse.
+</Note>

@@ -92,7 +92,8 @@
               "api/profile",
               "api/chat-actions",
               "api/mex",
-              "api/tctoken"
+              "api/tctoken",
+              "api/spam-report"
             ]
           },
           {

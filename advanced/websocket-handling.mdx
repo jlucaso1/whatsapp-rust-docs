@@ -728,6 +728,51 @@ loop {
 }
 ```
 
+## Keepalive and Dead Socket Detection
+
+The keepalive loop monitors connection health, matching WhatsApp Web's behavior precisely.
+
+### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `KEEP_ALIVE_INTERVAL_MIN` | 15s | Minimum interval between pings |
+| `KEEP_ALIVE_INTERVAL_MAX` | 30s | Maximum interval between pings |
+| `KEEP_ALIVE_RESPONSE_DEADLINE` | 20s | Timeout waiting for pong response |
+| `DEAD_SOCKET_TIME` | 20s | Max silence after a send before declaring socket dead |
+
+### Keepalive loop behavior
+
+The loop runs every 15-30 seconds (randomized, matching WA Web's `15 * (1 + random())` formula) and performs these checks in order:
+
+1. **Skip if recently active** — if data was received within `KEEP_ALIVE_INTERVAL_MIN` (15s), the connection is proven alive; skip the ping and reset the error counter
+2. **Send keepalive ping** — sends the ping *before* the dead-socket check so that a successful pong updates `last_data_received_ms` and prevents false-positive dead-socket detection on idle-but-healthy connections
+3. **RTT-adjusted clock skew** — on pong, calculates server time offset using the midpoint formula: `(startTime + rtt/2) / 1000 - serverTime`, matching WA Web's `onClockSkewUpdate`
+4. **Skip ping when IQ pending** — if there are already pending IQ responses, the connection is implicitly being tested; skip the explicit ping
+
+### Dead socket detection
+
+Dead socket detection mirrors WA Web's `deadSocketTimer` pattern:
+
+- **Not armed** if nothing was ever sent (both timestamps are zero)
+- **Cancelled** if data was received after the last send
+- **Fires** if `DEAD_SOCKET_TIME` (20s) has elapsed since the last send with no receive
+
+When a dead socket is detected after a transient keepalive failure, the client calls `reconnect_immediately()` and exits the keepalive loop.
+
+### Error classification
+
+Keepalive errors are classified exhaustively (compile-time enforced for new error variants):
+
+| Error type | Classification | Behavior |
+|------------|---------------|----------|
+| `Socket`, `Disconnected`, `NotConnected`, `InternalChannelClosed` | Fatal | Exit keepalive loop immediately |
+| `Timeout`, `ServerError`, `ParseError` | Transient | Increment error count, check dead socket |
+
+### Periodic maintenance
+
+Approximately every 12 keepalive ticks (~5 minutes), the keepalive loop runs background cleanup of expired sent messages from the database, based on `CacheConfig::sent_message_ttl_secs`.
+
 ## Performance Considerations
 
 ### Buffer Sizing

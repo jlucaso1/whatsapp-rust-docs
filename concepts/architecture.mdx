@@ -284,7 +284,7 @@ pub(crate) connection_generation: Arc<AtomicU64>, // Detect stale tasks
 
 ### Keepalive Loop
 
-Monitors connection health with periodic pings:
+Monitors connection health with periodic pings, matching WhatsApp Web's keepalive protocol:
 
 ```rust
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(15);
@@ -294,10 +294,15 @@ const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
 ```
 
 **Behavior:**
-- Sends ping every 15-30 seconds (randomized)
+- Sends ping every 15-30 seconds (randomized, matching WA Web's `15 * (1 + random())`)
+- Skips ping if data was received within the minimum interval (connection proven alive)
+- Sends ping *before* dead-socket check to prevent false-positive reconnects on idle-but-healthy connections
 - Waits up to 20s for response
 - Detects dead socket if no data received for 20s after a send, triggering immediate reconnection
-- Fatal errors (`SocketClosed`, `Disconnected`, `NotConnected`) cause the keepalive loop to exit immediately
+- Fatal errors (`Socket`, `Disconnected`, `NotConnected`, `InternalChannelClosed`) cause the keepalive loop to exit immediately
+- Error classification is exhaustive and compile-time enforced — adding a new error variant without handling it causes a build failure
+
+See [WebSocket & Noise Protocol - Keepalive](/advanced/websocket-handling#keepalive-and-dead-socket-detection) for detailed keepalive internals.
 
 ### Offline sync
 
@@ -326,6 +331,35 @@ pub(crate) struct OfflineSyncMetrics {
 **Concurrency gating:** During offline sync, the client restricts message processing to a single concurrent task (1 semaphore permit) to preserve ordering. Once sync completes — either by the server end marker, all expected items arriving, or timeout — the semaphore is expanded to 64 permits, switching to parallel message processing.
 
 **State reset:** On reconnect or cleanup, all offline sync state is reset (counters, sequence tracker, timing, and the semaphore is replaced with a fresh single-permit instance) so stale state does not leak into the next connection attempt.
+
+## History Sync Pipeline
+
+History sync transfers chat history from the phone to the linked device. The pipeline is designed for minimal RAM usage through a multi-layered zero-copy strategy.
+
+### Processing flow
+
+```mermaid
+graph LR
+    A[Phone uploads<br/>compressed blob] --> B[Download &<br/>stream-decrypt]
+    B --> C[Decompress<br/>zlib]
+    C --> D[Manual protobuf<br/>field walking]
+    D --> E[Bounded channel<br/>cap=4]
+    E --> F[LazyConversation<br/>zero-copy]
+    F --> G[Event dispatch]
+```
+
+### RAM optimization layers
+
+1. **Immediate drop of compressed data** — after decompression, the compressed input is dropped so peak memory equals `max(compressed, decompressed)` rather than both combined
+2. **Hand-rolled protobuf parser** — instead of decoding the entire `HistorySync` message tree (which allocates every nested message), the core walks varint tags manually and only extracts field 2 (conversations) and field 7 (pushnames)
+3. **`Bytes` zero-copy slicing** — decompressed data is wrapped in a reference-counted `Bytes` buffer; each conversation is extracted as `buf.slice(pos..end)`, which is an Arc refcount increment with no per-conversation heap allocation
+4. **Bounded channel streaming** — a `tokio::sync::mpsc::channel::<Bytes>(4)` streams conversation bytes from the blocking parser thread to the async event dispatcher, providing backpressure with only ~4 conversations in-flight
+5. **`LazyConversation` wrapper** — raw `Bytes` are wrapped without parsing; protobuf decoding only happens if the event handler calls `.get()` or `.conversation()`. On first parse, embedded messages are immediately cleared and shrunk to reclaim memory
+6. **Compile-time callback elimination** — when no event handlers are registered, the callback is `None`, causing the parser to skip conversation extraction entirely at the protobuf level
+
+### Skip mode
+
+For bots that don't need chat history, `skip_history_sync()` sends a receipt so the phone stops retrying uploads but downloads nothing. See [Bot - History Sync](/api/bot#history-sync).
 
 ## Concurrency Patterns
 

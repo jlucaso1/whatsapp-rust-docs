@@ -372,6 +372,20 @@ See [Cache Configuration](#cache-configuration-reference) for available cache ty
 
 ## History Sync
 
+History sync transfers chat history from the phone to the linked device. The processing pipeline is optimized for minimal RAM usage through zero-copy streaming and lazy parsing.
+
+### How it works
+
+When your bot receives history sync data, the pipeline:
+
+1. **Stream-decrypts** external blobs in 8KB chunks (or moves inline payloads without copying)
+2. **Decompresses** zlib data on a blocking thread with pre-allocated buffers capped at 8 MiB
+3. **Walks protobuf fields manually** instead of decoding the entire message tree — only conversations and pushnames are extracted
+4. **Streams conversations** through a bounded channel (capacity 4) as zero-copy `Bytes` slices
+5. **Wraps each conversation** in a [`LazyConversation`](/concepts/events#lazyconversation) — protobuf parsing is deferred until you call `.get()`, and embedded messages are cleared on first parse to reclaim memory
+
+If no event handlers are registered, conversation extraction is skipped entirely at the protobuf level.
+
 ### skip_history_sync
 
 ```rust
@@ -381,7 +395,7 @@ pub fn skip_history_sync(self) -> Self
 Skips processing of history sync notifications from the phone.
 
 When enabled:
-- Acknowledges history sync notifications (so phone considers them delivered)
+- Sends a receipt so the phone stops retrying uploads
 - Does not download or process historical data
 - Emits debug log for each skipped notification
 - Useful for bot use cases where message history is not needed

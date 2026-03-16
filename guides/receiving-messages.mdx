@@ -37,7 +37,7 @@ let bot = Bot::builder()
     .await?;
 ```
 
-See `\1`
+See [Bot API reference](/api/bot#event-handling) for full details.
 
 ### Available Events
 
@@ -126,7 +126,7 @@ if let Some(ctx_info) = &message.message_context_info {
 }
 ```
 
-See `\1`
+See [WAProto API reference](/api/waproto) for the full message type hierarchy.
 
 ## Message Types
 
@@ -295,7 +295,7 @@ match event {
 The client automatically handles decryption retries using the retry receipt mechanism. Failed messages trigger `Event::UndecryptableMessage`, and the client will request re-encryption from the sender.
 </Note>
 
-See `\1` and `\1`
+See [Signal Protocol](/advanced/signal-protocol) and [Events reference](/concepts/events) for more details.
 
 ### Decryption Retry Mechanism
 
@@ -342,7 +342,7 @@ The client automatically sends delivery receipts for successfully decrypted mess
 // No manual action needed
 ```
 
-See `\1`
+See [Receipt API reference](/api/receipt) for full details.
 
 ### Sending Read Receipts
 
@@ -412,7 +412,7 @@ impl EncHandler for CustomEncHandler {
 client.register_enc_handler("custom_type", Arc::new(CustomEncHandler));
 ```
 
-See `\1`
+See [Client API reference](/api/client) for handler registration details.
 
 ### Filtering Messages
 
@@ -465,7 +465,7 @@ For advanced cases (identity changes, session cleanup):
 // - Preserves old session for in-flight messages
 ```
 
-See `\1`
+See [Signal Protocol](/advanced/signal-protocol) for more on session management.
 
 ## Error Handling
 

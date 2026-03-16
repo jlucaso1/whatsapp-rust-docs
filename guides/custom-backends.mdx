@@ -16,7 +16,7 @@ The storage backend is split into four domain-grouped traits:
 3. **ProtocolStore** - WhatsApp Web protocol alignment (SKDM, LID mapping, device registry)
 4. **DeviceStore** - Device persistence operations
 
-See `\1`
+See [Store API reference](/api/store) for the complete trait definitions.
 
 ### Backend Trait
 
@@ -206,7 +206,7 @@ impl SignalStore for MyCustomStore {
 }
 ```
 
-See `\1`
+See [Store API reference](/api/store#signal-store) for all SignalStore methods.
 
 ### Step 3: Implement AppSyncStore
 
@@ -294,7 +294,7 @@ impl AppSyncStore for MyCustomStore {
 }
 ```
 
-See `\1`
+See [Store API reference](/api/store#app-sync-store) for all AppSyncStore methods.
 
 ### Step 4: Implement ProtocolStore
 
@@ -434,7 +434,7 @@ impl ProtocolStore for MyCustomStore {
 }
 ```
 
-See `\1`
+See [Store API reference](/api/store#protocol-store) for all ProtocolStore methods.
 
 ### Step 5: Implement DeviceStore
 
@@ -497,7 +497,7 @@ impl DeviceStore for MyCustomStore {
 }
 ```
 
-See `\1`
+See [Store API reference](/api/store#device-store) for all DeviceStore methods.
 
 ### Using Your Custom Backend
 
@@ -541,7 +541,7 @@ impl Transport for MyCustomTransport {
 }
 ```
 
-See `\1`
+See [Transport API reference](/api/transport) for full trait details.
 
 ### Transport Factory
 
@@ -584,7 +584,7 @@ impl TransportFactory for MyCustomTransportFactory {
 }
 ```
 
-See `\1`
+See [Transport API reference](/api/transport#transport-factory) for factory details.
 
 ### Transport Events
 
@@ -656,7 +656,7 @@ impl HttpClient for MyCustomHttpClient {
 
 The library includes a full SQLite implementation you can use as reference:
 
-See `\1`
+See [Store API reference](/api/store#sqlite-store) for the SQLite implementation details.
 
 ### Key Features
 

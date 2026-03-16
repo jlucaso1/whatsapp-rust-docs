@@ -55,7 +55,7 @@ match event {
 }
 ```
 
-See `\1`
+See [Download API reference](/api/download) for full details.
 
 ### Streaming Download
 
@@ -71,7 +71,7 @@ if let Some(video) = &message.video_message {
 }
 ```
 
-See `\1`
+See [Download API reference](/api/download#download_to_writer) for streaming details.
 
 <Note>
 Streaming downloads use ~40KB of memory regardless of file size (8KB buffer + decryption state). The entire HTTP download, decryption, and file write happen in a single blocking thread for optimal performance.
@@ -96,7 +96,7 @@ let data = client.download_from_params(
 std::fs::write("downloaded.jpg", data)?;
 ```
 
-See `\1`
+See [Download API reference](/api/download#download_from_params) for raw parameter downloads.
 
 ### Streaming from Raw Parameters
 
@@ -113,7 +113,7 @@ let file = client.download_from_params_to_writer(
 ).await?;
 ```
 
-See `\1`
+See [Download API reference](/api/download#download_from_params_to_writer) for streaming from raw parameters.
 
 ## Uploading Media
 
@@ -134,7 +134,7 @@ println!("Direct path: {}", upload.direct_path);
 println!("File SHA256: {:?}", upload.file_sha256);
 ```
 
-See `\1`
+See [Upload API reference](/api/upload) for full details.
 
 ### Using Upload Response in Messages
 

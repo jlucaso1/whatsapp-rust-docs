@@ -17,7 +17,7 @@ use whatsapp_rust::client::Client;
 let groups = client.groups();
 ```
 
-See `\1`
+See [Groups API reference](/api/groups) for the full API.
 
 ## Creating Groups
 
@@ -43,7 +43,7 @@ let result = client.groups().create_group(options).await?;
 println!("Group created with JID: {}", result.gid);
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#create_group) for full details.
 
 ### Group Creation Options
 
@@ -83,7 +83,7 @@ let options = GroupCreateOptions {
 let result = client.groups().create_group(options).await?;
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#create_group) for all options.
 
 ### Group Constraints
 
@@ -127,7 +127,7 @@ for participant in &metadata.participants {
 }
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#get_metadata) for metadata fields.
 
 ### List All Groups
 
@@ -148,7 +148,7 @@ for (jid, metadata) in groups {
 }
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#get_participating) for details.
 
 ### Query Group Info (Internal)
 
@@ -170,7 +170,7 @@ if let Some(mapping) = info.get_lid_to_pn_map() {
 }
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#query_info) for details.
 
 ## Updating Group Metadata
 
@@ -182,7 +182,7 @@ let new_subject = GroupSubject::new("Updated Group Name")?;
 client.groups().set_subject(&group_jid, new_subject).await?;
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#set_subject) for details.
 
 ### Set or Delete Group Description
 
@@ -205,7 +205,7 @@ client.groups().set_description(
 ).await?;
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#set_description) for details.
 
 <Note>
 The `prev` parameter can be used for conflict detection. If provided and the current description ID doesn't match, the operation may fail. Pass `None` if you don't need this check.
@@ -237,7 +237,7 @@ for response in responses {
 }
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#add_participants) for response codes.
 
 ### Remove Participants
 
@@ -260,7 +260,7 @@ for response in responses {
 }
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#remove_participants) for details.
 
 ### Promote to Admin
 
@@ -275,7 +275,7 @@ client.groups().promote_participants(
 println!("Promoted to admin");
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#promote_participants) for details.
 
 ### Demote Admin
 
@@ -290,7 +290,7 @@ client.groups().demote_participants(
 println!("Demoted from admin");
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#demote_participants) for details.
 
 ### Leave Group
 
@@ -299,7 +299,7 @@ client.groups().leave(&group_jid).await?;
 println!("Left the group");
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#leave) for details.
 
 ## Group Invite Links
 
@@ -315,7 +315,7 @@ let new_link = client.groups().get_invite_link(&group_jid, true).await?;
 println!("New invite link: https://chat.whatsapp.com/{}", new_link);
 ```
 
-See `\1`
+See [Groups API reference](/api/groups#get_invite_link) for details.
 
 <Warning>
 Resetting the invite link (`reset = true`) invalidates the old link. Anyone with the old link will no longer be able to join.
@@ -489,7 +489,7 @@ let participant = GroupParticipantOptions::new(lid_jid)
 // The library will automatically resolve phone numbers for LID participants
 ```
 
-See `\1`
+See [Groups API reference](/api/groups) for addressing mode details.
 
 ## Best Practices
 

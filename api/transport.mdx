@@ -236,6 +236,10 @@ The default WebSocket URL is:
 pub const WHATSAPP_WEB_WS_URL: &str = "wss://web.whatsapp.com/ws/chat";
 ```
 
+<Note>
+The `Client` wraps `create_transport()` in a **20-second timeout** matching WhatsApp Web's connect timeout. The transport itself does not enforce this timeout — it is applied at the client layer. If you use a custom transport, be aware that the client will abort the connection attempt after 20 seconds regardless of the transport's own timeout behavior.
+</Note>
+
 ### Internal Architecture
 
 TokioWebSocketTransport splits the WebSocket into separate read/write paths:

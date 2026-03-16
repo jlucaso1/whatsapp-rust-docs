@@ -268,12 +268,14 @@ pub(crate) expected_disconnect: Arc<AtomicBool>,  // Expected vs unexpected
 pub(crate) connection_generation: Arc<AtomicU64>, // Detect stale tasks
 ```
 
+**Connection timeout:** Both the transport connection and version fetch are wrapped in a 20-second timeout (`TRANSPORT_CONNECT_TIMEOUT`), matching WhatsApp Web's MQTT and DGW defaults. This prevents dead networks from blocking on the OS TCP SYN timeout (~60-75s). Both operations run in parallel via `tokio::join!`.
+
 **Reconnection flow:**
 1. Connection lost → `cleanup_connection_state()`
 2. Check `enable_auto_reconnect` → exit if disabled (401, 409, 516 disable this)
 3. Check `expected_disconnect` → immediate reconnect if expected (e.g., 515)
 4. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
-5. Wait → attempt reconnection
+5. Wait → attempt reconnection (with 20s connect timeout)
 
 **Stream error behavior:**
 - **401 (unauthorized)**: Disables auto-reconnect, emits `LoggedOut`

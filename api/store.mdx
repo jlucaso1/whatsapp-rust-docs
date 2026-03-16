@@ -301,11 +301,20 @@ async fn create(&self) -> Result<i32>;
 async fn snapshot_db(&self, name: &str, extra_content: Option<&[u8]>) -> Result<()>;
 ```
 
-## SqliteStore Implementation
+## SqliteStore implementation
 
-The default storage implementation using SQLite with Diesel ORM.
+The default storage implementation using SQLite with Diesel ORM. SQLite is bundled by default — you don't need it installed on your system.
 
-### Creating a Store
+### Bundled SQLite
+
+The `whatsapp-rust-sqlite-storage` crate enables the `bundled-sqlite` feature by default, which compiles SQLite from source and statically links it. To use a system-installed SQLite instead:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust-sqlite-storage = { version = "0.3", default-features = false }
+```
+
+### Creating a store
 
 ```rust
 use whatsapp_rust::store::SqliteStore;

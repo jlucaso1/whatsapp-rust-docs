@@ -9,7 +9,10 @@ Before installing whatsapp-rust, ensure you have:
 
 - **Rust 2024 edition** or later (requires recent stable Rust)
 - **Cargo** package manager
-- **SQLite** (if using the default storage backend)
+
+<Note>
+  SQLite is bundled by default with the `whatsapp-rust-sqlite-storage` crate, so you don't need to install it separately. If you prefer to link against a system-installed SQLite, disable the default `bundled-sqlite` feature.
+</Note>
 
 ## Add to your project
 
@@ -56,6 +59,19 @@ whatsapp-rust supports several optional features:
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 | `debug-diagnostics` | Memory diagnostics API (`MemoryDiagnostics`) | ❌ No |
+
+The `whatsapp-rust-sqlite-storage` crate has its own feature flags:
+
+| Feature | Description | Included by default |
+|---------|-------------|--------------------|
+| `bundled-sqlite` | Bundles SQLite (compiles from source, no system library needed) | ✅ Yes |
+
+To use a system-installed SQLite instead of the bundled version:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust-sqlite-storage = { version = "0.3", default-features = false }
+```
 
 <Note>
   The default features provide everything needed for most use cases. Only customize features if you have specific requirements.

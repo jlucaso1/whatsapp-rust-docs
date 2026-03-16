@@ -667,13 +667,17 @@ See `\1`
 - Transaction support
 - Database snapshotting for debugging
 
-### Using SQLite Store
+### Using SQLite store
 
 ```rust
 use whatsapp_rust::store::SqliteStore;
 
 let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
 ```
+
+<Note>
+  SQLite is bundled by default via the `bundled-sqlite` feature on `whatsapp-rust-sqlite-storage`. No system SQLite installation is required.
+</Note>
 
 ## Best Practices
 

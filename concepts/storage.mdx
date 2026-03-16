@@ -510,9 +510,13 @@ pub struct Device {
 }
 ```
 
-## SqliteStore Implementation
+## SqliteStore implementation
 
 **Location:** `storages/sqlite-storage/src/lib.rs`
+
+<Note>
+  As of v0.3, the `whatsapp-rust-sqlite-storage` crate bundles SQLite by default via the `bundled-sqlite` feature. You no longer need SQLite installed as a system dependency. To link against a system SQLite instead, disable the default features on the crate.
+</Note>
 
 ### Database Schema
 

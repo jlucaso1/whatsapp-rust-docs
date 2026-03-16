@@ -372,6 +372,7 @@ match event {
             ReceiptType::Read => println!("Read"),
             ReceiptType::ReadSelf => println!("Read on another device"),
             ReceiptType::Played => println!("Played (voice/video)"),
+            ReceiptType::EncRekeyRetry => println!("VoIP call re-keying retry"),
             _ => {}
         }
     }

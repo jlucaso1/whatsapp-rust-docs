@@ -50,13 +50,13 @@ pub enum Event {
     UndecryptableMessage(UndecryptableMessage),
     
     /// Client connected to WhatsApp
-    Connected(ConnectedInfo),
+    Connected(Connected),
     
     /// Client disconnected
-    Disconnected,
+    Disconnected(Disconnected),
     
     /// Logged out (session invalidated)
-    LoggedOut(LoggedOutReason),
+    LoggedOut(LoggedOut),
     
     /// Pairing QR code for scanning
     PairingQrCode { code: String, timeout: Duration },
@@ -540,7 +540,7 @@ Always handle critical events:
 match event {
     Event::Message(message, info) => { /* ... */ }
     Event::Connected(_) => { /* Initialize */ }
-    Event::Disconnected => { /* Cleanup */ }
+    Event::Disconnected(_) => { /* Cleanup */ }
     Event::LoggedOut(_) => { /* Re-authenticate */ }
     _ => {}
 }

@@ -204,9 +204,10 @@ impl IqSpec for GroupQueryIq {
 **Example: Feature API**
 ```rust
 // src/features/groups.rs
-impl Client {
-    pub async fn get_group_info(&self, jid: &Jid) -> Result<GroupInfoResponse> {
-        self.execute(GroupQueryIq::new(jid)).await
+impl<'a> Groups<'a> {
+    pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata> {
+        // Use wacore IqSpec for protocol
+        self.client.execute(GroupQueryIq::new(jid)?).await
     }
 }
 ```
@@ -403,22 +404,26 @@ impl PersistenceManager {
 ```
 features/
 ├── mod.rs              // Feature exports
+├── blocking.rs         // Block/unblock contacts
+├── chat_actions.rs     // Archive, pin, mute, star
+├── chatstate.rs        // Typing indicators
+├── contacts.rs         // Contact operations
 ├── groups.rs           // Group management
+├── mex.rs              // GraphQL MEX queries
 ├── presence.rs         // Presence updates
-├── media.rs            // Media upload/download
-└── contacts.rs         // Contact operations
+├── profile.rs          // Profile management
+├── status.rs           // Status updates
+└── tctoken.rs          // Trusted contact tokens
 ```
 
-**Pattern:**
+Media upload and download operations are in `src/download.rs` and `src/upload.rs` as separate top-level modules.
+
+**Pattern:** Features are accessed through accessor methods on `Client`:
 ```rust
-impl Client {
-    /// High-level feature method
-    pub async fn create_group(&self, subject: &str, participants: &[Jid]) -> Result<Jid> {
-        // Use wacore IqSpec for protocol
-        let spec = CreateGroupIq::new(subject, participants)?;
-        self.execute(spec).await
-    }
-}
+// Access features through the client
+let metadata = client.groups().get_metadata(&group_jid).await?;
+let result = client.groups().create_group(options).await?;
+client.presence().set_available().await?;
 ```
 
 ## State Management Flow

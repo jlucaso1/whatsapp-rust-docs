@@ -616,7 +616,7 @@ Custom handlers for encrypted message types. You can register handlers for speci
 pub const RECONNECT_BACKOFF_STEP: u32 = 4;
 ```
 
-The number of Fibonacci steps added to the backoff counter when the server returns a 429 (rate limited) stream error.
+The number of Fibonacci steps added to the backoff counter when `reconnect()` is called, creating an approximately 5-second offline window before the next connection attempt. This prevents tight reconnect loops after intentional disconnects.
 
 ---
 

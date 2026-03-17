@@ -861,6 +861,107 @@ snapshots/
 └── decrypt_failure_1234567890_extra.bin
 ```
 
+## Pluggable cache store
+
+**Location:** `src/cache_store.rs`, `src/cache_config.rs`, `wacore/src/store/cache.rs`
+
+### Overview
+
+By default, whatsapp-rust uses in-process [moka](https://github.com/moka-rs/moka) caches for group metadata, device lists, device registry, and LID-PN mappings. The pluggable cache store adapter lets you replace any of these with an external backend (Redis, Memcached, etc.) by implementing the `CacheStore` trait.
+
+```mermaid
+graph TB
+    A[Client] --> B[TypedCache]
+    B -->|Default| C[Moka In-Process]
+    B -->|Custom| D[CacheStore Trait]
+    D --> E[Redis]
+    D --> F[Memcached]
+    D --> G[Your Backend]
+```
+
+### CacheStore trait
+
+```rust
+#[async_trait]
+pub trait CacheStore: Send + Sync + 'static {
+    async fn get(&self, namespace: &str, key: &str) -> anyhow::Result<Option<Vec<u8>>>;
+    async fn set(&self, namespace: &str, key: &str, value: &[u8], ttl: Option<Duration>) -> anyhow::Result<()>;
+    async fn delete(&self, namespace: &str, key: &str) -> anyhow::Result<()>;
+    async fn clear(&self, namespace: &str) -> anyhow::Result<()>;
+    async fn entry_count(&self, namespace: &str) -> anyhow::Result<u64> { Ok(0) }
+}
+```
+
+Each logical cache uses a unique namespace string (e.g., `"group"`, `"device"`, `"lid_pn_by_lid"`). Implementations should partition keys by namespace — for example, a Redis implementation might prefix keys as `{namespace}:{key}`.
+
+Cache operations are best-effort. The client falls back gracefully when cache reads fail (treats as miss) and logs warnings on write failures.
+
+### TypedCache
+
+`TypedCache<K, V>` is a generic wrapper that dispatches to either moka or a custom `CacheStore` backend. The moka path has zero extra overhead — values are stored in-process without any serialization. The custom-store path serializes values with `serde_json` and keys via `Display`.
+
+```rust
+// Moka path (zero overhead)
+let cache = TypedCache::from_moka(moka_cache);
+
+// Custom store path (serde_json serialization)
+let cache = TypedCache::from_store(store, "group", Some(Duration::from_secs(3600)));
+```
+
+### CacheStores configuration
+
+The `CacheStores` struct controls which caches use custom backends:
+
+```rust
+pub struct CacheStores {
+    pub group_cache: Option<Arc<dyn CacheStore>>,
+    pub device_cache: Option<Arc<dyn CacheStore>>,
+    pub device_registry_cache: Option<Arc<dyn CacheStore>>,
+    pub lid_pn_cache: Option<Arc<dyn CacheStore>>,
+}
+```
+
+Fields left as `None` keep the default moka behavior. Use `CacheStores::all(store)` to set the same backend for all pluggable caches at once.
+
+<Note>
+Coordination caches (`session_locks`, `message_queues`, `message_enqueue_locks`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects (mutexes, channel senders) that cannot be serialized to an external store.
+</Note>
+
+### Usage with Bot builder
+
+```rust
+use whatsapp_rust::{CacheConfig, CacheStores};
+use std::sync::Arc;
+
+let redis = Arc::new(MyRedisCacheStore::new("redis://localhost:6379"));
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .with_cache_config(CacheConfig {
+        cache_stores: CacheStores {
+            group_cache: Some(redis.clone()),
+            device_cache: Some(redis.clone()),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .build()
+    .await?;
+```
+
+Or use `CacheStores::all()` to route all pluggable caches to the same backend:
+
+```rust
+let config = CacheConfig {
+    cache_stores: CacheStores::all(redis.clone()),
+    ..Default::default()
+};
+```
+
+See [Custom backends guide](/guides/custom-backends#custom-cache-store) for a full implementation example.
+
 ## Related Sections
 
 <CardGroup cols={2}>

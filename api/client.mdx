@@ -678,9 +678,10 @@ When a history sync notification arrives, the client:
 
 1. Sends a `HistorySync` receipt immediately (so the phone knows delivery succeeded)
 2. Retrieves the data — either from an inline payload (moved via `.take()`, not cloned) or by stream-decrypting an external blob in 8KB chunks
-3. Runs decompression and protobuf parsing on a blocking thread (`tokio::task::spawn_blocking`) to avoid stalling the async runtime
-4. Streams conversation bytes through a bounded channel (capacity 4) to the event dispatcher
-5. Wraps each conversation in a `LazyConversation` for zero-copy delivery to event handlers
+3. Extracts a `compressed_size_hint` from the notification's `file_length` field, which the decompressor uses with a 4x multiplier for better buffer pre-allocation (avoids repeated `Vec` reallocation)
+4. Runs decompression and protobuf parsing on a blocking thread (`tokio::task::spawn_blocking`) to avoid stalling the async runtime
+5. Streams conversation bytes through a bounded channel (capacity 4) to the event dispatcher
+6. Wraps each conversation in a `LazyConversation` for zero-copy delivery to event handlers
 
 If no event handlers are registered, the callback is `None` and conversation extraction is skipped entirely at the protobuf level — only the pushname field is extracted.
 

@@ -167,7 +167,11 @@ std::thread::sleep(std::time::Duration::from_secs(2));
 client.chatstate().send_paused(&recipient).await?;
 
 // Send the actual message
-client.send_text(&recipient, "Hello!").await?;
+let message = wa::Message {
+    conversation: Some("Hello!".to_string()),
+    ..Default::default()
+};
+client.send_message(recipient.clone(), message).await?;
 ```
 
 ### Recording Audio
@@ -184,8 +188,23 @@ let audio_data = record_audio();
 // Stop indicator (optional)
 client.chatstate().send_paused(&recipient).await?;
 
-// Send audio message
-client.send_audio(&recipient, audio_data).await?;
+// Upload and send audio message
+let upload = client.upload(audio_data, MediaType::Audio).await?;
+let message = wa::Message {
+    audio_message: Some(Box::new(wa::message::AudioMessage {
+        url: Some(upload.url),
+        direct_path: Some(upload.direct_path),
+        media_key: Some(upload.media_key),
+        file_enc_sha256: Some(upload.file_enc_sha256),
+        file_sha256: Some(upload.file_sha256),
+        file_length: Some(upload.file_length),
+        mimetype: Some("audio/ogg; codecs=opus".to_string()),
+        ptt: Some(true),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+client.send_message(recipient.clone(), message).await?;
 ```
 
 ### Throttling
@@ -240,7 +259,11 @@ let group_jid: Jid = "123456789@g.us".parse()?;
 client.chatstate().send_composing(&group_jid).await?;
 
 // Send message
-client.send_text(&group_jid, "Hello everyone!").await?;
+let message = wa::Message {
+    conversation: Some("Hello everyone!".to_string()),
+    ..Default::default()
+};
+client.send_message(group_jid.clone(), message).await?;
 ```
 
 ## Error Handling
@@ -293,7 +316,11 @@ println!("Still typing...");
 
 // User finishes and sends message
 client.chatstate().send_paused(&recipient).await?;
-client.send_text(&recipient, "Hello there!").await?;
+let message = wa::Message {
+    conversation: Some("Hello there!".to_string()),
+    ..Default::default()
+};
+client.send_message(recipient.clone(), message).await?;
 println!("Message sent");
 
 // Or simulate voice recording

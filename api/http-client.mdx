@@ -193,7 +193,7 @@ The default HTTP client implementation using the `ureq` crate for synchronous HT
 ### Creating a Client
 
 ```rust
-use whatsapp_rust::http::UreqHttpClient;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
 // Basic usage
 let client = UreqHttpClient::new();
@@ -207,7 +207,7 @@ let client = UreqHttpClient::default();
 #### Basic GET Request
 
 ```rust
-use whatsapp_rust::http::UreqHttpClient;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use wacore::net::HttpRequest;
 
 #[tokio::main]
@@ -454,22 +454,24 @@ let client = MockHttpClient::new()
     );
 ```
 
-## Usage with Client
+## Usage with Bot builder
 
 ```rust
-use whatsapp_rust::Client;
-use whatsapp_rust::http::UreqHttpClient;
+use whatsapp_rust::Bot;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let http_client = Arc::new(UreqHttpClient::new());
+    let http_client = UreqHttpClient::new();
     
-    let mut client = Client::new();
-    client.set_http_client(http_client);
-    
-    // Now the client can download/upload media
-    client.connect().await?;
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(transport_factory)
+        .with_http_client(http_client)
+        .on_event(|event, client| async move { /* handle events */ })
+        .build()
+        .await?;
     
     Ok(())
 }

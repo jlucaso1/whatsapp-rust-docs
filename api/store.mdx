@@ -363,33 +363,38 @@ PRAGMA foreign_keys = ON;
 ### Usage Example
 
 ```rust
-use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust::store::Backend;
+use whatsapp_rust_sqlite_storage::SqliteStore;
+use whatsapp_rust::Bot;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create store
-    let store = Arc::new(SqliteStore::new("whatsapp.db").await?);
+    let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
     
-    // Use with client
-    let mut client = Client::new();
-    client.set_store(store.clone());
+    // Use with Bot builder
+    let mut bot = Bot::builder()
+        .with_backend(backend.clone())
+        .with_transport_factory(transport_factory)
+        .with_http_client(http_client)
+        .on_event(|event, client| async move { /* handle events */ })
+        .build()
+        .await?;
     
     // Store implements all traits
     // SignalStore
-    store.put_identity("address@s.whatsapp.net", [0u8; 32]).await?;
-    let identity = store.load_identity("address@s.whatsapp.net").await?;
+    backend.put_identity("address@s.whatsapp.net", [0u8; 32]).await?;
+    let identity = backend.load_identity("address@s.whatsapp.net").await?;
     
     // AppSyncStore
-    let version = store.get_version("regular").await?;
+    let version = backend.get_version("regular").await?;
     
     // ProtocolStore
-    let devices = store.get_skdm_recipients("group@g.us").await?;
+    let devices = backend.get_skdm_recipients("group@g.us").await?;
     
     // DeviceStore
-    if store.exists().await? {
-        let device = store.load().await?;
+    if backend.exists().await? {
+        let device = backend.load().await?;
     }
     
     Ok(())

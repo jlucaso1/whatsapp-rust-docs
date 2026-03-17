@@ -135,14 +135,18 @@ pub async fn create_group(
 
 **Example:**
 ```rust
-use whatsapp_rust::features::groups::{GroupCreateOptions, GroupSubject};
+use whatsapp_rust::features::groups::{GroupCreateOptions, GroupParticipantOptions};
 
-let subject = GroupSubject::new("My New Group")?;
 let participant1: Jid = "15551234567@s.whatsapp.net".parse()?;
 let participant2: Jid = "15559876543@s.whatsapp.net".parse()?;
 
-let options = GroupCreateOptions::new(subject)
-    .with_participants(vec![participant1, participant2]);
+let options = GroupCreateOptions::builder()
+    .subject("My New Group")
+    .participants(vec![
+        GroupParticipantOptions::new(participant1),
+        GroupParticipantOptions::new(participant2),
+    ])
+    .build();
 
 let result = client.groups().create_group(options).await?;
 println!("Created group: {}", result.gid);

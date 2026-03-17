@@ -262,12 +262,15 @@ impl NoiseSocket {
 The client implements robust reconnection handling with stream error awareness:
 
 ```rust
-// Client fields for reconnection management
-pub enable_auto_reconnect: Arc<AtomicBool>,      // Toggle auto-reconnect
+// Client fields for connection and reconnection management
+is_connected: Arc<AtomicBool>,                    // Lock-free connection state (Acquire/Release)
+pub enable_auto_reconnect: Arc<AtomicBool>,       // Toggle auto-reconnect
 pub auto_reconnect_errors: Arc<AtomicU32>,        // Error count for backoff
 pub(crate) expected_disconnect: Arc<AtomicBool>,  // Expected vs unexpected
 pub(crate) connection_generation: Arc<AtomicU64>, // Detect stale tasks
 ```
+
+The `is_connected` field uses an `AtomicBool` to track whether the noise socket is established. This avoids a TOCTOU race that previously occurred when `try_lock()` on the noise socket mutex failed under contention, causing false-negative connection checks and silent ack drops.
 
 **Connection timeout:** Both the transport connection and version fetch are wrapped in a 20-second timeout (`TRANSPORT_CONNECT_TIMEOUT`), matching WhatsApp Web's MQTT and DGW defaults. This prevents dead networks from blocking on the OS TCP SYN timeout (~60-75s). Both operations run in parallel via `tokio::join!`.
 

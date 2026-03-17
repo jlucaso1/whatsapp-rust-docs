@@ -206,7 +206,7 @@ pub struct PairCodeOptions {
     /// Platform identifier (default: Chrome)
     pub platform_id: PlatformId,
 
-    /// Platform display name (default: "Chrome")
+    /// Platform display name (default: "Chrome (Linux)")
     pub platform_display: String,
 }
 ```
@@ -440,7 +440,21 @@ match client.pair_with_code(options).await {
     Err(PairCodeError::InvalidCustomCode) => {
         eprintln!("Custom code must be 8 valid Crockford Base32 characters");
     }
-    Err(e) => eprintln!("Pairing failed: {}", e),
+    Err(PairCodeError::MissingPairingRef) => {
+        eprintln!("Server did not return a pairing reference");
+    }
+    Err(PairCodeError::NotWaiting) => {
+        eprintln!("No pending pair code request");
+    }
+    Err(PairCodeError::InvalidWrappedData { expected, got }) => {
+        eprintln!("Invalid wrapped data: expected {} bytes, got {}", expected, got);
+    }
+    Err(PairCodeError::CryptoError(msg)) => {
+        eprintln!("Crypto error during pairing: {}", msg);
+    }
+    Err(PairCodeError::RequestFailed(msg)) => {
+        eprintln!("Pairing request failed: {}", msg);
+    }
 }
 ```
 

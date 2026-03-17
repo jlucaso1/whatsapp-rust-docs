@@ -630,6 +630,46 @@ pub http_client: Arc<dyn HttpClient>
 
 The HTTP client used for media operations, version fetching, and other HTTP requests. This field is public and can be used directly for custom HTTP operations that share the same client configuration.
 
+### enable_auto_reconnect
+
+```rust
+pub enable_auto_reconnect: Arc<AtomicBool>
+```
+
+Controls whether the client automatically reconnects after an unexpected disconnection. Defaults to `true`. Set to `false` to disable auto-reconnect.
+
+### auto_reconnect_errors
+
+```rust
+pub auto_reconnect_errors: Arc<AtomicU32>
+```
+
+Tracks the number of consecutive reconnection failures. Used internally for Fibonacci backoff calculations. Resets to `0` on a successful connection.
+
+### last_successful_connect
+
+```rust
+pub last_successful_connect: Arc<Mutex<Option<DateTime<Utc>>>>
+```
+
+Timestamp of the last successful connection. `None` if the client has never successfully connected.
+
+### custom_enc_handlers
+
+```rust
+pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>
+```
+
+Custom handlers for encrypted message types. You can register handlers for specific encryption types that the client doesn't natively support. These are also registerable via `BotBuilder::with_enc_handler()`.
+
+### RECONNECT_BACKOFF_STEP
+
+```rust
+pub const RECONNECT_BACKOFF_STEP: u32 = 4;
+```
+
+The number of Fibonacci steps added to the backoff counter when the server returns a 429 (rate limited) stream error.
+
 ---
 
 ## Device State

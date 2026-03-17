@@ -475,11 +475,48 @@ let ciphertext = spawn_blocking(move || {
 }).await??;
 ```
 
+## Cache patching strategy
+
+Beyond device state, whatsapp-rust maintains several in-memory caches (device registry, group metadata, LID-PN mappings) that require real-time updates when server notifications arrive.
+
+### Granular patching vs. invalidation
+
+The client uses **granular cache patching** rather than the simpler invalidate-and-refetch approach. When a notification indicates a change (for example, a new device added or a group participant removed), the client reads the cached value, applies the diff in memory, and writes the updated value back — all without making any network requests.
+
+This avoids an extra IQ round-trip per update. If no cache entry exists when the notification arrives, the patch is silently skipped, and the next read fetches authoritative state from the server.
+
+```rust
+// Internal patching pattern (not a public API)
+if let Some(mut cached) = cache.get(&key).await {
+    cached.apply_change(notification_data);
+    cache.insert(key, cached).await;
+}
+```
+
+### Concurrency model
+
+The `get` → mutate → `insert` sequence is **not atomic**. A concurrent notification for the same key could race and cause one update to be lost. This is acceptable because:
+
+1. The cache is best-effort — a full server fetch on the next read corrects any drift
+2. Races are rare in practice (device and group notifications for the same user rarely overlap)
+3. Device registry patches persist to the backend store immediately, so even if the cache entry is evicted, the persistent state is correct
+
+### Where patching is used
+
+| Cache | Patched on | Persisted | Fallback |
+| --- | --- | --- | --- |
+| Device registry | Device add/remove/update notifications | Yes (backend store) | Hash-only notifications trigger full invalidation |
+| Group metadata | Participant add/remove notifications and API calls | No (cache-only) | `leave()` and cache eviction trigger server re-fetch |
+| LID-PN mappings | Usync, peer messages, device notifications | Yes (backend store) | Timestamp conflict resolution prevents stale overwrites |
+
+For full details including patching methods and data flow, see [Granular cache patching](/concepts/storage#granular-cache-patching).
+
 ## Related Components
 
 - [Signal Protocol](/advanced/signal-protocol) - Cryptographic state stored in Device
 - [Binary Protocol](/advanced/binary-protocol) - Protocol messages modify device state
 - [WebSocket Handling](/advanced/websocket-handling) - Connection state in Device
+- [Storage](/concepts/storage) - Cache patching and pluggable cache stores
 
 ## References
 

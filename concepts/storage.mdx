@@ -962,6 +962,66 @@ let config = CacheConfig {
 
 See [Custom backends guide](/guides/custom-backends#custom-cache-store) for a full implementation example.
 
+## Granular cache patching
+
+Instead of invalidating a cache entry and re-fetching from the server on every change notification, whatsapp-rust applies granular patches to cached values in place. This eliminates an extra IQ round-trip per update and keeps caches consistent in real time.
+
+### How it works
+
+All patching follows the same pattern: read the cached value, mutate it, and write it back. There is no atomic compare-and-swap — the `get` → mutate → `insert` sequence can race with concurrent notifications, but this is acceptable because the cache is best-effort and a full server fetch on the next read corrects any drift.
+
+```rust
+// Pseudocode for the patching pattern
+if let Some(mut cached) = cache.get(&key).await {
+    cached.apply_change(notification_data);
+    cache.insert(key, cached).await;
+}
+// If the key isn't cached, the patch is a no-op —
+// the next read fetches authoritative state from the server.
+```
+
+### Patched cache domains
+
+Granular patching is implemented in three areas:
+
+**Device registry** (`src/client/device_registry.rs`)
+
+When a device notification arrives, the client patches both the `device_cache` (keyed by JID, stores `Vec<Jid>`) and `device_registry_cache` (keyed by user string, stores `DeviceListRecord`) simultaneously:
+
+- `patch_device_add` — appends a new device JID to the cached list and persists the updated `DeviceListRecord` to the backend store
+- `patch_device_remove` — removes a device by ID using `retain`, then persists
+- `patch_device_update` — updates `key_index` on an existing device entry, then persists
+
+All three methods iterate over every known PN/LID alias for the user so stale alternate-key entries stay consistent. Device patches also persist to the backend store immediately, so changes survive cache eviction and restarts.
+
+When a notification arrives with only a hash (no device list), the client falls back to full invalidation and lets the next access re-fetch from the server.
+
+**Group metadata** (`src/handlers/notification.rs`, `src/features/groups.rs`)
+
+When participant add/remove notifications arrive, the cached `GroupInfo` is patched in place:
+
+- Participant adds use `GroupInfo::add_participants()`, which deduplicates by user and backfills LID-to-PN maps for LID-addressed groups
+- Participant removes use `GroupInfo::remove_participants()`, which also cleans up both LID-to-PN and PN-to-LID maps bidirectionally
+- API calls (`client.groups().add_participants()`, `client.groups().remove_participants()`) also patch the cache after a successful server response, filtering to only participants the server accepted (status 200)
+
+Group patches are cache-only — they are not persisted to the backend. If the cache entry is evicted, the next `query_info()` call re-fetches from the server.
+
+Only `leave()` uses full invalidation.
+
+**LID-PN mappings** (`src/lid_pn_cache.rs`)
+
+The `LidPnCache` uses timestamp-based conflict resolution when adding new mappings. The PN → entry map only updates if the new entry's `created_at` is newer than or equal to the existing entry's, preventing older stale mappings from overwriting newer ones.
+
+### Patching vs. invalidation summary
+
+| Behavior | Granular patch | Invalidate + refetch |
+| --- | --- | --- |
+| **Network cost** | Zero — applies diff locally | One IQ round-trip per cache miss |
+| **Latency** | Immediate update | Stale until next access |
+| **Used when** | Device add/remove/update, group participant changes, LID-PN discovery | Group leave, hash-only device update |
+| **Atomicity** | Not atomic (can race, corrected on next full fetch) | N/A |
+| **Persistence** | Device patches persist immediately; group patches are cache-only | Backend remains authoritative |
+
 ## Related Sections
 
 <CardGroup cols={2}>

@@ -406,8 +406,8 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
-    pub fn new(db_path: &str) -> Result<Self>
-    pub fn new_for_device(db_path: &str, device_id: &str) -> Result<Self>
+    pub async fn new(db_path: &str) -> Result<Self>
+    pub async fn new_for_device(db_path: &str, device_id: i32) -> Result<Self>
 }
 ```
 

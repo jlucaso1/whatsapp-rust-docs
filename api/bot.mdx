@@ -22,8 +22,8 @@ The Bot is the **recommended way** to use whatsapp-rust. It provides sensible de
 ## Basic Usage
 
 ```rust
-use whatsapp_rust::Bot;
-use whatsapp_rust::types::events::Event;
+use whatsapp_rust::bot::Bot;
+use wacore::types::events::Event;
 
 let bot = Bot::builder()
     .with_backend(backend)
@@ -557,9 +557,9 @@ Deletes a message in the same chat.
 ## Complete Example
 
 ```rust
-use whatsapp_rust::Bot;
+use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust::types::events::Event;
+use wacore::types::events::Event;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use waproto::whatsapp as wa;

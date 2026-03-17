@@ -685,18 +685,18 @@ pub struct SelfPushNameUpdated {
 
 ### JoinedGroup
 
-**Emitted:** When added to a group
+**Emitted:** When added to a group, and for each conversation received during history sync
 
 ```rust
 Event::JoinedGroup(LazyConversation)
 ```
 
-**LazyConversation:** Lazily-parsed group conversation data
+**LazyConversation:** Lazily-parsed conversation data. This event is used both for real-time group join notifications and as the per-conversation delivery mechanism for history sync. During history sync, the pipeline streams each conversation through a bounded channel and dispatches it as `Event::JoinedGroup(LazyConversation)`.
 
 ```rust
 Event::JoinedGroup(lazy_conv) => {
     if let Some(conv) = lazy_conv.get() {
-        println!("Joined group: {}", conv.id);
+        println!("Conversation: {}", conv.id);
     }
 }
 ```

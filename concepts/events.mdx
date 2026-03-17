@@ -1157,12 +1157,12 @@ tokio::spawn(async move {
 
 ```rust
 pub struct LazyConversation {
-    raw_bytes: Bytes,                          // Zero-copy reference-counted bytes
-    parsed: Arc<OnceLock<wa::Conversation>>,   // Parsed on first access
+    raw_bytes: Bytes,                        // Zero-copy reference-counted bytes
+    parsed: OnceLock<wa::Conversation>,      // Parsed on first access
 }
 
 impl LazyConversation {
-    /// Creates from owned bytes
+    /// Creates from owned bytes (converts to Bytes internally)
     pub fn new(raw_bytes: Vec<u8>) -> Self;
 
     /// True zero-copy from existing Bytes (used by history sync pipeline)
@@ -1178,7 +1178,7 @@ impl LazyConversation {
 
 **Memory optimization:** On first parse, the `messages` field is immediately cleared and shrunk (`messages.clear()` + `messages.shrink_to_fit()`) because history sync conversations embed full `WebMessageInfo` arrays that can be very large. This prevents parsed conversations from retaining message data in memory.
 
-**Cloning is O(1)** — both `Bytes` and `Arc<OnceLock<...>>` are reference-counted, so cloning a `LazyConversation` only increments atomic counters.
+**Cloning:** `Bytes` is reference-counted so cloning the raw data is O(1). However, `parsed` uses a plain `OnceLock` (not `Arc<OnceLock>`), so each clone gets its own parse cache and parses independently. This is acceptable because parsing is idempotent and the common case is a single handler. If multi-handler parsing cost becomes an issue, wrapping `parsed` in `Arc<OnceLock<T>>` is a straightforward upgrade.
 
 **Usage:**
 ```rust

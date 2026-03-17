@@ -349,12 +349,13 @@ graph LR
 
 ### RAM optimization layers
 
-1. **Immediate drop of compressed data** — after decompression, the compressed input is dropped so peak memory equals `max(compressed, decompressed)` rather than both combined
-2. **Hand-rolled protobuf parser** — instead of decoding the entire `HistorySync` message tree (which allocates every nested message), the core walks varint tags manually and only extracts field 2 (conversations) and field 7 (pushnames)
-3. **`Bytes` zero-copy slicing** — decompressed data is wrapped in a reference-counted `Bytes` buffer; each conversation is extracted as `buf.slice(pos..end)`, which is an Arc refcount increment with no per-conversation heap allocation
-4. **Bounded channel streaming** — a `tokio::sync::mpsc::channel::<Bytes>(4)` streams conversation bytes from the blocking parser thread to the async event dispatcher, providing backpressure with only ~4 conversations in-flight
-5. **`LazyConversation` wrapper** — raw `Bytes` are wrapped without parsing; protobuf decoding only happens if the event handler calls `.get()` or `.conversation()`. On first parse, embedded messages are immediately cleared and shrunk to reclaim memory
-6. **Compile-time callback elimination** — when no event handlers are registered, the callback is `None`, causing the parser to skip conversation extraction entirely at the protobuf level
+1. **Heuristic pre-allocation with `compressed_size_hint`** — the decompression buffer is pre-allocated using a 4x multiplier on the compressed blob's `file_length` (clamped to 256 bytes – 8 MiB). When the notification provides `file_length`, this avoids repeated `Vec` reallocation during decompression. The hint comes from the decrypted (but still compressed) blob size, which is a better estimate than the encrypted size that includes MAC/padding overhead
+2. **Immediate drop of compressed data** — after decompression, the compressed input is dropped so peak memory equals `max(compressed, decompressed)` rather than both combined
+3. **Hand-rolled protobuf parser** — instead of decoding the entire `HistorySync` message tree (which allocates every nested message), the core walks varint tags manually and only extracts field 2 (conversations) and field 7 (pushnames)
+4. **`Bytes` zero-copy slicing** — decompressed data is wrapped in a reference-counted `Bytes` buffer; each conversation is extracted as `buf.slice(pos..end)`, which is an Arc refcount increment with no per-conversation heap allocation
+5. **Bounded channel streaming** — a `tokio::sync::mpsc::channel::<Bytes>(4)` streams conversation bytes from the blocking parser thread to the async event dispatcher, providing backpressure with only ~4 conversations in-flight
+6. **`LazyConversation` wrapper** — raw `Bytes` are wrapped without parsing; protobuf decoding only happens if the event handler calls `.get()` or `.conversation()`. Each clone parses independently (plain `OnceLock`, not `Arc`-wrapped) since the common case is a single handler. On first parse, embedded messages are immediately cleared and shrunk to reclaim memory
+7. **Compile-time callback elimination** — when no event handlers are registered, the callback is `None`, causing the parser to skip conversation extraction entirely at the protobuf level
 
 ### Skip mode
 

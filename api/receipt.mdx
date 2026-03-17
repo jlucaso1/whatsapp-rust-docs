@@ -118,6 +118,51 @@ For group messages, the receipt includes a `participant` attribute identifying t
   Delivery receipts are sent automatically. Unlike other receipt types (e.g., `type="read"`, `type="played"`), delivery receipts have **no `type` attribute** on the wire — delivery is the implicit default. The library omits the `type` attribute from ack responses to delivery receipts accordingly, since including an explicit `type="delivery"` would cause `<stream:error>` disconnections from the server. This is different from read receipts (type=`"read"`), which you send manually with `mark_as_read()`.
 </Note>
 
+### Wire format
+
+Internally, delivery receipts use `jid_attr()` for the `to` and `participant` attributes, storing JIDs directly without string conversion for better performance:
+
+```rust
+let mut builder = NodeBuilder::new("receipt")
+    .attr("id", &info.id)
+    .jid_attr("to", info.source.chat.clone());
+
+if info.category == "peer" {
+    builder = builder.attr("type", "peer_msg");
+}
+
+if info.source.is_group {
+    builder = builder.jid_attr("participant", info.source.sender.clone());
+}
+
+let receipt_node = builder.build();
+```
+
+Read receipts (`mark_as_read`) batch multiple message IDs using a `<list>` child node with `<item>` elements:
+
+```rust
+let mut builder = NodeBuilder::new("receipt")
+    .attr("to", chat.to_string())
+    .attr("type", "read")
+    .attr("id", &message_ids[0])
+    .attr("t", &timestamp);
+
+if let Some(sender) = sender {
+    builder = builder.attr("participant", sender.to_string());
+}
+
+// Additional message IDs beyond the first
+if message_ids.len() > 1 {
+    let items: Vec<Node> = message_ids[1..]
+        .iter()
+        .map(|id| NodeBuilder::new("item").attr("id", id).build())
+        .collect();
+    builder = builder.children(vec![
+        NodeBuilder::new("list").children(items).build()
+    ]);
+}
+```
+
 ---
 
 ## Receipt Types

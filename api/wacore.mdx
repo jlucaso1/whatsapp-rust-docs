@@ -206,7 +206,7 @@ let decoded = unmarshal_ref(&bytes)?;
 **Key exports:**
 - `jid::Jid` - WhatsApp JID (Jabber ID) parsing
 - `node::{Node, NodeRef, NodeValue}` - Protocol node types
-- `builder::NodeBuilder` - Fluent node builder
+- `builder::NodeBuilder` - Fluent node builder with `attr()`, `jid_attr()`, `children()`, `bytes()`, `string_content()`, and `apply_content()` chaining methods
 - `marshal::*` - Binary marshaling functions
 - `attrs::AttrParser` - Attribute parsing utilities
 - `token` - Token dictionary

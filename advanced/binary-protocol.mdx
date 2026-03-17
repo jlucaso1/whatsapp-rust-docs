@@ -64,14 +64,39 @@ pub struct Attrs(Vec<(String, NodeValue)>);
 JIDs (Jabber IDs) like `15551234567@s.whatsapp.net` appear frequently in the protocol. Storing them as structured data avoids repeated parsing/formatting overhead:
 
 ```rust
+use std::borrow::Cow;
+
 pub struct Jid {
-    pub user: String,      // "15551234567"
-    pub server: String,    // "s.whatsapp.net"
-    pub agent: u8,         // Domain type (0, 1, 128, 129)
-    pub device: u16,       // Device ID (0 for primary)
-    pub integrator: u16,   // Reserved
+    pub user: String,                  // "15551234567"
+    pub server: Cow<'static, str>,     // "s.whatsapp.net"
+    pub agent: u8,                     // Domain type (0, 1, 128, 129)
+    pub device: u16,                   // Device ID (0 for primary)
+    pub integrator: u16,               // Integrator ID (used with interop server)
 }
 ```
+
+The `server` field uses `Cow<'static, str>` so that known server constants (like `"s.whatsapp.net"`, `"g.us"`, `"lid"`) are borrowed as zero-allocation static references, while unknown servers fall back to an owned `String`. This eliminates per-JID heap allocations on hot paths since most JIDs use one of the ~11 predefined server constants.
+
+#### Typed constructors
+
+Convenience constructors avoid specifying the server string directly:
+
+```rust
+Jid::pn("15551234567")          // @s.whatsapp.net, device 0
+Jid::lid("ABC123")              // @lid, device 0
+Jid::group("12345678")          // @g.us
+Jid::pn_device("15551234567", 1) // @s.whatsapp.net, device 1
+Jid::lid_device("ABC123", 2)    // @lid, device 2
+Jid::status_broadcast()         // status@broadcast
+Jid::new("user", "custom.srv")  // arbitrary server (Cow-optimized)
+```
+
+#### Borrowing types
+
+For zero-allocation lookups and comparisons, the protocol also provides:
+
+- **`JidRef<'a>`** — a borrowing version of `Jid` where both `user` and `server` are `Cow<'a, str>`, useful for temporary parsing results
+- **`DeviceKey<'a>`** — a lightweight key containing `(&'a str, &'a str, u16)` for user/server/device, used for `HashSet` lookups without cloning
 
 Location: `wacore/binary/src/node.rs:10-112`, `wacore/binary/src/jid.rs`
 

@@ -191,58 +191,6 @@ pub async fn wait_for_connected(
 
 Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
 
-### wait_for_startup_sync
-
-```rust
-pub async fn wait_for_startup_sync(
-    &self,
-    timeout: std::time::Duration
-) -> Result<(), anyhow::Error>
-```
-
-Waits for both offline sync completion AND all in-flight history sync tasks to finish. This is more comprehensive than `wait_for_connected`, which only gates on the initial offline delivery.
-
-<ParamField path="timeout" type="Duration" required>
-  Maximum time to wait for all sync operations
-</ParamField>
-
-**Behavior:**
-- First waits for offline sync to complete
-- Then waits for all history sync tasks to become idle (zero in-flight tasks)
-- Returns error on timeout at either stage
-
-**Example:**
-```rust
-use std::time::Duration;
-
-// Wait for all startup sync to complete (offline + history)
-client.wait_for_startup_sync(Duration::from_secs(60)).await?;
-println!("All sync complete, safe to query state");
-```
-
-<Note>
-Use this when you need to ensure all historical data has been synced before proceeding, such as when accessing chat history or contact lists.
-</Note>
-
-### wait_for_offline_delivery_end
-
-```rust
-pub(crate) async fn wait_for_offline_delivery_end(&self)
-```
-
-Waits for offline message delivery to finish before proceeding. Uses a 60-second timeout (matching WhatsApp Web's `OFFLINE_STANZA_TIMEOUT_MS` constant) to prevent indefinite blocking if the server never sends the completion marker.
-
-**Behavior:**
-- **Fast path:** Returns immediately if offline sync is already complete
-- **Normal path:** Waits for the server to send `<ib><offline/>` or for all expected items to arrive
-- **Timeout path:** After 60 seconds, logs a warning with progress details, marks sync complete, and re-enables parallel message processing (64 concurrent tasks)
-
-A stale-connection guard prevents the timeout from completing sync for a connection that was already replaced by a reconnect.
-
-<Note>
-This method is used internally by the client. Post-login tasks, session establishment, and dirty-bit handlers all wait for offline delivery to complete before proceeding.
-</Note>
-
 ---
 
 ## Connection State
@@ -698,6 +646,18 @@ pub async fn get_lid(&self) -> Option<Jid>
 
 Returns the LID (Linked Identity).
 
+### get_phone_number_from_lid
+
+```rust
+pub async fn get_phone_number_from_lid(&self, lid: &str) -> Option<String>
+```
+
+Resolves a LID (Linked Identity) to the corresponding phone number string. Returns `None` if the mapping is not cached.
+
+<ParamField path="lid" type="&str" required>
+  The LID user string to look up (e.g., `"ABC123"`)
+</ParamField>
+
 ### persistence_manager
 
 ```rust
@@ -868,6 +828,24 @@ let response = client.send_iq(query).await?;
 <Warning>
 This bypasses higher-level abstractions and safety checks. You should be familiar with the WhatsApp protocol and IQ stanza format before using this.
 </Warning>
+
+### execute
+
+```rust
+pub async fn execute<S: IqSpec>(&self, spec: S) -> Result<S::Response, IqError>
+```
+
+Executes a typed IQ specification. This is the preferred way to send IQ stanzas — each spec type handles building the request and parsing the response.
+
+<ParamField path="spec" type="S: IqSpec" required>
+  A typed IQ specification that defines the request structure and response parsing
+</ParamField>
+
+**Example:**
+```rust
+// Fetch group metadata using a typed spec
+let metadata = client.execute(GroupQueryIq::new(&group_jid)).await?;
+```
 
 ### wait_for_node
 

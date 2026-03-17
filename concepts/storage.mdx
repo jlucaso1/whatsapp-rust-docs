@@ -266,6 +266,13 @@ pub struct SignalStoreCache {
     identities: Mutex<StoreState>,
     sender_keys: Mutex<StoreState>,
 }
+
+// Internal per-domain state
+struct StoreState {
+    cache: HashMap<Arc<str>, Option<Arc<[u8]>>>,  // None = known-absent
+    dirty: HashSet<Arc<str>>,                       // Modified keys pending flush
+    deleted: HashSet<Arc<str>>,                     // Deleted keys pending flush
+}
 ```
 
 **Key features:**
@@ -273,6 +280,7 @@ pub struct SignalStoreCache {
 - **Negative caching**: Known-absent keys are cached as `None` to avoid repeated DB lookups
 - **Independent locking**: Sessions, identities, and sender keys each have their own mutex
 - **O(1) reads**: Values stored as `Arc<[u8]>` for cheap cloning (reference count bump)
+- **O(1) key cloning**: Keys stored as `Arc<str>` so cloning a key (needed for both cache and dirty/deleted sets) is a refcount bump instead of a heap allocation
 
 **Cache operations:**
 

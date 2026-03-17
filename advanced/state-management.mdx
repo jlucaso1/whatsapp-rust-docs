@@ -324,46 +324,31 @@ The `Device` is protected by a `tokio::sync::RwLock`:
 - **Single writer**: `modify_device()` blocks all other access
 - **Writer priority**: Pending writes block new reads (avoid reader starvation)
 
-### Chat Locks
+### Session locks and message queues
 
-For per-chat operations (like sending messages), the `Client` provides chat-level locks:
+The `Client` uses two cache-based lock mechanisms for per-chat and per-device serialization:
 
 ```rust
 pub struct Client {
-    pub(crate) chat_locks: DashMap<String, Arc<Mutex<()>>>,
+    /// Per-device session locks for Signal protocol operations.
+    /// Prevents race conditions when multiple messages from the same sender
+    /// are processed concurrently across different chats.
+    /// Keys are Signal protocol address strings (e.g., "user@s.whatsapp.net:0").
+    pub(crate) session_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+
+    /// Per-chat message queues for sequential message processing.
+    /// Prevents race conditions where a later message is processed before
+    /// the PreKey message that establishes the Signal session.
+    pub(crate) message_queues: Cache<String, mpsc::Sender<Arc<Node>>>,
+
+    /// Per-chat mutex for serializing message enqueue operations.
+    /// Ensures messages are enqueued in the order they arrive.
+    pub(crate) message_enqueue_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
     // ...
 }
-
-impl Client {
-    pub async fn with_chat_lock<F, Fut, R>(
-        &self,
-        chat_jid: &str,
-        f: F,
-    ) -> R
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = R>,
-    {
-        let lock = self.chat_locks
-            .entry(chat_jid.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(())));
-        
-        let _guard = lock.lock().await;
-        f().await
-    }
-}
 ```
 
-**Usage:**
-
-```rust
-// Serialize operations for a specific chat
-client.with_chat_lock(&chat_jid, || async {
-    // Send message, update state, etc.
-    client.send_message(&chat_jid, "Hello").await?;
-    Ok(())
-}).await?;
-```
+All three use [moka](https://github.com/moka-rs/moka) `Cache` with TTL-based eviction (configurable via `CacheConfig`), so stale entries are automatically cleaned up.
 
 Location: `src/client.rs`
 

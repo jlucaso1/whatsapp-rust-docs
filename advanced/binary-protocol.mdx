@@ -100,19 +100,78 @@ For zero-allocation lookups and comparisons, the protocol also provides:
 
 Location: `wacore/binary/src/node.rs:10-112`, `wacore/binary/src/jid.rs`
 
-### Example Node
+### NodeBuilder API
+
+The `NodeBuilder` provides a fluent chaining API for constructing nodes. All setter methods consume and return `Self`:
 
 ```rust
 use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
 
 let message = NodeBuilder::new("message")
     .attr("to", "15551234567@s.whatsapp.net")
     .attr("type", "text")
     .attr("id", "ABCD1234")
-    .content_nodes(vec![
-        NodeBuilder::new("body").text("Hello, world!").build(),
+    .children(vec![
+        NodeBuilder::new("body").string_content("Hello, world!").build(),
     ])
     .build();
+```
+
+#### Available methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `new` | `new(tag: impl Into<String>) -> Self` | Create a builder with a tag |
+| `attr` | `attr(key: impl Into<String>, value: impl Into<String>) -> Self` | Add a string attribute |
+| `jid_attr` | `jid_attr(key: impl Into<String>, jid: Jid) -> Self` | Add a JID attribute without stringifying |
+| `attrs` | `attrs(attrs: impl IntoIterator<Item = (K, V)>) -> Self` | Bulk-add attributes from an iterator |
+| `children` | `children(children: impl IntoIterator<Item = Node>) -> Self` | Set child nodes as content |
+| `bytes` | `bytes(bytes: impl Into<Vec<u8>>) -> Self` | Set raw bytes as content |
+| `string_content` | `string_content(s: impl Into<String>) -> Self` | Set string as content |
+| `apply_content` | `apply_content(content: Option<NodeContent>) -> Self` | Set arbitrary content |
+| `build` | `build(self) -> Node` | Consume the builder and produce a `Node` |
+
+Location: `wacore/binary/src/builder.rs`
+
+#### jid_attr vs attr
+
+The `jid_attr` method stores JIDs as `NodeValue::Jid(jid)` directly in the attribute map, avoiding the allocation cost of `jid.to_string()`. Use `jid_attr` for JID-valued attributes like `to`, `from`, and `participant` on hot paths:
+
+```rust
+// Prefer jid_attr for JID attributes — avoids string allocation
+let receipt = NodeBuilder::new("receipt")
+    .attr("id", &message_id)
+    .jid_attr("to", chat_jid.clone())
+    .jid_attr("participant", sender_jid.clone())
+    .build();
+
+// Equivalent but allocates a string per JID
+let receipt = NodeBuilder::new("receipt")
+    .attr("id", &message_id)
+    .attr("to", chat_jid.to_string())
+    .attr("participant", sender_jid.to_string())
+    .build();
+```
+
+#### Conditional chaining
+
+Use `let mut builder` with reassignment for conditional attributes:
+
+```rust
+let mut builder = NodeBuilder::new("receipt")
+    .attr("id", &info.id)
+    .jid_attr("to", info.source.chat.clone());
+
+if info.category == "peer" {
+    builder = builder.attr("type", "peer_msg");
+}
+
+if info.source.is_group {
+    builder = builder.jid_attr("participant", info.source.sender.clone());
+}
+
+let node = builder.build();
 ```
 
 ## Token Dictionary
@@ -496,7 +555,7 @@ NodeBuilder::new("iq")
     .attr("type", "get")
     .attr("xmlns", "w:g2")
     .attr("to", "@s.whatsapp.net")
-    .content_nodes(vec![
+    .children(vec![
         NodeBuilder::new("query").build(),
     ])
     .build()
@@ -506,7 +565,7 @@ NodeBuilder::new("iq")
     .attr("id", "ABC123")
     .attr("type", "result")
     .attr("from", "@s.whatsapp.net")
-    .content_nodes(vec![
+    .children(vec![
         NodeBuilder::new("group")
             .attr("id", "123456@g.us")
             .attr("subject", "My Group")
@@ -522,7 +581,7 @@ NodeBuilder::new("message")
     .attr("to", "15551234567@s.whatsapp.net")
     .attr("type", "text")
     .attr("id", message_id)
-    .content_nodes(vec![
+    .children(vec![
         NodeBuilder::new("enc")
             .attr("v", "2")
             .attr("type", "msg")

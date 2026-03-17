@@ -201,7 +201,11 @@ Waits for full connection and authentication to complete, including offline sync
 pub fn is_connected(&self) -> bool
 ```
 
-Returns `true` if the Noise socket is established.
+Returns `true` if the Noise socket is established. This method uses an internal `AtomicBool` flag (with `Acquire` ordering) instead of probing the noise socket mutex, making it lock-free and immune to false negatives under mutex contention.
+
+<Note>
+  Prior to this design, connection checks used `try_lock()` on the noise socket mutex. Under contention (e.g., during frame encryption), `try_lock()` would fail and incorrectly report the client as disconnected — silently dropping receipt acks. The `AtomicBool` approach eliminates this race condition entirely.
+</Note>
 
 ### is_logged_in
 

@@ -653,6 +653,29 @@ impl Client {
 }
 ```
 
+### Connection state tracking
+
+The client tracks whether the noise socket is established using a dedicated `AtomicBool` (`is_connected`) rather than probing the noise socket mutex. This design prevents a TOCTOU race where `try_lock()` on the mutex fails due to contention (e.g., during frame encryption), not because the socket is absent — which previously caused `is_connected()` to return `false` on live connections, silently dropping receipt acks.
+
+**State transitions:**
+
+| Event | `is_connected` value | Ordering |
+|-------|---------------------|----------|
+| `connect()` start | `false` | `Relaxed` (reset) |
+| Noise socket stored | `true` | `Release` (after socket is `Some`) |
+| `cleanup_connection_state()` | `false` | `Release` (after socket is `None`) |
+
+The `Release`/`Acquire` ordering ensures that any task reading `is_connected() == true` is guaranteed to see the noise socket as `Some`, and any task reading `false` after cleanup sees the socket as `None`.
+
+```rust
+// Lock-free connection check — never affected by mutex contention
+pub fn is_connected(&self) -> bool {
+    self.is_connected.load(Ordering::Acquire)
+}
+```
+
+This is critical for the keepalive loop and stanza acknowledgment, both of which call `is_connected()` to decide whether to send data. Under the old `try_lock()` approach, concurrent `send_node()` calls holding the mutex would cause false negatives, leading to skipped keepalive pings or dropped ack stanzas.
+
 ## Error Handling
 
 ### Socket Errors

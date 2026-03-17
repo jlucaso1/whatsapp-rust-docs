@@ -283,6 +283,7 @@ struct StoreState {
 - **Independent locking**: Sessions, identities, and sender keys each have their own mutex
 - **O(1) reads**: Values stored as `Arc<[u8]>` for cheap cloning (reference count bump)
 - **O(1) key cloning**: Keys stored as `Arc<str>` so cloning a key (needed for both cache and dirty/deleted sets) is a refcount bump instead of a heap allocation
+- **Single-allocation keys**: Session lock keys use `to_protocol_address_string()` (format: `user[:device]@server.0`) which builds the key string in one allocation, avoiding the two-allocation overhead of constructing a `ProtocolAddress` then calling `.to_string()`. See [Signal Protocol performance](/advanced/signal-protocol#single-allocation-session-lock-keys) for details
 
 **Cache operations:**
 

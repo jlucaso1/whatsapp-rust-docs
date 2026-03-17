@@ -337,7 +337,34 @@ This approach prevents ID collisions when pre-keys are consumed non-sequentially
 
 Location: `src/prekeys.rs`
 
-## Storage Integration
+## JID-to-Signal address conversion
+
+The `JidExt` trait in `wacore::types::jid` converts WhatsApp JIDs into the string keys used by the Signal session store and session locks. Two methods handle this:
+
+- **`to_signal_address_string()`** — produces the Signal address name in WhatsApp Web format (`{user}[:device]@{server}`). The `s.whatsapp.net` server is mapped to `c.us` to match WhatsApp Web's internal convention, and the `:device` segment is only included when the device ID is non-zero.
+- **`to_protocol_address_string()`** — appends `.0` to the signal address string, producing the full `ProtocolAddress` key (e.g., `5511999887766@c.us.0`). This is equivalent to `to_protocol_address().to_string()` but avoids an intermediate `ProtocolAddress` allocation.
+
+```rust
+use wacore::types::jid::JidExt;
+
+let jid = Jid::pn("5511999887766");
+assert_eq!(jid.to_signal_address_string(), "5511999887766@c.us");
+assert_eq!(jid.to_protocol_address_string(), "5511999887766@c.us.0");
+
+let lid = Jid::lid_device("100000000000001.1", 75);
+assert_eq!(lid.to_signal_address_string(), "100000000000001.1:75@lid");
+assert_eq!(lid.to_protocol_address_string(), "100000000000001.1:75@lid.0");
+```
+
+`to_protocol_address_string()` reuses `to_signal_address_string()` internally and reserves two extra bytes for the `.0` suffix, so the append typically avoids reallocation.
+
+These address strings are used as keys for:
+- **Session locks** — per-device mutexes in `Client::session_locks` that prevent concurrent Signal operations on the same session
+- **Signal store lookups** — identity, session, and sender key storage keyed by address string
+
+Location: `wacore/src/types/jid.rs`
+
+## Storage integration
 
 whatsapp-rust integrates Signal Protocol storage with SQLite via Diesel:
 

@@ -100,6 +100,22 @@ For zero-allocation lookups and comparisons, the protocol also provides:
 
 Location: `wacore/binary/src/node.rs:10-112`, `wacore/binary/src/jid.rs`
 
+#### Signal address conversion
+
+A separate `JidExt` trait in `wacore::types::jid` converts JIDs into Signal Protocol address strings. The conversion maps `s.whatsapp.net` to `c.us` (matching WhatsApp Web's internal format) and formats the result as `{user}[:device]@{server}`:
+
+| Method | Output format | Example |
+|--------|--------------|---------|
+| `to_signal_address_string()` | `user[:device]@server` | `5511999887766@c.us` |
+| `to_protocol_address_string()` | `user[:device]@server.0` | `5511999887766@c.us.0` |
+| `to_protocol_address()` | `ProtocolAddress { name, device_id: 0 }` | — |
+
+`to_protocol_address_string()` reuses `to_signal_address_string()` internally, appending a `.0` suffix. Both methods pre-allocate capacity to avoid reallocation.
+
+See [Signal protocol](/advanced/signal-protocol#jid-to-signal-address-conversion) for usage details.
+
+Location: `wacore/src/types/jid.rs`
+
 ### NodeBuilder API
 
 The `NodeBuilder` provides a fluent chaining API for constructing nodes. All setter methods consume and return `Self`:

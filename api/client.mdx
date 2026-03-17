@@ -317,7 +317,7 @@ pub async fn send_message_with_options(
 ) -> Result<String, anyhow::Error>
 ```
 
-Sends a message with advanced options like custom ID, edit attributes, or extra attributes.
+Sends a message with advanced options like extra stanza nodes.
 
 <ParamField path="options" type="SendOptions" required>
   Configuration for message sending behavior
@@ -417,12 +417,12 @@ Access group management operations.
 
 **Example:**
 ```rust
-use whatsapp_rust::features::{GroupCreateOptions, GroupSubject};
+use whatsapp_rust::features::groups::{GroupCreateOptions, GroupParticipantOptions};
 
-let options = GroupCreateOptions::new(
-    GroupSubject::new("My Group")?,
-    vec![participant_jid],
-);
+let options = GroupCreateOptions::builder()
+    .subject("My Group")
+    .participants(vec![GroupParticipantOptions::new(participant_jid)])
+    .build();
 let result = client.groups().create_group(options).await?;
 ```
 

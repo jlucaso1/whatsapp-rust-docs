@@ -227,16 +227,17 @@ pub enum ReceiptType {
 
 ## Receipt Events
 
-You can listen for receipt events to track message delivery and read status:
+You can listen for receipt events to track message delivery and read status using the Bot event handler:
 
 ```rust
 use whatsapp_rust::types::events::Event;
 
-let mut events = client.subscribe();
-
-while let Some(event) = events.recv().await {
-    match event {
-        Event::Receipt(receipt) => {
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport_factory)
+    .with_http_client(http_client)
+    .on_event(|event, client| async move {
+        if let Event::Receipt(receipt) = event {
             println!("Receipt type: {:?}", receipt.r#type);
             println!("From: {}", receipt.source.sender);
             println!("Message IDs: {:?}", receipt.message_ids);
@@ -254,9 +255,9 @@ while let Some(event) = events.recv().await {
                 _ => {}
             }
         }
-        _ => {}
-    }
-}
+    })
+    .build()
+    .await?;
 ```
 
 ### Receipt Event Structure
@@ -334,14 +335,22 @@ impl MessageTracker {
     }
 }
 
-let mut tracker = MessageTracker::default();
-let mut events = client.subscribe();
+let tracker = Arc::new(Mutex::new(MessageTracker::default()));
 
-while let Some(event) = events.recv().await {
-    if let Event::Receipt(receipt) = event {
-        tracker.track_receipt(&receipt);
-    }
-}
+// Use within Bot event handler
+let tracker_clone = tracker.clone();
+let mut bot = Bot::builder()
+    // ... configure backend, transport, http_client ...
+    .on_event(move |event, _client| {
+        let tracker = tracker_clone.clone();
+        async move {
+            if let Event::Receipt(receipt) = event {
+                tracker.lock().await.track_receipt(&receipt);
+            }
+        }
+    })
+    .build()
+    .await?;
 ```
 
 ---

@@ -173,30 +173,29 @@ The default implementation using tokio-websockets for async WebSocket connection
 ### Creating a Transport Factory
 
 ```rust
-use whatsapp_rust::transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
 // Default - connects to WhatsApp Web
 let factory = TokioWebSocketTransportFactory::new();
-
-// Custom URL (for testing/proxying)
-let factory = TokioWebSocketTransportFactory::new()
-    .with_url("wss://custom-endpoint.example.com/ws");
 ```
 
-### Usage with Client
+### Usage with Bot builder
 
 ```rust
-use whatsapp_rust::Client;
-use whatsapp_rust::transport::TokioWebSocketTransportFactory;
+use whatsapp_rust::Bot;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let factory = TokioWebSocketTransportFactory::new();
     
-    let mut client = Client::new();
-    client.set_transport_factory(Box::new(factory));
-    
-    client.connect().await?;
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(factory)
+        .with_http_client(http_client)
+        .on_event(|event, client| async move { /* handle events */ })
+        .build()
+        .await?;
     
     Ok(())
 }

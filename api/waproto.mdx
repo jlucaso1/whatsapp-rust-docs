@@ -50,39 +50,39 @@ pub struct Message {
     pub conversation: Option<String>,
     
     // Media messages
-    pub image_message: Option<ImageMessage>,
-    pub video_message: Option<VideoMessage>,
-    pub audio_message: Option<AudioMessage>,
-    pub document_message: Option<DocumentMessage>,
-    pub sticker_message: Option<StickerMessage>,
+    pub image_message: Option<Box<ImageMessage>>,
+    pub video_message: Option<Box<VideoMessage>>,
+    pub audio_message: Option<Box<AudioMessage>>,
+    pub document_message: Option<Box<DocumentMessage>>,
+    pub sticker_message: Option<Box<StickerMessage>>,
     
     // Rich messages
-    pub extended_text_message: Option<ExtendedTextMessage>,
-    pub interactive_message: Option<InteractiveMessage>,
-    pub template_message: Option<TemplateMessage>,
-    pub buttons_message: Option<ButtonsMessage>,
-    pub list_message: Option<ListMessage>,
+    pub extended_text_message: Option<Box<ExtendedTextMessage>>,
+    pub interactive_message: Option<Box<InteractiveMessage>>,
+    pub template_message: Option<Box<TemplateMessage>>,
+    pub buttons_message: Option<Box<ButtonsMessage>>,
+    pub list_message: Option<Box<ListMessage>>,
     
     // Group messages
-    pub sender_key_distribution_message: Option<SenderKeyDistributionMessage>,
+    pub sender_key_distribution_message: Option<Box<SenderKeyDistributionMessage>>,
     
     // System messages
-    pub protocol_message: Option<ProtocolMessage>,
-    pub ephemeral_message: Option<EphemeralMessage>,
-    pub view_once_message: Option<ViewOnceMessage>,
-    pub view_once_message_v2: Option<ViewOnceMessageV2>,
+    pub protocol_message: Option<Box<ProtocolMessage>>,
+    pub ephemeral_message: Option<Box<EphemeralMessage>>,
+    pub view_once_message: Option<Box<ViewOnceMessage>>,
+    pub view_once_message_v2: Option<Box<ViewOnceMessageV2>>,
     
     // Reactions and interactions
-    pub reaction_message: Option<ReactionMessage>,
-    pub edit_message: Option<EditMessage>,
-    pub keep_in_chat_message: Option<KeepInChatMessage>,
+    pub reaction_message: Option<Box<ReactionMessage>>,
+    pub edit_message: Option<Box<EditMessage>>,
+    pub keep_in_chat_message: Option<Box<KeepInChatMessage>>,
     
     // AI/Bot messages
-    pub ai_rich_response_message: Option<AiRichResponseMessage>,
-    pub bot_feedback_message: Option<BotFeedbackMessage>,
+    pub ai_rich_response_message: Option<Box<AiRichResponseMessage>>,
+    pub bot_feedback_message: Option<Box<BotFeedbackMessage>>,
     
     // Metadata
-    pub message_context_info: Option<MessageContextInfo>,
+    pub message_context_info: Option<Box<MessageContextInfo>>,
     // ... and many more
 }
 ```
@@ -100,14 +100,14 @@ let msg = wa::Message {
 
 // Construct an image message
 let img = wa::Message {
-    image_message: Some(wa::ImageMessage {
+    image_message: Some(Box::new(wa::message::ImageMessage {
         url: Some(media_url),
         media_key: Some(media_key.to_vec()),
         file_sha256: Some(file_sha256.to_vec()),
         file_enc_sha256: Some(file_enc_sha256.to_vec()),
         caption: Some("Check this out!".to_string()),
         ..Default::default()
-    }),
+    })),
     ..Default::default()
 };
 ```
@@ -625,7 +625,7 @@ let text = wa::Message {
 
 // Image with caption
 let image = wa::Message {
-    image_message: Some(wa::ImageMessage {
+    image_message: Some(Box::new(wa::message::ImageMessage {
         url: Some(media_url),
         media_key: Some(media_key.to_vec()),
         file_sha256: Some(file_sha256.to_vec()),
@@ -633,22 +633,22 @@ let image = wa::Message {
         caption: Some("Nice photo!".to_string()),
         jpeg_thumbnail: Some(thumbnail),
         ..Default::default()
-    }),
+    })),
     ..Default::default()
 };
 
 // Quoted reply
 let reply = wa::Message {
-    extended_text_message: Some(wa::ExtendedTextMessage {
+    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
         text: Some("Great question!".to_string()),
-        context_info: Some(wa::ContextInfo {
+        context_info: Some(Box::new(wa::message::ContextInfo {
             stanza_id: Some(original_message_id),
             participant: Some(original_sender),
             quoted_message: Some(Box::new(original_message)),
             ..Default::default()
-        }),
+        })),
         ..Default::default()
-    }),
+    })),
     ..Default::default()
 };
 ```
@@ -679,12 +679,8 @@ use waproto::whatsapp as wa;
 use wacore::download::{Downloadable, MediaType};
 
 if let Some(img) = &message.image_message {
-    let media_type = MediaType::Image;
-    let url = img.url.as_ref().unwrap();
-    let media_key = img.media_key.as_ref().unwrap();
-    
-    // Download and decrypt
-    let data = client.download_media(url, media_key, media_type).await?;
+    // Use the Downloadable trait to download and decrypt
+    let data = client.download(img).await?;
 }
 ```
 

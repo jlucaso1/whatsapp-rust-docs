@@ -421,6 +421,55 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
 
 ## Performance Optimizations
 
+### Single-Allocation Session Lock Keys
+
+Session lock keys use the full Signal protocol address string (e.g., `5511999887766@c.us.0`). The `JidExt` trait provides two methods for generating these strings, both defined in `wacore/src/types/jid.rs`:
+
+```rust
+pub trait JidExt {
+    /// Signal address string: `{user}[:device]@{server}`
+    /// Device part only included when device != 0.
+    fn to_signal_address_string(&self) -> String;
+
+    /// Full protocol address string: `{signal_address_string}.0`
+    /// Equivalent to `to_protocol_address().to_string()` but avoids the
+    /// intermediate ProtocolAddress allocation — one String instead of two.
+    fn to_protocol_address_string(&self) -> String;
+}
+```
+
+`to_protocol_address_string()` is used on hot paths (message encryption and decryption) as the key for `session_locks`. It pre-sizes the output buffer and builds the string in a single allocation, avoiding the two-allocation overhead of constructing a `ProtocolAddress` and then calling `.to_string()`.
+
+**Format examples:**
+
+| JID | Signal address | Protocol address string |
+|-----|---------------|------------------------|
+| `5511999887766@s.whatsapp.net` | `5511999887766@c.us` | `5511999887766@c.us.0` |
+| `5511999887766:33@s.whatsapp.net` | `5511999887766:33@c.us` | `5511999887766:33@c.us.0` |
+| `123456789@lid` | `123456789@lid` | `123456789@lid.0` |
+| `123456789:33@lid` | `123456789:33@lid` | `123456789:33@lid.0` |
+
+<Note>
+  The server `s.whatsapp.net` is mapped to `c.us` in address strings, matching WhatsApp Web's internal format. The trailing `.0` is the Signal device_id (always 0 in WhatsApp's usage).
+</Note>
+
+**Usage in message processing:**
+
+```rust
+// In message decryption (src/message.rs)
+let signal_addr_str = sender_encryption_jid.to_protocol_address_string();
+let session_mutex = self.session_locks
+    .get_with(signal_addr_str.clone(), async {
+        Arc::new(tokio::sync::Mutex::new(()))
+    }).await;
+let _session_guard = session_mutex.lock().await;
+
+// In message encryption (src/send.rs)
+let signal_addr_str = encryption_jid.to_protocol_address_string();
+```
+
+Location: `wacore/src/types/jid.rs:4-68`
+
 ### Take/Restore Pattern
 
 Avoids cloning session states during decryption attempts:

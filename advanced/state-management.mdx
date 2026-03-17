@@ -333,7 +333,8 @@ pub struct Client {
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
     /// are processed concurrently across different chats.
-    /// Keys are Signal protocol address strings (e.g., "user@s.whatsapp.net:0").
+    /// Keys are protocol address strings from to_protocol_address_string()
+    /// (e.g., "5511999887766@c.us.0", "123456789:33@lid.0").
     pub(crate) session_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
 
     /// Per-chat message queues for sequential message processing.

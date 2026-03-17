@@ -679,6 +679,188 @@ let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
   SQLite is bundled by default via the `bundled-sqlite` feature on `whatsapp-rust-sqlite-storage`. No system SQLite installation is required.
 </Note>
 
+## Custom Cache Store
+
+The pluggable cache store adapter lets you replace the default in-process moka caches with an external backend like Redis or Memcached. This is useful for sharing cache state across multiple client instances or for deployments where in-process memory is limited.
+
+### The CacheStore trait
+
+Implement the `CacheStore` trait from `wacore::store::cache`:
+
+```rust
+use async_trait::async_trait;
+use std::time::Duration;
+use wacore::store::cache::CacheStore;
+
+pub struct MyRedisCacheStore {
+    client: redis::aio::ConnectionManager,
+}
+
+impl MyRedisCacheStore {
+    pub async fn new(url: &str) -> Self {
+        let client = redis::Client::open(url).unwrap();
+        let conn = client.get_connection_manager().await.unwrap();
+        Self { client: conn }
+    }
+}
+
+#[async_trait]
+impl CacheStore for MyRedisCacheStore {
+    async fn get(&self, namespace: &str, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        let redis_key = format!("{namespace}:{key}");
+        let result: Option<Vec<u8>> = redis::cmd("GET")
+            .arg(&redis_key)
+            .query_async(&mut self.client.clone())
+            .await?;
+        Ok(result)
+    }
+
+    async fn set(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: &[u8],
+        ttl: Option<Duration>,
+    ) -> anyhow::Result<()> {
+        let redis_key = format!("{namespace}:{key}");
+        match ttl {
+            Some(duration) => {
+                redis::cmd("SET")
+                    .arg(&redis_key)
+                    .arg(value)
+                    .arg("EX")
+                    .arg(duration.as_secs())
+                    .query_async(&mut self.client.clone())
+                    .await?;
+            }
+            None => {
+                redis::cmd("SET")
+                    .arg(&redis_key)
+                    .arg(value)
+                    .query_async(&mut self.client.clone())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete(&self, namespace: &str, key: &str) -> anyhow::Result<()> {
+        let redis_key = format!("{namespace}:{key}");
+        redis::cmd("DEL")
+            .arg(&redis_key)
+            .query_async(&mut self.client.clone())
+            .await?;
+        Ok(())
+    }
+
+    async fn clear(&self, namespace: &str) -> anyhow::Result<()> {
+        // Use SCAN to find and delete all keys with the namespace prefix
+        let pattern = format!("{namespace}:*");
+        let mut cursor = 0u64;
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut self.client.clone())
+                .await?;
+
+            if !keys.is_empty() {
+                redis::cmd("DEL")
+                    .arg(&keys)
+                    .query_async(&mut self.client.clone())
+                    .await?;
+            }
+
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn entry_count(&self, namespace: &str) -> anyhow::Result<u64> {
+        // Approximate count using SCAN (expensive — use only for diagnostics)
+        let pattern = format!("{namespace}:*");
+        let mut count = 0u64;
+        let mut cursor = 0u64;
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut self.client.clone())
+                .await?;
+            count += keys.len() as u64;
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+        Ok(count)
+    }
+}
+```
+
+### Plugging in your cache store
+
+Use `CacheStores` to assign your custom backend to specific caches:
+
+```rust
+use whatsapp_rust::{CacheConfig, CacheStores};
+use std::sync::Arc;
+
+let redis = Arc::new(MyRedisCacheStore::new("redis://localhost:6379").await);
+
+// Route only group and device caches to Redis
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .with_cache_config(CacheConfig {
+        cache_stores: CacheStores {
+            group_cache: Some(redis.clone()),
+            device_cache: Some(redis.clone()),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .build()
+    .await?;
+```
+
+Or route all pluggable caches to the same backend:
+
+```rust
+let config = CacheConfig {
+    cache_stores: CacheStores::all(redis.clone()),
+    ..Default::default()
+};
+```
+
+### Available namespaces
+
+The following namespaces are used internally by the client:
+
+| Namespace | Cache | Description |
+|-----------|-------|-------------|
+| `"group"` | `group_cache` | Group metadata |
+| `"device"` | `device_cache` | Device lists per user |
+| `"device_registry"` | `device_registry_cache` | Device registry entries |
+| `"lid_pn_by_lid"` | `lid_pn_cache` | LID-to-phone bidirectional mappings |
+
+### Design considerations
+
+- **Error handling is best-effort.** Cache misses and failures are logged as warnings but don't break the client — it falls back to fetching from the authoritative source.
+- **Serialization uses `serde_json`.** Values are serialized to JSON bytes on the custom-store path. The moka path has zero serialization overhead.
+- **TTL is forwarded from `CacheEntryConfig`.** Your implementation receives the same TTL configured in `CacheConfig`.
+- **Coordination caches cannot be externalized.** Session locks, message queues, and enqueue locks hold live Rust objects (mutexes, channels) and always stay in-process.
+
 ## Best Practices
 
 <Steps>

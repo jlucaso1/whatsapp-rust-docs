@@ -385,7 +385,7 @@ docker build -t whatsapp-rust .
 docker run -v ./data:/data whatsapp-rust
 ```
 
-Session data is stored in the `/data` directory inside the container. Mount a volume to persist it across restarts. See the [installation guide](/installation#docker-deployment) for more details.
+Session data is stored in the `/data` directory inside the container. Mount a volume to persist it across restarts. The container shuts down gracefully on `docker stop` — the bot disconnects cleanly from WhatsApp before exiting. See the [installation guide](/installation#docker-deployment) for more details.
 
 ## Benchmarking
 

@@ -31,9 +31,11 @@ wacore/binary/src/
 A node represents a protocol message or message component:
 
 ```rust
+use std::borrow::Cow;
+
 pub struct Node {
-    pub tag: String,              // e.g., "message", "receipt", "iq"
-    pub attrs: Attrs,             // Key-value attributes
+    pub tag: Cow<'static, str>,        // e.g., "message", "receipt", "iq"
+    pub attrs: Attrs,                  // Key-value attributes
     pub content: Option<NodeContent>,  // Optional content
 }
 
@@ -44,7 +46,9 @@ pub enum NodeContent {
 }
 ```
 
-Location: `wacore/binary/src/node.rs:308-314`
+The `tag` field uses `Cow<'static, str>` so that known protocol tags (like `"message"`, `"iq"`, `"receipt"`) are borrowed as zero-allocation static references from the token dictionary, while unknown tags fall back to an owned `String`.
+
+Location: `wacore/binary/src/node.rs:366`
 
 ### Attributes
 
@@ -56,8 +60,10 @@ pub enum NodeValue {
     Jid(Jid),         // Optimized for WhatsApp identifiers
 }
 
-pub struct Attrs(Vec<(String, NodeValue)>);
+pub struct Attrs(pub Vec<(Cow<'static, str>, NodeValue)>);
 ```
+
+Like `Node.tag`, attribute keys use `Cow<'static, str>` so that common protocol attribute names (like `"id"`, `"type"`, `"to"`, `"from"`) reference static memory from the token dictionary rather than allocating on the heap.
 
 **Why Jid as a separate type?**
 
@@ -122,15 +128,18 @@ let message = NodeBuilder::new("message")
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `new` | `new(tag: impl Into<String>) -> Self` | Create a builder with a tag |
-| `attr` | `attr(key: impl Into<String>, value: impl Into<String>) -> Self` | Add a string attribute |
-| `jid_attr` | `jid_attr(key: impl Into<String>, jid: Jid) -> Self` | Add a JID attribute without stringifying |
-| `attrs` | `attrs(attrs: impl IntoIterator<Item = (K, V)>) -> Self` | Bulk-add attributes from an iterator |
+| `new` | `new(tag: &'static str) -> Self` | Create a builder with a static tag (zero-alloc) |
+| `new_dynamic` | `new_dynamic(tag: String) -> Self` | Create a builder with a dynamic tag |
+| `attr` | `attr(self, key: &'static str, value: impl Into<NodeValue>) -> Self` | Add a string attribute (zero-alloc key) |
+| `jid_attr` | `jid_attr(self, key: &'static str, jid: Jid) -> Self` | Add a JID attribute without stringifying |
+| `attrs` | `attrs(self, attrs: impl IntoIterator<Item = (&'static str, V)>) -> Self` | Bulk-add attributes from an iterator |
 | `children` | `children(children: impl IntoIterator<Item = Node>) -> Self` | Set child nodes as content |
 | `bytes` | `bytes(bytes: impl Into<Vec<u8>>) -> Self` | Set raw bytes as content |
 | `string_content` | `string_content(s: impl Into<String>) -> Self` | Set string as content |
 | `apply_content` | `apply_content(content: Option<NodeContent>) -> Self` | Set arbitrary content |
 | `build` | `build(self) -> Node` | Consume the builder and produce a `Node` |
+
+The `new` and `attr` methods accept `&'static str` for tags and keys, which creates `Cow::Borrowed` values with zero heap allocation. For rare cases where the tag is computed at runtime, use `new_dynamic`.
 
 Location: `wacore/binary/src/builder.rs`
 
@@ -477,6 +486,34 @@ Location: `wacore/binary/src/decoder.rs:400-450`
 
 ## Performance Optimizations
 
+### Token Interning with Cow
+
+When converting decoded `NodeRef` values to owned `Node` values, the `intern_cow` function maps known protocol strings to their static references:
+
+```rust
+fn intern_cow(s: &str) -> Cow<'static, str> {
+    if let Some(idx) = token::index_of_single_token(s)
+        && let Some(token) = token::get_single_token(idx)
+    {
+        return Cow::Borrowed(token);    // Zero-alloc: points to static str
+    } else if let Some((dict, idx)) = token::index_of_double_byte_token(s)
+        && let Some(token) = token::get_double_token(dict, idx)
+    {
+        return Cow::Borrowed(token);    // Zero-alloc: points to static str
+    }
+    Cow::Owned(s.to_string())           // Fallback: heap-allocate unknown strings
+}
+```
+
+The token lookup tables are generated at compile time via `phf` (perfect hash functions), so lookups are O(1). Since the vast majority of node tags and attribute keys are part of the WhatsApp token dictionary, this eliminates most heap allocations during protocol decoding.
+
+This optimization applies to:
+- **`Node.tag`** — protocol tags like `"message"`, `"iq"`, `"receipt"`
+- **`Attrs` keys** — attribute names like `"id"`, `"type"`, `"to"`, `"from"`
+- **`Jid.server`** — server constants like `"s.whatsapp.net"`, `"g.us"`, `"lid"`
+
+Location: `wacore/binary/src/node.rs:9-21`
+
 ### Two-Pass Encoding
 
 For large or variable-size payloads, exact size calculation prevents buffer growth:
@@ -521,12 +558,12 @@ Location: `wacore/binary/src/encoder.rs:240-282`
 
 ### Capacity Estimation
 
-Auto-sizing strategy samples node structure to estimate capacity:
+Auto-sizing strategy samples node structure to estimate capacity. The `Cow<'static, str>` tag works transparently here since `Cow` implements `Deref<Target = str>`:
 
 ```rust
 fn estimate_capacity_node(node: &Node) -> usize {
     let mut estimate = DEFAULT_MARSHAL_CAPACITY + 16;
-    estimate += node.tag.len();
+    estimate += node.tag.len();  // Works with both Cow::Borrowed and Cow::Owned
     estimate += node.attrs.len() * AUTO_ATTR_ESTIMATE;  // ~24 bytes/attr
     
     if let Some(NodeContent::Nodes(children)) = &node.content {

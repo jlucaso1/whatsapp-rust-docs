@@ -206,7 +206,7 @@ let decoded = unmarshal_ref(&bytes)?;
 **Key exports:**
 - `jid::Jid` - WhatsApp JID (Jabber ID) parsing
 - `node::{Node, NodeRef, NodeValue}` - Protocol node types
-- `builder::NodeBuilder` - Fluent node builder with `attr()`, `jid_attr()`, `children()`, `bytes()`, `string_content()`, and `apply_content()` chaining methods
+- `builder::NodeBuilder` - Fluent node builder with `new(&'static str)` / `new_dynamic(String)`, `attr()`, `jid_attr()`, `children()`, `bytes()`, `string_content()`, and `apply_content()` chaining methods
 - `marshal::*` - Binary marshaling functions
 - `attrs::AttrParser` - Attribute parsing utilities
 - `token` - Token dictionary
@@ -358,6 +358,7 @@ Strong typing throughout:
 
 ### Zero-Copy Where Possible
 
+- `Cow<'static, str>` for `Node.tag` and `Attrs` keys — known protocol strings (from the token dictionary) are borrowed as static references with zero heap allocation, while unknown strings fall back to owned `String`
 - `NodeRef` for borrowed node parsing
 - `AttrParserRef` for attribute iteration
 - `marshal_ref` for encoding without cloning

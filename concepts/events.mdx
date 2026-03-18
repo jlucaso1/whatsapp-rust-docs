@@ -129,6 +129,9 @@ pub enum Event {
     DeviceListUpdate(DeviceListUpdate),
     BusinessStatusUpdate(BusinessStatusUpdate),
 
+    // Newsletter
+    NewsletterLiveUpdate(NewsletterLiveUpdate),
+
     // Notification Updates
     DisappearingModeChanged(DisappearingModeChanged),
 }
@@ -1033,6 +1036,54 @@ pub enum BusinessUpdateType {
     Unknown,
 }
 ```
+
+## Newsletter Events
+
+### NewsletterLiveUpdate
+
+**Emitted:** When reaction counts change or messages are updated on a newsletter you're subscribed to (via `subscribe_live_updates`).
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdate {
+    pub newsletter_jid: Jid,
+    pub messages: Vec<NewsletterLiveUpdateMessage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdateMessage {
+    pub server_id: u64,
+    pub reactions: Vec<NewsletterLiveUpdateReaction>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdateReaction {
+    pub code: String,
+    pub count: u64,
+}
+```
+
+**Fields:**
+- `newsletter_jid` — The newsletter channel this update is for
+- `messages` — List of messages with updated reaction counts
+- `server_id` — Server-assigned message ID
+- `reactions` — Current reaction counts (emoji code and count)
+
+**Example:**
+```rust
+Event::NewsletterLiveUpdate(update) => {
+    println!("Newsletter {} updated:", update.newsletter_jid);
+    for msg in &update.messages {
+        for r in &msg.reactions {
+            println!("  Message {}: {} x{}", msg.server_id, r.code, r.count);
+        }
+    }
+}
+```
+
+<Note>
+You must call `client.newsletter().subscribe_live_updates(&jid)` to receive these events. The subscription has a limited duration (typically 300 seconds) and must be renewed periodically.
+</Note>
 
 ## Notification Events
 

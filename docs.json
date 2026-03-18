@@ -47,6 +47,7 @@
               "guides/receiving-messages",
               "guides/media-handling",
               "guides/group-management",
+              "guides/newsletters",
               "guides/custom-backends"
             ]
           },
@@ -92,6 +93,7 @@
               "api/profile",
               "api/chat-actions",
               "api/mex",
+              "api/newsletter",
               "api/tctoken"
             ]
           },

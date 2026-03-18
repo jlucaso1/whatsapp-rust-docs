@@ -385,3 +385,24 @@ if downloadable.is_encrypted() {
     println!("Plaintext media - no decryption needed");
 }
 ```
+
+---
+
+## DownloadUtils
+
+Low-level static methods for media decryption and validation. These are re-exported from `wacore::download` and useful when you need fine-grained control over the download pipeline.
+
+```rust
+use whatsapp_rust::download::DownloadUtils;
+```
+
+### Key methods
+
+| Method | Description |
+|--------|-------------|
+| `verify_and_decrypt(data, media_key, media_type, file_length)` | Verifies HMAC and decrypts AES-256-CBC in one call |
+| `decrypt_stream(reader, media_key, media_type)` | Streaming decryption from a reader |
+| `decrypt_stream_to_writer(reader, writer, media_key, media_type)` | Streaming decryption directly into a writer |
+| `validate_plaintext_sha256(data, expected_sha256)` | Validates SHA-256 hash of plaintext media |
+| `prepare_download_requests(direct_path, ...)` | Builds CDN request URLs with host failover |
+| `get_media_keys(media_key, app_info)` | Derives IV, cipher key, and MAC key via HKDF |

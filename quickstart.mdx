@@ -376,6 +376,29 @@ RUST_LOG="debug" cargo run
 During shutdown or disconnect, the client automatically downgrades sync errors from `error` to `debug` level to reduce noise. This means you won't see spurious error logs when the client is intentionally disconnecting.
 </Note>
 
+## Running with Docker
+
+You can also run the bot using Docker instead of compiling locally:
+
+```bash
+docker build -t whatsapp-rust .
+docker run -v ./data:/data whatsapp-rust
+```
+
+Session data is stored in the `/data` directory inside the container. Mount a volume to persist it across restarts. See the [installation guide](/installation#docker-deployment) for more details.
+
+## Benchmarking
+
+The repository includes a benchmark example at `examples/benchmark.rs` that you can use for performance testing. It uses an in-memory SQLite database and supports a custom WebSocket URL via the `WHATSAPP_WS_URL` environment variable:
+
+```bash
+cargo run --example benchmark --features danger-skip-tls-verify
+```
+
+<Note>
+  The benchmark example requires the `danger-skip-tls-verify` feature flag because it's designed for use with local test servers.
+</Note>
+
 ## Next steps
 
 <CardGroup cols={2}>

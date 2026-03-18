@@ -109,13 +109,27 @@ use std::borrow::Cow;
 pub struct Jid {
     pub user: String,                  // "15551234567"
     pub server: Cow<'static, str>,     // "s.whatsapp.net"
-    pub agent: u8,                     // Domain type (0, 1, 128, 129)
+    pub agent: u8,                     // Agent byte (parsed from JID string)
     pub device: u16,                   // Device ID (0 for primary)
     pub integrator: u16,               // Integrator ID (used with interop server)
 }
 ```
 
-The `server` field uses `Cow<'static, str>` so that known server constants (like `"s.whatsapp.net"`, `"g.us"`, `"lid"`) are borrowed as zero-allocation static references, while unknown servers fall back to an owned `String`. This eliminates per-JID heap allocations on hot paths since most JIDs use one of the ~11 predefined server constants.
+The `server` field uses `Cow<'static, str>` so that known server constants are borrowed as zero-allocation static references, while unknown servers fall back to an owned `String`. This eliminates per-JID heap allocations on hot paths since most JIDs use one of the predefined server constants:
+
+| Constant | Value | Description |
+|---|---|---|
+| `DEFAULT_USER_SERVER` | `s.whatsapp.net` | Standard phone-number JIDs |
+| `HIDDEN_USER_SERVER` | `lid` | Linked Identity JIDs |
+| `GROUP_SERVER` | `g.us` | Group chat JIDs |
+| `BROADCAST_SERVER` | `broadcast` | Broadcast lists and status |
+| `NEWSLETTER_SERVER` | `newsletter` | Newsletter / channel JIDs |
+| `HOSTED_SERVER` | `hosted` | Cloud API business devices (phone-based) |
+| `HOSTED_LID_SERVER` | `hosted.lid` | Cloud API business devices (LID-based) |
+| `MESSENGER_SERVER` | `msgr` | Messenger interop JIDs |
+| `INTEROP_SERVER` | `interop` | Cross-platform interop JIDs |
+| `BOT_SERVER` | `bot` | Bot JIDs |
+| `LEGACY_USER_SERVER` | `c.us` | Legacy user server (pre-multidevice) |
 
 #### Typed constructors
 
@@ -139,6 +153,36 @@ For zero-allocation lookups and comparisons, the protocol also provides:
 - **`DeviceKey<'a>`** — a lightweight key containing `(&'a str, &'a str, u16)` for user/server/device, used for `HashSet` lookups without cloning
 
 Location: `wacore/binary/src/node.rs:10-112`, `wacore/binary/src/jid.rs`
+
+#### JidExt trait
+
+The `JidExt` trait provides type-checking methods on JIDs. It is implemented for `Jid`, `JidRef`, and other borrowing types so you can inspect a JID's server type without string comparisons:
+
+```rust
+use wacore_binary::jid::{Jid, JidExt};
+
+let jid = Jid::pn("15551234567");
+assert!(jid.is_ad());        // true — s.whatsapp.net is an AD server
+assert!(!jid.is_group());    // false — not a @g.us JID
+```
+
+| Method | Returns `true` when |
+|---|---|
+| `is_ad()` | Server is `s.whatsapp.net`, `lid`, or `hosted` |
+| `is_group()` | Server is `g.us` |
+| `is_broadcast_list()` | Server is `broadcast` |
+| `is_status_broadcast()` | User is `"status"` and server is `broadcast` |
+| `is_newsletter()` | Server is `newsletter` |
+| `is_hosted()` | Device is 99, or server is `hosted` / `hosted.lid` |
+| `is_bot()` | Server is `bot`, or phone number starts with known bot prefixes |
+| `is_interop()` | Server is `interop` |
+| `is_messenger()` | Server is `msgr` |
+| `is_empty()` | User is empty and server is empty |
+| `is_same_user_as(other)` | Both JIDs share the same user and server |
+
+The trait also exposes basic accessor methods (`user()`, `server()`, `device()`, `integrator()`) that work uniformly across owned and borrowed JID types.
+
+Location: `wacore/binary/src/jid.rs:218-279`
 
 ### NodeBuilder API
 
@@ -395,12 +439,26 @@ Location: `wacore/binary/src/encoder.rs:706-715`
 // Format: AD_JID + domain_type + device + user
 // Example: "15551234567:1@s.whatsapp.net" (device 1)
 self.write_u8(token::AD_JID)?;
-self.write_u8(meta.domain_type)?;  // 0 for normal, 1 for lid
+self.write_u8(server_to_domain_type(&jid.server, jid.agent))?;
 self.write_u8(device)?;            // Device number
 self.write_string(user)?;          // User part only
 ```
 
-Location: `wacore/binary/src/encoder.rs:699-705`
+The `domain_type` byte is **derived from the `server` field** at encoding time, not from the `agent` field directly. The mapping is:
+
+| `domain_type` | Server | Description |
+|---|---|---|
+| `0` | `s.whatsapp.net` | Standard phone-number JIDs |
+| `1` | `lid` | Linked Identity JIDs |
+| `128` | `hosted` | Cloud API / Meta Business API (phone-based) |
+| `129` | `hosted.lid` | Cloud API / Meta Business API (LID-based) |
+| fallback | *(other)* | Uses the `agent` byte from the JID |
+
+<Warning>
+The `domain_type` must be derived from the JID's `server` field via `server_to_domain_type()`, **not** from `jid.agent`. A previous bug wrote `jid.agent` (which is 0 for most JIDs) unconditionally, causing LID JIDs to be encoded with `domain_type=0` instead of `domain_type=1`. This made LID group messages silently rejected by the server with error 421.
+</Warning>
+
+Location: `wacore/binary/src/encoder.rs:699-705`, `362-369`
 
 ### List Encoding
 

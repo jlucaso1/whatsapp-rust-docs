@@ -65,6 +65,40 @@ pub struct Attrs(pub Vec<(Cow<'static, str>, NodeValue)>);
 
 Like `Node.tag`, attribute keys use `Cow<'static, str>` so that common protocol attribute names (like `"id"`, `"type"`, `"to"`, `"from"`) reference static memory from the token dictionary rather than allocating on the heap.
 
+#### NodeValue API
+
+`NodeValue` provides exactly two methods for accessing the underlying value, regardless of variant:
+
+```rust
+use std::borrow::Cow;
+
+// Get a string view of the value (works for both variants)
+// - String variant: Cow::Borrowed(&str) — zero copy
+// - Jid variant: Cow::Owned(formatted) — allocates only when needed
+pub fn as_str(&self) -> Cow<'_, str>
+
+// Convert to an owned Jid, parsing from string if necessary
+// - Jid variant: clones the Jid directly
+// - String variant: attempts to parse, returns None on failure
+pub fn to_jid(&self) -> Option<Jid>
+```
+
+This simplified API means you never need to match on the variant directly — use `as_str()` when you need the value as text, and `to_jid()` when you need a structured JID:
+
+```rust
+// Reading an attribute value as a string
+let msg_type = node.attrs.get("type")
+    .map(|v| v.as_str().into_owned());
+
+// Reading an attribute value as a JID
+let recipient = node.attrs.get("to")
+    .and_then(|v| v.to_jid());
+```
+
+`NodeValue` also implements `PartialEq<str>` for zero-allocation comparisons — the `Jid` variant compares byte-by-byte against the formatted string without allocating.
+
+Location: `wacore/binary/src/node.rs:39-58`
+
 **Why Jid as a separate type?**
 
 JIDs (Jabber IDs) like `15551234567@s.whatsapp.net` appear frequently in the protocol. Storing them as structured data avoids repeated parsing/formatting overhead:
@@ -460,6 +494,41 @@ pub enum NodeContentRef<'a> {
 
 Location: `wacore/binary/src/node.rs:316-321`, `288-293`
 
+The borrowed counterpart to `NodeValue` is `ValueRef<'a>`, used in the decoder path:
+
+```rust
+pub enum ValueRef<'a> {
+    String(Cow<'a, str>),
+    Jid(JidRef<'a>),
+}
+```
+
+`ValueRef` provides four methods: `as_str()` (returns `Option<&str>`, only for `String` variant), `as_jid()` (returns `Option<&JidRef>`, only for `Jid` variant), `to_jid()` (converts either variant to owned `Jid`), and `to_string_cow()` (converts either variant to `Cow<'a, str>`).
+
+Location: `wacore/binary/src/node.rs:267-316`
+
+### Attribute parsing
+
+`AttrParser` and `AttrParserRef` provide structured attribute extraction from owned `Node` and borrowed `NodeRef` values respectively. They accumulate parse errors instead of panicking:
+
+```rust
+let mut parser = node.attr_parser();
+
+let msg_id: String = parser.required_str("id");
+let msg_type: Option<String> = parser.optional_str("type");
+let recipient: Option<Jid> = parser.optional_jid("to");
+
+parser.finish()?; // Returns accumulated errors if any
+```
+
+The `optional_jid` method handles both `NodeValue` variants:
+- If the attribute is a `NodeValue::Jid`, it returns the JID directly via clone (zero parse cost).
+- If the attribute is a `NodeValue::String`, it parses via `Jid::from_str`. Parse failures are captured in the error list and surfaced when you call `finish()`, rather than being silently discarded.
+
+This ensures that malformed JID strings in protocol messages are reported as `BinaryError::Jid` (for `AttrParser`) or `BinaryError::AttrParse` (for `AttrParserRef`) instead of silently returning `None`.
+
+Location: `wacore/binary/src/attrs.rs`
+
 ### Unpacking
 
 Reverse of the packing process:
@@ -710,10 +779,13 @@ pub enum BinaryError {
     InvalidToken(u8),
     InvalidListSize,
     AttrParse(String),
+    Jid(JidParseError),     // JID parse failures from AttrParser
     LeftoverData(usize),
     Io(std::io::Error),
 }
 ```
+
+The `Jid` variant is emitted by `AttrParser::optional_jid` when a string attribute fails to parse as a JID. This ensures malformed JIDs in protocol messages are surfaced as typed errors rather than silently ignored.
 
 Location: `wacore/binary/src/error.rs`
 

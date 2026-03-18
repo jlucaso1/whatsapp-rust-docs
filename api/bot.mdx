@@ -418,14 +418,28 @@ For bots that only need to respond to new messages, enabling this can significan
 ### build
 
 ```rust
-pub async fn build(self) -> Result<Bot>
+pub async fn build(self) -> Result<Bot, BotBuilderError>
 ```
 
 Builds the bot with the configured options.
 
 **Errors:**
-- Missing required fields (backend, transport_factory, http_client)
-- Backend initialization failures
+
+```rust
+pub enum BotBuilderError {
+    MissingBackend,
+    MissingTransport,
+    MissingHttpClient,
+    Other(anyhow::Error),
+}
+```
+
+| Variant | Cause |
+|---------|-------|
+| `MissingBackend` | `with_backend()` was not called |
+| `MissingTransport` | `with_transport_factory()` was not called |
+| `MissingHttpClient` | `with_http_client()` was not called |
+| `Other` | Backend initialization or other runtime failure |
 
 ### client
 

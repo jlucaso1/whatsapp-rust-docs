@@ -191,6 +191,56 @@ pub async fn wait_for_connected(
 
 Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
 
+### pair_with_code
+
+```rust
+pub async fn pair_with_code(
+    self: &Arc<Self>,
+    options: PairCodeOptions,
+) -> Result<String, PairCodeError>
+```
+
+Initiates pair code authentication as an alternative to QR code pairing. The returned 8-character code should be displayed to the user, who enters it on their phone under **WhatsApp > Linked Devices > Link a Device > Link with phone number instead**.
+
+This can run concurrently with QR code pairing — whichever completes first wins.
+
+<ParamField path="options" type="PairCodeOptions" required>
+  Configuration for pair code authentication:
+  - `phone_number` — Phone number in international format (e.g., `"15551234567"`)
+  - `show_push_notification` — Whether to show a push notification on the phone (default: `true`)
+  - `custom_code` — Optional custom 8-character code using Crockford Base32 alphabet
+</ParamField>
+
+<ResponseField name="code" type="String">
+  The 8-character pairing code to display to the user
+</ResponseField>
+
+**Errors (`PairCodeError`):**
+
+| Variant | Cause |
+|---------|-------|
+| `PhoneNumberRequired` | Empty phone number |
+| `PhoneNumberTooShort` | Fewer than 7 digits |
+| `PhoneNumberNotInternational` | Starts with `0` (not international format) |
+| `InvalidCustomCode` | Custom code is not 8 valid Crockford Base32 characters |
+| `MissingPairingRef` | Server response missing pairing ref |
+| `RequestFailed` | Server request failed |
+
+**Example:**
+```rust
+use whatsapp_rust::pair_code::PairCodeOptions;
+
+let options = PairCodeOptions {
+    phone_number: "15551234567".to_string(),
+    show_push_notification: true,
+    custom_code: None, // Generate random code
+    ..Default::default()
+};
+
+let code = client.pair_with_code(options).await?;
+println!("Enter this code on your phone: {}", code);
+```
+
 ---
 
 ## Connection State
@@ -597,14 +647,6 @@ pub auto_reconnect_errors: Arc<AtomicU32>
 ```
 
 Tracks the number of consecutive reconnection failures. Used internally for Fibonacci backoff calculations. Resets to `0` on a successful connection.
-
-### last_successful_connect
-
-```rust
-pub last_successful_connect: Arc<Mutex<Option<DateTime<Utc>>>>
-```
-
-Timestamp of the last successful connection. `None` if the client has never successfully connected.
 
 ### custom_enc_handlers
 
@@ -1017,6 +1059,50 @@ pub async fn send_digest_key_bundle(&self) -> Result<(), IqError>
 ```
 
 Sends Signal Protocol prekey bundle digest to the server.
+
+---
+
+## Memory diagnostics
+
+<Note>
+  Requires the `debug-diagnostics` feature flag.
+</Note>
+
+### memory_diagnostics
+
+```rust
+#[cfg(feature = "debug-diagnostics")]
+pub async fn memory_diagnostics(&self) -> MemoryDiagnostics
+```
+
+Returns a snapshot of all internal collection sizes for memory leak detection. Moka caches report approximate counts (pending evictions may not be reflected).
+
+**`MemoryDiagnostics` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `group_cache` | `u64` | Moka cache — group metadata |
+| `device_cache` | `u64` | Moka cache — device info |
+| `device_registry_cache` | `u64` | Moka cache — device registry |
+| `lid_pn_lid_entries` | `u64` | LID-to-PN mapping entries |
+| `lid_pn_pn_entries` | `u64` | PN-to-LID mapping entries |
+| `retried_group_messages` | `u64` | Pending group message retries |
+| `recent_messages` | `u64` | Recent message dedup cache |
+| `message_retry_counts` | `u64` | Message retry counter cache |
+| `session_locks` | `u64` | Per-device session locks |
+| `message_queues` | `u64` | Per-chat message queues |
+| `response_waiters` | `usize` | Active IQ response waiters |
+| `node_waiters` | `usize` | Active node waiters |
+| `pending_retries` | `usize` | Pending message retries |
+| `signal_cache_sessions` | `usize` | Cached Signal sessions |
+| `signal_cache_identities` | `usize` | Cached Signal identities |
+| `signal_cache_sender_keys` | `usize` | Cached sender keys |
+
+**Example:**
+```rust
+let diag = client.memory_diagnostics().await;
+println!("{}", diag); // Pretty-prints all collection sizes
+```
 
 ---
 

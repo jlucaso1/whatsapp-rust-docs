@@ -106,6 +106,35 @@ cargo run
 
 If you see "whatsapp-rust installed successfully!", you're ready to move on to the [Quickstart](/quickstart) guide.
 
+## Docker deployment
+
+whatsapp-rust includes a Dockerfile for building a minimal, statically linked container image. The multi-stage build produces a `scratch`-based image with only the compiled binary.
+
+### Build the image
+
+```bash
+docker build -t whatsapp-rust .
+```
+
+The build process:
+
+1. Uses `rust:slim` with musl toolchain to compile a fully static binary
+2. Targets `x86_64-unknown-linux-musl` for maximum portability
+3. Caches dependency compilation in a separate layer for fast rebuilds
+4. Produces a final image from `scratch` containing only the binary
+
+### Run the container
+
+```bash
+docker run -v ./data:/data whatsapp-rust
+```
+
+The container uses `/data` as its working directory, so mount a volume there to persist your SQLite database and session data across restarts.
+
+<Note>
+  The Dockerfile builds for `x86_64-unknown-linux-musl` only. For other architectures, you need to modify the target triple in the Dockerfile.
+</Note>
+
 ## Next steps
 
 <Card title="Quickstart" icon="rocket" href="/quickstart">

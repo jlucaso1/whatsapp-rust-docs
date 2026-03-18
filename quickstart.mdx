@@ -344,7 +344,7 @@ whatsapp-rust uses the `log` crate with module-specific targets for fine-grained
 | `Client/Group` | Group metadata and participant operations |
 | `Client/Contacts` | Contact sync and lookup |
 | `Client/Business` | Business profile updates |
-| `Client/PDO` | Pre-delivery operations and retry |
+| `Client/PDO` | Peer Data Operations (message resend from primary device) |
 | `Client/IQ` | IQ stanza send/receive |
 | `Client/Ack` | Stanza acknowledgment |
 | `Client/Status` | Status/story operations |
@@ -375,6 +375,32 @@ RUST_LOG="debug" cargo run
 <Note>
 During shutdown or disconnect, the client automatically downgrades sync errors from `error` to `debug` level to reduce noise. This means you won't see spurious error logs when the client is intentionally disconnecting.
 </Note>
+
+## CLI options
+
+The demo bot supports command-line arguments for pair code authentication:
+
+```bash
+# QR code pairing only (default)
+cargo run
+
+# Pair code + QR code (concurrent)
+cargo run -- --phone 15551234567
+cargo run -- -p 15551234567
+
+# Custom 8-character pair code
+cargo run -- -p 15551234567 --code MYCODE12
+cargo run -- -p 15551234567 -c MYCODE12
+```
+
+When a phone number is provided, the bot uses pair code authentication concurrently with QR code pairing. The first method to complete is used.
+
+The demo bot also responds to these text commands:
+
+| Command | Description |
+|---------|-------------|
+| `!setname <name>` | Set your WhatsApp push name |
+| `!setstatus <text>` | Set your WhatsApp status text |
 
 ## Running with Docker
 

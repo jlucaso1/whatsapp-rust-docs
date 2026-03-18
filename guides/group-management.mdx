@@ -564,8 +564,44 @@ let info = client.groups().query_info(&group_jid).await?;
 
 </Steps>
 
-## Next Steps
+## Communities
+
+Communities are parent groups that contain linked subgroups. You can create communities, link and unlink subgroups, and query community metadata using the `community()` API:
+
+```rust
+let community = client.community();
+
+// Create a community
+let options = CreateCommunityOptions::new("My Community");
+let result = community.create(options).await?;
+
+// List subgroups
+let subgroups = community.get_subgroups(&result.gid).await?;
+for sg in &subgroups {
+    println!("{}: {}", sg.id, sg.subject);
+}
+```
+
+You can determine what type of group you're dealing with using the `group_type()` helper:
+
+```rust
+use whatsapp_rust::{group_type, GroupType};
+
+let metadata = client.groups().get_metadata(&group_jid).await?;
+
+match group_type(&metadata) {
+    GroupType::Community => println!("This is a community parent group"),
+    GroupType::LinkedSubgroup => println!("This is a community subgroup"),
+    GroupType::Default => println!("This is a regular group"),
+    _ => {}
+}
+```
+
+See the [Community API reference](/api/community) for the full API.
+
+## Next steps
 
 - [Sending Messages](/guides/sending-messages) - Send messages to groups
 - [Receiving Messages](/guides/receiving-messages) - Handle group message events
+- [Community API reference](/api/community) - Manage WhatsApp communities
 - [Custom Backends](/guides/custom-backends) - Store group metadata

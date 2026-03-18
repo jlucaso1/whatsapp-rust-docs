@@ -1,0 +1,423 @@
+---
+title: Community
+description: Community management operations — create, manage, and organize WhatsApp communities with linked subgroups
+---
+
+The `Community` feature provides methods for managing WhatsApp communities, which are parent groups that contain linked subgroups. Community operations use `w:g2` IQ stanzas for mutations and MEX (GraphQL) for metadata queries.
+
+## Access
+
+Access community operations through the client:
+
+```rust
+let community = client.community();
+```
+
+## Methods
+
+### create
+
+Create a new community.
+
+```rust
+pub async fn create(
+    &self,
+    options: CreateCommunityOptions,
+) -> Result<CreateCommunityResult, anyhow::Error>
+```
+
+**Parameters:**
+- `options` — Community creation options (see [CreateCommunityOptions](#createcommunityoptions))
+
+**Returns:**
+- `CreateCommunityResult` — Contains the JID of the created community
+
+<Note>
+If a description is provided, it is set via a follow-up IQ after creation because the group create stanza does not support inline descriptions for communities.
+</Note>
+
+**Example:**
+```rust
+use whatsapp_rust::Community;
+use whatsapp_rust::CreateCommunityOptions;
+
+let options = CreateCommunityOptions::new("My Community")
+    .description("A community for Rust developers".to_string())
+    .closed(false)
+    .create_general_chat(true);
+
+let result = client.community().create(options).await?;
+println!("Created community: {}", result.gid);
+```
+
+### deactivate
+
+Deactivate (delete) a community. Subgroups are unlinked but not deleted.
+
+```rust
+pub async fn deactivate(&self, community_jid: &Jid) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `community_jid` — JID of the community to deactivate
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+client.community().deactivate(&community_jid).await?;
+```
+
+### link_subgroups
+
+Link existing groups as subgroups of a community.
+
+```rust
+pub async fn link_subgroups(
+    &self,
+    community_jid: &Jid,
+    subgroup_jids: &[Jid],
+) -> Result<LinkSubgroupsResult, anyhow::Error>
+```
+
+**Parameters:**
+- `community_jid` — JID of the parent community
+- `subgroup_jids` — Slice of group JIDs to link
+
+**Returns:**
+- `LinkSubgroupsResult` — Contains successfully linked JIDs and any failures
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+let groups = vec![
+    "120363098765432@g.us".parse()?,
+    "120363011111111@g.us".parse()?,
+];
+
+let result = client.community().link_subgroups(&community_jid, &groups).await?;
+
+println!("Linked: {:?}", result.linked_jids);
+for (jid, error_code) in &result.failed_groups {
+    println!("Failed to link {}: error {}", jid, error_code);
+}
+```
+
+### unlink_subgroups
+
+Unlink subgroups from a community.
+
+```rust
+pub async fn unlink_subgroups(
+    &self,
+    community_jid: &Jid,
+    subgroup_jids: &[Jid],
+    remove_orphan_members: bool,
+) -> Result<UnlinkSubgroupsResult, anyhow::Error>
+```
+
+**Parameters:**
+- `community_jid` — JID of the parent community
+- `subgroup_jids` — Slice of subgroup JIDs to unlink
+- `remove_orphan_members` — Whether to remove members who are only in the community through the unlinked subgroups
+
+**Returns:**
+- `UnlinkSubgroupsResult` — Contains successfully unlinked JIDs and any failures
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+let subgroups = vec!["120363098765432@g.us".parse()?];
+
+let result = client.community().unlink_subgroups(
+    &community_jid,
+    &subgroups,
+    true, // remove orphan members
+).await?;
+
+println!("Unlinked: {:?}", result.unlinked_jids);
+```
+
+### get_subgroups
+
+Fetch all subgroups of a community via MEX (GraphQL).
+
+```rust
+pub async fn get_subgroups(
+    &self,
+    community_jid: &Jid,
+) -> Result<Vec<CommunitySubgroup>, MexError>
+```
+
+**Parameters:**
+- `community_jid` — JID of the community
+
+**Returns:**
+- `Vec<CommunitySubgroup>` — List of subgroups with metadata
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+let subgroups = client.community().get_subgroups(&community_jid).await?;
+
+for sg in &subgroups {
+    println!("{}: {} (participants: {:?})", sg.id, sg.subject, sg.participant_count);
+    if sg.is_default_sub_group {
+        println!("  (announcement subgroup)");
+    }
+    if sg.is_general_chat {
+        println!("  (general chat)");
+    }
+}
+```
+
+### get_subgroup_participant_counts
+
+Fetch participant counts per subgroup via MEX (GraphQL).
+
+```rust
+pub async fn get_subgroup_participant_counts(
+    &self,
+    community_jid: &Jid,
+) -> Result<Vec<(Jid, u32)>, MexError>
+```
+
+**Parameters:**
+- `community_jid` — JID of the community
+
+**Returns:**
+- `Vec<(Jid, u32)>` — List of subgroup JID and participant count pairs
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+let counts = client.community().get_subgroup_participant_counts(&community_jid).await?;
+
+for (jid, count) in &counts {
+    println!("{}: {} participants", jid, count);
+}
+```
+
+### query_linked_group
+
+Query a linked subgroup's metadata from the parent community.
+
+```rust
+pub async fn query_linked_group(
+    &self,
+    community_jid: &Jid,
+    subgroup_jid: &Jid,
+) -> Result<GroupMetadata, anyhow::Error>
+```
+
+**Parameters:**
+- `community_jid` — JID of the parent community
+- `subgroup_jid` — JID of the subgroup to query
+
+**Returns:**
+- `GroupMetadata` — Full metadata of the linked subgroup (see [Groups API](/api/groups#get_participating) for fields)
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+let subgroup_jid: Jid = "120363098765432@g.us".parse()?;
+
+let metadata = client.community().query_linked_group(&community_jid, &subgroup_jid).await?;
+println!("Subgroup: {} ({} participants)", metadata.subject, metadata.participants.len());
+```
+
+### join_subgroup
+
+Join a linked subgroup via the parent community.
+
+```rust
+pub async fn join_subgroup(
+    &self,
+    community_jid: &Jid,
+    subgroup_jid: &Jid,
+) -> Result<GroupMetadata, anyhow::Error>
+```
+
+**Parameters:**
+- `community_jid` — JID of the parent community
+- `subgroup_jid` — JID of the subgroup to join
+
+**Returns:**
+- `GroupMetadata` — Metadata of the joined subgroup
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+let subgroup_jid: Jid = "120363098765432@g.us".parse()?;
+
+let metadata = client.community().join_subgroup(&community_jid, &subgroup_jid).await?;
+println!("Joined: {}", metadata.subject);
+```
+
+### get_linked_groups_participants
+
+Get all participants across all linked groups of a community.
+
+```rust
+pub async fn get_linked_groups_participants(
+    &self,
+    community_jid: &Jid,
+) -> Result<Vec<GroupParticipant>, anyhow::Error>
+```
+
+**Parameters:**
+- `community_jid` — JID of the community
+
+**Returns:**
+- `Vec<GroupParticipant>` — Aggregated list of participants from all linked subgroups
+
+**Example:**
+```rust
+let community_jid: Jid = "120363012345678@g.us".parse()?;
+let participants = client.community().get_linked_groups_participants(&community_jid).await?;
+
+println!("Total participants across all subgroups: {}", participants.len());
+for p in &participants {
+    println!("  {} (admin: {})", p.jid, p.is_admin);
+}
+```
+
+## Types
+
+### CreateCommunityOptions
+
+Options for creating a new community.
+
+```rust
+pub struct CreateCommunityOptions {
+    pub name: String,
+    pub description: Option<String>,
+    pub closed: bool,
+    pub allow_non_admin_sub_group_creation: bool,
+    pub create_general_chat: bool,
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `String` | required | Community name |
+| `description` | `Option<String>` | `None` | Community description |
+| `closed` | `bool` | `false` | Whether the community requires approval to join |
+| `allow_non_admin_sub_group_creation` | `bool` | `false` | Allow non-admin members to create subgroups |
+| `create_general_chat` | `bool` | `true` | Create a general chat subgroup alongside the community |
+
+**Constructor:**
+```rust
+let options = CreateCommunityOptions::new("My Community");
+```
+
+### CreateCommunityResult
+
+Result of creating a community.
+
+```rust
+pub struct CreateCommunityResult {
+    pub gid: Jid,
+}
+```
+
+### CommunitySubgroup
+
+A subgroup within a community.
+
+```rust
+pub struct CommunitySubgroup {
+    pub id: Jid,
+    pub subject: String,
+    pub participant_count: Option<u32>,
+    pub is_default_sub_group: bool,
+    pub is_general_chat: bool,
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `Jid` | Subgroup JID |
+| `subject` | `String` | Subgroup name |
+| `participant_count` | `Option<u32>` | Number of participants (if available) |
+| `is_default_sub_group` | `bool` | Whether this is the default announcement subgroup |
+| `is_general_chat` | `bool` | Whether this is the general chat subgroup |
+
+### GroupType
+
+Classification of a group within the community hierarchy.
+
+```rust
+pub enum GroupType {
+    Default,
+    Community,
+    LinkedSubgroup,
+    LinkedAnnouncementGroup,
+    LinkedGeneralGroup,
+}
+```
+
+| Variant | Description |
+|---------|-------------|
+| `Default` | Regular standalone group (not part of a community) |
+| `Community` | Community parent group |
+| `LinkedSubgroup` | A subgroup linked to a community |
+| `LinkedAnnouncementGroup` | The default announcement subgroup of a community |
+| `LinkedGeneralGroup` | The general chat subgroup of a community |
+
+### group_type helper
+
+Determine the group type from metadata fields:
+
+```rust
+use whatsapp_rust::{group_type, GroupType};
+
+let metadata = client.groups().get_metadata(&group_jid).await?;
+
+match group_type(&metadata) {
+    GroupType::Community => println!("This is a community"),
+    GroupType::LinkedSubgroup => println!("This is a linked subgroup"),
+    GroupType::LinkedAnnouncementGroup => println!("This is the announcement group"),
+    GroupType::LinkedGeneralGroup => println!("This is the general chat"),
+    GroupType::Default => println!("This is a regular group"),
+}
+```
+
+### LinkSubgroupsResult
+
+Result of linking subgroups to a community.
+
+```rust
+pub struct LinkSubgroupsResult {
+    pub linked_jids: Vec<Jid>,
+    pub failed_groups: Vec<(Jid, u32)>,
+}
+```
+
+### UnlinkSubgroupsResult
+
+Result of unlinking subgroups from a community.
+
+```rust
+pub struct UnlinkSubgroupsResult {
+    pub unlinked_jids: Vec<Jid>,
+    pub failed_groups: Vec<(Jid, u32)>,
+}
+```
+
+## Error handling
+
+Methods that query via MEX return `MexError`, while IQ-based methods return `anyhow::Error`. See [MEX API reference](/api/mex) for `MexError` details.
+
+```rust
+// MEX-based method
+match client.community().get_subgroups(&community_jid).await {
+    Ok(subgroups) => println!("Found {} subgroups", subgroups.len()),
+    Err(e) => eprintln!("MEX query failed: {}", e),
+}
+
+// IQ-based method
+match client.community().deactivate(&community_jid).await {
+    Ok(()) => println!("Community deactivated"),
+    Err(e) => eprintln!("Failed to deactivate: {}", e),
+}
+```

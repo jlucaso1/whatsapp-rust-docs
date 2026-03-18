@@ -1,0 +1,247 @@
+---
+title: Community management
+description: Learn how to create communities, manage subgroups, and query community metadata in whatsapp-rust
+---
+
+## Overview
+
+Communities are parent groups that contain linked subgroups. They use the `w:g2` IQ namespace for mutations and MEX (GraphQL) for metadata queries.
+
+This guide covers creating communities, linking and unlinking subgroups, querying subgroup metadata, and identifying group types within a community hierarchy.
+
+## Accessing the Community API
+
+All community operations are accessed through the `community()` method:
+
+```rust
+let community = client.community();
+```
+
+See [Community API reference](/api/community) for the full API.
+
+## Creating a community
+
+```rust
+use whatsapp_rust::features::community::CreateCommunityOptions;
+
+let options = CreateCommunityOptions::new("My Community");
+
+let result = client.community().create(options).await?;
+println!("Community created: {}", result.gid);
+```
+
+By default, `create_general_chat` is `true`, so a general chat subgroup is created alongside the community.
+
+See [Community API reference](/api/community#create) for details.
+
+### Community creation options
+
+Customize the community with `CreateCommunityOptions`:
+
+```rust
+use whatsapp_rust::features::community::CreateCommunityOptions;
+
+let mut options = CreateCommunityOptions::new("My Community");
+options.description = Some("Welcome to the community!".to_string());
+options.closed = true;
+options.allow_non_admin_sub_group_creation = false;
+options.create_general_chat = true;
+
+let result = client.community().create(options).await?;
+```
+
+<Note>
+If a description is provided, it is set via a follow-up IQ after creation — the group create stanza does not support inline descriptions for communities.
+</Note>
+
+## Deactivating a community
+
+Deactivate (delete) a community. Subgroups are unlinked but not deleted:
+
+```rust
+client.community().deactivate(&community_jid).await?;
+```
+
+See [Community API reference](/api/community#deactivate) for details.
+
+## Managing subgroups
+
+### Link existing groups
+
+Link existing groups as subgroups of a community:
+
+```rust
+let subgroup_jids = vec![
+    "120363001111111@g.us".parse()?,
+    "120363002222222@g.us".parse()?,
+];
+
+let result = client.community()
+    .link_subgroups(&community_jid, &subgroup_jids)
+    .await?;
+
+println!("Linked: {:?}", result.linked_jids);
+
+for (jid, error_code) in &result.failed_groups {
+    eprintln!("Failed to link {}: error code {}", jid, error_code);
+}
+```
+
+See [Community API reference](/api/community#link_subgroups) for details.
+
+### Unlink subgroups
+
+Unlink subgroups from a community:
+
+```rust
+let result = client.community()
+    .unlink_subgroups(
+        &community_jid,
+        &subgroup_jids,
+        true, // remove_orphan_members
+    )
+    .await?;
+
+println!("Unlinked: {:?}", result.unlinked_jids);
+```
+
+When `remove_orphan_members` is `true`, members who are only in the community through the unlinked subgroups are removed from the community.
+
+See [Community API reference](/api/community#unlink_subgroups) for details.
+
+### Join a subgroup
+
+Join a linked subgroup via the parent community:
+
+```rust
+let metadata = client.community()
+    .join_subgroup(&community_jid, &subgroup_jid)
+    .await?;
+
+println!("Joined: {} ({} participants)",
+    metadata.subject, metadata.participants.len());
+```
+
+See [Community API reference](/api/community#join_subgroup) for details.
+
+## Querying community information
+
+### List subgroups
+
+Fetch all subgroups of a community via MEX (GraphQL):
+
+```rust
+let subgroups = client.community()
+    .get_subgroups(&community_jid)
+    .await?;
+
+for sg in &subgroups {
+    println!("{}: {} (default: {}, general: {})",
+        sg.id, sg.subject, sg.is_default_sub_group, sg.is_general_chat);
+    if let Some(count) = sg.participant_count {
+        println!("  Participants: {}", count);
+    }
+}
+```
+
+See [Community API reference](/api/community#get_subgroups) for details.
+
+### Get subgroup participant counts
+
+Fetch participant counts per subgroup without fetching full subgroup details:
+
+```rust
+let counts = client.community()
+    .get_subgroup_participant_counts(&community_jid)
+    .await?;
+
+for (jid, count) in &counts {
+    println!("{}: {} participants", jid, count);
+}
+```
+
+See [Community API reference](/api/community#get_subgroup_participant_counts) for details.
+
+### Query linked group metadata
+
+Query a specific linked subgroup's metadata from the parent community:
+
+```rust
+let metadata = client.community()
+    .query_linked_group(&community_jid, &subgroup_jid)
+    .await?;
+
+println!("Subject: {}", metadata.subject);
+println!("Participants: {}", metadata.participants.len());
+```
+
+See [Community API reference](/api/community#query_linked_group) for details.
+
+### Get all participants across subgroups
+
+Fetch all participants across all linked groups of a community:
+
+```rust
+let participants = client.community()
+    .get_linked_groups_participants(&community_jid)
+    .await?;
+
+for p in &participants {
+    println!("{} (admin: {})", p.jid, p.is_admin);
+}
+```
+
+See [Community API reference](/api/community#get_linked_groups_participants) for details.
+
+## Identifying group types
+
+Use the `group_type` function to classify a group within the community hierarchy:
+
+```rust
+use whatsapp_rust::features::community::{group_type, GroupType};
+
+let metadata = client.groups().get_metadata(&group_jid).await?;
+
+match group_type(&metadata) {
+    GroupType::Community => println!("This is a community parent group"),
+    GroupType::LinkedSubgroup => println!("This is a linked subgroup"),
+    GroupType::LinkedAnnouncementGroup => println!("This is the default announcement subgroup"),
+    GroupType::LinkedGeneralGroup => println!("This is the general chat subgroup"),
+    GroupType::Default => println!("This is a regular group"),
+}
+```
+
+The classification is based on these `GroupMetadata` fields:
+
+| Field | Description |
+|-------|-------------|
+| `is_parent_group` | `true` for community parent groups |
+| `parent_group_jid` | JID of the parent community (for subgroups) |
+| `is_default_sub_group` | `true` for the default announcement subgroup |
+| `is_general_chat` | `true` for the general chat subgroup |
+| `allow_non_admin_sub_group_creation` | Whether non-admin members can create subgroups |
+
+See [Groups API reference](/api/groups#get_metadata) for all `GroupMetadata` fields.
+
+## Error handling
+
+Community mutations return `anyhow::Error`, while MEX-based queries (`get_subgroups`, `get_subgroup_participant_counts`) return `MexError`:
+
+```rust
+use whatsapp_rust::features::mex::MexError;
+
+match client.community().get_subgroups(&community_jid).await {
+    Ok(subgroups) => println!("Found {} subgroups", subgroups.len()),
+    Err(MexError::PayloadParsing(msg)) => {
+        eprintln!("Parse error: {}", msg);
+    }
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
+## Next steps
+
+- [Community API reference](/api/community) — Full API details and types
+- [Group management](/guides/group-management) — Manage individual groups
+- [Events](/concepts/events) — Handle group update events
+- [MEX API](/api/mex) — Understand the GraphQL layer used by community queries

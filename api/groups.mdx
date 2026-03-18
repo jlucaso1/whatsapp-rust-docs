@@ -67,6 +67,13 @@ pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, 
 - `member_add_mode: Option<MemberAddMode>` - Who can add members
 - `member_link_mode: Option<MemberLinkMode>` - Who can use invite links
 - `size: Option<u32>` - Total participant count
+- `is_parent_group: bool` - Whether this group is a community parent group
+- `parent_group_jid: Option<Jid>` - JID of the parent community (for subgroups)
+- `is_default_sub_group: bool` - Whether this is the default announcement subgroup of a community
+- `is_general_chat: bool` - Whether this is the general chat subgroup of a community
+- `allow_non_admin_sub_group_creation: bool` - Whether non-admin community members can create subgroups
+
+See [Community API](/api/community) for community-specific operations.
 
 **GroupParticipant fields:**
 - `jid: Jid` - Participant JID

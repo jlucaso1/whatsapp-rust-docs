@@ -361,6 +361,9 @@ pub struct AppStateSyncKey {
 #[async_trait]
 pub trait ProtocolStore: Send + Sync {
     // SKDM Tracking (Sender Key Distribution Messages)
+    // These are updated only AFTER the server ACKs the message stanza,
+    // preventing stale entries from network failures mid-send.
+    // See: Signal Protocol - Deferred SKDM recipient caching
     async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>>;
     async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()>;
     async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;

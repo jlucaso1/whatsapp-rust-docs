@@ -977,11 +977,11 @@ client.register_handler(Arc::new(MyHandler));
 ```rust
 pub async fn register_chatstate_handler(
     &self,
-    handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>
+    handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>,
 )
 ```
 
-Registers a handler for chat state events (typing indicators).
+Registers a handler for chat state events (typing indicators). The handler is wrapped in `Arc` for thread-safe sharing across the event dispatching system.
 
 ---
 
@@ -1089,14 +1089,21 @@ Returns a snapshot of all internal collection sizes for memory leak detection. M
 | `retried_group_messages` | `u64` | Pending group message retries |
 | `recent_messages` | `u64` | Recent message dedup cache |
 | `message_retry_counts` | `u64` | Message retry counter cache |
+| `pdo_pending_requests` | `u64` | PDO pending request cache |
 | `session_locks` | `u64` | Per-device session locks |
 | `message_queues` | `u64` | Per-chat message queues |
+| `message_enqueue_locks` | `u64` | Per-chat message enqueue locks |
 | `response_waiters` | `usize` | Active IQ response waiters |
 | `node_waiters` | `usize` | Active node waiters |
 | `pending_retries` | `usize` | Pending message retries |
+| `presence_subscriptions` | `usize` | Active presence subscriptions |
+| `app_state_key_requests` | `usize` | Pending app state key requests |
+| `app_state_syncing` | `usize` | Active app state sync operations |
 | `signal_cache_sessions` | `usize` | Cached Signal sessions |
 | `signal_cache_identities` | `usize` | Cached Signal identities |
 | `signal_cache_sender_keys` | `usize` | Cached sender keys |
+| `chatstate_handlers` | `usize` | Registered chat state handlers |
+| `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
 
 **Example:**
 ```rust

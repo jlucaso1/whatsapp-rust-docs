@@ -671,13 +671,6 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 | `message_queues_capacity` | 2,000 | Per-chat message processing queue capacity |
 | `message_enqueue_locks_capacity` | 2,000 | Per-chat message enqueue lock capacity |
 
-#### Buffer pool
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `max_pooled_buffers` | 8 | Max number of reusable plaintext marshal buffers |
-| `max_pooled_buffer_capacity` | 256 KiB | Max byte capacity per pooled buffer |
-
 #### Sent message DB cleanup
 
 | Setting | Default | Description |

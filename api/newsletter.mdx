@@ -1,0 +1,422 @@
+---
+title: Newsletter
+description: Newsletter (channel) operations — create, manage, subscribe, and send messages to WhatsApp channels
+---
+
+The `Newsletter` feature provides methods for managing WhatsApp newsletter channels, including creation, subscription management, messaging, reactions, and live updates. Newsletter operations use MEX (GraphQL) for metadata/management and IQ stanzas for message operations.
+
+<Note>
+Newsletter messages are **plaintext** — they are not encrypted with the Signal protocol.
+</Note>
+
+## Access
+
+Access newsletter operations through the client:
+
+```rust
+let newsletter = client.newsletter();
+```
+
+## Methods
+
+### list_subscribed
+
+List all newsletters the user is subscribed to.
+
+```rust
+pub async fn list_subscribed(&self) -> Result<Vec<NewsletterMetadata>, MexError>
+```
+
+**Returns:**
+- `Vec<NewsletterMetadata>` — List of subscribed newsletters
+
+**Example:**
+```rust
+let newsletters = client.newsletter().list_subscribed().await?;
+
+for nl in &newsletters {
+    println!("{}: {} ({} subscribers)", nl.jid, nl.name, nl.subscriber_count);
+}
+```
+
+### get_metadata
+
+Fetch metadata for a newsletter by its JID.
+
+```rust
+pub async fn get_metadata(&self, jid: &Jid) -> Result<NewsletterMetadata, MexError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID (server must be `newsletter`)
+
+**Returns:**
+- `NewsletterMetadata` — Full newsletter metadata
+
+**Example:**
+```rust
+let metadata = client.newsletter().get_metadata(&newsletter_jid).await?;
+
+println!("Name: {}", metadata.name);
+println!("Subscribers: {}", metadata.subscriber_count);
+println!("Verified: {:?}", metadata.verification);
+```
+
+### get_metadata_by_invite
+
+Fetch metadata for a newsletter by its invite code.
+
+```rust
+pub async fn get_metadata_by_invite(
+    &self,
+    invite_code: &str,
+) -> Result<NewsletterMetadata, MexError>
+```
+
+**Parameters:**
+- `invite_code` — Newsletter invite code string
+
+**Returns:**
+- `NewsletterMetadata` — Full newsletter metadata
+
+**Example:**
+```rust
+let metadata = client.newsletter()
+    .get_metadata_by_invite("ABC123")
+    .await?;
+
+println!("Found: {} ({})", metadata.name, metadata.jid);
+```
+
+### create
+
+Create a new newsletter.
+
+```rust
+pub async fn create(
+    &self,
+    name: &str,
+    description: Option<&str>,
+) -> Result<NewsletterMetadata, MexError>
+```
+
+**Parameters:**
+- `name` — Newsletter name
+- `description` — Optional description
+
+**Returns:**
+- `NewsletterMetadata` — Metadata of the newly created newsletter
+
+**Example:**
+```rust
+let created = client.newsletter()
+    .create("My Channel", Some("A description"))
+    .await?;
+
+println!("Created: {} ({})", created.name, created.jid);
+```
+
+### join
+
+Join (subscribe to) a newsletter.
+
+```rust
+pub async fn join(&self, jid: &Jid) -> Result<NewsletterMetadata, MexError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID to join
+
+**Returns:**
+- `NewsletterMetadata` — Metadata with the viewer's role set to `Subscriber`
+
+**Example:**
+```rust
+let joined = client.newsletter().join(&newsletter_jid).await?;
+
+println!("Joined '{}' as {:?}", joined.name, joined.role);
+```
+
+### leave
+
+Leave (unsubscribe from) a newsletter.
+
+```rust
+pub async fn leave(&self, jid: &Jid) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID to leave
+
+**Example:**
+```rust
+client.newsletter().leave(&newsletter_jid).await?;
+```
+
+### update
+
+Update a newsletter's name and/or description.
+
+```rust
+pub async fn update(
+    &self,
+    jid: &Jid,
+    name: Option<&str>,
+    description: Option<&str>,
+) -> Result<NewsletterMetadata, MexError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `name` — New name, or `None` to keep the current name
+- `description` — New description, or `None` to keep the current description
+
+**Returns:**
+- `NewsletterMetadata` — Updated metadata
+
+**Example:**
+```rust
+let updated = client.newsletter()
+    .update(&newsletter_jid, Some("New Name"), None)
+    .await?;
+
+println!("Updated: {}", updated.name);
+```
+
+### send_message
+
+Send a message to a newsletter. Newsletter messages are plaintext (no Signal E2E encryption).
+
+```rust
+pub async fn send_message(
+    &self,
+    jid: &Jid,
+    message: &wa::Message,
+) -> Result<String, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `message` — Protobuf message to send
+
+**Returns:**
+- `String` — Client-assigned message ID
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    conversation: Some("Hello subscribers!".to_string()),
+    ..Default::default()
+};
+
+let msg_id = client.newsletter()
+    .send_message(&newsletter_jid, &message)
+    .await?;
+```
+
+<Note>
+For media messages (images, videos, etc.), the media must be uploaded separately using the newsletter-specific upload endpoint before sending. Text messages work directly.
+</Note>
+
+### send_reaction
+
+Send a reaction to a newsletter message.
+
+```rust
+pub async fn send_reaction(
+    &self,
+    jid: &Jid,
+    server_id: u64,
+    reaction: &str,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `server_id` — Server-assigned ID of the message to react to
+- `reaction` — Emoji code (e.g., `"👍"`, `"❤️"`), or empty string to remove
+
+**Example:**
+```rust
+// Add a reaction
+client.newsletter()
+    .send_reaction(&newsletter_jid, server_id, "👍")
+    .await?;
+
+// Remove a reaction
+client.newsletter()
+    .send_reaction(&newsletter_jid, server_id, "")
+    .await?;
+```
+
+### get_messages
+
+Fetch message history from a newsletter.
+
+```rust
+pub async fn get_messages(
+    &self,
+    jid: &Jid,
+    count: u32,
+    before: Option<u64>,
+) -> Result<Vec<NewsletterMessage>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `count` — Maximum number of messages to return
+- `before` — If set, return messages before this `server_id` (for pagination)
+
+**Returns:**
+- `Vec<NewsletterMessage>` — List of newsletter messages
+
+**Example:**
+```rust
+// Fetch latest 50 messages
+let messages = client.newsletter()
+    .get_messages(&newsletter_jid, 50, None)
+    .await?;
+
+// Paginate backwards
+if let Some(oldest) = messages.last() {
+    let older = client.newsletter()
+        .get_messages(&newsletter_jid, 50, Some(oldest.server_id))
+        .await?;
+}
+```
+
+### subscribe_live_updates
+
+Subscribe to live updates for a newsletter (reaction counts, message changes).
+
+```rust
+pub async fn subscribe_live_updates(
+    &self,
+    jid: &Jid,
+) -> Result<u64, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+
+**Returns:**
+- `u64` — Subscription duration in seconds (typically 300)
+
+The server sends `Event::NewsletterLiveUpdate` events with updated reaction counts. You need to re-subscribe periodically when the duration expires.
+
+**Example:**
+```rust
+let duration = client.newsletter()
+    .subscribe_live_updates(&newsletter_jid)
+    .await?;
+
+println!("Subscribed for {}s", duration);
+```
+
+## Types
+
+### NewsletterMetadata
+
+Metadata for a newsletter channel.
+
+```rust
+pub struct NewsletterMetadata {
+    pub jid: Jid,
+    pub name: String,
+    pub description: Option<String>,
+    pub subscriber_count: u64,
+    pub verification: NewsletterVerification,
+    pub state: NewsletterState,
+    pub picture_url: Option<String>,
+    pub preview_url: Option<String>,
+    pub invite_code: Option<String>,
+    pub role: Option<NewsletterRole>,
+    pub creation_time: Option<u64>,
+}
+```
+
+### NewsletterVerification
+
+```rust
+pub enum NewsletterVerification {
+    Verified,
+    Unverified,
+}
+```
+
+### NewsletterState
+
+```rust
+pub enum NewsletterState {
+    Active,
+    Suspended,
+    Geosuspended,
+}
+```
+
+### NewsletterRole
+
+The viewer's role in a newsletter.
+
+```rust
+pub enum NewsletterRole {
+    Owner,
+    Admin,
+    Subscriber,
+    Guest,
+}
+```
+
+### NewsletterMessage
+
+A message from a newsletter's history.
+
+```rust
+pub struct NewsletterMessage {
+    /// Server-assigned message ID (monotonic, used for pagination cursors).
+    pub server_id: u64,
+    /// Message timestamp (Unix seconds).
+    pub timestamp: u64,
+    /// Message type ("text", "media", etc.).
+    pub message_type: String,
+    /// Whether the viewer is the sender.
+    pub is_sender: bool,
+    /// Decoded protobuf message (from plaintext bytes).
+    pub message: Option<wa::Message>,
+    /// Reaction counts on this message.
+    pub reactions: Vec<NewsletterReactionCount>,
+}
+```
+
+### NewsletterReactionCount
+
+A reaction count on a newsletter message.
+
+```rust
+pub struct NewsletterReactionCount {
+    pub code: String,
+    pub count: u64,
+}
+```
+
+## Error handling
+
+Metadata and management methods return `MexError`:
+
+```rust
+pub enum MexError {
+    PayloadParsing(String),
+    // ... other variants
+}
+```
+
+Message operations (`send_message`, `send_reaction`, `get_messages`, `subscribe_live_updates`) return `anyhow::Error`.
+
+```rust
+match client.newsletter().create("Test", None).await {
+    Ok(metadata) => println!("Created: {}", metadata.name),
+    Err(e) => eprintln!("Failed: {}", e),
+}
+```

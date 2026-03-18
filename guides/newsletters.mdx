@@ -1,0 +1,262 @@
+---
+title: Newsletters (channels)
+description: Learn how to create, manage, and interact with WhatsApp newsletter channels in whatsapp-rust
+---
+
+## Overview
+
+Newsletters (also called channels) are broadcast-style messaging in WhatsApp. Unlike groups, newsletter messages are **plaintext** (no Signal E2E encryption) and flow one-way from admins to subscribers.
+
+This guide covers creating newsletters, managing subscriptions, sending messages, and handling live updates.
+
+## Accessing the Newsletter API
+
+All newsletter operations are accessed through the `newsletter()` method:
+
+```rust
+let newsletter = client.newsletter();
+```
+
+See [Newsletter API reference](/api/newsletter) for the full API.
+
+## Creating a newsletter
+
+```rust
+let created = client.newsletter()
+    .create("My Channel", Some("Channel description"))
+    .await?;
+
+println!("Created: {} ({})", created.name, created.jid);
+println!("Invite code: {:?}", created.invite_code);
+```
+
+The returned `NewsletterMetadata` contains the channel's JID (with `@newsletter` server), name, subscriber count, and invite code.
+
+See [Newsletter API reference](/api/newsletter#create) for details.
+
+## Listing subscribed newsletters
+
+```rust
+let newsletters = client.newsletter().list_subscribed().await?;
+
+for nl in &newsletters {
+    println!("{}: {} ({} subscribers)",
+        nl.jid, nl.name, nl.subscriber_count);
+}
+```
+
+See [Newsletter API reference](/api/newsletter#list_subscribed) for details.
+
+## Fetching metadata
+
+### By JID
+
+```rust
+let metadata = client.newsletter().get_metadata(&newsletter_jid).await?;
+
+println!("Name: {}", metadata.name);
+println!("Description: {:?}", metadata.description);
+println!("Subscribers: {}", metadata.subscriber_count);
+println!("Verification: {:?}", metadata.verification);
+println!("State: {:?}", metadata.state);
+```
+
+### By invite code
+
+```rust
+let metadata = client.newsletter()
+    .get_metadata_by_invite("invite-code-here")
+    .await?;
+
+println!("Found: {} ({})", metadata.name, metadata.jid);
+```
+
+See [Newsletter API reference](/api/newsletter#get_metadata) for all metadata fields.
+
+## Joining and leaving
+
+### Join a newsletter
+
+```rust
+let joined = client.newsletter().join(&newsletter_jid).await?;
+
+println!("Joined '{}' as {:?}", joined.name, joined.role);
+```
+
+### Leave a newsletter
+
+```rust
+client.newsletter().leave(&newsletter_jid).await?;
+```
+
+See [Newsletter API reference](/api/newsletter#join) for details.
+
+## Updating a newsletter
+
+You can update the name and/or description of a newsletter you own:
+
+```rust
+let updated = client.newsletter()
+    .update(
+        &newsletter_jid,
+        Some("New Channel Name"),
+        Some("Updated description"),
+    )
+    .await?;
+
+println!("Updated: {}", updated.name);
+```
+
+Pass `None` for fields you don't want to change.
+
+See [Newsletter API reference](/api/newsletter#update) for details.
+
+## Sending messages
+
+Newsletter messages are plaintext — they bypass Signal encryption entirely.
+
+### Text messages
+
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    conversation: Some("Hello subscribers!".to_string()),
+    ..Default::default()
+};
+
+let msg_id = client.newsletter()
+    .send_message(&newsletter_jid, &message)
+    .await?;
+
+println!("Sent message: {}", msg_id);
+```
+
+<Note>
+For media messages (images, videos, etc.), you must upload the media separately using the newsletter-specific upload endpoint before sending. Text messages work directly.
+</Note>
+
+### Reactions
+
+Send a reaction to a specific newsletter message using its `server_id`:
+
+```rust
+// React with thumbs up
+client.newsletter()
+    .send_reaction(&newsletter_jid, server_id, "👍")
+    .await?;
+
+// Remove reaction (empty string)
+client.newsletter()
+    .send_reaction(&newsletter_jid, server_id, "")
+    .await?;
+```
+
+See [Newsletter API reference](/api/newsletter#send_message) for details.
+
+## Fetching message history
+
+Retrieve past messages with pagination support:
+
+```rust
+// Fetch the latest 50 messages
+let messages = client.newsletter()
+    .get_messages(&newsletter_jid, 50, None)
+    .await?;
+
+for msg in &messages {
+    println!("ID: {}, time: {}, type: {}",
+        msg.server_id, msg.timestamp, msg.message_type);
+    
+    if let Some(decoded) = &msg.message {
+        if let Some(text) = &decoded.conversation {
+            println!("  Text: {}", text);
+        }
+    }
+    
+    for reaction in &msg.reactions {
+        println!("  {} x{}", reaction.code, reaction.count);
+    }
+}
+```
+
+### Pagination
+
+Use the `server_id` from a previous response to paginate backwards:
+
+```rust
+// Get messages before a specific server_id
+let older = client.newsletter()
+    .get_messages(&newsletter_jid, 20, Some(last_server_id))
+    .await?;
+```
+
+See [Newsletter API reference](/api/newsletter#get_messages) for details.
+
+## Live updates
+
+Subscribe to real-time updates for a newsletter to receive reaction count changes:
+
+```rust
+let duration = client.newsletter()
+    .subscribe_live_updates(&newsletter_jid)
+    .await?;
+
+println!("Subscribed for {}s", duration);
+```
+
+The server sends `NewsletterLiveUpdate` events with updated reaction counts. Handle them in your event handler:
+
+```rust
+use wacore::types::events::Event;
+
+Event::NewsletterLiveUpdate(update) => {
+    println!("Newsletter {} updated:", update.newsletter_jid);
+    for msg in &update.messages {
+        println!("  Message {}: {:?}", msg.server_id,
+            msg.reactions.iter()
+                .map(|r| format!("{} x{}", r.code, r.count))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+```
+
+<Note>
+The subscription duration (typically 300 seconds) is returned by the server. You need to re-subscribe periodically to continue receiving live updates.
+</Note>
+
+See [Events reference](/concepts/events#newsletterliveupdate) for the full event type.
+
+## Error handling
+
+Newsletter operations return `MexError` for metadata/management operations and `anyhow::Error` for message operations:
+
+```rust
+use whatsapp_rust::features::mex::MexError;
+
+match client.newsletter().get_metadata(&jid).await {
+    Ok(metadata) => println!("Found: {}", metadata.name),
+    Err(MexError::PayloadParsing(msg)) => {
+        eprintln!("Parse error: {}", msg);
+    }
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
+## Key differences from groups
+
+| Feature | Newsletters | Groups |
+|---------|------------|--------|
+| Encryption | Plaintext | Signal E2E |
+| Messaging | One-way (admins only) | All members |
+| JID server | `@newsletter` | `@g.us` |
+| Reactions | Emoji counts (aggregated) | Per-message |
+| API backend | MEX (GraphQL) | IQ stanzas |
+
+## Next steps
+
+- [Newsletter API reference](/api/newsletter) — Full API details and types
+- [Events](/concepts/events) — Handle newsletter live update events
+- [Sending messages](/guides/sending-messages) — Send messages to groups and contacts
+- [MEX API](/api/mex) — Understand the GraphQL layer used by newsletters

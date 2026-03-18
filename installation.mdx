@@ -55,7 +55,7 @@ whatsapp-rust supports several optional features:
 | `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
 | `ureq-client` | Ureq HTTP client | ✅ Yes |
 | `tokio-native` | Tokio multi-threaded runtime | ✅ Yes |
-| `signal` | Unix signal handling | ❌ No |
+| `signal` | Unix signal handling (graceful shutdown on SIGTERM/Ctrl+C) | ✅ Yes |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 | `debug-diagnostics` | Memory diagnostics API (`MemoryDiagnostics`) | ❌ No |
@@ -130,6 +130,12 @@ docker run -v ./data:/data whatsapp-rust
 ```
 
 The container uses `/data` as its working directory, so mount a volume there to persist your SQLite database and session data across restarts.
+
+### Graceful shutdown
+
+The container supports graceful shutdown out of the box. When the `signal` feature is enabled (it is by default), the bot listens for `SIGTERM` and `Ctrl+C`, disconnects cleanly from WhatsApp, and exits. Docker sends `SIGTERM` on `docker stop`, so the bot will shut down gracefully without losing session state.
+
+Since the image is built from `scratch`, PID 1 is the binary itself. It handles signals directly — no init system like `tini` is needed.
 
 <Note>
   The Dockerfile builds for `x86_64-unknown-linux-musl` only. For other architectures, you need to modify the target triple in the Dockerfile.

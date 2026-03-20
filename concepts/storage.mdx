@@ -872,6 +872,32 @@ snapshots/
 
 By default, whatsapp-rust uses in-process [moka](https://github.com/moka-rs/moka) caches for group metadata, device lists, device registry, and LID-PN mappings. The pluggable cache store adapter lets you replace any of these with an external backend (Redis, Memcached, etc.) by implementing the `CacheStore` trait.
 
+### PortableCache (WASM-compatible alternative)
+
+When the `moka-cache` feature is disabled, whatsapp-rust automatically switches to `PortableCache` — a platform-agnostic, runtime-independent cache implementation suitable for WASM and other non-standard runtimes. It mirrors the moka `Cache` API surface so call-sites can switch transparently.
+
+`PortableCache` supports:
+- **Maximum capacity** with oldest-inserted eviction
+- **Time-to-live (TTL)** — entries expire a fixed duration after insertion
+- **Time-to-idle (TTI)** — entries expire after a fixed duration of no access
+- **Single-flight `get_with`** — concurrent initializations for the same key coalesce into a single call, which is critical for caches storing coordination primitives (mutexes, channels)
+
+All time checks use `wacore::time::now_millis` instead of `std::time::Instant`, making it compatible with environments where monotonic clocks are unavailable.
+
+```toml
+# Disable moka to use PortableCache (e.g., for WASM targets)
+[dependencies]
+whatsapp-rust = { version = "0.4", default-features = false, features = [
+    "sqlite-storage",
+    "tokio-transport",
+    "tokio-runtime",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+    # "moka-cache" omitted — PortableCache is used instead
+] }
+```
+
 ```mermaid
 graph TB
     A[Client] --> B[TypedCache]

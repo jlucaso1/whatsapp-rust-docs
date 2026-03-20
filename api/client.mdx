@@ -608,6 +608,8 @@ Access status/story operations.
 - `send_raw(message, recipients, options)` - Post any message type as a status
 - `revoke(message_id, recipients, options)` - Delete a posted status
 
+See [Status API](/api/status) for full documentation.
+
 ### mex
 
 ```rust
@@ -619,6 +621,8 @@ Access Meta Exchange (GraphQL) operations.
 **Methods:**
 - `query(request: MexRequest)` - Execute a GraphQL query
 - `mutate(request: MexRequest)` - Execute a GraphQL mutation
+
+See [MEX API](/api/mex) for full documentation.
 
 ### profile
 
@@ -744,10 +748,10 @@ Tracks the number of consecutive reconnection failures. Used internally for Fibo
 ### custom_enc_handlers
 
 ```rust
-pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>
+pub custom_enc_handlers: Arc<async_lock::RwLock<HashMap<String, Arc<dyn EncHandler>>>>
 ```
 
-Custom handlers for encrypted message types. You can register handlers for specific encryption types that the client doesn't natively support. These are also registerable via `BotBuilder::with_enc_handler()`.
+Custom handlers for encrypted message types. You can register handlers for specific encryption types that the client doesn't natively support. Access requires `.read().await` for lookups and `.write().await` for modifications. These are also registerable via `BotBuilder::with_enc_handler()`.
 
 ### RECONNECT_BACKOFF_STEP
 
@@ -1165,6 +1169,44 @@ pub async fn register_chatstate_handler(
 ```
 
 Registers a handler for chat state events (typing indicators). The handler is wrapped in `Arc` for thread-safe sharing across the event dispatching system.
+
+---
+
+## Call management
+
+### reject_call
+
+```rust
+pub async fn reject_call(
+    &self,
+    call_id: &str,
+    call_from: &Jid,
+) -> Result<(), anyhow::Error>
+```
+
+Reject an incoming call. This is fire-and-forget — no server response is expected. Sends a `<call><reject>` stanza to the WhatsApp server.
+
+<ParamField path="call_id" type="&str" required>
+  The ID of the incoming call to reject. Must not be empty.
+</ParamField>
+
+<ParamField path="call_from" type="&Jid" required>
+  The JID of the caller.
+</ParamField>
+
+**Example:**
+
+```rust
+bot.on_event(|event, client| async move {
+    if let Event::Notification(node) = &event {
+        // Handle incoming call notification and reject it
+        if let Some(call_id) = extract_call_id(&node) {
+            let caller = extract_caller(&node);
+            client.reject_call(&call_id, &caller).await.ok();
+        }
+    }
+});
+```
 
 ---
 

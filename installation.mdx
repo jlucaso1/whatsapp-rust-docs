@@ -22,23 +22,23 @@ Add whatsapp-rust and its required dependencies to your `Cargo.toml`:
 
 ```toml Default features
 [dependencies]
-whatsapp-rust = "0.3"
-whatsapp-rust-sqlite-storage = "0.3"
-whatsapp-rust-tokio-transport = "0.3"
-whatsapp-rust-ureq-http-client = "0.3"
-wacore = "0.3"
-waproto = "0.3"
+whatsapp-rust = "0.4"
+whatsapp-rust-sqlite-storage = "0.4"
+whatsapp-rust-tokio-transport = "0.4"
+whatsapp-rust-ureq-http-client = "0.4"
+wacore = "0.4"
+waproto = "0.4"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```toml Minimal setup
 [dependencies]
-whatsapp-rust = { version = "0.3", default-features = false }
-whatsapp-rust-sqlite-storage = "0.3"
-whatsapp-rust-tokio-transport = "0.3"
-whatsapp-rust-ureq-http-client = "0.3"
-wacore = "0.3"
-waproto = "0.3"
+whatsapp-rust = { version = "0.4", default-features = false }
+whatsapp-rust-sqlite-storage = "0.4"
+whatsapp-rust-tokio-transport = "0.4"
+whatsapp-rust-ureq-http-client = "0.4"
+wacore = "0.4"
+waproto = "0.4"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -76,7 +76,7 @@ To use a system-installed SQLite instead of the bundled version:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-sqlite-storage = { version = "0.3", default-features = false }
+whatsapp-rust-sqlite-storage = { version = "0.4", default-features = false }
 ```
 
 <Note>
@@ -89,7 +89,7 @@ If you want to use only specific features:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust = { version = "0.3", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
+whatsapp-rust = { version = "0.4", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
 ```
 
 ## Verify installation

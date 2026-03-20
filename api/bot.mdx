@@ -354,7 +354,7 @@ Bot::builder()
         match event {
             Event::PairingCode { code, timeout } => {
                 println!("Enter this code on your phone: {}", code);
-                println!("Expires in: {} seconds", timeout);
+                println!("Expires in: {} seconds", timeout.as_secs());
             }
             _ => {}
         }

@@ -824,6 +824,43 @@ Event::ContactSyncRequested(sync) => {
 }
 ```
 
+### ContactUpdate
+
+**Emitted:** When a contact's information changes via app-state sync (e.g., first name, last name set in your address book)
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactUpdate {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::ContactAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `jid` - The contact whose information changed
+- `timestamp` - When the change occurred
+- `action` - The contact action from app-state sync, containing fields like `full_name` and `first_name`
+- `from_full_sync` - Whether this came from a full app-state sync (initial load) or an incremental update
+
+**Example:**
+```rust
+Event::ContactUpdate(update) => {
+    println!("Contact {} updated at {}", update.jid, update.timestamp);
+    if let Some(name) = &update.action.full_name {
+        println!("Full name: {}", name);
+    }
+    if update.from_full_sync {
+        println!("(from full sync)");
+    }
+}
+```
+
+<Note>
+`ContactUpdate` comes from app-state sync mutations and is distinct from `ContactUpdated`, which comes from server-side `<notification type="contacts">` stanzas.
+</Note>
+
 <Note>
 The server may also send `<add/>` and `<remove/>` child actions in contacts notifications for lightweight roster changes. These are acknowledged automatically and do not emit events.
 </Note>

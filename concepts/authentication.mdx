@@ -68,8 +68,12 @@ pub fn make_qr_data(store: &Device, ref_str: String) -> String {
 ### Implementation
 
 ```rust
+use std::sync::Arc;
 use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use wacore::types::events::Event;
 
 #[tokio::main]
@@ -78,6 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut bot = Bot::builder()
         .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .with_runtime(TokioRuntime)
         .on_event(|event, _client| async move {
             match event {
                 Event::PairingQrCode { code, timeout } => {
@@ -85,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}", code);
                 }
                 Event::PairSuccess(info) => {
-                    println!("✅ Paired as {}", info.id);
+                    println!("Paired as {}", info.id);
                 }
                 _ => {}
             }

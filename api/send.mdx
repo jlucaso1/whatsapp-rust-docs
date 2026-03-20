@@ -1,6 +1,6 @@
 ---
 title: "send"
-description: "Send messages, configure send options, and revoke messages"
+description: "Send, edit, and revoke messages with advanced options"
 ---
 
 ## send_message
@@ -148,6 +148,66 @@ let message_id = client.send_message_with_options(
     options
 ).await?;
 ```
+
+---
+
+## edit_message
+
+Edit a previously sent message.
+
+```rust
+pub async fn edit_message(
+    &self,
+    to: Jid,
+    original_id: impl Into<String>,
+    new_content: wa::Message,
+) -> Result<String, anyhow::Error>
+```
+
+<ParamField path="to" type="Jid" required>
+  Chat JID where the original message was sent
+</ParamField>
+
+<ParamField path="original_id" type="String" required>
+  ID of the message to edit (from `send_message` return value)
+</ParamField>
+
+<ParamField path="new_content" type="wa::Message" required>
+  New message content to replace the original
+</ParamField>
+
+<ResponseField name="message_id" type="String">
+  Message ID of the edit message
+</ResponseField>
+
+### Example: Edit a message
+
+```rust
+use waproto::whatsapp as wa;
+
+// Send original message
+let msg_id = client.send_message(
+    chat_jid.clone(),
+    wa::Message {
+        conversation: Some("Hello!".to_string()),
+        ..Default::default()
+    }
+).await?;
+
+// Edit it
+let edit_id = client.edit_message(
+    chat_jid,
+    &msg_id,
+    wa::Message {
+        conversation: Some("Hello, edited!".to_string()),
+        ..Default::default()
+    }
+).await?;
+```
+
+<Note>
+  The edit wraps your new content in an `edited_message` (FutureProofMessage) envelope automatically. In group chats, the correct participant JID (LID or PN) is resolved for you.
+</Note>
 
 ---
 

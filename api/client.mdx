@@ -472,10 +472,16 @@ Access group management operations.
 - `promote_participants(jid: &Jid, participants: &[Jid])` - Make members admins
 - `demote_participants(jid: &Jid, participants: &[Jid])` - Remove admin status
 - `get_invite_link(jid: &Jid, reset: bool)` - Get/reset invite link
+- `join_with_invite_code(code: &str)` - Join a group via invite code or URL
+- `get_invite_info(code: &str)` - Preview group metadata from invite code
 - `set_locked(jid: &Jid, locked: bool)` - Lock/unlock group info editing
 - `set_announce(jid: &Jid, announce: bool)` - Enable/disable announcement mode
 - `set_ephemeral(jid: &Jid, expiration: u32)` - Set disappearing messages timer
 - `set_membership_approval(jid: &Jid, mode: MembershipApprovalMode)` - Require admin approval
+- `get_membership_requests(jid: &Jid)` - Get pending membership requests
+- `approve_membership_requests(jid: &Jid, participants: &[Jid])` - Approve pending requests
+- `reject_membership_requests(jid: &Jid, participants: &[Jid])` - Reject pending requests
+- `set_member_add_mode(jid: &Jid, mode: MemberAddMode)` - Set who can add members
 
 **Example:**
 ```rust
@@ -875,7 +881,97 @@ Fetches account properties from WhatsApp servers.
 pub async fn fetch_privacy_settings(&self) -> Result<PrivacySettingsResponse, IqError>
 ```
 
-Fetches privacy settings (last seen, profile photo, about, etc.).
+Fetches privacy settings (last seen, profile photo, about, etc.). See [Privacy API](/api/privacy) for types and details.
+
+### set_privacy_setting
+
+```rust
+pub async fn set_privacy_setting(
+    &self,
+    category: &str,
+    value: &str,
+) -> Result<(), IqError>
+```
+
+Sets a privacy setting for a specific category.
+
+<ParamField path="category" type="&str" required>
+  Privacy category: `"last"`, `"online"`, `"profile"`, `"status"`, `"groupadd"`, or `"readreceipts"`
+</ParamField>
+
+<ParamField path="value" type="&str" required>
+  Privacy value: `"all"`, `"contacts"`, `"none"`, `"contact_blacklist"`, or `"match_last_seen"`
+</ParamField>
+
+**Example:**
+```rust
+// Hide last seen from everyone
+client.set_privacy_setting("last", "none").await?;
+
+// Show profile photo only to contacts
+client.set_privacy_setting("profile", "contacts").await?;
+```
+
+See [Privacy API](/api/privacy) for all categories and values.
+
+### set_default_disappearing_mode
+
+```rust
+pub async fn set_default_disappearing_mode(
+    &self,
+    duration: u32,
+) -> Result<(), IqError>
+```
+
+Sets the default disappearing messages duration for new chats.
+
+<ParamField path="duration" type="u32" required>
+  Timer duration in seconds. Common values: `86400` (24 hours), `604800` (7 days), `7776000` (90 days). Pass `0` to disable.
+</ParamField>
+
+**Example:**
+```rust
+// Enable 7-day default disappearing messages
+client.set_default_disappearing_mode(604800).await?;
+
+// Disable default disappearing messages
+client.set_default_disappearing_mode(0).await?;
+```
+
+### get_business_profile
+
+```rust
+pub async fn get_business_profile(
+    &self,
+    jid: &Jid,
+) -> Result<Option<BusinessProfile>, IqError>
+```
+
+Fetches the business profile for a WhatsApp Business account. Returns `None` if the account is not a business account or has no business profile.
+
+<ParamField path="jid" type="&Jid" required>
+  JID of the business account to query
+</ParamField>
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+if let Some(profile) = client.get_business_profile(&jid).await? {
+    println!("Description: {}", profile.description);
+    println!("Email: {:?}", profile.email);
+    println!("Website: {:?}", profile.website);
+    println!("Address: {:?}", profile.address);
+
+    for category in &profile.categories {
+        println!("Category: {} ({})", category.name, category.id);
+    }
+} else {
+    println!("Not a business account");
+}
+```
+
+See [Business API](/api/business) for full type details.
 
 ### clean_dirty_bits
 

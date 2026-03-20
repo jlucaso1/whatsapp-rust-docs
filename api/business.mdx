@@ -1,0 +1,182 @@
+---
+title: Business
+description: Business profile operations - fetch WhatsApp Business account profiles and handle business events
+---
+
+The business API allows you to fetch business profiles for WhatsApp Business accounts, including their description, contact information, categories, and business hours.
+
+## Access
+
+Business profile operations are available directly on the `Client`:
+
+```rust
+let profile = client.get_business_profile(&jid).await?;
+```
+
+## Methods
+
+### get_business_profile
+
+Fetch the business profile for a WhatsApp Business account.
+
+```rust
+pub async fn get_business_profile(
+    &self,
+    jid: &Jid,
+) -> Result<Option<BusinessProfile>, IqError>
+```
+
+**Parameters:**
+- `jid` - JID of the account to query
+
+**Returns:**
+- `Some(BusinessProfile)` if the account is a business with a profile
+- `None` if the account is not a business or has no profile
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+if let Some(profile) = client.get_business_profile(&jid).await? {
+    println!("Description: {}", profile.description);
+    
+    if let Some(email) = &profile.email {
+        println!("Email: {}", email);
+    }
+    
+    for site in &profile.website {
+        println!("Website: {}", site);
+    }
+    
+    if let Some(addr) = &profile.address {
+        println!("Address: {}", addr);
+    }
+    
+    for category in &profile.categories {
+        println!("Category: {} (ID: {})", category.name, category.id);
+    }
+    
+    if let Some(tz) = &profile.business_hours.timezone {
+        println!("Timezone: {}", tz);
+    }
+    
+    if let Some(configs) = &profile.business_hours.business_config {
+        for config in configs {
+            println!(
+                "  {}: {} ({}–{})",
+                config.day_of_week,
+                config.mode,
+                config.open_time.as_deref().unwrap_or("N/A"),
+                config.close_time.as_deref().unwrap_or("N/A"),
+            );
+        }
+    }
+} else {
+    println!("Not a business account");
+}
+```
+
+## Types
+
+### BusinessProfile
+
+```rust
+pub struct BusinessProfile {
+    pub wid: Option<Jid>,
+    pub description: String,
+    pub email: Option<String>,
+    pub website: Vec<String>,
+    pub categories: Vec<BusinessCategory>,
+    pub address: Option<String>,
+    pub business_hours: BusinessHours,
+}
+```
+
+### BusinessCategory
+
+```rust
+pub struct BusinessCategory {
+    pub id: String,
+    pub name: String,
+}
+```
+
+### BusinessHours
+
+```rust
+pub struct BusinessHours {
+    pub timezone: Option<String>,
+    pub business_config: Option<Vec<BusinessHoursConfig>>,
+}
+```
+
+### BusinessHoursConfig
+
+```rust
+pub struct BusinessHoursConfig {
+    pub day_of_week: String,
+    pub mode: String,
+    pub open_time: Option<String>,
+    pub close_time: Option<String>,
+}
+```
+
+## Business events
+
+Business account changes are reported through the event system. Subscribe to `BusinessStatusUpdate` events to track changes:
+
+```rust
+use wacore::types::events::{Event, BusinessStatusUpdate, BusinessUpdateType};
+
+match event {
+    Event::BusinessStatusUpdate(update) => {
+        match update.update_type {
+            BusinessUpdateType::VerifiedNameChanged => {
+                println!("Verified name: {:?}", update.verified_name);
+            }
+            BusinessUpdateType::ProfileUpdated => {
+                println!("Business profile updated for {}", update.jid);
+            }
+            BusinessUpdateType::RemovedAsBusiness => {
+                println!("{} is no longer a business account", update.jid);
+            }
+            BusinessUpdateType::ProductsUpdated => {
+                println!("Products updated: {:?}", update.product_ids);
+            }
+            BusinessUpdateType::CollectionsUpdated => {
+                println!("Collections updated: {:?}", update.collection_ids);
+            }
+            BusinessUpdateType::SubscriptionsUpdated => {
+                println!("Subscriptions: {:?}", update.subscriptions);
+            }
+            _ => {}
+        }
+    }
+    _ => {}
+}
+```
+
+See [Events](/concepts/events#businessstatusupdate) for the full `BusinessStatusUpdate` type.
+
+## Checking if a contact is a business
+
+You can check if a contact is a business account using the contacts API:
+
+```rust
+let phones = ["15551234567"];
+let results = client.contacts().get_info(&phones).await?;
+
+for contact in &results {
+    if contact.is_business {
+        println!("{} is a business account", contact.jid);
+    }
+}
+```
+
+See [Contacts API](/api/contacts) for details.
+
+## See also
+
+- [Client API](/api/client#get_business_profile) - Client-level business methods
+- [Contacts API](/api/contacts) - Check `is_business` flag on contacts
+- [Events](/concepts/events#businessstatusupdate) - Business status update events

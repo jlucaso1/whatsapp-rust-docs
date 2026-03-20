@@ -321,6 +321,88 @@ See [Groups API reference](/api/groups#get_invite_link) for details.
 Resetting the invite link (`reset = true`) invalidates the old link. Anyone with the old link will no longer be able to join.
 </Warning>
 
+### Join a group via invite
+
+You can join a group using an invite code or a full `https://chat.whatsapp.com/...` URL. The method automatically strips the URL prefix if present.
+
+```rust
+use whatsapp_rust::features::groups::JoinGroupResult;
+
+// Join using a full URL
+let result = client.groups()
+    .join_with_invite_code("https://chat.whatsapp.com/AbCdEfGh")
+    .await?;
+
+match &result {
+    JoinGroupResult::Joined(jid) => {
+        println!("Successfully joined group: {}", jid);
+    }
+    JoinGroupResult::PendingApproval(jid) => {
+        println!("Request sent — waiting for admin approval in group: {}", jid);
+    }
+}
+```
+
+If the group has [membership approval](#membership-approval-mode) enabled, the result will be `PendingApproval` instead of `Joined`.
+
+See [Groups API reference](/api/groups#join_with_invite_code) for details.
+
+### Preview a group before joining
+
+Use `get_invite_info` to fetch group metadata from an invite code without joining:
+
+```rust
+let metadata = client.groups().get_invite_info("AbCdEfGh").await?;
+
+println!("Group: {}", metadata.subject);
+println!("Members: {}", metadata.participants.len());
+println!("Requires approval: {}", metadata.membership_approval);
+```
+
+See [Groups API reference](/api/groups#get_invite_info) for details.
+
+## Membership Requests
+
+When a group has membership approval enabled, new members must be approved by an admin. You can view, approve, and reject pending requests.
+
+### Get pending requests
+
+```rust
+let requests = client.groups().get_membership_requests(&group_jid).await?;
+
+for request in &requests {
+    println!("Pending: {} (requested at {:?})", request.jid, request.request_time);
+}
+```
+
+See [Groups API reference](/api/groups#get_membership_requests) for details.
+
+### Approve or reject requests
+
+```rust
+// Approve specific requests
+let to_approve = vec!["15551234567@s.whatsapp.net".parse()?];
+let results = client.groups()
+    .approve_membership_requests(&group_jid, &to_approve)
+    .await?;
+
+for result in &results {
+    println!("Approved {}: status {:?}", result.jid, result.status);
+}
+
+// Reject specific requests
+let to_reject = vec!["15559876543@s.whatsapp.net".parse()?];
+client.groups()
+    .reject_membership_requests(&group_jid, &to_reject)
+    .await?;
+```
+
+See [Groups API reference](/api/groups#approve_membership_requests) for details.
+
+<Note>
+You must be a group admin to view, approve, or reject membership requests.
+</Note>
+
 ## Group Settings
 
 ### Member Add Mode
@@ -335,12 +417,17 @@ pub enum MemberAddMode {
     AllMemberAdd,  // All members can add others
 }
 
-// Set during creation or via group settings update IQ
+// Set during creation
 let options = GroupCreateOptions {
     member_add_mode: Some(MemberAddMode::AdminAdd),
     ..Default::default()
 };
+
+// Or update an existing group
+client.groups().set_member_add_mode(&group_jid, MemberAddMode::AdminAdd).await?;
 ```
+
+See [Groups API reference](/api/groups#set_member_add_mode) for details.
 
 ### Membership Approval Mode
 

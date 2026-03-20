@@ -1,0 +1,195 @@
+---
+title: Privacy
+description: Privacy settings management - fetch, update, and configure account privacy
+---
+
+The privacy API allows you to fetch and update account-level privacy settings, such as who can see your last seen, profile photo, about text, and online status.
+
+## Access
+
+Privacy operations are available directly on the `Client`:
+
+```rust
+let settings = client.fetch_privacy_settings().await?;
+client.set_privacy_setting("last", "contacts").await?;
+```
+
+## Methods
+
+### fetch_privacy_settings
+
+Fetch all current privacy settings.
+
+```rust
+pub async fn fetch_privacy_settings(&self) -> Result<PrivacySettingsResponse, IqError>
+```
+
+**Returns:**
+- `PrivacySettingsResponse` - Contains a list of all privacy settings
+
+**Example:**
+```rust
+let response = client.fetch_privacy_settings().await?;
+
+for setting in &response.settings {
+    println!("{:?} = {:?}", setting.category, setting.value);
+}
+
+// Look up a specific category
+use whatsapp_rust::privacy_settings::PrivacyCategory;
+
+if let Some(value) = response.get_value(&PrivacyCategory::Last) {
+    println!("Last seen: {:?}", value);
+}
+```
+
+### set_privacy_setting
+
+Update a specific privacy setting.
+
+```rust
+pub async fn set_privacy_setting(
+    &self,
+    category: &str,
+    value: &str,
+) -> Result<(), IqError>
+```
+
+**Parameters:**
+- `category` - Privacy category string (see `PrivacyCategory` below)
+- `value` - Privacy value string (see `PrivacyValue` below)
+
+**Example:**
+```rust
+// Hide last seen from everyone
+client.set_privacy_setting("last", "none").await?;
+
+// Show profile photo only to contacts
+client.set_privacy_setting("profile", "contacts").await?;
+
+// Allow everyone to add you to groups
+client.set_privacy_setting("groupadd", "all").await?;
+
+// Disable read receipts
+client.set_privacy_setting("readreceipts", "none").await?;
+```
+
+### set_default_disappearing_mode
+
+Set the default disappearing messages duration for all new chats.
+
+```rust
+pub async fn set_default_disappearing_mode(
+    &self,
+    duration: u32,
+) -> Result<(), IqError>
+```
+
+**Parameters:**
+- `duration` - Timer in seconds. Common values: `86400` (24 hours), `604800` (7 days), `7776000` (90 days). Pass `0` to disable.
+
+**Example:**
+```rust
+// Enable 7-day default disappearing messages
+client.set_default_disappearing_mode(604800).await?;
+
+// Disable default disappearing messages
+client.set_default_disappearing_mode(0).await?;
+```
+
+<Note>
+This sets the default for **new** chats only. Existing chats keep their current setting. To change disappearing messages for a specific group, use [`set_ephemeral`](/api/groups#set_ephemeral).
+</Note>
+
+## Types
+
+### PrivacyCategory
+
+```rust
+pub enum PrivacyCategory {
+    Last,           // "last" — Last seen visibility
+    Online,         // "online" — Online status visibility
+    Profile,        // "profile" — Profile photo visibility
+    Status,         // "status" — Status/story visibility
+    GroupAdd,       // "groupadd" — Who can add you to groups
+    ReadReceipts,   // "readreceipts" — Read receipt visibility
+    Other(String),  // Unknown/custom category
+}
+```
+
+### PrivacyValue
+
+```rust
+pub enum PrivacyValue {
+    All,              // "all" — Visible to everyone
+    Contacts,         // "contacts" — Visible only to contacts
+    None,             // "none" — Not visible to anyone
+    ContactBlacklist, // "contact_blacklist" — Contacts except specific list
+    MatchLastSeen,    // "match_last_seen" — Match the other person's setting
+    Other(String),    // Unknown/custom value
+}
+```
+
+### PrivacySetting
+
+```rust
+pub struct PrivacySetting {
+    pub category: PrivacyCategory,
+    pub value: PrivacyValue,
+}
+```
+
+### PrivacySettingsResponse
+
+```rust
+pub struct PrivacySettingsResponse {
+    pub settings: Vec<PrivacySetting>,
+}
+```
+
+**Methods:**
+- `get(&self, category: &PrivacyCategory) -> Option<&PrivacySetting>` - Look up a setting by category
+- `get_value(&self, category: &PrivacyCategory) -> Option<&PrivacyValue>` - Look up a value directly
+
+## Common patterns
+
+### Fetch and display all settings
+
+```rust
+use whatsapp_rust::privacy_settings::{PrivacyCategory, PrivacyValue};
+
+let response = client.fetch_privacy_settings().await?;
+
+let categories = [
+    PrivacyCategory::Last,
+    PrivacyCategory::Online,
+    PrivacyCategory::Profile,
+    PrivacyCategory::Status,
+    PrivacyCategory::GroupAdd,
+    PrivacyCategory::ReadReceipts,
+];
+
+for category in &categories {
+    let value = response
+        .get_value(category)
+        .unwrap_or(&PrivacyValue::All);
+    println!("{:?}: {:?}", category, value);
+}
+```
+
+### Maximum privacy configuration
+
+```rust
+client.set_privacy_setting("last", "none").await?;
+client.set_privacy_setting("online", "match_last_seen").await?;
+client.set_privacy_setting("profile", "contacts").await?;
+client.set_privacy_setting("status", "contacts").await?;
+client.set_privacy_setting("groupadd", "contacts").await?;
+client.set_privacy_setting("readreceipts", "none").await?;
+```
+
+## See also
+
+- [Client API](/api/client#fetch_privacy_settings) - Client-level privacy methods
+- [TC Token API](/api/tctoken) - Trusted contact tokens used for privacy-gated operations
+- [Blocking API](/api/blocking) - Block and unblock contacts

@@ -93,6 +93,8 @@
               "api/status",
               "api/profile",
               "api/chat-actions",
+              "api/privacy",
+              "api/business",
               "api/mex",
               "api/newsletter",
               "api/community",

@@ -628,6 +628,85 @@ Access profile operations. Requires `Arc<Client>` because push name updates need
 - `set_profile_picture(image_data: Vec<u8>)` - Set profile picture (JPEG)
 - `remove_profile_picture()` - Remove profile picture
 
+### newsletter
+
+```rust
+pub fn newsletter(&self) -> Newsletter<'_>
+```
+
+Access newsletter (channel) operations.
+
+**Methods:**
+- `list_subscribed()` - List all subscribed newsletters
+- `get_metadata(jid: &Jid)` - Get newsletter metadata
+- `get_metadata_by_invite(invite: &str)` - Get metadata via invite link
+- `create(name, description)` - Create a new newsletter
+- `join(jid: &Jid)` - Join a newsletter
+- `leave(jid: &Jid)` - Leave a newsletter
+- `update(jid, options)` - Update newsletter settings
+- `send_message(jid, message)` - Send a message to a newsletter
+- `send_reaction(jid, msg_server_id, reaction)` - React to a newsletter message
+- `get_messages(jid, count, before)` - Fetch newsletter messages
+- `subscribe_live_updates(jid: &Jid)` - Subscribe to real-time updates
+
+**Example:**
+```rust
+let newsletters = client.newsletter().list_subscribed().await?;
+let metadata = client.newsletter().get_metadata(&newsletter_jid).await?;
+```
+
+See [Newsletter API](/api/newsletter) for full documentation.
+
+### community
+
+```rust
+pub fn community(&self) -> Community<'_>
+```
+
+Access community operations.
+
+**Methods:**
+- `create(options: CreateCommunityOptions)` - Create a community
+- `deactivate(jid: &Jid)` - Deactivate a community
+- `link_subgroups(jid: &Jid, subgroups: &[Jid])` - Link groups to a community
+- `unlink_subgroups(jid: &Jid, subgroups: &[Jid])` - Unlink groups from a community
+- `get_subgroups(jid: &Jid)` - List community subgroups
+- `get_subgroup_participant_counts(jid: &Jid)` - Get participant counts per subgroup
+- `query_linked_group(jid: &Jid)` - Query a linked group's community metadata
+- `join_subgroup(jid: &Jid)` - Join a community subgroup
+- `get_linked_groups_participants(jid: &Jid)` - Get participants across linked groups
+
+**Example:**
+```rust
+let subgroups = client.community().get_subgroups(&community_jid).await?;
+```
+
+See [Community API](/api/community) for full documentation.
+
+### media_reupload
+
+```rust
+pub fn media_reupload(self: &Arc<Self>) -> MediaReupload<'_>
+```
+
+Access media reupload operations. Requires `Arc<Client>`. Use this when a media download fails because the URL has expired.
+
+**Methods:**
+- `request(req: &MediaReuploadRequest)` - Request the server to re-upload expired media
+
+**Example:**
+```rust
+let result = client.media_reupload().request(&MediaReuploadRequest {
+    msg_id: "ABCD1234",
+    chat_jid: &chat_jid,
+    media_key: &media_key_bytes,
+    is_from_me: false,
+    participant: Some(&sender_jid),
+}).await?;
+```
+
+The request sends a `server-error` receipt and waits up to 30 seconds for a `mediaretry` notification with an updated download path.
+
 ---
 
 ## Public fields

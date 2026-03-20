@@ -59,9 +59,10 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 
 ### Architecture
 
-- **Modular design** - Pluggable storage, transport, and HTTP clients
-- **Tokio-powered** - Built on Tokio with a runtime-agnostic core (`wacore`)
-- **SQLite included** - Default storage backend, easily swappable
+- **Runtime agnostic** - Pluggable async runtime, transport, HTTP client, and storage via trait abstractions
+- **Modular design** - Swap any component (Tokio, SQLite, ureq) without changing application code
+- **WASM-ready** - Core protocol library (`wacore`) has zero runtime dependencies, enabling WebAssembly targets
+- **SQLite included** - Default storage backend with bundled SQLite, easily swappable
 
 ## Getting started
 
@@ -86,15 +87,17 @@ The library is organized into multiple crates for maximum flexibility:
 
 ```
 whatsapp-rust/
-├── src/                    # Main client library
-├── wacore/                 # Platform-agnostic core (runtime-agnostic)
-│   ├── binary/             # WhatsApp binary protocol
-│   ├── libsignal/          # Signal Protocol implementation
-│   └── appstate/           # App state management
-├── waproto/                # Protocol Buffers definitions
-├── storages/sqlite-storage # SQLite backend
-├── transports/tokio-transport
-└── http_clients/ureq-client
+├── src/                          # Main client library + binary
+├── wacore/                       # Platform-agnostic core (zero runtime deps)
+│   ├── binary/                   # WhatsApp binary protocol
+│   ├── libsignal/                # Signal Protocol implementation
+│   ├── appstate/                 # App state management
+│   ├── noise/                    # Noise Protocol handshake
+│   └── derive/                   # Derive macros
+├── waproto/                      # Protocol Buffers definitions
+├── storages/sqlite-storage/      # SQLite backend
+├── transports/tokio-transport/   # Tokio WebSocket transport
+└── http_clients/ureq-client/     # HTTP client for media
 ```
 
 ## Acknowledgements

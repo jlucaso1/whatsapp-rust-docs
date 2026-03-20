@@ -32,11 +32,13 @@ whatsapp-rust/
 
 **Location:** `wacore/`
 
-**Purpose:** Contains core logic for the WhatsApp binary protocol, cryptography primitives, IQ protocol types, and state management traits.
+**Purpose:** Contains core logic for the WhatsApp binary protocol, cryptography primitives, IQ protocol types, runtime abstraction, and state management traits.
 
 **Key Features:**
-- **No runtime dependencies** on Tokio or specific databases
-- Pure protocol implementation
+- **Zero runtime dependencies** — no Tokio, no async-std, only `futures`, `async-trait`, `async-lock`, and `async-channel`
+- `Runtime` trait for pluggable async executors (Tokio, async-std, WASM, etc.)
+- `Transport`, `TransportFactory`, and `HttpClient` traits for pluggable networking
+- `Backend` trait for pluggable storage
 - Cryptographic operations (Signal Protocol, Noise Protocol)
 - Type-safe protocol node builders
 
@@ -47,13 +49,16 @@ wacore/
 ├── libsignal/        // E2E encryption
 ├── noise/            // Noise Protocol handshake
 ├── appstate/         // App state sync protocol
+├── derive/           // Derive macros (EmptyNode, ProtocolNode, StringEnum)
 ├── iq/               // Type-safe IQ protocol types
-├── protocol.rs       // ProtocolNode trait
+├── net.rs            // Transport, HttpClient trait definitions
+├── runtime.rs        // Runtime trait + AbortHandle
+├── protocol/         // ProtocolNode trait, keepalive, retry
 ├── types/
 │   ├── events.rs     // Event definitions
 │   └── message.rs    // Message types
 └── store/
-    ├── traits.rs     // Storage trait definitions
+    ├── traits.rs     // Storage trait definitions (Backend, SignalStore, etc.)
     └── device.rs     // Device state model
 ```
 
@@ -79,13 +84,42 @@ prost_build::compile_protos(&["src/whatsapp.proto"], &["src/"])?;
 
 **Location:** `src/`
 
-**Purpose:** Integrates `wacore` with the Tokio runtime, provides high-level client API, and manages storage.
+**Purpose:** Integrates `wacore` with concrete implementations (Tokio runtime, SQLite storage, ureq HTTP, Tokio WebSocket), provides the high-level `Bot` builder and `Client` API.
 
 **Key Features:**
-- Asynchronous operations with Tokio
-- SQLite persistence (pluggable)
+- `TokioRuntime` — default `Runtime` implementation (gated on `tokio-runtime` feature)
+- Typestate `BotBuilder` — compile-time enforcement that all 4 required components are provided
+- SQLite persistence (pluggable via `Backend` trait)
 - Event bus system
-- Feature modules (groups, media, etc.)
+- Feature modules (groups, media, newsletters, communities, etc.)
+
+## Runtime abstraction
+
+The library is fully runtime-agnostic. All async operations go through four pluggable trait abstractions defined in `wacore`:
+
+| Concern | Trait | Default implementation | Crate |
+|---------|-------|----------------------|-------|
+| Async runtime | `Runtime` | `TokioRuntime` | `whatsapp-rust` (gated on `tokio-runtime`) |
+| Network transport | `TransportFactory` + `Transport` | `TokioWebSocketTransportFactory` | `whatsapp-rust-tokio-transport` |
+| HTTP client | `HttpClient` | `UreqHttpClient` | `whatsapp-rust-ureq-http-client` |
+| Storage | `Backend` | `SqliteStore` | `whatsapp-rust-sqlite-storage` |
+
+The `Runtime` trait requires four methods:
+
+```rust
+pub trait Runtime: Send + Sync + 'static {
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> AbortHandle;
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+    fn spawn_blocking(&self, f: Box<dyn FnOnce() + Send + 'static>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+    fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
+}
+```
+
+On WASM targets, `Send` bounds are automatically removed via `#[cfg(target_arch = "wasm32")]`.
+
+The `BotBuilder` uses a typestate pattern with four type parameters `<B, T, H, R>` (Backend, Transport, HttpClient, Runtime). The `build()` method is only callable when all four are `Provided`, making missing-component errors compile-time instead of runtime.
+
+See [custom backends](/guides/custom-backends) for implementing your own runtime, transport, HTTP client, or storage backend.
 
 ## Key Components
 
@@ -93,7 +127,7 @@ prost_build::compile_protos(&["src/whatsapp.proto"], &["src/"])?;
 
 **Location:** `src/client.rs`
 
-**Purpose:** Orchestrates connection lifecycle, event bus, and high-level operations.
+**Purpose:** Orchestrates connection lifecycle, event bus, and high-level operations. Uses `async-lock` (runtime-agnostic) for all internal synchronization instead of Tokio-specific primitives.
 
 ```rust
 pub struct Client {

@@ -8,12 +8,13 @@ The `Bot` provides a simplified, ergonomic API for building WhatsApp bots. It ha
 ## Overview
 
 Use the Bot builder pattern to:
-- Configure storage backend
-- Set up transport and HTTP client
+- Configure storage backend, transport, HTTP client, and async runtime
 - Register event handlers
 - Configure device properties and versions
 - Enable pair code authentication
 - Skip history sync for bot use cases
+
+The builder uses a **typestate pattern** with four type parameters `<B, T, H, R>` (Backend, Transport, HttpClient, Runtime). The `build()` method is only callable when all four are `Provided`, making missing-component errors compile-time instead of runtime.
 
 <Tip>
 The Bot is the **recommended way** to use whatsapp-rust. It provides sensible defaults and handles boilerplate setup.
@@ -23,12 +24,14 @@ The Bot is the **recommended way** to use whatsapp-rust. It provides sensible de
 
 ```rust
 use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
 use wacore::types::events::Event;
 
 let bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport)
     .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
     .on_event(|event, client| async move {
         match event {
             Event::Message(msg, info) => {
@@ -130,6 +133,33 @@ let bot = Bot::builder()
     .with_http_client(UreqHttpClient::new())
     // ...
 ```
+
+### with_runtime
+
+```rust
+pub fn with_runtime<Rt>(self, runtime: Rt) -> Self
+where
+    Rt: Runtime + 'static
+```
+
+Sets the async runtime for spawning tasks, sleeping, and blocking operations (required).
+
+<ParamField path="runtime" type="Rt: Runtime" required>
+  Runtime implementation providing spawn, sleep, and spawn_blocking
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::TokioRuntime;
+
+let bot = Bot::builder()
+    .with_runtime(TokioRuntime)
+    // ...
+```
+
+<Note>
+`TokioRuntime` is only available when the `tokio-runtime` feature is enabled (it is by default). To use a different async runtime, implement the `Runtime` trait from `wacore::runtime`. See [custom backends](/guides/custom-backends#custom-runtime) for details.
+</Note>
 
 ---
 
@@ -427,19 +457,17 @@ Builds the bot with the configured options.
 
 ```rust
 pub enum BotBuilderError {
-    MissingBackend,
-    MissingTransport,
-    MissingHttpClient,
     Other(anyhow::Error),
 }
 ```
 
 | Variant | Cause |
 |---------|-------|
-| `MissingBackend` | `with_backend()` was not called |
-| `MissingTransport` | `with_transport_factory()` was not called |
-| `MissingHttpClient` | `with_http_client()` was not called |
 | `Other` | Backend initialization or other runtime failure |
+
+<Note>
+Missing required components (backend, transport, HTTP client, runtime) are caught at **compile time** via the typestate pattern — `build()` is only available when all four type parameters are `Provided`. You won't see runtime errors for missing components.
+</Note>
 
 ### client
 
@@ -455,6 +483,7 @@ let bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport)
     .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
     .build()
     .await?;
 
@@ -465,12 +494,12 @@ let jid = client.get_pn().await;
 ### run
 
 ```rust
-pub async fn run(&mut self) -> Result<task::JoinHandle<()>>
+pub async fn run(&mut self) -> Result<BotHandle>
 ```
 
 Starts the bot's connection loop and background workers.
 
-Returns a JoinHandle for the main client task.
+Returns a `BotHandle` that implements `Future`. You can also call `.abort()` on it to cancel the bot.
 
 **Example:**
 ```rust
@@ -572,6 +601,7 @@ Deletes a message in the same chat.
 
 ```rust
 use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
 use wacore::types::events::Event;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
@@ -589,6 +619,7 @@ async fn main() -> anyhow::Result<()> {
         .with_backend(backend)
         .with_transport_factory(TokioWebSocketTransportFactory::new())
         .with_http_client(UreqHttpClient::new())
+        .with_runtime(TokioRuntime)
         .skip_history_sync() // Bot only needs new messages
         .on_event(|event, client| async move {
             match event {
@@ -735,6 +766,7 @@ let config = CacheConfig {
 };
 
 let bot = Bot::builder()
+    .with_runtime(TokioRuntime)
     .with_cache_config(config)
     // ...
 ```

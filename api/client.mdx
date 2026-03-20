@@ -23,15 +23,21 @@ Most users should use the [`Bot`](/api/bot) builder instead of creating a Client
 
 ```rust
 use whatsapp_rust::Client;
+use whatsapp_rust::TokioRuntime;
 use std::sync::Arc;
 
 let (client, sync_receiver) = Client::new(
+    Arc::new(TokioRuntime),
     persistence_manager,
     transport_factory,
     http_client,
     None, // version override
 ).await;
 ```
+
+<ParamField path="runtime" type="Arc<dyn Runtime>" required>
+  Async runtime for spawning tasks, sleeping, and blocking operations
+</ParamField>
 
 <ParamField path="persistence_manager" type="Arc<PersistenceManager>" required>
   State manager for device credentials, sessions, and app state
@@ -49,7 +55,7 @@ let (client, sync_receiver) = Client::new(
   Optional WhatsApp version override (primary, secondary, tertiary)
 </ParamField>
 
-<ParamField path="Returns" type="(Arc<Client>, mpsc::Receiver<MajorSyncTask>)">
+<ParamField path="Returns" type="(Arc<Client>, Receiver<MajorSyncTask>)">
   Returns the client Arc and a receiver for history/app state sync tasks
 </ParamField>
 
@@ -57,6 +63,7 @@ let (client, sync_receiver) = Client::new(
 
 ```rust
 use whatsapp_rust::{Client, CacheConfig, CacheEntryConfig};
+use whatsapp_rust::TokioRuntime;
 use std::time::Duration;
 
 let cache_config = CacheConfig {
@@ -65,6 +72,7 @@ let cache_config = CacheConfig {
 };
 
 let (client, sync_receiver) = Client::new_with_cache_config(
+    Arc::new(TokioRuntime),
     persistence_manager,
     transport_factory,
     http_client,

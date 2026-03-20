@@ -18,10 +18,12 @@ wacore contains all the core logic for:
 - Binary protocol encoding/decoding
 - Cryptographic primitives (AES-GCM, Signal Protocol)
 - IQ protocol types and specifications
-- State management traits
+- Runtime abstraction (`Runtime` trait for pluggable async executors)
+- Network abstractions (`Transport`, `TransportFactory`, `HttpClient` traits)
+- State management traits (`Backend`, `SignalStore`, `AppSyncStore`, etc.)
 - Message builders and parsers
 
-It has **no runtime dependencies** on Tokio or databases. The main `whatsapp-rust` crate integrates wacore with Tokio for async operations and Diesel for persistence.
+It has **zero runtime dependencies** — no Tokio, no async-std, only `futures`, `async-trait`, `async-lock`, and `async-channel` for async primitives. This makes `wacore` portable to any async runtime, including WASM targets. The main `whatsapp-rust` crate provides concrete implementations (Tokio runtime, SQLite storage, ureq HTTP client, Tokio WebSocket transport).
 
 ## Key Exports
 
@@ -131,6 +133,33 @@ pub mod store;
 
 See [State Management](/advanced/state-management) for the command pattern.
 
+### Runtime & Networking
+
+```rust
+pub mod runtime;  // Runtime trait, AbortHandle, timeout(), blocking()
+pub mod net;      // Transport, TransportFactory, HttpClient, TransportEvent
+```
+
+The `runtime` module defines the `Runtime` trait that all async operations go through:
+
+```rust
+pub trait Runtime: Send + Sync + 'static {
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> AbortHandle;
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+    fn spawn_blocking(&self, f: Box<dyn FnOnce() + Send + 'static>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+    fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
+}
+```
+
+The `net` module defines the networking abstractions:
+
+- **`Transport`** — active connection for sending/receiving raw bytes
+- **`TransportFactory`** — creates new transport instances and event streams
+- **`HttpClient`** — HTTP request execution (buffered and streaming)
+- **`TransportEvent`** — `Connected`, `DataReceived(Bytes)`, `Disconnected`
+
+On WASM targets (`target_arch = "wasm32"`), all `Send` bounds are automatically removed.
+
 ### Connection & Pairing
 
 <CardGroup cols={2}>
@@ -144,7 +173,7 @@ See [State Management](/advanced/state-management) for the command pattern.
     Phone number pairing
   </Card>
   <Card title="net" icon="network-wired">
-    Network utilities
+    Transport and HTTP client traits
   </Card>
 </CardGroup>
 
@@ -339,14 +368,15 @@ use wacore::proto_helpers;
 ### Platform-Agnostic
 
 No dependencies on:
-- Tokio or any async runtime
+- Tokio or any async runtime — uses only `futures`, `async-trait`, `async-lock`, `async-channel`
 - Specific database implementations
 - File system operations
 
-This allows the main library to choose:
-- **Runtime:** Tokio (current), async-std, smol, etc.
-- **Storage:** SQLite (current), PostgreSQL, in-memory, etc.
-- **Transport:** WebSocket (current), custom protocols
+This allows users to provide their own:
+- **Runtime:** Tokio (default), async-std, smol, WASM, etc. — implement `Runtime` (4 methods)
+- **Storage:** SQLite (default), PostgreSQL, in-memory, etc. — implement `Backend` (4 sub-traits)
+- **Transport:** Tokio WebSocket (default), custom protocols — implement `TransportFactory` + `Transport`
+- **HTTP client:** ureq (default), reqwest, surf, etc. — implement `HttpClient`
 
 ### Type Safety
 

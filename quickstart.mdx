@@ -12,6 +12,7 @@ Here's a minimal bot that responds to "ping" messages:
 ```rust src/main.rs
 use std::sync::Arc;
 use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
@@ -27,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_backend(backend)
         .with_transport_factory(TokioWebSocketTransportFactory::new())
         .with_http_client(UreqHttpClient::new())
+        .with_runtime(TokioRuntime)
         .on_event(|event, client| async move {
             match event {
                 Event::PairingQrCode { code, .. } => {
@@ -69,10 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .with_backend(backend)
       .with_transport_factory(TokioWebSocketTransportFactory::new())
       .with_http_client(UreqHttpClient::new())
+      .with_runtime(TokioRuntime)
   ```
 
   <Note>
-    All three components (backend, transport, HTTP client) are required. The builder will return an error if any are missing.
+    All four components (backend, transport, HTTP client, runtime) are required. The builder uses a typestate pattern — your code won't compile if any are missing.
   </Note>
 </Step>
 
@@ -183,6 +186,7 @@ let mut bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(TokioWebSocketTransportFactory::new())
     .with_http_client(UreqHttpClient::new())
+    .with_runtime(TokioRuntime)
     .with_pair_code(PairCodeOptions {
         phone_number: "15551234567".to_string(),
         show_push_notification: true,
@@ -255,6 +259,7 @@ use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
@@ -284,6 +289,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_backend(backend)
         .with_transport_factory(TokioWebSocketTransportFactory::new())
         .with_http_client(UreqHttpClient::new())
+        .with_runtime(TokioRuntime)
         .on_event(|event, client| async move {
             match event {
                 Event::PairingQrCode { code, .. } => {

@@ -499,10 +499,11 @@ impl DeviceStore for MyCustomStore {
 
 See [Store API reference](/api/store#device-store) for all DeviceStore methods.
 
-### Using Your Custom Backend
+### Using your custom backend
 
 ```rust
 use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
 
 let backend = Arc::new(MyCustomStore::new("my://connection").await?);
 
@@ -510,9 +511,83 @@ let bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport_factory)
     .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
     .build()
     .await?;
 ```
+
+## Custom Runtime
+
+The `Runtime` trait is the foundation of the runtime-agnostic architecture. It abstracts async task spawning, sleeping, and blocking operations. Implement it to use a different async runtime (e.g., async-std, smol, or a WASM executor).
+
+### The Runtime trait
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+use async_trait::async_trait;
+use wacore::runtime::{AbortHandle, Runtime};
+
+pub struct MyRuntime;
+
+#[async_trait]
+impl Runtime for MyRuntime {
+    fn spawn(
+        &self,
+        future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
+    ) -> AbortHandle {
+        // Spawn a task on your runtime and return an AbortHandle
+        // that cancels the task when called
+        let handle = my_runtime::spawn(future);
+        AbortHandle::new(move || handle.cancel())
+    }
+
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        // Return a future that completes after the given duration
+        Box::pin(my_runtime::sleep(duration))
+    }
+
+    fn spawn_blocking(
+        &self,
+        f: Box<dyn FnOnce() + Send + 'static>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        // Offload a blocking closure to a thread pool
+        Box::pin(async {
+            let _ = my_runtime::spawn_blocking(f).await;
+        })
+    }
+
+    fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
+        // Return Some(future) if cooperative yielding is needed,
+        // or None if the runtime handles this automatically
+        // (e.g., multi-threaded runtimes don't need explicit yielding)
+        None
+    }
+}
+```
+
+### AbortHandle
+
+`AbortHandle` is a type-erased cancellation handle. It calls the abort function on drop, ensuring spawned tasks are cleaned up. Call `.detach()` to prevent automatic cancellation for fire-and-forget tasks.
+
+### Using your runtime
+
+```rust
+use whatsapp_rust::bot::Bot;
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport_factory)
+    .with_http_client(http_client)
+    .with_runtime(MyRuntime)
+    .build()
+    .await?;
+```
+
+<Tip>
+To target WASM, disable all default features and implement `Runtime` without `Send` bounds. On `target_arch = "wasm32"`, the trait automatically removes `Send` requirements.
+</Tip>
 
 ## Custom Transport Backend
 
@@ -822,6 +897,7 @@ let bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport)
     .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
     .with_cache_config(CacheConfig {
         cache_stores: CacheStores {
             group_cache: Some(redis.clone()),

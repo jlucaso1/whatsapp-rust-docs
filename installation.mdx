@@ -50,15 +50,21 @@ whatsapp-rust supports several optional features:
 
 | Feature | Description | Included by default |
 |---------|-------------|--------------------|
-| `simd` | SIMD-optimized binary protocol encoding/decoding | ✅ Yes |
-| `sqlite-storage` | SQLite storage backend | ✅ Yes |
+| `tokio-runtime` | Enables `TokioRuntime` implementation of the `Runtime` trait | ✅ Yes |
+| `tokio-native` | Multi-threaded Tokio runtime (`tokio/rt-multi-thread`) | ✅ Yes |
 | `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
 | `ureq-client` | Ureq HTTP client | ✅ Yes |
-| `tokio-native` | Tokio multi-threaded runtime | ✅ Yes |
+| `sqlite-storage` | SQLite storage backend | ✅ Yes |
+| `moka-cache` | Moka in-memory cache | ✅ Yes |
+| `simd` | SIMD-optimized binary protocol encoding/decoding | ✅ Yes |
 | `signal` | Unix signal handling (graceful shutdown on SIGTERM/Ctrl+C) | ✅ Yes |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 | `debug-diagnostics` | Memory diagnostics API (`MemoryDiagnostics`) | ❌ No |
+
+<Tip>
+  All default features enable Tokio as the async runtime, but every component is optional. To target a different runtime (async-std, WASM, etc.), disable all defaults and provide your own implementations of the `Runtime`, `TransportFactory`, `HttpClient`, and `Backend` traits. See [custom backends](/guides/custom-backends) for details.
+</Tip>
 
 The `whatsapp-rust-sqlite-storage` crate has its own feature flags:
 

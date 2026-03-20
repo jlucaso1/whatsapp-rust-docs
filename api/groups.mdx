@@ -362,6 +362,60 @@ let new_link = client.groups().get_invite_link(&group_jid, true).await?;
 println!("New invite link: https://chat.whatsapp.com/{}", new_link);
 ```
 
+### join_with_invite_code
+
+Join a group using an invite code or full invite URL.
+
+```rust
+pub async fn join_with_invite_code(&self, code: &str) -> Result<JoinGroupResult, anyhow::Error>
+```
+
+**Parameters:**
+- `code` - Invite code or full URL (e.g., `"AbCdEfGh"` or `"https://chat.whatsapp.com/AbCdEfGh"`)
+
+**Returns:**
+- `JoinGroupResult` - Either `Joined(Jid)` if immediately joined, or `PendingApproval(Jid)` if the group requires admin approval
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::JoinGroupResult;
+
+// Join using a full URL or just the code
+let result = client.groups().join_with_invite_code("https://chat.whatsapp.com/AbCdEfGh").await?;
+
+match &result {
+    JoinGroupResult::Joined(jid) => println!("Joined group: {}", jid),
+    JoinGroupResult::PendingApproval(jid) => println!("Pending approval for group: {}", jid),
+}
+
+// Access the group JID regardless of result
+println!("Group JID: {}", result.group_jid());
+```
+
+### get_invite_info
+
+Get group metadata from an invite code without joining the group.
+
+```rust
+pub async fn get_invite_info(&self, code: &str) -> Result<GroupMetadata, anyhow::Error>
+```
+
+**Parameters:**
+- `code` - Invite code or full URL
+
+**Returns:**
+- `GroupMetadata` - Group metadata (see `get_participating` for fields)
+
+**Example:**
+```rust
+// Preview a group before joining
+let metadata = client.groups().get_invite_info("AbCdEfGh").await?;
+
+println!("Group: {}", metadata.subject);
+println!("Participants: {}", metadata.participants.len());
+println!("Approval required: {}", metadata.membership_approval);
+```
+
 ### set_locked
 
 Lock or unlock the group so only admins can change group info.
@@ -460,6 +514,127 @@ client.groups().set_membership_approval(&group_jid, MembershipApprovalMode::On).
 client.groups().set_membership_approval(&group_jid, MembershipApprovalMode::Off).await?;
 ```
 
+### get_membership_requests
+
+Get pending membership approval requests for a group.
+
+```rust
+pub async fn get_membership_requests(
+    &self,
+    jid: &Jid,
+) -> Result<Vec<MembershipRequest>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+
+**Returns:**
+- `Vec<MembershipRequest>` - List of pending requests
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let requests = client.groups().get_membership_requests(&group_jid).await?;
+
+for request in &requests {
+    println!("Pending request from: {}", request.jid);
+    if let Some(time) = request.request_time {
+        println!("  Requested at: {}", time);
+    }
+}
+```
+
+### approve_membership_requests
+
+Approve pending membership requests for a group.
+
+```rust
+pub async fn approve_membership_requests(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of JIDs to approve
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Get pending requests
+let requests = client.groups().get_membership_requests(&group_jid).await?;
+let jids: Vec<Jid> = requests.iter().map(|r| r.jid.clone()).collect();
+
+// Approve all pending requests
+let results = client.groups().approve_membership_requests(&group_jid, &jids).await?;
+
+for result in results {
+    println!("Approved {}: status {:?}", result.jid, result.status);
+}
+```
+
+### reject_membership_requests
+
+Reject pending membership requests for a group.
+
+```rust
+pub async fn reject_membership_requests(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of JIDs to reject
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_reject = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.groups().reject_membership_requests(&group_jid, &to_reject).await?;
+```
+
+### set_member_add_mode
+
+Set who can add members to the group.
+
+```rust
+pub async fn set_member_add_mode(
+    &self,
+    jid: &Jid,
+    mode: MemberAddMode,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `mode` - `MemberAddMode::AdminAdd` to restrict to admins, `MemberAddMode::AllMemberAdd` to allow all members
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::MemberAddMode;
+
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Only admins can add members
+client.groups().set_member_add_mode(&group_jid, MemberAddMode::AdminAdd).await?;
+
+// All members can add others
+client.groups().set_member_add_mode(&group_jid, MemberAddMode::AllMemberAdd).await?;
+```
+
 ## Types
 
 ### GroupSubject
@@ -535,6 +710,43 @@ pub struct GroupParticipantOptions {
 use whatsapp_rust::features::groups::GroupParticipantOptions;
 
 let participant = GroupParticipantOptions::new("15551234567@s.whatsapp.net".parse()?);
+```
+
+### JoinGroupResult
+
+Result of joining a group via invite code.
+
+```rust
+pub enum JoinGroupResult {
+    Joined(Jid),          // Successfully joined
+    PendingApproval(Jid), // Membership approval required
+}
+```
+
+**Methods:**
+- `group_jid(&self) -> &Jid` - Returns the group JID regardless of result variant
+
+### MembershipRequest
+
+A pending membership approval request.
+
+```rust
+pub struct MembershipRequest {
+    pub jid: Jid,
+    pub request_time: Option<u64>,
+}
+```
+
+### ParticipantChangeResponse
+
+Result of a participant change operation (add, remove, approve, reject).
+
+```rust
+pub struct ParticipantChangeResponse {
+    pub jid: Jid,
+    pub status: Option<String>,
+    pub error: Option<String>,
+}
 ```
 
 ### AddressingMode

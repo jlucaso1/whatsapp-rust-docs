@@ -1,0 +1,180 @@
+---
+title: Polls
+description: Learn how to create polls, cast votes, and decrypt poll results in whatsapp-rust
+---
+
+## Overview
+
+This guide covers creating polls in WhatsApp chats, casting votes on existing polls, and decrypting encrypted vote results. Polls support both single-select and multi-select modes and work in both direct messages and group chats.
+
+## Creating a poll
+
+Use the `polls()` accessor on the client to create a poll:
+
+```rust
+use wacore_binary::jid::Jid;
+
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let options = vec![
+    "Option A".to_string(),
+    "Option B".to_string(),
+    "Option C".to_string(),
+];
+
+// Create a single-select poll
+let (message_id, message_secret) = client
+    .polls()
+    .create(&chat_jid, "What do you prefer?", &options, 1)
+    .await?;
+
+println!("Poll sent with ID: {}", message_id);
+```
+
+The `create` method returns a tuple of `(message_id, message_secret)`. You must store the `message_secret` (a 32-byte key) to decrypt votes later.
+
+### Multi-select polls
+
+Set `selectable_count` to allow voters to pick multiple options:
+
+```rust
+// Allow selecting up to 2 options
+let (message_id, message_secret) = client
+    .polls()
+    .create(&chat_jid, "Pick your favorites", &options, 2)
+    .await?;
+```
+
+<Note>
+Polls must have between 2 and 12 options, and all option names must be unique. The `selectable_count` must be between 1 and the total number of options.
+</Note>
+
+## Voting on a poll
+
+To vote on an existing poll, you need the poll's message ID, the poll creator's JID, and the `message_secret` from when the poll was created:
+
+```rust
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+let poll_creator_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let selected = vec!["Option A".to_string()];
+
+let vote_msg_id = client
+    .polls()
+    .vote(
+        &chat_jid,
+        &poll_msg_id,
+        &poll_creator_jid,
+        &message_secret,
+        &selected,
+    )
+    .await?;
+```
+
+Votes are end-to-end encrypted using AES-256-GCM with a key derived from the poll's `message_secret`, the poll message ID, the poll creator's JID, and the voter's JID.
+
+<Warning>
+You can only vote on polls where you have the `message_secret`. This secret is generated at poll creation time and must be stored by the poll creator.
+</Warning>
+
+## Decrypting votes
+
+When you receive poll update events, the vote payload is encrypted. Use `decrypt_vote` to retrieve the selected option hashes:
+
+```rust
+use whatsapp_rust::features::Polls;
+
+let selected_hashes = Polls::decrypt_vote(
+    &enc_payload,
+    &enc_iv,
+    &message_secret,
+    &poll_msg_id,
+    &poll_creator_jid,
+    &voter_jid,
+)?;
+```
+
+Each returned hash is a 32-byte SHA-256 hash of the option name. To map hashes back to option names, compare them against the known options using `wacore::poll::compute_option_hash`.
+
+## Aggregating results
+
+For tallying votes across multiple voters, use `aggregate_votes`. This handles vote replacement (last-vote-wins) and maps hashes back to option names:
+
+```rust
+use whatsapp_rust::features::{Polls, PollOptionResult};
+
+let poll_options = vec![
+    "Option A".to_string(),
+    "Option B".to_string(),
+    "Option C".to_string(),
+];
+
+// votes: Vec<(&Jid, &[u8], &[u8])> — (voter_jid, enc_payload, enc_iv)
+// Should be ordered oldest-first
+let results: Vec<PollOptionResult> = Polls::aggregate_votes(
+    &poll_options,
+    &votes,
+    &message_secret,
+    &poll_msg_id,
+    &poll_creator_jid,
+)?;
+
+for result in &results {
+    println!("{}: {} votes", result.name, result.voters.len());
+    for voter in &result.voters {
+        println!("  - {}", voter);
+    }
+}
+```
+
+<Note>
+Pass votes in chronological order (oldest first). When a voter changes their vote, only the latest vote counts. An empty selection clears the voter's previous vote.
+</Note>
+
+## Encryption details
+
+Poll votes use a multi-step encryption process:
+
+1. Each option is identified by its SHA-256 hash (not the option name)
+2. An encryption key is derived using HKDF-SHA256 from the `message_secret`, poll message ID, creator JID, and voter JID
+3. The selected option hashes are serialized as a protobuf `PollVoteMessage`
+4. The payload is encrypted with AES-256-GCM using the derived key and a random 12-byte IV
+5. Additional authenticated data (AAD) includes the poll message ID and voter JID
+
+This means each voter's encryption key is unique, and votes can only be decrypted by someone who has the original `message_secret`.
+
+## Error handling
+
+```rust
+use anyhow::Result;
+
+async fn create_poll_safely(client: &Client) -> Result<()> {
+    let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+    let options = vec!["Yes".to_string(), "No".to_string()];
+
+    match client.polls().create(&jid, "Agree?", &options, 1).await {
+        Ok((msg_id, secret)) => {
+            println!("Poll created: {}", msg_id);
+            // Store secret for later vote decryption
+        }
+        Err(e) => {
+            eprintln!("Failed to create poll: {}", e);
+        }
+    }
+
+    Ok(())
+}
+```
+
+Common errors:
+- Fewer than 2 or more than 12 options
+- Duplicate option names
+- `selectable_count` out of range
+- Invalid `message_secret` length (must be 32 bytes)
+- GCM tag verification failure during vote decryption
+
+## Next steps
+
+- [Sending messages](/guides/sending-messages) - Send text, reactions, and other message types
+- [Receiving messages](/guides/receiving-messages) - Handle incoming messages and events
+- [Group management](/guides/group-management) - Work with group chats

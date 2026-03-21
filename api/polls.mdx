@@ -1,0 +1,297 @@
+---
+title: Polls
+description: Poll creation, voting, and vote decryption API reference
+---
+
+The `Polls` struct provides methods for creating polls, casting votes, and decrypting poll results. Votes are end-to-end encrypted using AES-256-GCM with HKDF-SHA256 key derivation.
+
+## Access
+
+Access poll operations through the client:
+
+```rust
+let polls = client.polls();
+```
+
+## Methods
+
+### create
+
+Create a new poll in a chat.
+
+```rust
+pub async fn create(
+    &self,
+    to: &Jid,
+    name: &str,
+    options: &[String],
+    selectable_count: u32,
+) -> Result<(String, Vec<u8>)>
+```
+
+<ParamField path="to" type="&Jid" required>
+  Recipient JID. Can be a direct message or group chat.
+</ParamField>
+
+<ParamField path="name" type="&str" required>
+  Poll question or title.
+</ParamField>
+
+<ParamField path="options" type="&[String]" required>
+  List of poll options. Must have between 2 and 12 entries, with no duplicates.
+</ParamField>
+
+<ParamField path="selectable_count" type="u32" required>
+  Maximum number of options a voter can select. Must be between 1 and the number of options. When set to 1, creates a single-select poll (uses `poll_creation_message_v3`). When greater than 1, creates a multi-select poll (uses `poll_creation_message`).
+</ParamField>
+
+<ResponseField name="(message_id, message_secret)" type="(String, Vec<u8>)">
+  A tuple containing the message ID and a 32-byte random secret. The `message_secret` is required to decrypt votes — store it securely.
+</ResponseField>
+
+**Example:**
+
+```rust
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let options = vec![
+    "Yes".to_string(),
+    "No".to_string(),
+    "Maybe".to_string(),
+];
+
+let (msg_id, secret) = client
+    .polls()
+    .create(&chat_jid, "Do you agree?", &options, 1)
+    .await?;
+```
+
+### vote
+
+Cast a vote on an existing poll.
+
+```rust
+pub async fn vote(
+    &self,
+    chat_jid: &Jid,
+    poll_msg_id: &str,
+    poll_creator_jid: &Jid,
+    message_secret: &[u8],
+    option_names: &[String],
+) -> Result<String>
+```
+
+<ParamField path="chat_jid" type="&Jid" required>
+  Chat JID where the poll was sent.
+</ParamField>
+
+<ParamField path="poll_msg_id" type="&str" required>
+  Message ID of the original poll creation message.
+</ParamField>
+
+<ParamField path="poll_creator_jid" type="&Jid" required>
+  JID of the user who created the poll.
+</ParamField>
+
+<ParamField path="message_secret" type="&[u8]" required>
+  The 32-byte secret returned by `create`. Required for vote encryption.
+</ParamField>
+
+<ParamField path="option_names" type="&[String]" required>
+  Names of the selected options. Pass an empty slice to clear your vote.
+</ParamField>
+
+<ResponseField name="message_id" type="String">
+  Message ID of the vote update message.
+</ResponseField>
+
+**Example:**
+
+```rust
+let selected = vec!["Yes".to_string()];
+
+let vote_id = client
+    .polls()
+    .vote(
+        &chat_jid,
+        &poll_msg_id,
+        &poll_creator_jid,
+        &message_secret,
+        &selected,
+    )
+    .await?;
+```
+
+### decrypt_vote
+
+Decrypt an encrypted poll vote. This is a static method — no client instance needed.
+
+```rust
+pub fn decrypt_vote(
+    enc_payload: &[u8],
+    enc_iv: &[u8],
+    message_secret: &[u8],
+    poll_msg_id: &str,
+    poll_creator_jid: &Jid,
+    voter_jid: &Jid,
+) -> Result<Vec<Vec<u8>>>
+```
+
+<ParamField path="enc_payload" type="&[u8]" required>
+  Encrypted vote payload (from the `PollUpdateMessage`).
+</ParamField>
+
+<ParamField path="enc_iv" type="&[u8]" required>
+  12-byte initialization vector from the encrypted vote.
+</ParamField>
+
+<ParamField path="message_secret" type="&[u8]" required>
+  The 32-byte secret from poll creation.
+</ParamField>
+
+<ParamField path="poll_msg_id" type="&str" required>
+  Message ID of the original poll.
+</ParamField>
+
+<ParamField path="poll_creator_jid" type="&Jid" required>
+  JID of the poll creator (AD suffix is stripped automatically).
+</ParamField>
+
+<ParamField path="voter_jid" type="&Jid" required>
+  JID of the voter (AD suffix is stripped automatically).
+</ParamField>
+
+<ResponseField name="selected_hashes" type="Vec<Vec<u8>>">
+  List of 32-byte SHA-256 hashes of the selected option names.
+</ResponseField>
+
+**Example:**
+
+```rust
+use whatsapp_rust::features::Polls;
+
+let selected_hashes = Polls::decrypt_vote(
+    &enc_payload,
+    &enc_iv,
+    &message_secret,
+    "3EB0ABC123",
+    &poll_creator_jid,
+    &voter_jid,
+)?;
+```
+
+### aggregate_votes
+
+Decrypt multiple votes and tally results per option. This is a static method. Later votes from the same voter replace earlier ones (last-vote-wins).
+
+```rust
+pub fn aggregate_votes(
+    poll_options: &[String],
+    votes: &[(&Jid, &[u8], &[u8])],
+    message_secret: &[u8],
+    poll_msg_id: &str,
+    poll_creator_jid: &Jid,
+) -> Result<Vec<PollOptionResult>>
+```
+
+<ParamField path="poll_options" type="&[String]" required>
+  The original poll option names (in order).
+</ParamField>
+
+<ParamField path="votes" type="&[(&Jid, &[u8], &[u8])]" required>
+  Slice of `(voter_jid, enc_payload, enc_iv)` tuples, ordered oldest-first.
+</ParamField>
+
+<ParamField path="message_secret" type="&[u8]" required>
+  The 32-byte secret from poll creation.
+</ParamField>
+
+<ParamField path="poll_msg_id" type="&str" required>
+  Message ID of the original poll.
+</ParamField>
+
+<ParamField path="poll_creator_jid" type="&Jid" required>
+  JID of the poll creator.
+</ParamField>
+
+<ResponseField name="results" type="Vec<PollOptionResult>">
+  One entry per poll option, each containing the option name and a list of voter JID strings.
+</ResponseField>
+
+**Example:**
+
+```rust
+use whatsapp_rust::features::{Polls, PollOptionResult};
+
+let options = vec!["Yes".to_string(), "No".to_string()];
+
+let results = Polls::aggregate_votes(
+    &options,
+    &votes,
+    &message_secret,
+    &poll_msg_id,
+    &poll_creator_jid,
+)?;
+
+for result in &results {
+    println!("{}: {} votes", result.name, result.voters.len());
+}
+```
+
+<Note>
+Votes that fail to decrypt are logged as warnings and skipped. An empty selection from a voter clears their previous vote.
+</Note>
+
+## Types
+
+### PollOptionResult
+
+Aggregated result for a single poll option.
+
+```rust
+pub struct PollOptionResult {
+    pub name: String,
+    pub voters: Vec<String>,
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `String` | The option name |
+| `voters` | `Vec<String>` | JID strings of voters who selected this option |
+
+## Low-level utilities
+
+The `wacore::poll` module exposes the cryptographic primitives used internally:
+
+| Function | Description |
+|----------|-------------|
+| `compute_option_hash(name: &str) -> [u8; 32]` | SHA-256 hash of an option name |
+| `derive_vote_encryption_key(secret, stanza_id, creator, voter) -> [u8; 32]` | HKDF-SHA256 key derivation |
+| `encrypt_poll_vote(hashes, key, stanza_id, voter) -> (Vec<u8>, [u8; 12])` | AES-256-GCM encryption |
+| `decrypt_poll_vote(payload, iv, key, stanza_id, voter) -> Vec<Vec<u8>>` | AES-256-GCM decryption |
+
+## Error handling
+
+All methods return `Result<T, anyhow::Error>`. Common errors:
+
+- **Fewer than 2 options** or **more than 12 options** when creating a poll
+- **Duplicate option names** — would produce identical SHA-256 hashes
+- **`selectable_count` out of range** — must be between 1 and the option count
+- **Invalid `message_secret` size** — must be exactly 32 bytes
+- **GCM tag verification failed** — wrong key, corrupted payload, or tampered data
+- **Invalid IV length** — must be exactly 12 bytes
+- **Not logged in** — voter's JID cannot be determined when voting
+
+```rust
+match client.polls().create(&jid, "Question?", &options, 1).await {
+    Ok((id, secret)) => println!("Created poll: {}", id),
+    Err(e) => eprintln!("Failed: {}", e),
+}
+```
+
+## See also
+
+- [Polls guide](/guides/polls) - Step-by-step usage guide
+- [Sending messages](/guides/sending-messages) - Send other message types
+- [Send API](/api/send) - Low-level send operations

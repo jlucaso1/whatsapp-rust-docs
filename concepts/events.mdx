@@ -1256,15 +1256,28 @@ impl LazyConversation {
     /// True zero-copy from existing Bytes (used by history sync pipeline)
     pub fn from_bytes(raw_bytes: Bytes) -> Self;
 
-    /// Parse on first access, returns None if conversation ID is empty
+    /// Access the raw protobuf bytes for custom decoding (including messages)
+    pub fn raw_bytes(&self) -> &[u8];
+
+    /// Decode the full conversation including messages (fresh decode each call, not cached)
+    pub fn get_with_messages(&self) -> Option<wa::Conversation>;
+
+    /// Parse on first access, returns None if conversation ID is empty.
+    /// Messages are stripped on first parse to save memory.
     pub fn get(&self) -> Option<&wa::Conversation>;
 
-    /// Parse on first access, panics on failure
+    /// Parse on first access, panics on failure.
+    /// Messages are stripped on first parse to save memory.
     pub fn conversation(&self) -> &wa::Conversation;
 }
 ```
 
-**Memory optimization:** On first parse, the `messages` field is immediately cleared and shrunk (`messages.clear()` + `messages.shrink_to_fit()`) because history sync conversations embed full `WebMessageInfo` arrays that can be very large. This prevents parsed conversations from retaining message data in memory.
+**Memory optimization:** On first parse via `get()` or `conversation()`, the `messages` field is immediately cleared and shrunk (`messages.clear()` + `messages.shrink_to_fit()`) because history sync conversations embed full `WebMessageInfo` arrays that can be very large. This prevents parsed conversations from retaining message data in memory. If you need message history, use `raw_bytes()` or `get_with_messages()` instead.
+
+**Accessing messages:** The `get()` and `conversation()` methods strip messages to save memory. To access the full conversation including messages:
+
+- **`raw_bytes()`** returns `&[u8]` for consumers who want to decode themselves via `wa::Conversation::decode(lazy_conv.raw_bytes())`
+- **`get_with_messages()`** is a convenience method that decodes a fresh `Conversation` with the full `WebMessageInfo` array intact. The result is **not cached** — call this only when you actually need the messages, and prefer `get()` for metadata-only access
 
 **Cloning:** `Bytes` is reference-counted so cloning the raw data is O(1). However, `parsed` uses a plain `OnceLock` (not `Arc<OnceLock>`), so each clone gets its own parse cache and parses independently. This is acceptable because parsing is idempotent and the common case is a single handler. If multi-handler parsing cost becomes an issue, wrapping `parsed` in `Arc<OnceLock<T>>` is a straightforward upgrade.
 
@@ -1275,10 +1288,27 @@ Event::JoinedGroup(lazy_conv) => {
     if interested_in_group() {
         if let Some(conv) = lazy_conv.get() {
             // Parse happens here (only once, then cached)
+            // Note: messages are stripped to save memory
             process_group(conv);
         }
     }
     // If you never call .get(), the raw bytes are never decoded
+}
+```
+
+**Accessing message history:**
+```rust
+Event::JoinedGroup(lazy_conv) => {
+    // Option 1: Use the convenience method
+    if let Some(conv) = lazy_conv.get_with_messages() {
+        for msg in &conv.messages {
+            process_message(msg);
+        }
+    }
+
+    // Option 2: Decode from raw bytes yourself
+    let conv = wa::Conversation::decode(lazy_conv.raw_bytes()).unwrap();
+    println!("Messages: {}", conv.messages.len());
 }
 ```
 

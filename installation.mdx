@@ -50,7 +50,7 @@ whatsapp-rust supports several optional features:
 
 | Feature | Description | Included by default |
 |---------|-------------|--------------------|
-| `tokio-runtime` | Enables `TokioRuntime` implementation of the `Runtime` trait | ✅ Yes |
+| `tokio-runtime` | Enables `TokioRuntime` implementation of the `Runtime` trait. Also required for `TypedCache::invalidate_all()` on custom cache backends | ✅ Yes |
 | `tokio-native` | Multi-threaded Tokio runtime (`tokio/rt-multi-thread`) | ✅ Yes |
 | `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
 | `ureq-client` | Ureq HTTP client | ✅ Yes |

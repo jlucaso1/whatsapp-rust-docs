@@ -33,7 +33,15 @@ tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 
 ```toml Stable Rust
 [dependencies]
-whatsapp-rust = { version = "0.4", default-features = false }
+whatsapp-rust = { version = "0.4", default-features = false, features = [
+    "sqlite-storage",
+    "tokio-transport",
+    "tokio-runtime",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+    "moka-cache",
+] }
 whatsapp-rust-sqlite-storage = "0.4"
 whatsapp-rust-tokio-transport = "0.4"
 whatsapp-rust-ureq-http-client = "0.4"
@@ -91,7 +99,18 @@ To compile on **stable Rust**, disable the `simd` feature by setting `default-fe
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust = { version = "0.4", default-features = false }
+# Disable defaults (removes `simd`), then re-enable everything else
+whatsapp-rust = { version = "0.4", default-features = false, features = [
+    "sqlite-storage",
+    "tokio-transport",
+    "tokio-runtime",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+    "moka-cache",
+] }
+# wacore also needs default-features = false to prevent feature unification
+# from re-enabling simd
 wacore = { version = "0.4", default-features = false }
 
 # These crates have no SIMD dependency — no changes needed

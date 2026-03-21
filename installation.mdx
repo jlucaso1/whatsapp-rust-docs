@@ -7,7 +7,7 @@ description: Add whatsapp-rust to your Rust project
 
 Before installing whatsapp-rust, ensure you have:
 
-- **Rust 2024 edition** or later (requires recent stable Rust)
+- **Rust nightly** (default) — required for SIMD-optimized binary protocol. See [Using Stable Rust](#using-stable-rust) if you need stable toolchain support.
 - **Cargo** package manager
 
 <Note>
@@ -20,7 +20,7 @@ Add whatsapp-rust and its required dependencies to your `Cargo.toml`:
 
 <CodeGroup>
 
-```toml Default features
+```toml Nightly (default)
 [dependencies]
 whatsapp-rust = "0.4"
 whatsapp-rust-sqlite-storage = "0.4"
@@ -31,13 +31,13 @@ waproto = "0.4"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
-```toml Minimal setup
+```toml Stable Rust
 [dependencies]
 whatsapp-rust = { version = "0.4", default-features = false }
 whatsapp-rust-sqlite-storage = "0.4"
 whatsapp-rust-tokio-transport = "0.4"
 whatsapp-rust-ureq-http-client = "0.4"
-wacore = "0.4"
+wacore = { version = "0.4", default-features = false }
 waproto = "0.4"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
@@ -56,7 +56,7 @@ whatsapp-rust supports several optional features:
 | `ureq-client` | Ureq HTTP client | ✅ Yes |
 | `sqlite-storage` | SQLite storage backend | ✅ Yes |
 | `moka-cache` | Moka in-memory cache | ✅ Yes |
-| `simd` | SIMD-optimized binary protocol encoding/decoding | ✅ Yes |
+| `simd` | SIMD-optimized binary protocol encoding/decoding (**requires nightly Rust**) | ✅ Yes |
 | `signal` | Unix signal handling (graceful shutdown on SIGTERM/Ctrl+C) | ✅ Yes |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
@@ -82,6 +82,31 @@ whatsapp-rust-sqlite-storage = { version = "0.4", default-features = false }
 <Note>
   The default features provide everything needed for most use cases. Only customize features if you have specific requirements.
 </Note>
+
+## Using Stable Rust
+
+By default, whatsapp-rust enables the `simd` feature, which uses Rust's `portable_simd` API for optimized binary protocol encoding/decoding. This requires a **nightly** Rust toolchain.
+
+To compile on **stable Rust**, disable the `simd` feature by setting `default-features = false`. You must do this on **both** `whatsapp-rust` and `wacore` — otherwise Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) will re-enable SIMD through the `wacore` dependency:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { version = "0.4", default-features = false }
+wacore = { version = "0.4", default-features = false }
+
+# These crates have no SIMD dependency — no changes needed
+whatsapp-rust-sqlite-storage = "0.4"
+whatsapp-rust-tokio-transport = "0.4"
+whatsapp-rust-ureq-http-client = "0.4"
+waproto = "0.4"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+<Warning>
+  Setting `default-features = false` only on `whatsapp-rust` is **not enough** if you also depend on `wacore` directly. The direct `wacore` dependency enables `simd` by default, and Cargo merges features across all dependents. Both must opt out.
+</Warning>
+
+The encoder/decoder automatically falls back to scalar code paths when SIMD is disabled. There is no functional difference — only a minor performance difference in binary protocol operations.
 
 ## Custom features example
 

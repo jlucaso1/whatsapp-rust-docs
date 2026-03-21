@@ -182,6 +182,102 @@ let message_id = client.send_message(chat_jid, message).await?;
 
 ---
 
+## Streaming encryption
+
+For large files, use `encrypt_media_streaming` to encrypt media with constant memory usage (~40KB) instead of buffering the entire file in memory. This is the core primitive that `encrypt_media` wraps internally.
+
+```rust
+pub fn encrypt_media_streaming<R: Read, W: Write>(
+    reader: R,
+    writer: W,
+    media_type: MediaType,
+) -> Result<EncryptedMediaInfo>
+```
+
+<ParamField path="reader" type="R: Read" required>
+  Source of plaintext media bytes. Can be a `File`, `Cursor<Vec<u8>>`, or any `Read` implementor.
+</ParamField>
+
+<ParamField path="writer" type="W: Write" required>
+  Destination for encrypted output. Receives ciphertext + 10-byte HMAC-SHA256 MAC — the exact bytes to upload to WhatsApp CDN.
+</ParamField>
+
+<ParamField path="media_type" type="MediaType" required>
+  Type of media being encrypted. Determines the HKDF info string for key derivation.
+</ParamField>
+
+<ResponseField name="EncryptedMediaInfo" type="struct">
+  Encryption metadata (keys and hashes). Unlike `EncryptedMedia`, this does **not** contain the encrypted data — it was already written to the provided writer.
+
+  ```rust
+  pub struct EncryptedMediaInfo {
+      pub media_key: [u8; 32],
+      pub file_sha256: [u8; 32],
+      pub file_enc_sha256: [u8; 32],
+      pub file_length: u64,
+  }
+  ```
+
+  <ParamField path="media_key" type="[u8; 32]">
+    32-byte encryption key for the recipient to decrypt the media
+  </ParamField>
+
+  <ParamField path="file_sha256" type="[u8; 32]">
+    SHA-256 hash of the original plaintext, computed on the fly during encryption
+  </ParamField>
+
+  <ParamField path="file_enc_sha256" type="[u8; 32]">
+    SHA-256 hash of the encrypted output (ciphertext + MAC)
+  </ParamField>
+
+  <ParamField path="file_length" type="u64">
+    Original file size in bytes (before encryption)
+  </ParamField>
+</ResponseField>
+
+### Example: Encrypt from file to file
+
+```rust
+use wacore::upload::encrypt_media_streaming;
+use wacore::download::MediaType;
+use std::fs::File;
+
+let reader = File::open("large_video.mp4")?;
+let writer = File::create("large_video.enc")?;
+
+let info = encrypt_media_streaming(reader, writer, MediaType::Video)?;
+println!("Media key: {:?}", info.media_key);
+println!("Original size: {} bytes", info.file_length);
+```
+
+<Note>
+  Memory usage is ~40KB regardless of file size (8KB read buffer + crypto state + remainder buffer). Data is read in 8KB chunks, encrypted with AES-256-CBC, and written incrementally.
+</Note>
+
+### Relationship to `encrypt_media`
+
+The in-memory `encrypt_media` function is a convenience wrapper around `encrypt_media_streaming`:
+
+```rust
+pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<EncryptedMedia> {
+    let mut data_to_upload = Vec::new();
+    let info = encrypt_media_streaming(Cursor::new(plaintext), &mut data_to_upload, media_type)?;
+    Ok(EncryptedMedia {
+        data_to_upload,
+        media_key: info.media_key,
+        file_sha256: info.file_sha256,
+        file_enc_sha256: info.file_enc_sha256,
+    })
+}
+```
+
+Use `encrypt_media_streaming` directly when you need to:
+- Encrypt files too large to fit in memory
+- Write encrypted output directly to disk or a network stream
+- Avoid double-buffering (reading file → memory → encryption → memory)
+
+---
+
 ## Resumable uploads
 
 For files 5 MiB (5,242,880 bytes) or larger, the client automatically probes the CDN to check for a previous partial or complete upload of the same file before sending the full payload.

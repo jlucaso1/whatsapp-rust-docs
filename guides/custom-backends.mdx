@@ -144,6 +144,14 @@ impl SignalStore for MyCustomStore {
         Ok(())
     }
     
+    async fn get_max_prekey_id(&self) -> Result<u32> {
+        let row = self.connection.query_optional(
+            "SELECT MAX(id) FROM prekeys",
+            &[],
+        ).await?;
+        Ok(row.and_then(|r| r.get(0)).unwrap_or(0))
+    }
+    
     // --- Signed PreKey Operations ---
     
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()> {
@@ -290,6 +298,14 @@ impl AppSyncStore for MyCustomStore {
             ).await?;
         }
         Ok(())
+    }
+    
+    async fn get_latest_sync_key_id(&self) -> Result<Option<Vec<u8>>> {
+        let row = self.connection.query_optional(
+            "SELECT key_id FROM app_state_sync_keys ORDER BY timestamp DESC LIMIT 1",
+            &[],
+        ).await?;
+        Ok(row.map(|r| r.get(0)))
     }
 }
 ```

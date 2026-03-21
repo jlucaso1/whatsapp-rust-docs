@@ -379,12 +379,12 @@ use waproto::whatsapp as wa;
 let message = wa::Message {
     extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
         text: Some("Reply to your message".to_string()),
-        context_info: Some(wa::ContextInfo {
+        context_info: Some(Box::new(wa::ContextInfo {
             stanza_id: Some(quoted_message_id),
             participant: Some(quoted_sender_jid.to_string()),
             quoted_message: Some(Box::new(quoted_message)),
             ..Default::default()
-        }),
+        })),
         ..Default::default()
     })),
     ..Default::default()

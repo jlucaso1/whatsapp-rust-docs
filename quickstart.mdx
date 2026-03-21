@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   ```
 
   The double `.await?` is intentional:
-  - First `.await?` starts the bot and returns a `JoinHandle`
+  - First `.await?` starts the bot and returns a `BotHandle`
   - Second `.await?` waits for the bot to finish running
 </Step>
 

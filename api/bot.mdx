@@ -27,7 +27,7 @@ use whatsapp_rust::bot::Bot;
 use whatsapp_rust::TokioRuntime;
 use wacore::types::events::Event;
 
-let bot = Bot::builder()
+let mut bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport)
     .with_http_client(http_client)
@@ -46,7 +46,7 @@ let bot = Bot::builder()
     .build()
     .await?;
 
-let mut bot_handle = bot.run().await?;
+let bot_handle = bot.run().await?;
 bot_handle.await?;
 ```
 
@@ -562,8 +562,11 @@ use whatsapp_rust::bot::MessageContext;
     if let Event::Message(msg, info) = event {
         let ctx = MessageContext { message: msg, info, client };
         let reply = wa::Message {
-            conversation: Some("Quoted reply!".to_string()),
-            context_info: Some(ctx.build_quote_context()),
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Quoted reply!".to_string()),
+                context_info: Some(Box::new(ctx.build_quote_context())),
+                ..Default::default()
+            })),
             ..Default::default()
         };
         let _ = ctx.send_message(reply).await;

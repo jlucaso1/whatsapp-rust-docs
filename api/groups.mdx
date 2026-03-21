@@ -3,7 +3,7 @@ title: Groups
 description: Group management operations - create, modify, and manage WhatsApp groups
 ---
 
-The `Groups` trait provides methods for managing WhatsApp groups, including creating groups, managing participants, and modifying group settings.
+The `Groups` struct provides methods for managing WhatsApp groups, including creating groups, managing participants, and modifying group settings.
 
 ## Access
 
@@ -34,8 +34,8 @@ pub async fn query_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error>
 let group_jid: Jid = "123456789@g.us".parse()?;
 let info = client.groups().query_info(&group_jid).await?;
 
-println!("Participants: {}", info.participants().len());
-println!("Addressing mode: {:?}", info.addressing_mode());
+println!("Participants: {}", info.participants.len());
+println!("Addressing mode: {:?}", info.addressing_mode);
 ```
 
 ### get_participating
@@ -636,6 +636,44 @@ client.groups().set_member_add_mode(&group_jid, MemberAddMode::AllMemberAdd).awa
 ```
 
 ## Types
+
+### GroupInfo
+
+Cached group information returned by `query_info`. Contains participant list, addressing mode, and LID-to-phone mappings for privacy-addressed groups.
+
+```rust
+pub struct GroupInfo {
+    pub participants: Vec<Jid>,
+    pub addressing_mode: AddressingMode,
+}
+```
+
+**Methods:**
+
+| Method | Description |
+|---|---|
+| `lid_to_pn_map() -> &HashMap<String, Jid>` | Access the LID-to-phone number mapping |
+| `phone_jid_for_lid_user(lid_user: &str) -> Option<&Jid>` | Look up the phone JID for a LID user |
+| `lid_jid_for_phone_user(phone_user: &str) -> Option<&Jid>` | Look up the LID JID for a phone number |
+| `phone_device_jid_to_lid(phone_device_jid: &Jid) -> Jid` | Convert a phone-based device JID to LID format |
+
+**Example:**
+
+```rust
+let info = client.groups().query_info(&group_jid).await?;
+
+// Access participants and addressing mode
+for participant in &info.participants {
+    println!("Participant: {}", participant);
+}
+
+// For LID-addressed groups, resolve phone numbers
+if info.addressing_mode == AddressingMode::Lid {
+    if let Some(phone_jid) = info.phone_jid_for_lid_user("lid_user_id") {
+        println!("Phone: {}", phone_jid);
+    }
+}
+```
 
 ### GroupSubject
 

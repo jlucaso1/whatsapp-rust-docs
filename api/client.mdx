@@ -679,11 +679,11 @@ Access community operations.
 - `create(options: CreateCommunityOptions)` - Create a community
 - `deactivate(jid: &Jid)` - Deactivate a community
 - `link_subgroups(jid: &Jid, subgroups: &[Jid])` - Link groups to a community
-- `unlink_subgroups(jid: &Jid, subgroups: &[Jid])` - Unlink groups from a community
+- `unlink_subgroups(jid: &Jid, subgroups: &[Jid], remove_orphan_members: bool)` - Unlink groups from a community
 - `get_subgroups(jid: &Jid)` - List community subgroups
 - `get_subgroup_participant_counts(jid: &Jid)` - Get participant counts per subgroup
-- `query_linked_group(jid: &Jid)` - Query a linked group's community metadata
-- `join_subgroup(jid: &Jid)` - Join a community subgroup
+- `query_linked_group(community_jid: &Jid, subgroup_jid: &Jid)` - Query a linked group's community metadata
+- `join_subgroup(community_jid: &Jid, subgroup_jid: &Jid)` - Join a community subgroup
 - `get_linked_groups_participants(jid: &Jid)` - Get participants across linked groups
 
 **Example:**

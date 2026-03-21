@@ -243,6 +243,24 @@ assert_eq!(upload.file_sha256.len(), 32);
 assert_eq!(upload.file_enc_sha256.len(), 32);
 ```
 
+### Streaming encryption
+
+For direct access to the encryption primitive with constant memory usage (~40KB), use `encrypt_media_streaming`. This is the core function that `encrypt_media` wraps internally:
+
+```rust
+use wacore::upload::encrypt_media_streaming;
+use wacore::download::MediaType;
+use std::fs::File;
+
+let reader = File::open("large_video.mp4")?;
+let writer = File::create("large_video.enc")?;
+
+let info = encrypt_media_streaming(reader, writer, MediaType::Video)?;
+// info.media_key, info.file_sha256, info.file_enc_sha256, info.file_length
+```
+
+See [Upload API reference](/api/upload#streaming-encryption) for full details.
+
 ### Download Decryption
 
 Decryption is automatic when downloading:

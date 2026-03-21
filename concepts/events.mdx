@@ -119,6 +119,8 @@ pub enum Event {
     ArchiveUpdate(ArchiveUpdate),
     StarUpdate(StarUpdate),
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
+    DeleteChatUpdate(DeleteChatUpdate),
+    DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
 
     // History Sync
     HistorySync(HistorySync),
@@ -944,7 +946,7 @@ Event::StarUpdate(update) => {
 
 ### MarkChatAsReadUpdate
 
-**Emitted:** When a chat is marked as read
+**Emitted:** When a chat is marked as read or unread across linked devices
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -953,6 +955,73 @@ pub struct MarkChatAsReadUpdate {
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
     pub from_full_sync: bool,
+}
+```
+
+**Example:**
+```rust
+Event::MarkChatAsReadUpdate(update) => {
+    let read = update.action.read.unwrap_or(false);
+    println!("Chat {} marked as {}", update.jid, if read { "read" } else { "unread" });
+}
+```
+
+### DeleteChatUpdate
+
+**Emitted:** When a chat is deleted across linked devices
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteChatUpdate {
+    pub jid: Jid,
+    /// From the index, not the proto — DeleteChatAction only has messageRange.
+    pub delete_media: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::DeleteChatAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `jid` - The JID of the deleted chat
+- `delete_media` - Whether media files were also deleted
+- `action` - The underlying protobuf action containing the optional `message_range`
+
+**Example:**
+```rust
+Event::DeleteChatUpdate(update) => {
+    println!("Chat {} deleted (media deleted: {})", update.jid, update.delete_media);
+}
+```
+
+### DeleteMessageForMeUpdate
+
+**Emitted:** When a message is deleted locally (not for everyone) across linked devices
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteMessageForMeUpdate {
+    pub chat_jid: Jid,
+    pub participant_jid: Option<Jid>,
+    pub message_id: String,
+    pub from_me: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::DeleteMessageForMeAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `chat_jid` - The chat containing the deleted message
+- `participant_jid` - The sender of the message (only for group messages from others; `None` for self-authored or 1-on-1 messages)
+- `message_id` - The ID of the deleted message
+- `from_me` - Whether the deleted message was sent by you
+- `action` - The underlying protobuf action containing `delete_media` and optional `message_timestamp`
+
+**Example:**
+```rust
+Event::DeleteMessageForMeUpdate(update) => {
+    println!("Message {} in {} deleted for me", update.message_id, update.chat_jid);
 }
 ```
 

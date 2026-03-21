@@ -710,7 +710,7 @@ async fn read_pump(
 Implement the `HttpClient` trait for custom HTTP operations:
 
 ```rust
-use whatsapp_rust::http::{HttpClient, HttpRequest, HttpResponse};
+use whatsapp_rust::http::{HttpClient, HttpRequest, HttpResponse, StreamingHttpResponse};
 use async_trait::async_trait;
 
 pub struct MyCustomHttpClient {
@@ -729,16 +729,12 @@ impl HttpClient for MyCustomHttpClient {
         })
     }
     
-    fn execute_streaming(&self, request: HttpRequest) -> Result<HttpStreamingResponse, anyhow::Error> {
+    fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse, anyhow::Error> {
         // Return a streaming response with a reader
-        Ok(HttpStreamingResponse {
+        Ok(StreamingHttpResponse {
             status_code: response.status_code,
             body: Box::new(response.body_reader),
         })
-    }
-    
-    fn clone_box(&self) -> Box<dyn HttpClient> {
-        Box::new(self.clone())
     }
 }
 ```

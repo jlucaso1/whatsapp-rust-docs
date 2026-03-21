@@ -937,6 +937,17 @@ let cache = TypedCache::from_moka(moka_cache);
 let cache = TypedCache::from_store(store, "group", Some(Duration::from_secs(3600)));
 ```
 
+#### `invalidate_all` and `clear`
+
+`TypedCache` provides two ways to remove all entries:
+
+- **`invalidate_all()`** — synchronous. For moka backends this works immediately. For custom `CacheStore` backends, it spawns a fire-and-forget task via `tokio::runtime::Handle::try_current()`, which **requires the `tokio-runtime` feature**. Without `tokio-runtime` enabled, the clear is skipped and a warning is logged.
+- **`clear()`** — async. Awaits completion for custom backends and is the recommended approach when you need to ensure all entries are removed.
+
+<Warning>
+If you disable the `tokio-runtime` feature and use a custom `CacheStore` backend, `invalidate_all()` will silently skip clearing the external store. Use the async `clear()` method instead.
+</Warning>
+
 ### CacheStores configuration
 
 The `CacheStores` struct controls which caches use custom backends:

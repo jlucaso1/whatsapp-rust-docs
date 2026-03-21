@@ -476,6 +476,29 @@ let config = CacheConfig {
 
 See [Custom backends — cache store](/guides/custom-backends#custom-cache-store) for a full implementation example.
 
+## TypedCache
+
+`TypedCache<K, V>` is a generic wrapper that dispatches to either moka or a custom `CacheStore` backend.
+
+**Location:** `src/cache_store.rs`
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `from_moka` | `fn from_moka(cache: Cache<K, V>) -> Self` | Wrap an existing moka cache (zero overhead) |
+| `from_store` | `fn from_store(store: Arc<dyn CacheStore>, namespace: &'static str, ttl: Option<Duration>) -> Self` | Create a cache backed by a custom store |
+| `get` | `async fn get<Q>(&self, key: &Q) -> Option<V>` | Look up a value. Misses and deserialization failures return `None` |
+| `insert` | `async fn insert(&self, key: K, value: V)` | Insert or update a value |
+| `invalidate` | `async fn invalidate<Q>(&self, key: &Q)` | Remove a single key |
+| `invalidate_all` | `fn invalidate_all(&self)` | Remove all entries (sync). Requires `tokio-runtime` for custom backends |
+| `clear` | `async fn clear(&self)` | Remove all entries (async). Awaits completion for custom backends |
+| `run_pending_tasks` | `async fn run_pending_tasks(&self)` | Run internal housekeeping (moka only) |
+| `entry_count` | `fn entry_count(&self) -> u64` | Approximate entry count (sync). Returns `0` for custom backends |
+| `entry_count_async` | `async fn entry_count_async(&self) -> u64` | Approximate entry count, delegating to custom backend if available |
+
+<Warning>
+`invalidate_all()` on custom `CacheStore` backends requires the `tokio-runtime` feature. Without it, the clear is silently skipped. Use the async `clear()` method as an alternative.
+</Warning>
+
 ## Implementing Custom Storage
 
 To implement a custom storage backend:

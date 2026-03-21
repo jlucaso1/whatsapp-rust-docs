@@ -936,6 +936,7 @@ The following namespaces are used internally by the client:
 - **Serialization uses `serde_json`.** Values are serialized to JSON bytes on the custom-store path. The moka path has zero serialization overhead.
 - **TTL is forwarded from `CacheEntryConfig`.** Your implementation receives the same TTL configured in `CacheConfig`.
 - **Coordination caches cannot be externalized.** Session locks, message queues, and enqueue locks hold live Rust objects (mutexes, channels) and always stay in-process.
+- **`invalidate_all()` requires `tokio-runtime`.** The synchronous `invalidate_all()` method on `TypedCache` spawns a fire-and-forget task via Tokio for custom backends. Without the `tokio-runtime` feature, the clear is skipped with a warning. Use the async `clear()` method instead if you disable `tokio-runtime`.
 
 ## Best Practices
 

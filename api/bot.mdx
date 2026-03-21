@@ -412,7 +412,7 @@ When your bot receives history sync data, the pipeline:
 2. **Decompresses** zlib data on a blocking thread with pre-allocated buffers capped at 8 MiB
 3. **Walks protobuf fields manually** instead of decoding the entire message tree — only conversations and pushnames are extracted
 4. **Streams conversations** through a bounded channel (capacity 4) as zero-copy `Bytes` slices
-5. **Wraps each conversation** in a [`LazyConversation`](/concepts/events#lazyconversation) — protobuf parsing is deferred until you call `.get()`, and embedded messages are cleared on first parse to reclaim memory
+5. **Wraps each conversation** in a [`LazyConversation`](/concepts/events#lazyconversation) — protobuf parsing is deferred until you call `.get()`, and embedded messages are cleared on first parse to reclaim memory. Use `.raw_bytes()` or `.get_with_messages()` if you need access to the full message history
 
 If no event handlers are registered, conversation extraction is skipped entirely at the protobuf level.
 

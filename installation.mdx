@@ -7,7 +7,7 @@ description: Add whatsapp-rust to your Rust project
 
 Before installing whatsapp-rust, ensure you have:
 
-- **Rust nightly** (default) — required for SIMD-optimized binary protocol. See [Using Stable Rust](#using-stable-rust) if you need stable toolchain support.
+- **Rust nightly** (default) — required for Rust edition 2024 and SIMD-optimized binary protocol. The project pins `nightly-2026-01-30` via `rust-toolchain.toml`. See [Using stable Rust](#using-stable-rust) if you need stable toolchain support.
 - **Cargo** package manager
 
 <Note>
@@ -74,6 +74,19 @@ whatsapp-rust supports several optional features:
   All default features enable Tokio as the async runtime, but every component is optional. To target a different runtime (async-std, WASM, etc.), disable all defaults and provide your own implementations of the `Runtime`, `TransportFactory`, `HttpClient`, and `Backend` traits. See [custom backends](/guides/custom-backends) for details.
 </Tip>
 
+The `wacore` crate has an additional feature for WASM browser targets:
+
+| Feature | Description | Included by default |
+|---------|-------------|--------------------|
+| `js` | Enables browser-compatible random number generation via `getrandom/wasm_js` for `wasm32` targets | ❌ No |
+
+To use whatsapp-rust in a WASM browser environment, enable the `js` feature on `wacore`:
+
+```toml Cargo.toml
+[dependencies]
+wacore = { version = "0.4", default-features = false, features = ["js"] }
+```
+
 The `whatsapp-rust-sqlite-storage` crate has its own feature flags:
 
 | Feature | Description | Included by default |
@@ -91,9 +104,9 @@ whatsapp-rust-sqlite-storage = { version = "0.4", default-features = false }
   The default features provide everything needed for most use cases. Only customize features if you have specific requirements.
 </Note>
 
-## Using Stable Rust
+## Using stable Rust
 
-By default, whatsapp-rust enables the `simd` feature, which uses Rust's `portable_simd` API for optimized binary protocol encoding/decoding. This requires a **nightly** Rust toolchain.
+By default, whatsapp-rust uses Rust **edition 2024** and enables the `simd` feature, which uses Rust's `portable_simd` API for optimized binary protocol encoding/decoding. Both of these require a **nightly** Rust toolchain. The project pins `nightly-2026-01-30` via `rust-toolchain.toml`.
 
 To compile on **stable Rust**, disable the `simd` feature by setting `default-features = false`. You must do this on **both** `whatsapp-rust` and `wacore` — otherwise Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) will re-enable SIMD through the `wacore` dependency:
 

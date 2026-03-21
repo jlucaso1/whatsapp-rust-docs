@@ -1,9 +1,9 @@
 ---
 title: Chat actions
-description: Archive, pin, mute chats and star messages
+description: Archive, pin, mute, delete chats, star messages, and mark chats as read
 ---
 
-The `ChatActions` feature provides methods for managing chat organization through archiving, pinning, muting, and starring messages. These operations sync across all your devices via WhatsApp's app state sync mechanism.
+The `ChatActions` feature provides methods for managing chat organization through archiving, pinning, muting, starring messages, marking chats as read, deleting chats, and deleting individual messages. These operations sync across all your devices via WhatsApp's app state sync mechanism.
 
 ## Access
 
@@ -20,16 +20,21 @@ let chat_actions = client.chat_actions();
 Archive a chat to hide it from the main chat list.
 
 ```rust
-pub async fn archive_chat(&self, jid: &Jid) -> Result<()>
+pub async fn archive_chat(
+    &self,
+    jid: &Jid,
+    message_range: Option<SyncActionMessageRange>,
+) -> Result<()>
 ```
 
 **Parameters:**
 - `jid` - The chat JID to archive
+- `message_range` - Optional message range for multi-device conflict resolution. Pass `None` in most cases
 
 **Example:**
 ```rust
 let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
-client.chat_actions().archive_chat(&jid).await?;
+client.chat_actions().archive_chat(&jid, None).await?;
 ```
 
 ### unarchive_chat
@@ -37,15 +42,20 @@ client.chat_actions().archive_chat(&jid).await?;
 Unarchive a chat to show it in the main chat list.
 
 ```rust
-pub async fn unarchive_chat(&self, jid: &Jid) -> Result<()>
+pub async fn unarchive_chat(
+    &self,
+    jid: &Jid,
+    message_range: Option<SyncActionMessageRange>,
+) -> Result<()>
 ```
 
 **Parameters:**
 - `jid` - The chat JID to unarchive
+- `message_range` - Optional message range for multi-device conflict resolution. Pass `None` in most cases
 
 **Example:**
 ```rust
-client.chat_actions().unarchive_chat(&jid).await?;
+client.chat_actions().unarchive_chat(&jid, None).await?;
 ```
 
 ## Pin
@@ -226,6 +236,151 @@ client.chat_actions()
     .await?;
 ```
 
+## Mark chat as read
+
+### mark_chat_as_read
+
+Mark a chat as read or unread. This is distinct from `mark_as_read` (IQ receipts) — it syncs the read/unread state across all linked devices.
+
+```rust
+pub async fn mark_chat_as_read(
+    &self,
+    jid: &Jid,
+    read: bool,
+    message_range: Option<SyncActionMessageRange>,
+) -> Result<()>
+```
+
+**Parameters:**
+- `jid` - The chat JID to mark
+- `read` - `true` to mark as read, `false` to mark as unread
+- `message_range` - Optional message range for multi-device conflict resolution. Pass `None` in most cases
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Mark chat as read
+client.chat_actions().mark_chat_as_read(&jid, true, None).await?;
+
+// Mark chat as unread
+client.chat_actions().mark_chat_as_read(&jid, false, None).await?;
+```
+
+<Note>
+This syncs the read/unread badge across linked devices via app state sync (`regular_low` collection). To send read receipts to the sender, use `client.mark_as_read()` instead.
+</Note>
+
+## Delete chat
+
+### delete_chat
+
+Delete a chat from the chat list across all linked devices.
+
+```rust
+pub async fn delete_chat(
+    &self,
+    jid: &Jid,
+    delete_media: bool,
+    message_range: Option<SyncActionMessageRange>,
+) -> Result<()>
+```
+
+**Parameters:**
+- `jid` - The chat JID to delete
+- `delete_media` - Whether to also delete downloaded media files
+- `message_range` - Optional message range for multi-device conflict resolution. Pass `None` in most cases
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Delete chat and its media
+client.chat_actions().delete_chat(&jid, true, None).await?;
+
+// Delete chat but keep media files
+client.chat_actions().delete_chat(&jid, false, None).await?;
+```
+
+<Warning>
+This operation is not reversible. The chat and optionally its media will be removed from all linked devices.
+</Warning>
+
+## Delete message for me
+
+### delete_message_for_me
+
+Delete a specific message locally (not for the other party). This is different from `revoke_message` which deletes for everyone.
+
+```rust
+pub async fn delete_message_for_me(
+    &self,
+    chat_jid: &Jid,
+    participant_jid: Option<&Jid>,
+    message_id: &str,
+    from_me: bool,
+    delete_media: bool,
+    message_timestamp: Option<i64>,
+) -> Result<()>
+```
+
+**Parameters:**
+- `chat_jid` - The chat containing the message
+- `participant_jid` - For group messages from others, pass `Some(&sender_jid)`. For 1-on-1 chats or your own messages, pass `None`
+- `message_id` - The ID of the message to delete
+- `from_me` - Whether the message was sent by you
+- `delete_media` - Whether to also delete the associated media file
+- `message_timestamp` - Optional timestamp of the message
+
+**Example:**
+```rust
+// Delete your own message in a 1-on-1 chat
+client.chat_actions()
+    .delete_message_for_me(&chat_jid, None, "MESSAGE_ID", true, true, None)
+    .await?;
+
+// Delete someone else's message in a group
+let sender_jid: Jid = "15559876543@s.whatsapp.net".parse()?;
+client.chat_actions()
+    .delete_message_for_me(&group_jid, Some(&sender_jid), "MESSAGE_ID", false, true, None)
+    .await?;
+```
+
+<Warning>
+For group messages not sent by you, `participant_jid` is required. The method will return an error if it's not provided.
+</Warning>
+
+<Note>
+This only removes the message from your own devices. The other party can still see the message. To delete for everyone, use `client.revoke_message()` instead.
+</Note>
+
+## Helper functions
+
+### message_range
+
+Construct a `SyncActionMessageRange` for multi-device conflict resolution. In most cases you can pass `None` instead — only WhatsApp Web with a full message database populates this.
+
+```rust
+pub fn message_range(
+    last_message_timestamp: i64,
+    last_system_message_timestamp: Option<i64>,
+    messages: Vec<(wa::MessageKey, i64)>,
+) -> SyncActionMessageRange
+```
+
+### message_key
+
+Construct a `MessageKey` for use with `message_range`.
+
+```rust
+pub fn message_key(
+    id: impl Into<String>,
+    remote_jid: &Jid,
+    from_me: bool,
+    participant: Option<&Jid>,
+) -> wa::MessageKey
+```
+
 ## App state sync
 
 All chat actions are synced across devices using WhatsApp's app state synchronization:
@@ -234,8 +389,11 @@ All chat actions are synced across devices using WhatsApp's app state synchroniz
 |--------|------------|
 | Archive | `regular_low` |
 | Pin | `regular_low` |
+| Mark chat as read | `regular_low` |
 | Mute | `regular_high` |
 | Star | `regular_high` |
+| Delete chat | `regular_high` |
+| Delete message for me | `regular_high` |
 
 <Note>
 App state sync requires encryption keys to be available. These are typically obtained during initial sync after authentication. Actions may fail if called immediately after pairing before sync completes.
@@ -262,6 +420,15 @@ use wacore::types::events::Event;
         Event::StarUpdate(update) => {
             println!("Message {} starred: {:?}", update.message_id, update.action.starred);
         }
+        Event::MarkChatAsReadUpdate(update) => {
+            println!("Chat {} marked as read: {:?}", update.jid, update.action.read);
+        }
+        Event::DeleteChatUpdate(update) => {
+            println!("Chat {} deleted (media: {})", update.jid, update.delete_media);
+        }
+        Event::DeleteMessageForMeUpdate(update) => {
+            println!("Message {} in {} deleted for me", update.message_id, update.chat_jid);
+        }
         _ => {}
     }
 })
@@ -273,7 +440,7 @@ All methods return `Result<(), anyhow::Error>`. Common errors:
 
 - No app state sync key available (sync not complete)
 - Invalid timestamp for `mute_chat_until`
-- Missing `participant_jid` for group star operations
+- Missing `participant_jid` for group star/delete operations
 - Network errors
 
 ```rust
@@ -306,12 +473,25 @@ async fn organize_chats(client: &Arc<Client>) -> anyhow::Result<()> {
         .await?;
     
     // Archive old conversations
-    client.chat_actions().archive_chat(&old_chat).await?;
+    client.chat_actions().archive_chat(&old_chat, None).await?;
     
     // Star an important message
     client.chat_actions()
         .star_message(&important_chat, None, "IMPORTANT_MSG_ID", false)
         .await?;
+    
+    // Mark chat as read across all devices
+    client.chat_actions()
+        .mark_chat_as_read(&important_chat, true, None)
+        .await?;
+    
+    // Delete a message locally (not for everyone)
+    client.chat_actions()
+        .delete_message_for_me(&old_chat, None, "OLD_MSG_ID", false, true, None)
+        .await?;
+    
+    // Delete an old chat and its media
+    client.chat_actions().delete_chat(&old_chat, true, None).await?;
     
     Ok(())
 }

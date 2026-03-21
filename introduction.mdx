@@ -32,12 +32,19 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 - **Upload and download** - Support for images, videos, documents, GIFs, and audio
 - **Automatic encryption** - Transparent encryption/decryption for all media
 
-### Contacts and groups
+### Groups and communities
 
-- **Phone number validation** - Check if phone numbers are on WhatsApp
-- **Profile management** - Get/set profile pictures, push name, and status text
-- **Group management** - Create, query, and manage groups with full settings control
-- **Group listing** - List all groups you're participating in
+- **Group management** - Create, manage, invite, membership approval, and subgroup linking
+- **Community support** - Create communities, link/unlink subgroups, query participants
+- **Invite links** - Generate, reset, and join via invite codes
+- **Membership controls** - Approval mode, member add mode, admin promotion/demotion
+
+### Newsletters
+
+- **Create and join** - Create newsletters, join by JID or invite code
+- **Send messages** - Plaintext messages and emoji reactions
+- **Live updates** - Subscribe to real-time reaction count changes
+- **Message history** - Fetch newsletter messages with pagination
 
 ### Status updates
 
@@ -45,17 +52,35 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 - **Privacy controls** - Send to all contacts, allow lists, or deny lists
 - **Revocation** - Delete posted status updates
 
+### Contacts
+
+- **Phone number lookup** - Batch check if numbers are on WhatsApp
+- **Profile pictures** - Fetch preview or full-size profile pictures
+- **User info** - Get LID, status text, business status, and picture IDs
+
 ### Presence and chat state
 
 - **Online/offline status** - Set your presence status
 - **Typing indicators** - Show composing, recording, and paused states
-- **Contact management** - Block and unblock contacts
+- **Blocking** - Block and unblock contacts, query blocklist
 
-### Chat organization
+### Chat actions
 
 - **Archive/pin/mute** - Organize chats with archive, pin, and mute actions
 - **Star messages** - Star and unstar individual messages
 - **App state sync** - Actions sync across all linked devices
+
+### Profile
+
+- **Push name** - Set your display name with app state sync
+- **Status text** - Update your "about" text
+- **Profile picture** - Set or remove your profile picture
+
+### Privacy
+
+- **Privacy settings** - Fetch and set last seen, online, profile, status, and group add visibility
+- **Disappearing messages** - Set default disappearing message duration
+- **Read receipts** - Control read receipt visibility
 
 ### Architecture
 

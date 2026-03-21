@@ -49,6 +49,7 @@
               "guides/group-management",
               "guides/newsletters",
               "guides/communities",
+              "guides/polls",
               "guides/custom-backends"
             ]
           },
@@ -98,6 +99,7 @@
               "api/mex",
               "api/newsletter",
               "api/community",
+              "api/polls",
               "api/tctoken"
             ]
           },

@@ -371,6 +371,10 @@ The `wa::Message` protobuf supports various message types. Set exactly one of th
   Emoji reaction to another message
 </ParamField>
 
+<ParamField path="poll_creation_message" type="PollCreationMessage">
+  Poll with multiple options. Use `client.polls().create()` for a higher-level API that handles message secret generation automatically. See [Polls API](/api/polls).
+</ParamField>
+
 ### Example: Extended Text with Quote
 
 ```rust

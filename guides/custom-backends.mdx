@@ -765,7 +765,9 @@ Implement the `CacheStore` trait from `wacore::store::cache`:
 ```rust
 use async_trait::async_trait;
 use std::time::Duration;
-use wacore::store::cache::CacheStore;
+// You can import from either location:
+// use wacore::store::cache::CacheStore;
+use whatsapp_rust::CacheStore;
 
 pub struct MyRedisCacheStore {
     client: redis::aio::ConnectionManager,

@@ -23,7 +23,9 @@ whatsapp-rust/
 ├── waproto/                      # Protocol Buffers definitions
 ├── storages/sqlite-storage/      # SQLite backend
 ├── transports/tokio-transport/   # Tokio WebSocket transport
-└── http_clients/ureq-client/     # HTTP client for media
+├── http_clients/ureq-client/     # HTTP client for media
+├── tests/e2e/                    # End-to-end test suite
+└── examples/                     # Example applications (benchmarks)
 ```
 
 ## Three Main Crates
@@ -445,9 +447,12 @@ features/
 ├── blocking.rs         // Block/unblock contacts
 ├── chat_actions.rs     // Archive, pin, mute, star
 ├── chatstate.rs        // Typing indicators
+├── community.rs        // Community management
 ├── contacts.rs         // Contact operations
 ├── groups.rs           // Group management
+├── media_reupload.rs   // Media re-upload for retry
 ├── mex.rs              // GraphQL MEX queries
+├── newsletter.rs       // Newsletter/channel operations
 ├── presence.rs         // Presence updates
 ├── profile.rs          // Profile management
 ├── status.rs           // Status updates

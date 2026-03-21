@@ -181,21 +181,23 @@ loop {
 
 ## UreqHttpClient
 
-The default HTTP client implementation using the `ureq` crate for synchronous HTTP requests.
+The default HTTP client implementation using the `ureq` crate (v3.3) for synchronous HTTP requests.
 
 ### Features
 
 - **Blocking I/O** - Uses synchronous ureq, wrapped in `tokio::task::spawn_blocking`
-- **Streaming Support** - Implements efficient streaming downloads
+- **Connection pooling** - Shares a `ureq::Agent` across requests for connection reuse
+- **Streaming support** - Implements efficient streaming downloads
 - **Simple API** - Minimal configuration required
-- **Thread-Safe** - Implements `Clone` for easy sharing
+- **Thread-safe** - Implements `Clone` for easy sharing (cloning the `Agent` is cheap)
+- **TLS via rustls** - Uses rustls for TLS, with optional `danger-skip-tls-verify` for testing
 
-### Creating a Client
+### Creating a client
 
 ```rust
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
-// Basic usage
+// Basic usage — creates a shared ureq::Agent internally
 let client = UreqHttpClient::new();
 
 // Or use default
@@ -282,24 +284,53 @@ println!("Downloaded {} bytes", file_data.len());
 
 ### Internal Implementation
 
-The `execute` method wraps ureq calls in `spawn_blocking`:
+The `UreqHttpClient` wraps a shared `ureq::Agent` for connection pooling. All requests go through the agent rather than standalone `ureq::get()`/`ureq::post()` functions:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct UreqHttpClient {
+    agent: ureq::Agent,
+}
+
+impl UreqHttpClient {
+    pub fn new() -> Self {
+        let agent = ureq::Agent::new_with_defaults();
+        Self { agent }
+    }
+}
+```
+
+When the `danger-skip-tls-verify` feature is enabled, the agent is built with TLS verification disabled:
+
+```rust
+use ureq::config::Config;
+use ureq::tls::TlsConfig;
+
+let agent: ureq::Agent = Config::builder()
+    .tls_config(TlsConfig::builder().disable_verification(true).build())
+    .build()
+    .into();
+```
+
+The `execute` method clones the agent and wraps the call in `spawn_blocking`:
 
 ```rust
 #[async_trait]
 impl HttpClient for UreqHttpClient {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+        let agent = self.agent.clone();
         // ureq is blocking, so wrap in spawn_blocking
         tokio::task::spawn_blocking(move || {
             let response = match request.method.as_str() {
                 "GET" => {
-                    let mut req = ureq::get(&request.url);
+                    let mut req = agent.get(&request.url);
                     for (key, value) in &request.headers {
                         req = req.header(key, value);
                     }
                     req.call()?
                 }
                 "POST" => {
-                    let mut req = ureq::post(&request.url);
+                    let mut req = agent.post(&request.url);
                     for (key, value) in &request.headers {
                         req = req.header(key, value);
                     }
@@ -327,13 +358,13 @@ impl HttpClient for UreqHttpClient {
 }
 ```
 
-The `execute_streaming` method is synchronous (no `spawn_blocking`) because it's called FROM within a blocking context:
+The `execute_streaming` method is synchronous (no `spawn_blocking`) because it's called from within a blocking context. It also uses the shared agent:
 
 ```rust
 fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse> {
     let response = match request.method.as_str() {
         "GET" => {
-            let mut req = ureq::get(&request.url);
+            let mut req = self.agent.get(&request.url);
             for (key, value) in &request.headers {
                 req = req.header(key, value);
             }
@@ -479,12 +510,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Best Practices
 
-1. **Blocking Operations** - Always wrap blocking HTTP libraries in `tokio::task::spawn_blocking`
-2. **Streaming for Large Files** - Use `execute_streaming` for media downloads to avoid buffering
-3. **Error Handling** - Return descriptive errors with context
-4. **Timeouts** - Implement request timeouts for reliability
+1. **Blocking operations** - Always wrap blocking HTTP libraries in `tokio::task::spawn_blocking`
+2. **Streaming for large files** - Use `execute_streaming` for media downloads to avoid buffering
+3. **Error handling** - Return descriptive errors with context
+4. **Timeouts** - ureq 3.3 applies per-IP connection timeouts automatically; implement request-level timeouts for reliability
 5. **Retries** - Consider retry logic for transient failures
-6. **Connection Pooling** - Reuse connections when possible
+6. **Connection pooling** - Use a shared `ureq::Agent` (as `UreqHttpClient` does) for connection reuse
 
 ## Media Operations
 

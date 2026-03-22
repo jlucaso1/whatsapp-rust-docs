@@ -372,16 +372,30 @@ src/store/
 └── signal_cache.rs         # Re-export of wacore::store::signal_cache::SignalStoreCache
 ```
 
-The `Device` struct implements the libsignal `SessionStore`, `IdentityKeyStore`, and other traits. These are wrapped by `SignalProtocolStoreAdapter`, which adds the `SignalStoreCache` layer for deferred writes:
+The `Device` struct implements the libsignal `SessionStore`, `IdentityKeyStore`, and other traits. These are wrapped by `SignalProtocolStoreAdapter`, which adds the `SignalStoreCache` layer — sessions are cached as `SessionRecord` objects (not bytes), with serialization deferred to `flush()`:
 
 ```rust
+// SignalProtocolStoreAdapter reads/writes through the cache
 #[async_trait]
-impl SessionStore for Device {
+impl SessionStore for SessionAdapter {
     async fn load_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<SessionRecord>, SignalProtocolError> {
+        // Returns cached SessionRecord object directly (no deserialization)
+        // Cold load deserializes from backend bytes once and caches the object
+        self.cache.get_session(&addr_str, &*device.backend).await
+    }
+
+    async fn store_session(
         &mut self,
         address: &ProtocolAddress,
-    ) -> Result<Option<SessionRecord>> {
-        // Reads from the SignalStore backend trait
+        record: SessionRecord,  // Takes ownership — zero-cost move
+    ) -> Result<(), SignalProtocolError> {
+        // Stores the SessionRecord object in cache, marks dirty
+        // Serialization happens only during flush()
+        self.cache.put_session(&addr_str, record).await;
+        Ok(())
     }
 }
 ```
@@ -443,23 +457,89 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
 
 ## Performance Optimizations
 
-### Redundant signal store write elimination
+### Session object cache
 
-The `SignalStoreCache` skips writes when the incoming data is byte-identical to the cached value. This avoids marking entries as dirty and eliminates unnecessary database writes during `flush()`.
+The `SignalStoreCache` stores sessions as deserialized `SessionRecord` objects rather than serialized bytes, matching WhatsApp Web's architecture where the JS object IS the cache. Serialization only happens during `flush()` to the database — not on every `store_session` call.
 
 ```rust
 // wacore/src/store/signal_cache.rs
-fn put(&mut self, address: &str, data: &[u8]) {
+struct SessionStoreState {
+    cache: HashMap<Arc<str>, Option<SessionRecord>>,  // Objects, not bytes
+    dirty: HashSet<Arc<str>>,
+    deleted: HashSet<Arc<str>>,
+}
+```
+
+This eliminates prost encode (on store) and decode (on load) from the per-message hot path. The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer:
+
+```rust
+// wacore/libsignal/src/protocol/storage/traits.rs
+pub trait SessionStore {
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: SessionRecord,  // Owned — zero-cost move, no clone
+    ) -> Result<()>;
+}
+```
+
+All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`, `message_decrypt_prekey`, `process_prekey_bundle`) drop the record immediately after storing. Taking ownership eliminates the `.clone()` in the adapter and the compiler enforces no use-after-store.
+
+**Per-message hot path impact:**
+
+| Operation | Before | After |
+|-----------|--------|-------|
+| `store_session` | clone all fields + prost encode | move (zero-cost) |
+| `load_session` | prost decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
+| `flush` (batched) | write bytes to DB | serialize + write bytes to DB |
+
+### Arc previous sessions
+
+`SessionRecord.previous_sessions` is wrapped in `Arc<Vec<SessionStructure>>`, making clone O(1) for the ~40 archived previous sessions that previously accounted for ~40% of the serialize cost:
+
+```rust
+// wacore/libsignal/src/protocol/state/session.rs
+pub struct SessionRecord {
+    current_session: Option<SessionState>,
+    /// Wrapped in Arc so cloning is O(1). Only mutated on rare paths via Arc::make_mut.
+    previous_sessions: Arc<Vec<SessionStructure>>,
+}
+```
+
+Only rare operations (archive current session, promote previous session, take/restore during session setup) trigger `Arc::make_mut` and a deep copy.
+
+### Redundant signal store write elimination
+
+The `SignalStoreCache` uses targeted deduplication strategies per store type. For identities (which rarely change), `put_dedup()` compares incoming bytes against the cached value and skips if identical:
+
+```rust
+// wacore/src/store/signal_cache.rs — ByteStoreState
+fn put_dedup(&mut self, address: &str, data: &[u8]) {
     if let Some(Some(existing)) = self.cache.get(address)
         && existing.as_ref() == data
     {
         return; // Skip — data unchanged, no dirty mark
     }
-    // ... insert and mark dirty
+    self.put(address, data);
 }
 ```
 
-This optimization is particularly impactful during message decryption, where Signal sessions are loaded into the cache and then "saved" back even when the session state has not changed. Without this check, every decryption would produce a dirty entry and trigger an unnecessary database write on the next `flush()`.
+Sender keys use unconditional `put()` since they change with every message — the byte comparison would always fail and waste CPU cycles. This split avoids unnecessary database writes during `flush()` while not adding overhead where it provides no benefit.
+
+### Key reuse in cache
+
+The `key_for()` method on both `SessionStoreState` and `ByteStoreState` reuses existing `Arc<str>` keys from the HashMap via `get_key_value()`, avoiding a heap allocation on every cache operation:
+
+```rust
+fn key_for(&self, address: &str) -> Arc<str> {
+    match self.cache.get_key_value(address) {
+        Some((existing, _)) => existing.clone(),  // O(1) refcount bump
+        None => Arc::from(address),                // Only on first insert
+    }
+}
+```
+
+On the hot path (put/delete for addresses already in the cache), this is always a refcount bump instead of a heap allocation.
 
 ### Single-Allocation Session Lock Keys
 

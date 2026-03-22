@@ -290,6 +290,29 @@ client.revoke_message(
 Admin revoke only works in group chats. The `original_sender` must match the JID format (LID or phone number) of the message being deleted.
 </Warning>
 
+## Forwarding media messages
+
+You can forward media by reusing the original CDN fields from a received message. This avoids downloading and re-uploading the media entirely — it's instant regardless of file size:
+
+```rust
+use waproto::whatsapp as wa;
+
+// Clone the image message, only change the caption
+if let Some(img) = &received_message.image_message {
+    let forwarded = wa::Message {
+        image_message: Some(Box::new(wa::message::ImageMessage {
+            caption: Some("Forwarded!".to_string()),
+            ..*img.clone()
+        })),
+        ..Default::default()
+    };
+
+    client.send_message(destination_jid, forwarded).await?;
+}
+```
+
+This works because `send_message` accepts any `wa::Message`. If the message already contains CDN fields (`url`, `direct_path`, `media_key`, etc.) from a received message, the server accepts it as-is. See [Media handling - CDN reuse](/guides/media-handling#forwarding-media-via-cdn-reuse) for details on all supported media types and when to fall back to download + re-upload.
+
 ## Send Options
 
 ### Adding Extra Stanza Nodes

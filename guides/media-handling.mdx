@@ -161,7 +161,7 @@ Inline thumbnails (`jpeg_thumbnail` / `png_thumbnail`) are embedded directly in 
 
 ### Reusing thumbnails from incoming messages
 
-When echoing or forwarding media, you can clone the thumbnail from the original message:
+When re-uploading media (for example, after processing or transcoding), you can clone the thumbnail from the original message:
 
 ```rust
 if let Some(img) = &message.image_message {
@@ -187,6 +187,10 @@ if let Some(img) = &message.image_message {
 }
 ```
 
+<Tip>
+If you don't need to modify the media, use [CDN reuse](#forwarding-media-via-cdn-reuse) instead — it forwards the entire message (including thumbnails) without downloading or re-uploading anything.
+</Tip>
+
 ### Downloading link thumbnails
 
 The `LinkThumbnail` variant in `MediaType` supports downloading thumbnails for URL previews in `ExtendedTextMessage`:
@@ -204,6 +208,58 @@ let thumbnail = client.download_from_params(
     MediaType::LinkThumbnail,
 ).await?;
 ```
+
+## Forwarding media via CDN reuse
+
+When you receive a media message (image, video, audio, document, sticker), you can "forward" it by reusing the original CDN fields directly — no download or re-upload needed. This is instant regardless of file size because no media bytes are transferred.
+
+The technique works because every media message contains all the CDN metadata (`url`, `direct_path`, `media_key`, `file_sha256`, etc.) needed for recipients to fetch the blob. You simply clone those fields into a new `wa::Message` and call `send_message`:
+
+```rust
+use waproto::whatsapp as wa;
+
+/// Reuses the original CDN blob, only swaps the caption.
+/// Instant regardless of file size — no download or re-upload.
+fn forward_image(original: &wa::message::ImageMessage) -> wa::Message {
+    wa::Message {
+        image_message: Some(Box::new(wa::message::ImageMessage {
+            caption: Some("Forwarded image".to_string()),
+            ..*original.clone() // reuses url, direct_path, media_key, hashes, thumbnail, etc.
+        })),
+        ..Default::default()
+    }
+}
+
+// In your message handler:
+if let Some(img) = &message.image_message {
+    let forwarded = forward_image(img);
+    client.send_message(destination_jid, forwarded).await?;
+}
+```
+
+The same pattern works for any media type:
+
+```rust
+// Forward a video, keeping all CDN fields intact
+if let Some(vid) = &message.video_message {
+    let forwarded = wa::Message {
+        video_message: Some(Box::new(wa::message::VideoMessage {
+            caption: Some("Forwarded video".to_string()),
+            ..*vid.clone()
+        })),
+        ..Default::default()
+    };
+    client.send_message(destination_jid, forwarded).await?;
+}
+```
+
+<Tip>
+Only use `download` + `upload` when you need the plaintext bytes (processing, transcoding, re-encoding). To forward existing media unchanged, reuse the original message's CDN fields directly.
+</Tip>
+
+### When CDN reuse won't work
+
+CDN URLs expire after some time. If the original media URL has expired, recipients won't be able to download it. In that case, use [media reupload](/api/client#media_reupload) to request the server to provide a fresh download path, or fall back to downloading and re-uploading the media.
 
 ## Uploading Media
 

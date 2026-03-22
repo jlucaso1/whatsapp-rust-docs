@@ -247,44 +247,109 @@ let mut bot = Bot::builder()
 
 </Steps>
 
+## Using MessageContext
+
+For cleaner message handling, use `MessageContext` to wrap the message, metadata, and client together. This provides convenience methods like `send_message` (auto-targets the source chat), `build_quote_context`, and `edit_message`:
+
+```rust
+use whatsapp_rust::bot::{Bot, MessageContext};
+
+.on_event(|event, client| async move {
+    match event {
+        Event::Message(msg, info) => {
+            let ctx = MessageContext {
+                message: msg,
+                info,
+                client,
+            };
+            handle_message(&ctx).await;
+        }
+        _ => {}
+    }
+})
+```
+
+Then define focused handler functions:
+
+```rust
+async fn handle_message(ctx: &MessageContext) {
+    if let Some(text) = ctx.message.text_content() {
+        if text == "ping" {
+            let reply = wa::Message {
+                conversation: Some("pong".to_string()),
+                ..Default::default()
+            };
+            if let Err(e) = ctx.send_message(reply).await {
+                eprintln!("Failed to send: {}", e);
+            }
+        }
+    }
+}
+```
+
+### Media forwarding with CDN reuse
+
+You can also forward media instantly by reusing the original CDN fields — no download or re-upload needed:
+
+```rust
+/// Reuses the original CDN blob, only swaps the caption.
+/// Instant regardless of file size.
+fn build_media_reply(message: &wa::Message) -> Option<wa::Message> {
+    let base = message.get_base_message();
+    if let Some(img) = &base.image_message {
+        return Some(wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                caption: Some("Received your image!".to_string()),
+                ..*img.clone()
+            })),
+            ..Default::default()
+        });
+    }
+    None
+}
+```
+
+See the [media forwarding guide](/guides/media-handling#forwarding-media-via-cdn-reuse) for more details.
+
 ## Complete example with logging
 
-Here's a production-ready example with proper logging:
+Here's a production-ready example with proper logging, reactions, message editing, and media CDN reuse:
 
 ```rust src/main.rs
-use chrono::Local;
+use chrono::{Local, Utc};
 use log::{error, info};
 use std::sync::Arc;
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
-use whatsapp_rust::bot::Bot;
+use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
+const PING_TRIGGER: &str = "🦀ping";
+const PONG_TEXT: &str = "🏓 Pong!";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Set up logging
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(|buf, record| {
             use std::io::Write;
             writeln!(
                 buf,
-                "{} [{}] - {}",
+                "{} [{:<5}] [{}] - {}",
                 Local::now().format("%H:%M:%S"),
                 record.level(),
+                record.target(),
                 record.args()
             )
         })
         .init();
 
-    // Initialize backend
     let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
     info!("SQLite backend initialized");
 
-    // Build bot
     let mut bot = Bot::builder()
         .with_backend(backend)
         .with_transport_factory(TokioWebSocketTransportFactory::new())
@@ -296,27 +361,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("\n{}", code);
                 }
                 Event::Message(msg, info) => {
-                    if let Some(text) = msg.text_content() {
-                        info!("Received: {} from {}", text, info.source.sender);
-
-                        if text == "ping" {
-                            let reply = wa::Message {
-                                conversation: Some("pong".to_string()),
-                                ..Default::default()
-                            };
-
-                            if let Err(e) = client.send_message(info.source.chat, reply).await {
-                                error!("Failed to send reply: {}", e);
-                            }
-                        }
-                    }
+                    let ctx = MessageContext {
+                        message: msg,
+                        info,
+                        client,
+                    };
+                    handle_message(&ctx).await;
                 }
-                Event::Connected(_) => {
-                    info!("✅ Bot connected successfully!");
-                }
-                Event::LoggedOut(_) => {
-                    error!("❌ Bot was logged out");
-                }
+                Event::Connected(_) => info!("Bot connected!"),
+                Event::LoggedOut(_) => error!("Bot was logged out!"),
                 _ => {}
             }
         })
@@ -326,6 +379,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting bot...");
     bot.run().await?.await?;
     Ok(())
+}
+
+async fn handle_message(ctx: &MessageContext) {
+    // Try CDN-reuse media reply first (instant, no download needed)
+    if let Some(reply) = build_media_pong(&ctx.message) {
+        if let Err(e) = ctx.send_message(reply).await {
+            error!("Failed to send media pong: {}", e);
+        }
+        return;
+    }
+
+    // Handle text ping
+    if ctx.message.text_content() == Some(PING_TRIGGER) {
+        let context_info = ctx.build_quote_context();
+        let reply = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some(PONG_TEXT.to_string()),
+                context_info: Some(Box::new(context_info)),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        if let Err(e) = ctx.send_message(reply).await {
+            error!("Failed to send pong: {}", e);
+        }
+    }
+}
+
+/// Reuses the original CDN blob, only swaps the caption.
+/// Instant regardless of file size — no download or re-upload.
+fn build_media_pong(message: &wa::Message) -> Option<wa::Message> {
+    let base = message.get_base_message();
+    if let Some(img) = &base.image_message
+        && img.caption.as_deref() == Some(PING_TRIGGER)
+    {
+        return Some(wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                caption: Some(PONG_TEXT.to_string()),
+                ..*img.clone()
+            })),
+            ..Default::default()
+        });
+    }
+    if let Some(vid) = &base.video_message
+        && vid.caption.as_deref() == Some(PING_TRIGGER)
+    {
+        return Some(wa::Message {
+            video_message: Some(Box::new(wa::message::VideoMessage {
+                caption: Some(PONG_TEXT.to_string()),
+                ..*vid.clone()
+            })),
+            ..Default::default()
+        });
+    }
+    None
 }
 ```
 

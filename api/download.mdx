@@ -7,6 +7,10 @@ description: "Download and decrypt media from WhatsApp messages"
 
 Download and decrypt media from a message.
 
+<Tip>
+Only use `download` when you need the plaintext bytes (processing, transcoding, re-upload). To forward existing media unchanged, reuse the original message's CDN fields directly — no download required. See [media forwarding via CDN reuse](/guides/media-handling#forwarding-media-via-cdn-reuse).
+</Tip>
+
 ```rust
 pub async fn download(
     &self,

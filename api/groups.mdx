@@ -392,6 +392,53 @@ match &result {
 println!("Group JID: {}", result.group_jid());
 ```
 
+### join_with_invite_v4
+
+Accept a V4 group invite received as a `GroupInviteMessage` (not a link). V4 invites are sent directly by a group admin as a message, rather than shared as a URL.
+
+```rust
+pub async fn join_with_invite_v4(
+    &self,
+    group_jid: &Jid,
+    code: &str,
+    expiration: i64,
+    admin_jid: &Jid,
+) -> Result<JoinGroupResult, anyhow::Error>
+```
+
+**Parameters:**
+- `group_jid` - The target group JID
+- `code` - Invite code from the `GroupInviteMessage`
+- `expiration` - Invite expiration timestamp (Unix seconds). The method returns an error if the invite has expired.
+- `admin_jid` - JID of the admin who sent the invite
+
+**Returns:**
+- `JoinGroupResult` - Either `Joined(Jid)` if immediately joined, or `PendingApproval(Jid)` if the group requires admin approval
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::JoinGroupResult;
+
+let group_jid: Jid = "123456789@g.us".parse()?;
+let admin_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let result = client.groups().join_with_invite_v4(
+    &group_jid,
+    "AbCdEfGh",
+    1735689600,    // expiration timestamp
+    &admin_jid,
+).await?;
+
+match &result {
+    JoinGroupResult::Joined(jid) => println!("Joined group: {}", jid),
+    JoinGroupResult::PendingApproval(jid) => println!("Pending approval for group: {}", jid),
+}
+```
+
+<Note>
+V4 invites expire. The method automatically checks the expiration timestamp and returns an error if the invite has already expired. You can pass `0` as the expiration to skip the expiration check.
+</Note>
+
 ### get_invite_info
 
 Get group metadata from an invite code without joining the group.

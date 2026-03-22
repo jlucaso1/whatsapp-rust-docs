@@ -347,6 +347,39 @@ If the group has [membership approval](#membership-approval-mode) enabled, the r
 
 See [Groups API reference](/api/groups#join_with_invite_code) for details.
 
+### Accept a V4 invite message
+
+V4 invites are sent directly by a group admin as a `GroupInviteMessage`, rather than shared as a URL. Use `join_with_invite_v4` to accept these invites:
+
+```rust
+use whatsapp_rust::features::groups::JoinGroupResult;
+
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+let admin_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let result = client.groups().join_with_invite_v4(
+    &group_jid,
+    "AbCdEfGh",       // invite code from the message
+    1735689600,         // expiration timestamp (Unix seconds)
+    &admin_jid,
+).await?;
+
+match &result {
+    JoinGroupResult::Joined(jid) => {
+        println!("Successfully joined group: {}", jid);
+    }
+    JoinGroupResult::PendingApproval(jid) => {
+        println!("Request sent — waiting for admin approval in group: {}", jid);
+    }
+}
+```
+
+<Note>
+V4 invites have an expiration timestamp. The method automatically checks whether the invite has expired and returns an error if it has. Pass `0` as the expiration to skip the check.
+</Note>
+
+See [Groups API reference](/api/groups#join_with_invite_v4) for details.
+
 ### Preview a group before joining
 
 Use `get_invite_info` to fetch group metadata from an invite code without joining:

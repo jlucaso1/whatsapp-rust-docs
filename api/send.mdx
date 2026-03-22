@@ -1,6 +1,6 @@
 ---
 title: "send"
-description: "Send, edit, and revoke messages with advanced options"
+description: "Send, edit, revoke, pin, and unpin messages with advanced options"
 ---
 
 ## send_message
@@ -326,6 +326,126 @@ client.revoke_message(
 <Note>
   Admin revoke is only valid for group chats. Attempting to use it in a direct message will return an error.
 </Note>
+
+---
+
+## pin_message
+
+Pin a message in a chat for all participants.
+
+```rust
+pub async fn pin_message(
+    &self,
+    chat: Jid,
+    key: wa::MessageKey,
+    duration: PinDuration,
+) -> Result<(), anyhow::Error>
+```
+
+<ParamField path="chat" type="Jid" required>
+  Chat JID where the message to pin is located
+</ParamField>
+
+<ParamField path="key" type="wa::MessageKey" required>
+  The message key identifying which message to pin. Construct this from the message's chat JID, message ID, sender info, and participant (for groups).
+</ParamField>
+
+<ParamField path="duration" type="PinDuration" required>
+  How long the message should remain pinned (see below)
+</ParamField>
+
+### PinDuration
+
+Specifies how long a message stays pinned. Defaults to 7 days (matches WhatsApp Web behavior).
+
+```rust
+pub enum PinDuration {
+    Hours24,
+    Days7,   // default
+    Days30,
+}
+```
+
+<ParamField path="Hours24" type="variant">
+  Pin for 24 hours
+</ParamField>
+
+<ParamField path="Days7" type="variant">
+  Pin for 7 days (default)
+</ParamField>
+
+<ParamField path="Days30" type="variant">
+  Pin for 30 days
+</ParamField>
+
+### Example: Pin a message for 7 days
+
+```rust
+use waproto::whatsapp as wa;
+use whatsapp_rust::send::PinDuration;
+
+let key = wa::MessageKey {
+    remote_jid: Some(chat_jid.to_string()),
+    id: Some(message_id.clone()),
+    from_me: Some(false),
+    participant: None,
+};
+
+client.pin_message(chat_jid, key, PinDuration::Days7).await?;
+```
+
+### Example: Pin a group message for 30 days
+
+```rust
+use waproto::whatsapp as wa;
+use whatsapp_rust::send::PinDuration;
+
+let key = wa::MessageKey {
+    remote_jid: Some(group_jid.to_string()),
+    id: Some(message_id.clone()),
+    from_me: Some(false),
+    participant: Some(sender_jid.to_string()),
+};
+
+client.pin_message(group_jid, key, PinDuration::Days30).await?;
+```
+
+---
+
+## unpin_message
+
+Unpin a previously pinned message.
+
+```rust
+pub async fn unpin_message(
+    &self,
+    chat: Jid,
+    key: wa::MessageKey,
+) -> Result<(), anyhow::Error>
+```
+
+<ParamField path="chat" type="Jid" required>
+  Chat JID where the pinned message is located
+</ParamField>
+
+<ParamField path="key" type="wa::MessageKey" required>
+  The message key identifying which message to unpin
+</ParamField>
+
+### Example: Unpin a message
+
+```rust
+use waproto::whatsapp as wa;
+
+let key = wa::MessageKey {
+    remote_jid: Some(chat_jid.to_string()),
+    id: Some(message_id.clone()),
+    from_me: Some(false),
+    participant: None,
+};
+
+client.unpin_message(chat_jid, key).await?;
+```
 
 ---
 

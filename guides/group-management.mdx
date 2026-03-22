@@ -228,11 +228,11 @@ let responses = client.groups().add_participants(
 
 // Check results
 for response in responses {
-    match response.code {
-        200 => println!("Added: {}", response.jid),
-        403 => println!("Failed to add {} (permission denied)", response.jid),
-        409 => println!("{} is already in the group", response.jid),
-        _ => println!("Error adding {}: {}", response.jid, response.code),
+    match response.status.as_deref() {
+        Some("200") => println!("Added: {}", response.jid),
+        Some("403") => println!("Failed to add {} (permission denied)", response.jid),
+        Some("409") => println!("{} is already in the group", response.jid),
+        other => println!("Error adding {}: {:?}", response.jid, other),
     }
 }
 ```
@@ -252,10 +252,10 @@ let responses = client.groups().remove_participants(
 ).await?;
 
 for response in responses {
-    match response.code {
-        200 => println!("Removed: {}", response.jid),
-        404 => println!("{} is not in the group", response.jid),
-        _ => println!("Error removing {}: {}", response.jid, response.code),
+    match response.status.as_deref() {
+        Some("200") => println!("Removed: {}", response.jid),
+        Some("404") => println!("{} is not in the group", response.jid),
+        other => println!("Error removing {}: {:?}", response.jid, other),
     }
 }
 ```
@@ -492,15 +492,15 @@ use whatsapp_rust::features::groups::ParticipantChangeResponse;
 let responses = client.groups().add_participants(&group_jid, &participants).await?;
 
 for response in responses {
-    match response.code {
-        200 => println!("✅ Success"),
-        403 => println!("❌ Permission denied"),
-        404 => println!("❌ Not found"),
-        409 => println!("⚠️  Already in group"),
-        _ => println!("⚠️  Unknown error: {}", response.code),
+    match response.status.as_deref() {
+        Some("200") => println!("Success: {}", response.jid),
+        Some("403") => println!("Permission denied: {}", response.jid),
+        Some("404") => println!("Not found: {}", response.jid),
+        Some("409") => println!("Already in group: {}", response.jid),
+        other => println!("Unknown status for {}: {:?}", response.jid, other),
     }
     
-    if let Some(error) = response.error {
+    if let Some(error) = &response.error {
         println!("Error: {}", error);
     }
 }
@@ -516,16 +516,15 @@ async fn create_group_safely(
     subject: &str,
     participants: Vec<Jid>,
 ) -> Result<Jid> {
-    let subject = GroupSubject::new(subject)?;
-    
-    let options = GroupCreateOptions {
-        subject,
-        participants: participants
-            .into_iter()
-            .map(GroupParticipantOptions::new)
-            .collect(),
-        ..Default::default()
-    };
+    let options = GroupCreateOptions::builder()
+        .subject(subject)
+        .participants(
+            participants
+                .into_iter()
+                .map(GroupParticipantOptions::new)
+                .collect(),
+        )
+        .build();
     
     match client.groups().create_group(options).await {
         Ok(result) => {
@@ -609,7 +608,7 @@ let mut success_count = 0;
 let mut failed = Vec::new();
 
 for response in responses {
-    if response.code == 200 {
+    if response.status.as_deref() == Some("200") {
         success_count += 1;
     } else {
         failed.push(response);

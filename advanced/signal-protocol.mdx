@@ -363,27 +363,25 @@ Location: `src/prekeys.rs`
 
 ## Storage Integration
 
-whatsapp-rust integrates Signal Protocol storage with SQLite via Diesel:
+whatsapp-rust integrates Signal Protocol storage through a layered architecture:
 
 ```
 src/store/
-├── signal_identity.rs      # Identity key storage
-├── signal_prekey.rs        # PreKey storage
-├── signal_session.rs       # Session state storage
-└── signal_sender_key.rs    # Sender key storage
+├── signal.rs               # SignalStore trait impl for Device (identity, session, prekey, sender key)
+├── signal_adapter.rs       # SignalProtocolStoreAdapter — cache-backed adapter bridging wacore traits to libsignal traits
+└── signal_cache.rs         # Re-export of wacore::store::signal_cache::SignalStoreCache
 ```
 
-Each storage trait from `wacore/libsignal/src/protocol/storage/traits.rs` is implemented using SQL queries:
+The `Device` struct implements the libsignal `SessionStore`, `IdentityKeyStore`, and other traits. These are wrapped by `SignalProtocolStoreAdapter`, which adds the `SignalStoreCache` layer for deferred writes:
 
 ```rust
 #[async_trait]
-impl SessionStore for SqliteStore {
+impl SessionStore for Device {
     async fn load_session(
         &mut self,
         address: &ProtocolAddress,
     ) -> Result<Option<SessionRecord>> {
-        // SQL: SELECT record FROM signal_sessions 
-        //      WHERE our_jid = ? AND their_jid = ?
+        // Reads from the SignalStore backend trait
     }
 }
 ```
@@ -444,6 +442,24 @@ This generates comprehensive error logs showing:
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
 
 ## Performance Optimizations
+
+### Redundant signal store write elimination
+
+The `SignalStoreCache` skips writes when the incoming data is byte-identical to the cached value. This avoids marking entries as dirty and eliminates unnecessary database writes during `flush()`.
+
+```rust
+// wacore/src/store/signal_cache.rs
+fn put(&mut self, address: &str, data: &[u8]) {
+    if let Some(Some(existing)) = self.cache.get(address)
+        && existing.as_ref() == data
+    {
+        return; // Skip — data unchanged, no dirty mark
+    }
+    // ... insert and mark dirty
+}
+```
+
+This optimization is particularly impactful during message decryption, where Signal sessions are loaded into the cache and then "saved" back even when the session state has not changed. Without this check, every decryption would produce a dirty entry and trigger an unnecessary database write on the next `flush()`.
 
 ### Single-Allocation Session Lock Keys
 
@@ -554,4 +570,4 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`
 - [Signal Protocol Specification](https://signal.org/docs/)
 - [libsignal Repository](https://github.com/signalapp/libsignal)
 - Source: `wacore/libsignal/src/protocol/`
-- Storage: `src/store/signal*.rs`
+- Storage: `src/store/signal.rs`, `src/store/signal_adapter.rs`, `wacore/src/store/signal_cache.rs`

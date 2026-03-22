@@ -51,9 +51,9 @@ let message_id = client.send_message(to, message).await?;
 
 ## Quoted Replies
 
-### Replying to a Message
+### Replying to a message
 
-Use `build_quote_context` to create a reply:
+Use `build_quote_context` to create a basic reply:
 
 ```rust
 use wacore::proto_helpers::{build_quote_context, MessageExt};
@@ -83,7 +83,48 @@ let reply = wa::Message {
 let message_id = client.send_message(to, reply).await?;
 ```
 
-### Setting Context on Media Messages
+### Cross-platform quoted replies with remoteJid
+
+For quoted replies that display correctly on all platforms (including iOS), use `build_quote_context_with_info`. This sets the `remote_jid` field on the `ContextInfo` to the chat JID, which iOS requires to scope the quote correctly:
+
+```rust
+use wacore::proto_helpers::{build_quote_context_with_info, MessageExt};
+use wacore_binary::jid::Jid;
+
+let original_message: wa::Message = /* ... */;
+let original_message_id = "3EB0ABC123";
+let original_sender: Jid = "1234567890@s.whatsapp.net".parse()?;
+let chat_jid: Jid = "120363040237990503@g.us".parse()?; // group or DM JID
+
+// Build quote context with remote_jid (recommended for cross-platform compatibility)
+let context = build_quote_context_with_info(
+    original_message_id,
+    &original_sender,
+    &chat_jid,
+    &original_message,
+);
+
+let reply = wa::Message {
+    extended_text_message: Some(Box::new(ExtendedTextMessage {
+        text: Some("This is my reply".to_string()),
+        context_info: Some(Box::new(context)),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let message_id = client.send_message(chat_jid, reply).await?;
+```
+
+The `build_quote_context_with_info` function handles two important details:
+- **`remote_jid`** is always set to the chat JID (matching WhatsApp Web's behavior)
+- **`participant`** is set to the sender JID for normal chats, or the newsletter JID for newsletter quotes
+
+<Note>
+Use `build_quote_context_with_info` instead of `build_quote_context` when sending replies in groups or newsletters. The `remote_jid` field is required by iOS clients to display the quoted message correctly.
+</Note>
+
+### Setting context on media messages
 
 You can add quote context to any message type using `set_context_info`:
 
@@ -101,16 +142,17 @@ let mut reply = wa::Message {
     ..Default::default()
 };
 
-// Build and set context
-let context = build_quote_context(
+// Build and set context (use build_quote_context_with_info for cross-platform support)
+let context = build_quote_context_with_info(
     original_message_id,
-    original_sender,
+    &original_sender,
+    &chat_jid,
     &original_message,
 );
 
 reply.set_context_info(context);
 
-let message_id = client.send_message(to, reply).await?;
+let message_id = client.send_message(chat_jid, reply).await?;
 ```
 
 ## Reactions
@@ -350,10 +392,10 @@ let message_id = client.send_message(to, message).await?;
 client.revoke_message(to, &message_id, RevokeType::Sender).await?;
 ```
 
-### Quote Context Best Practices
+### Quote context best practices
 
 - Always use `prepare_for_quote()` to avoid nested quote chains
-- Use `build_quote_context_with_info` for special message types (newsletters, status)
+- Use `build_quote_context_with_info` instead of `build_quote_context` for cross-platform compatibility — it sets `remote_jid` (required by iOS) and correctly resolves the `participant` field for newsletters
 - Preserve original media fields when quoting media messages
 
 </Steps>

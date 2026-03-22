@@ -473,6 +473,7 @@ Access group management operations.
 - `demote_participants(jid: &Jid, participants: &[Jid])` - Remove admin status
 - `get_invite_link(jid: &Jid, reset: bool)` - Get/reset invite link
 - `join_with_invite_code(code: &str)` - Join a group via invite code or URL
+- `join_with_invite_v4(group_jid, code, expiration, admin_jid)` - Accept a V4 invite message
 - `get_invite_info(code: &str)` - Preview group metadata from invite code
 - `set_locked(jid: &Jid, locked: bool)` - Lock/unlock group info editing
 - `set_announce(jid: &Jid, announce: bool)` - Enable/disable announcement mode
@@ -827,6 +828,37 @@ When a history sync notification arrives, the client:
 6. Wraps each conversation in a `LazyConversation` for zero-copy delivery to event handlers
 
 If no event handlers are registered, the callback is `None` and conversation extraction is skipped entirely at the protobuf level — only the pushname field is extracted.
+
+### process_sync_task
+
+```rust
+pub async fn process_sync_task(self: &Arc<Self>, task: MajorSyncTask)
+```
+
+Processes a `MajorSyncTask` received from the sync channel returned by `Client::new`. This is the public entry point for handling history sync and app state sync tasks.
+
+The method dispatches to the appropriate internal handler based on the task variant:
+- `MajorSyncTask::HistorySync` — downloads and processes history sync data
+- `MajorSyncTask::AppStateSync` — synchronizes app state (contacts, mutes, pins, etc.)
+
+**Example:**
+```rust
+let (client, mut sync_receiver) = Client::new(/* ... */).await;
+
+// Process sync tasks from the channel
+tokio::spawn({
+    let client = client.clone();
+    async move {
+        while let Some(task) = sync_receiver.recv().await {
+            client.process_sync_task(task).await;
+        }
+    }
+});
+```
+
+<Note>
+If you use the [`Bot`](/api/bot) builder, sync task processing is handled automatically. You only need this method when building a custom client setup.
+</Note>
 
 ### set_skip_history_sync
 

@@ -315,7 +315,28 @@ This works because `send_message` accepts any `wa::Message`. If the message alre
 
 ## Send Options
 
-### Adding Extra Stanza Nodes
+### Specifying a custom message ID
+
+You can override the auto-generated message ID by setting `message_id` on `SendOptions`. This is useful for resending a failed message with the same ID or ensuring idempotency:
+
+```rust
+use whatsapp_rust::send::SendOptions;
+
+let options = SendOptions {
+    message_id: Some("3EB0ABC123".to_string()),
+    ..Default::default()
+};
+
+let message_id = client.send_message_with_options(
+    to,
+    message,
+    options,
+).await?;
+
+// message_id will be "3EB0ABC123"
+```
+
+### Adding extra stanza nodes
 
 For advanced use cases, you can include custom XML nodes:
 
@@ -329,6 +350,7 @@ let options = SendOptions {
             .attr("key", "value")
             .build(),
     ],
+    ..Default::default()
 };
 
 let message_id = client.send_message_with_options(
@@ -338,7 +360,7 @@ let message_id = client.send_message_with_options(
 ).await?;
 ```
 
-See [Send API reference](/api/send#send-options) for full details.
+See [Send API reference](/api/send#sendoptions) for full details.
 
 ## Message Preparation Helpers
 

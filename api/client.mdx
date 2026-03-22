@@ -409,13 +409,13 @@ pub async fn send_message_with_options(
 ) -> Result<String, anyhow::Error>
 ```
 
-Sends a message with advanced options like extra stanza nodes.
+Sends a message with advanced options like a custom message ID or extra stanza nodes.
 
 <ParamField path="options" type="SendOptions" required>
-  Configuration for message sending behavior
+  Configuration for message sending behavior. Supports `message_id` (override the auto-generated ID) and `extra_stanza_nodes` (custom XML nodes on the stanza).
 </ParamField>
 
-See `src/send.rs:SendOptions` for available options.
+See [Send API reference](/api/send#sendoptions) for available options.
 
 ### edit_message
 

@@ -300,7 +300,48 @@ client.revoke_message(
 
 ---
 
-## Message Types
+## Stanza types
+
+When you send a message, the library automatically determines two protocol-level type attributes based on the protobuf message content. You don't need to set these manually, but understanding them can help with debugging.
+
+### Message stanza type
+
+The `type` attribute on the outer `<message>` XML node is determined by `stanza_type_from_message`:
+
+| Stanza type | Message types |
+|---|---|
+| `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `extended_text_message` (without `matched_text`) |
+| `"media"` | `image_message`, `video_message`, `audio_message`, `document_message`, `sticker_message`, `location_message`, `contact_message`, `extended_text_message` (with `matched_text`), and all other media types |
+| `"reaction"` | `reaction_message`, `enc_reaction_message` |
+| `"poll"` | `poll_creation_message`, `poll_creation_message_v2`, `poll_creation_message_v3`, `poll_update_message` |
+
+### Encrypted media type
+
+The `mediatype` attribute on the inner `<enc>` XML node provides a more specific media classification. This is set by `media_type_from_message` and is omitted for text-only messages:
+
+| Media type | Condition |
+|---|---|
+| `"image"` | `image_message` present |
+| `"video"` | `video_message` with `gif_playback` not set or `false` |
+| `"gif"` | `video_message` with `gif_playback = true` |
+| `"ptv"` | `ptv_message` present |
+| `"ptt"` | `audio_message` with `ptt = true` |
+| `"audio"` | `audio_message` with `ptt` not set or `false` |
+| `"document"` | `document_message` present |
+| `"sticker"` | `sticker_message` present |
+| `"location"` | `location_message` with `is_live` not set or `false` |
+| `"livelocation"` | `location_message` with `is_live = true`, or `live_location_message` |
+| `"vcard"` | `contact_message` present |
+| `"contact_array"` | `contacts_array_message` present |
+| `"url"` | `extended_text_message` with non-empty `matched_text`, or `group_invite_message` |
+
+<Note>
+Both stanza type and encrypted media type are resolved automatically by the library before encryption. Wrapper messages (`ephemeral_message`, `view_once_message`, etc.) are unwrapped first to determine the underlying content type.
+</Note>
+
+---
+
+## Message types
 
 The `wa::Message` protobuf supports various message types. Set exactly one of these fields:
 
@@ -375,22 +416,29 @@ The `wa::Message` protobuf supports various message types. Set exactly one of th
   Poll with multiple options. Use `client.polls().create()` for a higher-level API that handles message secret generation automatically. See [Polls API](/api/polls).
 </ParamField>
 
-### Example: Extended Text with Quote
+### Example: Extended text with quote
+
+Use `build_quote_context_with_info` to create a reply with the `remote_jid` field set for cross-platform compatibility:
 
 ```rust
 use waproto::whatsapp as wa;
+use wacore::proto_helpers::build_quote_context_with_info;
+
+let context = build_quote_context_with_info(
+    quoted_message_id,
+    &quoted_sender_jid,
+    &chat_jid,
+    &quoted_message,
+);
 
 let message = wa::Message {
     extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
         text: Some("Reply to your message".to_string()),
-        context_info: Some(Box::new(wa::ContextInfo {
-            stanza_id: Some(quoted_message_id),
-            participant: Some(quoted_sender_jid.to_string()),
-            quoted_message: Some(Box::new(quoted_message)),
-            ..Default::default()
-        })),
+        context_info: Some(Box::new(context)),
         ..Default::default()
     })),
     ..Default::default()
 };
 ```
+
+The `remote_jid` is set to the chat JID (group, DM, or newsletter) and is required by iOS clients to display quoted messages correctly. For newsletter chats, the `participant` field is automatically set to the newsletter JID instead of the sender.

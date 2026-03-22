@@ -534,7 +534,7 @@ let bot = Bot::builder()
 
 ## Custom Runtime
 
-The `Runtime` trait is the foundation of the runtime-agnostic architecture. It abstracts async task spawning, sleeping, and blocking operations. Implement it to use a different async runtime (e.g., async-std, smol, or a WASM executor).
+The `Runtime` trait is the foundation of the runtime-agnostic architecture. It abstracts async task spawning, sleeping, blocking operations, and cooperative yielding. Implement it to use a different async runtime (e.g., async-std, smol, or a WASM executor).
 
 ### The Runtime trait
 
@@ -580,6 +580,13 @@ impl Runtime for MyRuntime {
         // (e.g., multi-threaded runtimes don't need explicit yielding)
         None
     }
+
+    fn yield_frequency(&self) -> u32 {
+        // How many items to process before yielding in tight loops.
+        // Default is 10. Single-threaded runtimes should return 1
+        // to avoid starving the event loop.
+        10
+    }
 }
 ```
 
@@ -604,6 +611,10 @@ let mut bot = Bot::builder()
 <Tip>
 To target WASM, disable all default features and implement `Runtime` without `Send` bounds. On `target_arch = "wasm32"`, the trait automatically removes `Send` requirements.
 </Tip>
+
+<Note>
+If you are implementing a single-threaded runtime, override `yield_frequency()` to return `1` and have `yield_now()` return `Some(future)`. This ensures the event loop is not starved during tight processing loops (e.g., decoding incoming frames).
+</Note>
 
 ## Custom Transport Backend
 

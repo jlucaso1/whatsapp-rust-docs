@@ -262,13 +262,13 @@ if let Some(session) = backend.get_session("15551234567@s.whatsapp.net:0").await
 
 The `SignalStoreCache` provides an in-memory cache layer for Signal protocol state, matching WhatsApp Web's `SignalStoreCache` implementation. All crypto operations read and write through this cache, with database writes deferred to explicit `flush()` calls.
 
-Sessions are cached as deserialized `SessionRecord` objects (not bytes), matching WhatsApp Web's pattern where the JS object IS the cache. Serialization only happens during `flush()` — not on every `store_session` call. Identity and sender key stores use `Arc<[u8]>` byte caches.
+Sessions and sender keys are cached as deserialized objects (`SessionRecord` and `SenderKeyRecord` respectively), matching WhatsApp Web's pattern where the JS object IS the cache. Serialization only happens during `flush()` — not on every `store_session` or `put_sender_key` call. Identity stores use `Arc<[u8]>` byte caches.
 
 ```rust
 pub struct SignalStoreCache {
     sessions: Mutex<SessionStoreState>,
     identities: Mutex<ByteStoreState>,
-    sender_keys: Mutex<ByteStoreState>,
+    sender_keys: Mutex<SenderKeyStoreState>,
 }
 
 // Session object cache — no per-message serialize/deserialize
@@ -278,7 +278,13 @@ struct SessionStoreState {
     deleted: HashSet<Arc<str>>,                        // Deleted keys pending flush
 }
 
-// Byte cache for identities and sender keys
+// Sender key object cache (same pattern as sessions)
+struct SenderKeyStoreState {
+    cache: HashMap<Arc<str>, Option<SenderKeyRecord>>,  // None = known-absent
+    dirty: HashSet<Arc<str>>,                            // Modified keys pending flush
+}
+
+// Byte cache for identities
 struct ByteStoreState {
     cache: HashMap<Arc<str>, Option<Arc<[u8]>>>,  // None = known-absent
     dirty: HashSet<Arc<str>>,
@@ -288,10 +294,11 @@ struct ByteStoreState {
 
 **Key features:**
 - **Session object cache**: Sessions are stored as `SessionRecord` objects, eliminating prost encode/decode from the per-message path. Cold loads deserialize from backend bytes once and cache the object; subsequent reads return the cached object directly
+- **Sender key object cache**: Sender keys are stored as `SenderKeyRecord` objects (same pattern as sessions), eliminating serialize/deserialize from the per-message group encryption path. Cold loads deserialize from backend bytes once and cache the object
 - **`Arc` previous sessions**: `SessionRecord.previous_sessions` is wrapped in `Arc<Vec<SessionStructure>>`, making clone O(1) for the ~40 archived sessions. Only rare paths (archive, promote, take/restore) trigger `Arc::make_mut`
 - **Owned `store_session`**: The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer. The compiler enforces no use-after-store
-- **Deferred writes**: Changes are accumulated in memory and batch-written on `flush()`. Sessions are serialized only during `flush()`, not on every store
-- **Redundant write elimination**: For identities (which rarely change), `put_dedup()` compares incoming bytes against the cached value and skips if identical. Sender keys use unconditional `put()` since they change every message
+- **Deferred writes**: Changes are accumulated in memory and batch-written on `flush()`. Sessions and sender keys are serialized only during `flush()`, not on every store
+- **Redundant write elimination**: For identities (which rarely change), `put_dedup()` compares incoming bytes against the cached value and skips if identical
 - **Negative caching**: Known-absent keys are cached as `None` to avoid repeated DB lookups
 - **Independent locking**: Sessions, identities, and sender keys each have their own mutex
 - **O(1) key cloning**: Keys stored as `Arc<str>` so cloning a key is a refcount bump instead of a heap allocation. The `key_for()` method reuses existing `Arc<str>` keys from the HashMap via `get_key_value()`, avoiding heap allocation on the hot path
@@ -972,6 +979,15 @@ let cache = TypedCache::from_moka(moka_cache);
 
 // Custom store path (serde_json serialization)
 let cache = TypedCache::from_store(store, "group", Some(Duration::from_secs(3600)));
+```
+
+`CacheEntryConfig` provides a `build_typed_ttl` convenience method that automatically selects the right backend: if a custom `CacheStore` is provided, it creates a `TypedCache` backed by the store; otherwise it falls back to an in-process moka cache.
+
+```rust
+let cache: TypedCache<String, GroupInfo> = config.group_cache.build_typed_ttl(
+    config.cache_stores.group_cache.clone(),
+    "group",
+);
 ```
 
 #### `invalidate_all` and `clear`

@@ -459,7 +459,7 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
 
 ### Session object cache
 
-The `SignalStoreCache` stores sessions as deserialized `SessionRecord` objects rather than serialized bytes, matching WhatsApp Web's architecture where the JS object IS the cache. Serialization only happens during `flush()` to the database — not on every `store_session` call.
+The `SignalStoreCache` stores sessions and sender keys as deserialized objects (`SessionRecord` and `SenderKeyRecord`) rather than serialized bytes, matching WhatsApp Web's architecture where the JS object IS the cache. Serialization only happens during `flush()` to the database — not on every `store_session` or `put_sender_key` call.
 
 ```rust
 // wacore/src/store/signal_cache.rs
@@ -468,9 +468,15 @@ struct SessionStoreState {
     dirty: HashSet<Arc<str>>,
     deleted: HashSet<Arc<str>>,
 }
+
+// Same pattern for sender keys
+struct SenderKeyStoreState {
+    cache: HashMap<Arc<str>, Option<SenderKeyRecord>>,  // Objects, not bytes
+    dirty: HashSet<Arc<str>>,
+}
 ```
 
-This eliminates prost encode (on store) and decode (on load) from the per-message hot path. The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer:
+This eliminates prost encode (on store) and decode (on load) from the per-message hot path for both 1:1 and group messages. The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer:
 
 ```rust
 // wacore/libsignal/src/protocol/storage/traits.rs
@@ -491,7 +497,9 @@ All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`,
 |-----------|--------|-------|
 | `store_session` | clone all fields + prost encode | move (zero-cost) |
 | `load_session` | prost decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
-| `flush` (batched) | write bytes to DB | serialize + write bytes to DB |
+| `store_sender_key` | serialize to bytes + store bytes | store `SenderKeyRecord` object directly |
+| `load_sender_key` | load bytes + deserialize | return cached `SenderKeyRecord` object |
+| `flush` (batched) | write bytes to DB | serialize sessions + sender keys + write bytes to DB |
 
 ### Arc previous sessions
 
@@ -524,11 +532,11 @@ fn put_dedup(&mut self, address: &str, data: &[u8]) {
 }
 ```
 
-Sender keys use unconditional `put()` since they change with every message — the byte comparison would always fail and waste CPU cycles. This split avoids unnecessary database writes during `flush()` while not adding overhead where it provides no benefit.
+Sessions and sender keys use unconditional `put()` since they change with every message — dedup would always fail and waste CPU cycles. This split avoids unnecessary database writes during `flush()` while not adding overhead where it provides no benefit.
 
 ### Key reuse in cache
 
-The `key_for()` method on both `SessionStoreState` and `ByteStoreState` reuses existing `Arc<str>` keys from the HashMap via `get_key_value()`, avoiding a heap allocation on every cache operation:
+The `key_for()` method on `SessionStoreState`, `SenderKeyStoreState`, and `ByteStoreState` reuses existing `Arc<str>` keys from the HashMap via `get_key_value()`, avoiding a heap allocation on every cache operation:
 
 ```rust
 fn key_for(&self, address: &str) -> Arc<str> {

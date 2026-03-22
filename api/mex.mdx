@@ -134,7 +134,8 @@ pub struct MexGraphQLError {
 
 **Methods:**
 - `error_code()` - Returns the error code if available
-- `is_fatal()` - Returns `true` if this is a fatal error
+- `is_summary()` - Returns `true` if this is a summary error (`is_summary == true` in extensions)
+- `has_error_code()` - Returns `true` if this error has an error code
 
 ### MexErrorExtensions
 
@@ -210,8 +211,8 @@ let response = client.mex().query(request).await?;
 
 if response.has_errors() {
     for error in response.errors.as_ref().unwrap() {
-        if !error.is_fatal() {
-            // Log warning but continue
+        if !error.is_summary() && !error.has_error_code() {
+            // Non-fatal: log warning but continue
             eprintln!("Warning: {}", error.message);
         }
     }

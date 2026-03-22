@@ -694,6 +694,28 @@ let subgroups = client.community().get_subgroups(&community_jid).await?;
 
 See [Community API](/api/community) for full documentation.
 
+### polls
+
+```rust
+pub fn polls(&self) -> Polls<'_>
+```
+
+Access poll operations.
+
+**Methods:**
+- `create(to: &Jid, name: &str, options: &[String], selectable_count: u32)` - Create a poll (returns message ID and secret)
+- `vote(chat_jid, poll_msg_id, poll_creator_jid, message_secret, option_names)` - Cast a vote on a poll
+- `decrypt_vote(enc_payload, enc_iv, message_secret, poll_msg_id, poll_creator_jid, voter_jid)` - Decrypt a vote (static method)
+- `aggregate_votes(poll_options, votes, message_secret, poll_msg_id, poll_creator_jid)` - Tally all votes (static method)
+
+**Example:**
+```rust
+let options = vec!["Yes".to_string(), "No".to_string()];
+let (msg_id, secret) = client.polls().create(&chat_jid, "Agree?", &options, 1).await?;
+```
+
+See [Polls API](/api/polls) for full documentation.
+
 ### media_reupload
 
 ```rust

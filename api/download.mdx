@@ -404,10 +404,10 @@ use whatsapp_rust::download::DownloadUtils;
 
 | Method | Description |
 |--------|-------------|
-| `verify_and_decrypt(data, media_key, media_type, file_length)` | Verifies HMAC and decrypts AES-256-CBC in one call |
+| `verify_and_decrypt(encrypted_payload, media_key, media_type)` | Verifies HMAC and decrypts AES-256-CBC in one call |
 | `decrypt_stream(reader, media_key, media_type)` | Streaming decryption from a reader (convenience wrapper around `decrypt_stream_to_writer`) |
 | `decrypt_stream_to_writer(reader, media_key, media_type, writer)` | Streaming decryption directly into a writer with constant memory usage |
 | `validate_plaintext_sha256(data, expected_sha256)` | Validates SHA-256 hash of plaintext media (in-memory) |
 | `copy_and_validate_plaintext_to_writer(reader, expected_sha256, writer)` | Streams plaintext media to a writer while validating SHA-256 hash |
-| `prepare_download_requests(direct_path, ...)` | Builds CDN request URLs with host failover |
+| `prepare_download_requests(downloadable, media_conn)` | Builds CDN request URLs with host failover |
 | `get_media_keys(media_key, app_info)` | Derives IV, cipher key, and MAC key via HKDF |

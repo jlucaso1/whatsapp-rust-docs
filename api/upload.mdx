@@ -31,6 +31,7 @@ pub async fn upload(
   - `MediaType::Document` - Documents and other files
   - `MediaType::Sticker` - Sticker images
   - `MediaType::LinkThumbnail` - Link preview thumbnails
+  - `MediaType::ProductCatalogImage` - Product catalog images (unencrypted)
 </ParamField>
 
 <ResponseField name="UploadResponse" type="struct">
@@ -458,15 +459,19 @@ All media uploaded to WhatsApp is end-to-end encrypted before transmission:
 Each media type uses a specific HKDF info string:
 
 ```rust
-MediaType::Image      → "WhatsApp Image Keys"
-MediaType::Video      → "WhatsApp Video Keys"
-MediaType::Audio      → "WhatsApp Audio Keys"
-MediaType::Document   → "WhatsApp Document Keys"
-MediaType::Sticker    → "WhatsApp Image Keys"
-MediaType::LinkThumbnail → "WhatsApp Link Thumbnail Keys"
+MediaType::Image              → "WhatsApp Image Keys"
+MediaType::Video              → "WhatsApp Video Keys"
+MediaType::Audio              → "WhatsApp Audio Keys"
+MediaType::Document           → "WhatsApp Document Keys"
+MediaType::Sticker            → "WhatsApp Image Keys"
+MediaType::StickerPack        → "WhatsApp Sticker Pack Keys"
+MediaType::LinkThumbnail      → "WhatsApp Link Thumbnail Keys"
+MediaType::History            → "WhatsApp History Keys"
+MediaType::AppState           → "WhatsApp App State Keys"
+MediaType::ProductCatalogImage → N/A (unencrypted)
 ```
 
-The `media_key` is shared with recipients through the encrypted message, allowing them to decrypt the media.
+The `media_key` is shared with recipients through the encrypted message, allowing them to decrypt the media. `ProductCatalogImage` is the exception — it is uploaded without encryption and has no media key.
 
 ### Encryption vs Decryption
 
@@ -497,43 +502,48 @@ pub enum MediaType {
     Sticker,
     StickerPack,
     LinkThumbnail,
+    ProductCatalogImage,
 }
 ```
 
 <ParamField path="Image" type="variant">
-  JPEG, PNG, or other image formats. Uses `"image"` MMS endpoint and `"WhatsApp Image Keys"` for HKDF.
+  JPEG, PNG, or other image formats. Uses `/mms/image` endpoint and `"WhatsApp Image Keys"` for HKDF.
 </ParamField>
 
 <ParamField path="Video" type="variant">
-  MP4 or other video formats. Uses `"video"` MMS endpoint and `"WhatsApp Video Keys"` for HKDF.
+  MP4 or other video formats. Uses `/mms/video` endpoint and `"WhatsApp Video Keys"` for HKDF.
 </ParamField>
 
 <ParamField path="Audio" type="variant">
-  Audio files and voice notes. Uses `"audio"` MMS endpoint and `"WhatsApp Audio Keys"` for HKDF.
+  Audio files and voice notes. Uses `/mms/audio` endpoint and `"WhatsApp Audio Keys"` for HKDF.
 </ParamField>
 
 <ParamField path="Document" type="variant">
-  PDF, DOCX, ZIP, and other document formats. Uses `"document"` MMS endpoint and `"WhatsApp Document Keys"` for HKDF.
+  PDF, DOCX, ZIP, and other document formats. Uses `/mms/document` endpoint and `"WhatsApp Document Keys"` for HKDF.
 </ParamField>
 
 <ParamField path="Sticker" type="variant">
-  Sticker images (WebP format). Uses `"image"` MMS endpoint and `"WhatsApp Image Keys"` for HKDF (same as images).
+  Sticker images (WebP format). Uses `/mms/image` endpoint and `"WhatsApp Image Keys"` for HKDF (same as images).
 </ParamField>
 
 <ParamField path="History" type="variant">
-  History sync data. Uses `"md-msg-hist"` MMS endpoint and `"WhatsApp History Keys"` for HKDF.
+  History sync data. Uses `/mms/md-msg-hist` endpoint and `"WhatsApp History Keys"` for HKDF.
 </ParamField>
 
 <ParamField path="AppState" type="variant">
-  App state sync data. Uses `"md-app-state"` MMS endpoint and `"WhatsApp App State Keys"` for HKDF.
+  App state sync data. Uses `/mms/md-app-state` endpoint and `"WhatsApp App State Keys"` for HKDF.
 </ParamField>
 
 <ParamField path="StickerPack" type="variant">
-  Sticker pack metadata. Uses `"sticker-pack"` MMS endpoint.
+  Sticker pack metadata. Uses `/mms/sticker-pack` endpoint and `"WhatsApp Sticker Pack Keys"` for HKDF.
 </ParamField>
 
 <ParamField path="LinkThumbnail" type="variant">
-  Link preview thumbnails. Uses `"thumbnail-link"` MMS endpoint.
+  Link preview thumbnails. Uses `/mms/thumbnail-link` endpoint and `"WhatsApp Link Thumbnail Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="ProductCatalogImage" type="variant">
+  Product catalog images for WhatsApp Business. **Unencrypted** — `is_encrypted()` returns `false`. Uses `/product/image` endpoint (not under the `/mms/` prefix). Matches WhatsApp Web's `CreateMediaKeys.js` behavior which skips encryption for this type.
 </ParamField>
 
 ---
@@ -543,14 +553,18 @@ pub enum MediaType {
 The upload endpoint is constructed as:
 
 ```
-https://{media_host}/mms/{mms_type}/{token}?auth={auth}&token={token}
+https://{media_host}{upload_path}/{token}?auth={auth}&token={token}
 ```
 
 Where:
 - `{media_host}` — CDN hostname from media connection (primary hosts tried first)
-- `{mms_type}` — Media type endpoint (e.g., `"image"`, `"video"`, `"document"`)
+- `{upload_path}` — Media type path from `MediaType::upload_path()` (e.g., `/mms/image`, `/mms/video`, `/product/image`)
 - `{token}` — Base64url-encoded `file_enc_sha256`
 - `{auth}` — Media connection auth token
+
+<Note>
+Most media types use the `/mms/{type}` prefix, but `ProductCatalogImage` uses `/product/image` directly. The `upload_path()` method returns the correct path for each media type.
+</Note>
 
 Optional query parameters (added automatically for resumable uploads):
 - `resume=1` — probe for existing upload (resume check request)

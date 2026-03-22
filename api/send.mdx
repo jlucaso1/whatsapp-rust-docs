@@ -449,6 +449,24 @@ client.unpin_message(chat_jid, key).await?;
 
 ---
 
+## Automatic stanza metadata
+
+When you call `send_message` or `send_message_with_options`, the library automatically infers and injects stanza-level metadata that WhatsApp servers expect for certain message types. You never need to set these manually — the library handles it for you.
+
+| Message type | Auto-injected metadata |
+|---|---|
+| `pin_in_chat_message` | Sets the `edit="2"` attribute on the message stanza |
+| `poll_creation_message` (v1, v2, v3) | Adds a `<meta polltype="creation"/>` child node |
+| `event_message` | Adds a `<meta event_type="creation"/>` child node |
+
+This means you can construct a raw `wa::Message` with any of these fields set and pass it directly to `send_message_with_options` — the correct protocol metadata is derived automatically. Any nodes you provide via `extra_stanza_nodes` in `SendOptions` are merged with the auto-inferred nodes.
+
+<Note>
+  The `pin_message()` and `unpin_message()` convenience methods already handle this internally. Auto-detection is most useful when you build a `wa::Message` manually and send it through `send_message` or `send_message_with_options`.
+</Note>
+
+---
+
 ## Stanza types
 
 When you send a message, the library automatically determines two protocol-level type attributes based on the protobuf message content. You don't need to set these manually, but understanding them can help with debugging.
@@ -563,6 +581,10 @@ The `wa::Message` protobuf supports various message types. Set exactly one of th
 
 <ParamField path="poll_creation_message" type="PollCreationMessage">
   Poll with multiple options. Use `client.polls().create()` for a higher-level API that handles message secret generation automatically. See [Polls API](/api/polls).
+</ParamField>
+
+<ParamField path="event_message" type="EventMessage">
+  Calendar event message. The required `<meta event_type="creation"/>` stanza node is injected automatically when sent through `send_message` or `send_message_with_options`.
 </ParamField>
 
 ### Example: Extended text with quote

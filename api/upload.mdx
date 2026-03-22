@@ -7,6 +7,10 @@ description: "Upload and encrypt media for sending in messages"
 
 Upload media to WhatsApp's CDN with automatic encryption.
 
+<Tip>
+Only use `upload` for new or modified media. To forward existing media unchanged, reuse the original message's CDN fields directly — no upload required. See [media forwarding via CDN reuse](/guides/media-handling#forwarding-media-via-cdn-reuse).
+</Tip>
+
 ```rust
 pub async fn upload(
     &self,

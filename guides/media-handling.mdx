@@ -349,10 +349,11 @@ pub enum MediaType {
     Sticker,
     StickerPack,
     LinkThumbnail,
+    ProductCatalogImage,
 }
 ```
 
-### Media Type Properties
+### Media type properties
 
 ```rust
 use wacore::download::MediaType;
@@ -363,8 +364,20 @@ let mms_type = MediaType::Image.mms_type();
 
 // Get app info string for HKDF key derivation
 let info = MediaType::Video.app_info();
-// Returns: b"WhatsApp Video Keys"
+// Returns: "WhatsApp Video Keys"
+
+// Get upload path for CDN routing
+let path = MediaType::Image.upload_path();
+// Returns: "/mms/image"
+
+// Check if media type uses E2E encryption
+let encrypted = MediaType::ProductCatalogImage.is_encrypted();
+// Returns: false (product catalog images are unencrypted)
 ```
+
+<Note>
+`ProductCatalogImage` is the only unencrypted media type. It uploads to `/product/image` instead of the `/mms/` prefix used by other types. This matches WhatsApp Web's behavior where `CreateMediaKeys.js` skips encryption for product catalog images.
+</Note>
 
 ## Encryption Details
 

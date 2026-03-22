@@ -340,6 +340,7 @@ pub enum MediaType {
     Sticker,
     StickerPack,
     LinkThumbnail,
+    ProductCatalogImage,
 }
 ```
 
@@ -351,6 +352,35 @@ Each media type has specific HKDF info strings used for key derivation:
 - `Document` → `"WhatsApp Document Keys"`
 - `History` → `"WhatsApp History Keys"`
 - `AppState` → `"WhatsApp App State Keys"`
+- `StickerPack` → `"WhatsApp Sticker Pack Keys"`
+- `LinkThumbnail` → `"WhatsApp Link Thumbnail Keys"`
+
+### MediaType methods
+
+| Method | Return type | Description |
+|--------|-------------|-------------|
+| `app_info()` | `&'static str` | HKDF info string for key derivation |
+| `mms_type()` | `&'static str` | Media type string for MMS path construction |
+| `upload_path()` | `&'static str` | URL path prefix for upload/download |
+| `is_encrypted()` | `bool` | Whether this media type uses E2E encryption |
+
+### Upload paths
+
+| Media type | Upload path |
+|------------|-------------|
+| `Image` / `Sticker` | `/mms/image` |
+| `Video` | `/mms/video` |
+| `Audio` | `/mms/audio` |
+| `Document` | `/mms/document` |
+| `History` | `/mms/md-msg-hist` |
+| `AppState` | `/mms/md-app-state` |
+| `StickerPack` | `/mms/sticker-pack` |
+| `LinkThumbnail` | `/mms/thumbnail-link` |
+| `ProductCatalogImage` | `/product/image` |
+
+<Note>
+`ProductCatalogImage` is **unencrypted** — `is_encrypted()` returns `false`. This matches WhatsApp Web's behavior where `CreateMediaKeys.js` skips encryption for product catalog images. Its upload path is `/product/image` (not under the `/mms/` prefix like other media types).
+</Note>
 
 ---
 

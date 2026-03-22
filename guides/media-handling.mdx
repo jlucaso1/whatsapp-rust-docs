@@ -243,9 +243,45 @@ assert_eq!(upload.file_sha256.len(), 32);
 assert_eq!(upload.file_enc_sha256.len(), 32);
 ```
 
-### Streaming encryption
+### Chunk-based encryption with MediaEncryptor
 
-For direct access to the encryption primitive with constant memory usage (~40KB), use `encrypt_media_streaming`. This is the core function that `encrypt_media` wraps internally:
+`MediaEncryptor` provides a chunk-based API for encrypting media incrementally. Unlike `encrypt_media_streaming`, it doesn't require a sync `Read` source — you can feed plaintext in arbitrarily sized chunks, making it suitable for async streams and network sources:
+
+```rust
+use wacore::upload::MediaEncryptor;
+use wacore::download::MediaType;
+
+let mut enc = MediaEncryptor::new(MediaType::Video)?;
+let mut encrypted = Vec::new();
+
+// Feed plaintext in any chunk size
+for chunk in video_chunks {
+    enc.update(&chunk, &mut encrypted);
+}
+
+// Finalize: PKCS7 pad + append 10-byte HMAC-SHA256 MAC
+let info = enc.finalize(&mut encrypted)?;
+// info.media_key, info.file_sha256, info.file_enc_sha256, info.file_length
+```
+
+You can also write directly to a file or writer instead of buffering in memory:
+
+```rust
+let mut enc = MediaEncryptor::new(MediaType::Video)?;
+let mut writer = File::create("large_video.enc")?;
+
+for chunk in video_chunks {
+    enc.update_to_writer(&chunk, &mut writer)?;
+}
+
+let info = enc.finalize_to_writer(&mut writer)?;
+```
+
+See [Upload API reference](/api/upload#mediaencryptor) for full details.
+
+### Streaming encryption from a reader
+
+For sync `Read` sources, `encrypt_media_streaming` wraps `MediaEncryptor` and reads in 8KB chunks:
 
 ```rust
 use wacore::upload::encrypt_media_streaming;

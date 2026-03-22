@@ -218,6 +218,25 @@ pub struct PairCodeOptions {
 }
 ```
 
+### PlatformId
+
+Platform identifiers for companion devices, matching the `DeviceProps.PlatformType` protobuf enum:
+
+```rust
+pub enum PlatformId {
+    Unknown = 0,
+    Chrome = 1,        // default
+    Firefox = 2,
+    InternetExplorer = 3,
+    Opera = 4,
+    Safari = 5,
+    Edge = 6,
+    Electron = 7,
+    Uwp = 8,
+    OtherWebClient = 9,
+}
+```
+
 ### Pair Code Events
 
 **Event:** `Event::PairingCode`

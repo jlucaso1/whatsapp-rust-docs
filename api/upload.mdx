@@ -40,6 +40,7 @@ pub async fn upload(
       pub file_enc_sha256: Vec<u8>,
       pub file_sha256: Vec<u8>,
       pub file_length: u64,
+      pub media_key_timestamp: i64,
   }
   ```
   
@@ -66,6 +67,10 @@ pub async fn upload(
   <ParamField path="file_length" type="u64">
     Original file size in bytes (before encryption)
   </ParamField>
+  
+  <ParamField path="media_key_timestamp" type="i64">
+    Unix timestamp (seconds) when the media key was generated. Set automatically by `upload()` to the current time.
+  </ParamField>
 </ResponseField>
 
 ### Example: Upload and Send Image
@@ -90,6 +95,7 @@ let message = wa::Message {
         file_enc_sha256: Some(upload.file_enc_sha256),
         file_sha256: Some(upload.file_sha256),
         file_length: Some(upload.file_length),
+        media_key_timestamp: Some(upload.media_key_timestamp),
         caption: Some("Check out this photo!".to_string()),
         mimetype: Some("image/jpeg".to_string()),
         ..Default::default()
@@ -143,6 +149,7 @@ let message = wa::Message {
         file_enc_sha256: Some(upload.file_enc_sha256),
         file_sha256: Some(upload.file_sha256),
         file_length: Some(upload.file_length),
+        media_key_timestamp: Some(upload.media_key_timestamp),
         file_name: Some(filename.to_string()),
         mimetype: Some("application/pdf".to_string()),
         ..Default::default()
@@ -170,6 +177,7 @@ let message = wa::Message {
         file_enc_sha256: Some(upload.file_enc_sha256),
         file_sha256: Some(upload.file_sha256),
         file_length: Some(upload.file_length),
+        media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("audio/ogg; codecs=opus".to_string()),
         ptt: Some(true), // Mark as Push-To-Talk (voice note)
         ..Default::default()

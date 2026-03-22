@@ -136,6 +136,7 @@ let message = wa::Message {
         file_sha256: Some(upload.file_sha256),
         file_enc_sha256: Some(upload.file_enc_sha256),
         file_length: Some(upload.file_length),
+        media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("image/jpeg".to_string()),
         jpeg_thumbnail: Some(thumbnail_bytes), // raw JPEG bytes
         width: Some(1920),
@@ -176,6 +177,7 @@ if let Some(img) = &message.image_message {
             file_sha256: Some(upload.file_sha256),
             file_enc_sha256: Some(upload.file_enc_sha256),
             file_length: Some(upload.file_length),
+            media_key_timestamp: Some(upload.media_key_timestamp),
             mimetype: img.mimetype.clone(),
             jpeg_thumbnail: img.jpeg_thumbnail.clone(), // reuse from original
             height: img.height,
@@ -241,6 +243,7 @@ let message = wa::Message {
         file_sha256: Some(upload.file_sha256),
         file_enc_sha256: Some(upload.file_enc_sha256),
         file_length: Some(upload.file_length),
+        media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("image/jpeg".to_string()),
         caption: Some("Check out this image!".to_string()),
         width: Some(1920),
@@ -660,6 +663,7 @@ let message = wa::Message {
         file_sha256: Some(upload.file_sha256),
         file_enc_sha256: Some(upload.file_enc_sha256),
         file_length: Some(upload.file_length),
+        media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("image/jpeg".to_string()),
         width: Some(width),
         height: Some(height),

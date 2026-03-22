@@ -73,6 +73,7 @@ let message = wa::Message {
         file_enc_sha256: Some(upload_result.file_enc_sha256),
         file_sha256: Some(upload_result.file_sha256),
         file_length: Some(upload_result.file_length),
+        media_key_timestamp: Some(upload_result.media_key_timestamp),
         caption: Some("Check out this image!".to_string()),
         mimetype: Some("image/jpeg".to_string()),
         ..Default::default()
@@ -364,7 +365,7 @@ The `wa::Message` protobuf supports various message types. Set exactly one of th
 
 <ParamField path="image_message" type="ImageMessage">
   Image with optional caption. Upload the image first using `client.upload()`, then populate:
-  - `url`, `direct_path`, `media_key`, `file_enc_sha256`, `file_sha256`, `file_length`
+  - `url`, `direct_path`, `media_key`, `file_enc_sha256`, `file_sha256`, `file_length`, `media_key_timestamp`
   - `caption` - Image caption
   - `mimetype` - e.g., `"image/jpeg"`
 </ParamField>

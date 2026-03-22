@@ -217,6 +217,8 @@ This can run concurrently with QR code pairing — whichever completes first win
   - `phone_number` — Phone number in international format (e.g., `"15551234567"`)
   - `show_push_notification` — Whether to show a push notification on the phone (default: `true`)
   - `custom_code` — Optional custom 8-character code using Crockford Base32 alphabet
+  - `platform_id` — Platform identifier for the companion device (default: Chrome)
+  - `platform_display` — Platform display name shown on the phone (default: `"Chrome (Linux)"`)
 </ParamField>
 
 <ResponseField name="code" type="String">
@@ -631,15 +633,15 @@ See [MEX API](/api/mex) for full documentation.
 ### profile
 
 ```rust
-pub fn profile(self: &Arc<Self>) -> Profile<'_>
+pub fn profile(&self) -> Profile<'_>
 ```
 
-Access profile operations. Requires `Arc<Client>` because push name updates need app state sync.
+Access profile operations.
 
 **Methods:**
 - `set_push_name(name: &str)` - Set display name (syncs across devices)
 - `set_status_text(text: &str)` - Set profile "About" text
-- `set_profile_picture(image_data: Vec<u8>)` - Set profile picture (JPEG)
+- `set_profile_picture(image_data: Vec<u8>)` - Set profile picture (JPEG, 640x640 recommended)
 - `remove_profile_picture()` - Remove profile picture
 
 ### newsletter
@@ -722,10 +724,10 @@ See [Polls API](/api/polls) for full documentation.
 ### media_reupload
 
 ```rust
-pub fn media_reupload(self: &Arc<Self>) -> MediaReupload<'_>
+pub fn media_reupload(&self) -> MediaReupload<'_>
 ```
 
-Access media reupload operations. Requires `Arc<Client>`. Use this when a media download fails because the URL has expired.
+Access media reupload operations. Use this when a media download fails because the URL has expired.
 
 **Methods:**
 - `request(req: &MediaReuploadRequest)` - Request the server to re-upload expired media

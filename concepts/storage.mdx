@@ -884,7 +884,7 @@ let pm = PersistenceManager::new(backend).await?;
 
 ```toml
 [dependencies]
-whatsapp-rust = { version = "0.4", features = ["debug-snapshots"] }
+whatsapp-rust = { version = "0.5", features = ["debug-snapshots"] }
 ```
 
 **Usage:**
@@ -931,7 +931,7 @@ All time checks use `wacore::time::now_millis` instead of `std::time::Instant`, 
 ```toml
 # Disable moka to use PortableCache (e.g., for WASM targets)
 [dependencies]
-whatsapp-rust = { version = "0.4", default-features = false, features = [
+whatsapp-rust = { version = "0.5", default-features = false, features = [
     "sqlite-storage",
     "tokio-transport",
     "tokio-runtime",

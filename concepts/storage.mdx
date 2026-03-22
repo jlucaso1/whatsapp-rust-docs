@@ -40,15 +40,15 @@ pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
-    save_notify: Arc<Notify>,
+    save_notify: Arc<Event>,  // event_listener::Event (runtime-agnostic)
 }
 ```
 
 **Fields:**
-- `device`: In-memory device state (protected by RwLock)
+- `device`: In-memory device state (protected by `async_lock::RwLock`)
 - `backend`: Storage backend implementation
 - `dirty`: Flag indicating unsaved changes
-- `save_notify`: Notification channel for background saver
+- `save_notify`: Notification channel for background saver (uses `event_listener::Event` for runtime-agnostic operation)
 
 ### Initialization
 
@@ -75,7 +75,7 @@ impl PersistenceManager {
             device: Arc::new(RwLock::new(device)),
             backend,
             dirty: Arc::new(AtomicBool::new(false)),
-            save_notify: Arc::new(Notify::new()),
+            save_notify: Arc::new(Event::new()),
         })
     }
 }
@@ -113,7 +113,7 @@ where
     let result = modifier(&mut device_guard);
 
     self.dirty.store(true, Ordering::Relaxed);
-    self.save_notify.notify_one();
+    self.save_notify.notify(1);
 
     result
 }
@@ -150,21 +150,21 @@ client.persistence_manager
 **Purpose:** Periodically persist dirty state to disk
 
 ```rust
-pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
-    tokio::spawn(async move {
+pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+    runtime.spawn(Box::pin(async move {
         loop {
-            tokio::select! {
-                _ = self.save_notify.notified() => {
-                    debug!("Save notification received.");
-                }
-                _ = sleep(interval) => {}
-            }
+            let listener = self.save_notify.listen();
+            // Race: wake on notification or after interval
+            futures_lite::future::or(listener, async {
+                // sleep using runtime abstraction
+                runtime.sleep(interval).await;
+            }).await;
 
             if let Err(e) = self.save_to_disk().await {
                 error!("Error saving device state: {e}");
             }
         }
-    });
+    }));
 }
 
 async fn save_to_disk(&self) -> Result<(), StoreError> {
@@ -187,7 +187,7 @@ async fn save_to_disk(&self) -> Result<(), StoreError> {
 **Start background saver:**
 ```rust
 let persistence_manager = Arc::new(PersistenceManager::new(backend).await?);
-persistence_manager.clone().run_background_saver(Duration::from_secs(5));
+persistence_manager.clone().run_background_saver(runtime.clone(), Duration::from_secs(30));
 ```
 
 ## Backend Trait
@@ -258,7 +258,7 @@ if let Some(session) = backend.get_session("15551234567@s.whatsapp.net:0").await
 
 ### SignalStoreCache
 
-**Location:** `src/store/signal_cache.rs`
+**Location:** `wacore/src/store/signal_cache.rs` (re-exported from `src/store/signal_cache.rs`)
 
 The `SignalStoreCache` provides an in-memory cache layer for Signal protocol state, matching WhatsApp Web's `SignalStoreCache` implementation. All crypto operations read and write through this cache, with database writes deferred to explicit `flush()` calls.
 
@@ -279,6 +279,7 @@ struct StoreState {
 
 **Key features:**
 - **Deferred writes**: Changes are accumulated in memory and batch-written on `flush()`
+- **Redundant write elimination**: Before marking a key as dirty, `put()` compares the incoming bytes against the cached value — if they are identical, the write is skipped entirely. This avoids unnecessary dirty marks and reduces database writes during `flush()`, particularly for Signal sessions and identities that are loaded and "saved" without actual changes
 - **Negative caching**: Known-absent keys are cached as `None` to avoid repeated DB lookups
 - **Independent locking**: Sessions, identities, and sender keys each have their own mutex
 - **O(1) reads**: Values stored as `Arc<[u8]>` for cheap cloning (reference count bump)

@@ -578,14 +578,14 @@ Access trust/privacy token operations.
 ### chat_actions
 
 ```rust
-pub fn chat_actions(self: &Arc<Self>) -> ChatActions<'_>
+pub fn chat_actions(&self) -> ChatActions<'_>
 ```
 
-Access chat management actions. Requires `Arc<Client>` because app state mutations need key access.
+Access chat management actions. Operations sync across all linked devices via app state sync.
 
 **Methods:**
-- `archive_chat(jid: &Jid)` - Archive a chat
-- `unarchive_chat(jid: &Jid)` - Unarchive a chat
+- `archive_chat(jid: &Jid, message_range: Option<SyncActionMessageRange>)` - Archive a chat
+- `unarchive_chat(jid: &Jid, message_range: Option<SyncActionMessageRange>)` - Unarchive a chat
 - `pin_chat(jid: &Jid)` - Pin a chat
 - `unpin_chat(jid: &Jid)` - Unpin a chat
 - `mute_chat(jid: &Jid)` - Mute a chat indefinitely
@@ -593,6 +593,9 @@ Access chat management actions. Requires `Arc<Client>` because app state mutatio
 - `unmute_chat(jid: &Jid)` - Unmute a chat
 - `star_message(chat_jid: &Jid, participant_jid: Option<&Jid>, message_id: &str, from_me: bool)` - Star a message
 - `unstar_message(chat_jid: &Jid, participant_jid: Option<&Jid>, message_id: &str, from_me: bool)` - Unstar a message
+- `mark_chat_as_read(jid: &Jid, read: bool, message_range: Option<SyncActionMessageRange>)` - Mark a chat as read or unread across devices
+- `delete_chat(jid: &Jid, delete_media: bool, message_range: Option<SyncActionMessageRange>)` - Delete a chat from all linked devices
+- `delete_message_for_me(chat_jid: &Jid, participant_jid: Option<&Jid>, message_id: &str, from_me: bool, delete_media: bool, message_timestamp: Option<i64>)` - Delete a message locally (not for the other party)
 
 ### status
 

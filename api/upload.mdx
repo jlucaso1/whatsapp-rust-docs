@@ -182,32 +182,74 @@ let message_id = client.send_message(chat_jid, message).await?;
 
 ---
 
-## Streaming encryption
+## MediaEncryptor
 
-For large files, use `encrypt_media_streaming` to encrypt media with constant memory usage (~40KB) instead of buffering the entire file in memory. This is the core primitive that `encrypt_media` wraps internally.
+Chunk-based AES-256-CBC media encryptor. Processes plaintext incrementally without requiring a sync `Read`, enabling use with async streams, network sources, or any chunk-at-a-time producer.
+
+Two output modes with zero duplicated crypto logic:
+- `update()` / `finalize()` — append encrypted blocks to a `Vec<u8>`
+- `update_to_writer()` / `finalize_to_writer()` — write directly to any `Write` implementor, zero intermediate buffer
 
 ```rust
-pub fn encrypt_media_streaming<R: Read, W: Write>(
-    reader: R,
-    writer: W,
-    media_type: MediaType,
-) -> Result<EncryptedMediaInfo>
+pub struct MediaEncryptor { /* ... */ }
 ```
 
-<ParamField path="reader" type="R: Read" required>
-  Source of plaintext media bytes. Can be a `File`, `Cursor<Vec<u8>>`, or any `Read` implementor.
-</ParamField>
+### Creating an encryptor
 
-<ParamField path="writer" type="W: Write" required>
-  Destination for encrypted output. Receives ciphertext + 10-byte HMAC-SHA256 MAC — the exact bytes to upload to WhatsApp CDN.
-</ParamField>
+```rust
+use wacore::upload::MediaEncryptor;
+use wacore::download::MediaType;
+
+// Initialize with a random media key
+let enc = MediaEncryptor::new(MediaType::Image)?;
+
+// Or initialize with a caller-supplied key (must be 32 cryptographically random bytes)
+let enc = MediaEncryptor::with_key(media_key, MediaType::Image)?;
+```
 
 <ParamField path="media_type" type="MediaType" required>
   Type of media being encrypted. Determines the HKDF info string for key derivation.
 </ParamField>
 
+<ParamField path="media_key" type="[u8; 32]">
+  Caller-supplied 32-byte key for `with_key()`. Must be cryptographically random — reusing keys breaks confidentiality.
+</ParamField>
+
+### Feeding plaintext
+
+Feed plaintext in arbitrarily sized chunks. Encrypted AES blocks are emitted as soon as a full 16-byte block is available; partial blocks are buffered internally (at most 15 bytes).
+
+```rust
+// Append encrypted blocks to a Vec
+let mut encrypted = Vec::new();
+enc.update(plaintext_chunk, &mut encrypted);
+
+// Or write encrypted blocks directly to a writer
+enc.update_to_writer(plaintext_chunk, &mut writer)?;
+```
+
+<ParamField path="plaintext" type="&[u8]" required>
+  Plaintext bytes to encrypt. Can be any size — from a single byte to the entire file.
+</ParamField>
+
+<Note>
+  On `update_to_writer` I/O error, the encryptor state is unspecified — discard it.
+</Note>
+
+### Finalizing
+
+Finalize applies PKCS7 padding to the remaining plaintext, encrypts the final block(s), and appends a 10-byte truncated HMAC-SHA256 MAC.
+
+```rust
+// Finalize to Vec
+let info = enc.finalize(&mut encrypted)?;
+
+// Or finalize to writer
+let info = enc.finalize_to_writer(&mut writer)?;
+```
+
 <ResponseField name="EncryptedMediaInfo" type="struct">
-  Encryption metadata (keys and hashes). Unlike `EncryptedMedia`, this does **not** contain the encrypted data — it was already written to the provided writer.
+  Encryption metadata (keys and hashes). The encrypted data was already written via `update`/`finalize` calls.
 
   ```rust
   pub struct EncryptedMediaInfo {
@@ -235,6 +277,73 @@ pub fn encrypt_media_streaming<R: Read, W: Write>(
   </ParamField>
 </ResponseField>
 
+### Example: Chunk-based encryption to Vec
+
+```rust
+use wacore::upload::MediaEncryptor;
+use wacore::download::MediaType;
+
+let mut enc = MediaEncryptor::new(MediaType::Image)?;
+let mut encrypted = Vec::new();
+
+// Feed plaintext in arbitrary chunks
+for chunk in plaintext_data.chunks(4096) {
+    enc.update(chunk, &mut encrypted);
+}
+
+let info = enc.finalize(&mut encrypted)?;
+println!("Media key: {:?}", info.media_key);
+println!("Original size: {} bytes", info.file_length);
+```
+
+### Example: Streaming encryption to a writer
+
+```rust
+use wacore::upload::MediaEncryptor;
+use wacore::download::MediaType;
+use std::fs::File;
+
+let mut enc = MediaEncryptor::new(MediaType::Video)?;
+let mut writer = File::create("large_video.enc")?;
+
+// Feed chunks from any source (async stream, network, etc.)
+for chunk in reader_chunks {
+    enc.update_to_writer(&chunk, &mut writer)?;
+}
+
+let info = enc.finalize_to_writer(&mut writer)?;
+```
+
+<Note>
+  Memory usage is constant regardless of file size — only the crypto state and at most 15 bytes of remainder are buffered. Unlike `encrypt_media_streaming`, `MediaEncryptor` does not require a sync `Read` source, making it suitable for async contexts.
+</Note>
+
+---
+
+## Streaming encryption
+
+For sync `Read` sources, `encrypt_media_streaming` provides a convenience wrapper around `MediaEncryptor` that reads in 8KB chunks:
+
+```rust
+pub fn encrypt_media_streaming<R: Read, W: Write>(
+    reader: R,
+    writer: W,
+    media_type: MediaType,
+) -> Result<EncryptedMediaInfo>
+```
+
+<ParamField path="reader" type="R: Read" required>
+  Source of plaintext media bytes. Can be a `File`, `Cursor<Vec<u8>>`, or any `Read` implementor.
+</ParamField>
+
+<ParamField path="writer" type="W: Write" required>
+  Destination for encrypted output. Receives ciphertext + 10-byte HMAC-SHA256 MAC — the exact bytes to upload to WhatsApp CDN.
+</ParamField>
+
+<ParamField path="media_type" type="MediaType" required>
+  Type of media being encrypted. Determines the HKDF info string for key derivation.
+</ParamField>
+
 ### Example: Encrypt from file to file
 
 ```rust
@@ -251,7 +360,7 @@ println!("Original size: {} bytes", info.file_length);
 ```
 
 <Note>
-  Memory usage is ~40KB regardless of file size (8KB read buffer + crypto state + remainder buffer). Data is read in 8KB chunks, encrypted with AES-256-CBC, and written incrementally.
+  `encrypt_media_streaming` uses ~40KB of memory regardless of file size (8KB read buffer + crypto state). Internally it creates a `MediaEncryptor` and feeds 8KB chunks from the reader.
 </Note>
 
 ### Relationship to `encrypt_media`
@@ -271,10 +380,13 @@ pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<Encrypte
 }
 ```
 
-Use `encrypt_media_streaming` directly when you need to:
-- Encrypt files too large to fit in memory
-- Write encrypted output directly to disk or a network stream
-- Avoid double-buffering (reading file → memory → encryption → memory)
+### When to use each API
+
+| API | Use when |
+|-----|----------|
+| `MediaEncryptor` | You have an async stream, network source, or need full control over chunk sizes |
+| `encrypt_media_streaming` | You have a sync `Read` source (file, cursor) |
+| `encrypt_media` | The entire plaintext fits in memory |
 
 ---
 

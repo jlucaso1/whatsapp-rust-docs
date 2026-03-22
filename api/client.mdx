@@ -199,6 +199,38 @@ pub async fn wait_for_connected(
 
 Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
 
+### wait_for_startup_sync
+
+```rust
+pub async fn wait_for_startup_sync(
+    &self,
+    timeout: std::time::Duration
+) -> Result<()>
+```
+
+Waits for both offline sync completion **and** history sync tasks to become idle. This is a superset of `wait_for_connected` — it ensures the client is not only authenticated but also fully synced with the server.
+
+<ParamField path="timeout" type="Duration" required>
+  Maximum time to wait for both offline sync and history sync to complete
+</ParamField>
+
+<ParamField path="Returns" type="Result<()>">
+  Ok if sync completed within the timeout, Err on timeout
+</ParamField>
+
+**Example:**
+```rust
+use std::time::Duration;
+
+// Wait up to 2 minutes for full sync
+client.wait_for_startup_sync(Duration::from_secs(120)).await?;
+println!("Client fully synced and ready");
+```
+
+<Note>
+  Use `wait_for_connected` if you only need to wait for authentication and offline sync. Use `wait_for_startup_sync` when you need history sync to finish before proceeding (e.g., before querying chat history).
+</Note>
+
 ### pair_with_code
 
 ```rust
@@ -425,6 +457,17 @@ Deletes a message. Use `Sender` to revoke your own message, or `Admin` to revoke
   `RevokeType::Sender` (delete your own message) or `RevokeType::Admin { original_sender: Jid }` (admin revoke in groups)
 </ParamField>
 
+### Media operations
+
+The Client also exposes media upload and download methods directly:
+
+- `upload(data: Vec<u8>, media_type: MediaType)` — Upload and encrypt media. See [Upload API](/api/upload).
+- `download(downloadable: &dyn Downloadable)` — Download and decrypt media. See [Download API](/api/download).
+- `download_to_file(downloadable, writer)` — Download media to a file writer.
+- `download_to_writer(downloadable, writer)` — Streaming download with ~40KB memory usage.
+- `download_from_params(direct_path, media_key, file_sha256, file_enc_sha256, file_length, media_type)` — Download from raw parameters.
+- `download_from_params_to_writer(direct_path, media_key, file_sha256, file_enc_sha256, file_length, media_type, writer)` — Streaming download from raw parameters.
+
 ---
 
 ## Feature APIs
@@ -578,10 +621,10 @@ Access trust/privacy token operations.
 ### chat_actions
 
 ```rust
-pub fn chat_actions(self: &Arc<Self>) -> ChatActions<'_>
+pub fn chat_actions(&self) -> ChatActions<'_>
 ```
 
-Access chat management actions. Requires `Arc<Client>` because app state mutations need key access.
+Access chat management actions.
 
 **Methods:**
 - `archive_chat(jid: &Jid)` - Archive a chat
@@ -628,10 +671,10 @@ See [MEX API](/api/mex) for full documentation.
 ### profile
 
 ```rust
-pub fn profile(self: &Arc<Self>) -> Profile<'_>
+pub fn profile(&self) -> Profile<'_>
 ```
 
-Access profile operations. Requires `Arc<Client>` because push name updates need app state sync.
+Access profile operations.
 
 **Methods:**
 - `set_push_name(name: &str)` - Set display name (syncs across devices)
@@ -719,10 +762,10 @@ See [Polls API](/api/polls) for full documentation.
 ### media_reupload
 
 ```rust
-pub fn media_reupload(self: &Arc<Self>) -> MediaReupload<'_>
+pub fn media_reupload(&self) -> MediaReupload<'_>
 ```
 
-Access media reupload operations. Requires `Arc<Client>`. Use this when a media download fails because the URL has expired.
+Access media reupload operations. Use this when a media download fails because the URL has expired.
 
 **Methods:**
 - `request(req: &MediaReuploadRequest)` - Request the server to re-upload expired media

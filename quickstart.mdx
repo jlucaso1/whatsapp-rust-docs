@@ -221,11 +221,18 @@ let mut bot = Bot::builder()
   cargo run
   ```
 
-  Scan the QR code with WhatsApp on your phone:
+  You can also use pair code authentication instead of (or alongside) QR code scanning:
+
+  ```bash
+  cargo run -- -p 15551234567            # Pair code + QR code
+  cargo run -- -p 15551234567 -c MYCODE  # Custom pair code
+  ```
+
+  Scan the QR code with WhatsApp on your phone (or enter the pair code):
   1. Open WhatsApp on your phone
   2. Go to Settings → Linked Devices
   3. Tap "Link a Device"
-  4. Scan the QR code displayed in your terminal
+  4. Scan the QR code displayed in your terminal, or tap "Link with phone number instead" and enter the pair code
 </Step>
 
 <Step title="Subsequent runs - Auto-login">

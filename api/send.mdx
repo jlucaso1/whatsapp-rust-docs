@@ -121,18 +121,45 @@ Options for customizing message sending behavior.
 
 ```rust
 pub struct SendOptions {
-    /// Extra XML nodes to add to the message stanza
+    /// Override the auto-generated message ID.
+    /// Useful for resending a failed message with the same ID or idempotency.
+    pub message_id: Option<String>,
+    /// Extra XML child nodes on the message stanza.
     pub extra_stanza_nodes: Vec<Node>,
 }
 ```
+
+<ParamField path="message_id" type="Option<String>" default="None">
+  Override the auto-generated message ID. When set, the provided ID is used instead of generating a new one. Useful for resending a failed message with the same ID or ensuring idempotency.
+</ParamField>
 
 <ParamField path="extra_stanza_nodes" type="Vec<Node>" default="[]">
   Additional XML nodes to include in the message stanza. Used for advanced protocol features like quoted replies, mentions, or custom metadata.
 </ParamField>
 
-### Example: Send with Custom Options
+### Example: Send with a custom message ID
 
 ```rust
+use whatsapp_rust::send::SendOptions;
+
+let options = SendOptions {
+    message_id: Some("3EB0ABC123".to_string()),
+    ..Default::default()
+};
+
+let message_id = client.send_message_with_options(
+    chat_jid,
+    message,
+    options
+).await?;
+
+assert_eq!(message_id, "3EB0ABC123");
+```
+
+### Example: Send with extra stanza nodes
+
+```rust
+use whatsapp_rust::send::SendOptions;
 use wacore_binary::builder::NodeBuilder;
 
 let options = SendOptions {
@@ -141,6 +168,7 @@ let options = SendOptions {
             .attr("key", "value")
             .build()
     ],
+    ..Default::default()
 };
 
 let message_id = client.send_message_with_options(

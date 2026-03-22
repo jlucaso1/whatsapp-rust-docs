@@ -262,51 +262,66 @@ if let Some(session) = backend.get_session("15551234567@s.whatsapp.net:0").await
 
 The `SignalStoreCache` provides an in-memory cache layer for Signal protocol state, matching WhatsApp Web's `SignalStoreCache` implementation. All crypto operations read and write through this cache, with database writes deferred to explicit `flush()` calls.
 
+Sessions are cached as deserialized `SessionRecord` objects (not bytes), matching WhatsApp Web's pattern where the JS object IS the cache. Serialization only happens during `flush()` — not on every `store_session` call. Identity and sender key stores use `Arc<[u8]>` byte caches.
+
 ```rust
 pub struct SignalStoreCache {
-    sessions: Mutex<StoreState>,
-    identities: Mutex<StoreState>,
-    sender_keys: Mutex<StoreState>,
+    sessions: Mutex<SessionStoreState>,
+    identities: Mutex<ByteStoreState>,
+    sender_keys: Mutex<ByteStoreState>,
 }
 
-// Internal per-domain state
-struct StoreState {
+// Session object cache — no per-message serialize/deserialize
+struct SessionStoreState {
+    cache: HashMap<Arc<str>, Option<SessionRecord>>,  // None = known-absent
+    dirty: HashSet<Arc<str>>,                          // Modified keys pending flush
+    deleted: HashSet<Arc<str>>,                        // Deleted keys pending flush
+}
+
+// Byte cache for identities and sender keys
+struct ByteStoreState {
     cache: HashMap<Arc<str>, Option<Arc<[u8]>>>,  // None = known-absent
-    dirty: HashSet<Arc<str>>,                       // Modified keys pending flush
-    deleted: HashSet<Arc<str>>,                     // Deleted keys pending flush
+    dirty: HashSet<Arc<str>>,
+    deleted: HashSet<Arc<str>>,
 }
 ```
 
 **Key features:**
-- **Deferred writes**: Changes are accumulated in memory and batch-written on `flush()`
-- **Redundant write elimination**: Before marking a key as dirty, `put()` compares the incoming bytes against the cached value — if they are identical, the write is skipped entirely. This avoids unnecessary dirty marks and reduces database writes during `flush()`, particularly for Signal sessions and identities that are loaded and "saved" without actual changes
+- **Session object cache**: Sessions are stored as `SessionRecord` objects, eliminating prost encode/decode from the per-message path. Cold loads deserialize from backend bytes once and cache the object; subsequent reads return the cached object directly
+- **`Arc` previous sessions**: `SessionRecord.previous_sessions` is wrapped in `Arc<Vec<SessionStructure>>`, making clone O(1) for the ~40 archived sessions. Only rare paths (archive, promote, take/restore) trigger `Arc::make_mut`
+- **Owned `store_session`**: The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer. The compiler enforces no use-after-store
+- **Deferred writes**: Changes are accumulated in memory and batch-written on `flush()`. Sessions are serialized only during `flush()`, not on every store
+- **Redundant write elimination**: For identities (which rarely change), `put_dedup()` compares incoming bytes against the cached value and skips if identical. Sender keys use unconditional `put()` since they change every message
 - **Negative caching**: Known-absent keys are cached as `None` to avoid repeated DB lookups
 - **Independent locking**: Sessions, identities, and sender keys each have their own mutex
-- **O(1) reads**: Values stored as `Arc<[u8]>` for cheap cloning (reference count bump)
-- **O(1) key cloning**: Keys stored as `Arc<str>` so cloning a key (needed for both cache and dirty/deleted sets) is a refcount bump instead of a heap allocation
+- **O(1) key cloning**: Keys stored as `Arc<str>` so cloning a key is a refcount bump instead of a heap allocation. The `key_for()` method reuses existing `Arc<str>` keys from the HashMap via `get_key_value()`, avoiding heap allocation on the hot path
 - **Single-allocation keys**: Session lock keys use `to_protocol_address_string()` (format: `user[:device]@server.0`) which builds the key string in one allocation, avoiding the two-allocation overhead of constructing a `ProtocolAddress` then calling `.to_string()`. See [Signal Protocol performance](/advanced/signal-protocol#single-allocation-session-lock-keys) for details
 
 **Cache operations:**
 
 ```rust
-// Read (loads from backend if not cached)
+// Read (loads from backend if not cached, returns SessionRecord object)
 let session = cache.get_session(address, &backend).await?;
 
-// Write (marks as dirty, doesn't hit backend)
-cache.put_session(address, &data).await;
+// Check existence (cache hit is O(1), cold load caches for subsequent get)
+let exists = cache.has_session(address, &backend).await?;
+
+// Write (takes ownership, marks as dirty, doesn't hit backend)
+cache.put_session(address, record).await;
 
 // Delete (marks for deletion on flush)
 cache.delete_session(address).await;
 
-// Persist all dirty state to backend
+// Persist all dirty state to backend (sessions serialized here)
 cache.flush(&backend).await?;
 
-// Clear cache (on disconnect/reconnect)
+// Clear cache (on disconnect/reconnect, retains allocated capacity)
 cache.clear().await;
 ```
 
 **Flush behavior:**
 - Acquires all three mutexes to ensure consistency
+- Sessions are serialized to bytes only during flush (not on every `put_session`)
 - Only clears dirty tracking after ALL writes succeed
 - On failure, dirty state is preserved for retry on next flush
 

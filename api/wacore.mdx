@@ -148,8 +148,19 @@ pub trait Runtime: Send + Sync + 'static {
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
     fn spawn_blocking(&self, f: Box<dyn FnOnce() + Send + 'static>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
     fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
+
+    /// How often to yield in tight loops (every N items). Defaults to 10.
+    fn yield_frequency(&self) -> u32 { 10 }
 }
 ```
+
+| Method | Purpose |
+|--------|---------|
+| `spawn` | Spawn a background task, returning an `AbortHandle` for cancellation |
+| `sleep` | Return a future that completes after a duration |
+| `spawn_blocking` | Offload a blocking closure to a thread pool |
+| `yield_now` | Cooperatively yield; return `None` if unnecessary (e.g., multi-threaded runtimes) |
+| `yield_frequency` | How many items to process before yielding in tight loops (default: `10`) |
 
 The `net` module defines the networking abstractions:
 

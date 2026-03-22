@@ -260,7 +260,7 @@ Event::StreamReplaced(_) => {
 
 ### LoggedOut
 
-**Emitted:** When the session is invalidated by the server (stream error code 401 or 516)
+**Emitted:** When the session is invalidated by the server (stream error code 401 or 516) or when `client.logout()` is called
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -269,6 +269,10 @@ pub struct LoggedOut {
     pub reason: ConnectFailureReason,
 }
 ```
+
+**Fields:**
+- `on_connect` — `true` if the logout happened during a connection attempt (server-initiated), `false` if triggered by `client.logout()` or a stream error while connected
+- `reason` — The reason for the logout (e.g., `ConnectFailureReason::LoggedOut`)
 
 **Usage:**
 ```rust

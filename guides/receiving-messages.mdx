@@ -297,7 +297,37 @@ The client automatically handles decryption retries using the retry receipt mech
 
 See [Signal Protocol](/advanced/signal-protocol) and [Events reference](/concepts/events) for more details.
 
-### Decryption Retry Mechanism
+### Two-pass decryption model
+
+Group messages arrive with two types of `<enc>` nodes in a single stanza:
+1. **Session messages** (`pkmsg`/`msg`) — carry the Sender Key Distribution Message (SKDM) via a pairwise Signal session
+2. **Group messages** (`skmsg`) — carry the actual message content, encrypted with the sender key
+
+The client decrypts these in two passes:
+
+1. **Pass 1:** Process session `<enc>` nodes to extract the SKDM, which establishes the sender key for the group.
+2. **Pass 2:** Process group `<enc>` nodes using the sender key from Pass 1.
+
+If session messages fail to decrypt, the SKDM they carried is lost. In this case, the client skips `skmsg` decryption entirely (since it would always fail with `NoSenderKey`) and dispatches an `UndecryptableMessage` event. The retry receipt for the session message causes the sender to resend the entire message including the SKDM.
+
+Exceptions where `skmsg` is still processed even without successful session decryption:
+- **No session messages present** — the sender key was already established from a prior message
+- **Duplicate session messages** — the SKDM was already processed in a previous delivery
+
+<Note>
+  This matches WhatsApp Web's `canDecryptNext` pattern. It prevents unnecessary retry receipts for `skmsg` nodes that can never succeed without the SKDM.
+</Note>
+
+### Decrypt-fail mode
+
+Each incoming message has a `decrypt_fail_mode` attribute parsed from the `<enc>` nodes:
+
+- **`DecryptFailMode::Show`** — the recipient should show a "waiting for this message" placeholder in the chat
+- **`DecryptFailMode::Hide`** — the message should be silently hidden on failure (used for infrastructure messages like reactions, poll votes, and pin changes)
+
+If any `<enc>` node in the stanza has `decrypt-fail="hide"`, the entire message uses `Hide` mode. See [Decrypt-fail suppression](/api/send#decrypt-fail-suppression) for which outgoing message types set this attribute.
+
+### Decryption retry mechanism
 
 The library automatically:
 1. Detects decryption failures (no session, invalid keys, MAC errors)

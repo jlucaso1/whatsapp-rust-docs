@@ -444,7 +444,6 @@ Each logical cache uses a unique namespace string. Implementations should partit
 | Namespace | Cache | Description |
 |-----------|-------|-------------|
 | `"group"` | `group_cache` | Group metadata |
-| `"device"` | `device_cache` | Per-user device lists |
 | `"device_registry"` | `device_registry_cache` | Device registry entries |
 | `"lid_pn_by_lid"` | `lid_pn_cache` | LID-to-phone bidirectional mappings |
 
@@ -457,7 +456,6 @@ Cache operations are best-effort. The client treats read failures as cache misse
 ```rust
 pub struct CacheStores {
     pub group_cache: Option<Arc<dyn CacheStore>>,
-    pub device_cache: Option<Arc<dyn CacheStore>>,
     pub device_registry_cache: Option<Arc<dyn CacheStore>>,
     pub lid_pn_cache: Option<Arc<dyn CacheStore>>,
 }

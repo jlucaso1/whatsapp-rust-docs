@@ -469,6 +469,57 @@ This means you can construct a raw `wa::Message` with any of these fields set an
 
 ---
 
+## Automatic business node detection
+
+When you send an `InteractiveMessage` with a `NativeFlowMessage` (used for business features like payments, CTAs, and catalogs), the library automatically injects a `<biz>` stanza child node. You don't need to construct this manually.
+
+The detection works by:
+
+1. Inspecting the outgoing message for an `InteractiveMessage` with a `NativeFlowMessage`
+2. Extracting the first button's `name` field
+3. Mapping the button name to a WhatsApp flow name
+4. Building the `<biz>` XML node with the correct structure
+
+The resulting stanza child looks like:
+
+```xml
+<biz>
+  <interactive type="native_flow" v="1">
+    <native_flow name="order_details"/>
+  </interactive>
+</biz>
+```
+
+### Supported button-to-flow mappings
+
+| Button name | Flow name |
+|---|---|
+| `review_and_pay` | `order_details` |
+| `payment_info` | `payment_info` |
+| `review_order`, `order_status` | `order_status` |
+| `payment_status` | `payment_status` |
+| `payment_method` | `payment_method` |
+| `payment_reminder` | `payment_reminder` |
+| `open_webview` | `message_with_link` |
+| `message_with_link_status` | `message_with_link_status` |
+| `cta_url` | `cta_url` |
+| `cta_call` | `cta_call` |
+| `cta_copy` | `cta_copy` |
+| `cta_catalog` | `cta_catalog` |
+| `catalog_message` | `catalog_message` |
+| `quick_reply` | `quick_reply` |
+| `galaxy_message` | `galaxy_message` |
+| `booking_confirmation` | `booking_confirmation` |
+| `call_permission_request` | `call_permission_request` |
+
+Unrecognized button names pass through as-is.
+
+<Note>
+  The `<biz>` node is merged with any other auto-inferred metadata (like `<meta>` nodes for polls or events) and any `extra_stanza_nodes` you provide in `SendOptions`. The library also checks inside `document_with_caption_message` wrappers for interactive messages.
+</Note>
+
+---
+
 ## Decrypt-fail suppression
 
 Certain infrastructure messages set `decrypt-fail="hide"` on their `<enc>` nodes so recipients don't see "waiting for this message" placeholders when decryption fails. The library applies this automatically based on message content — you don't need to handle it manually.

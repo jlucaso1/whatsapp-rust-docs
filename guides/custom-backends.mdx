@@ -926,7 +926,7 @@ let bot = Bot::builder()
     .with_cache_config(CacheConfig {
         cache_stores: CacheStores {
             group_cache: Some(redis.clone()),
-            device_cache: Some(redis.clone()),
+            device_registry_cache: Some(redis.clone()),
             ..Default::default()
         },
         ..Default::default()
@@ -951,7 +951,6 @@ The following namespaces are used internally by the client:
 | Namespace | Cache | Description |
 |-----------|-------|-------------|
 | `"group"` | `group_cache` | Group metadata |
-| `"device"` | `device_cache` | Device lists per user |
 | `"device_registry"` | `device_registry_cache` | Device registry entries |
 | `"lid_pn_by_lid"` | `lid_pn_cache` | LID-to-phone bidirectional mappings |
 

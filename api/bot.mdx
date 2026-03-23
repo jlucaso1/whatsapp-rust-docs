@@ -390,7 +390,7 @@ use std::time::Duration;
 Bot::builder()
     .with_cache_config(CacheConfig {
         group_cache: CacheEntryConfig::new(None, 500), // No TTL, 500 entries
-        device_cache: CacheEntryConfig::new(Some(Duration::from_secs(1800)), 2000),
+        device_registry_cache: CacheEntryConfig::new(Some(Duration::from_secs(1800)), 2000),
         ..Default::default()
     })
     // ...
@@ -681,7 +681,6 @@ pub struct CacheEntryConfig {
 | Cache | Default TTL | Default Capacity | Description |
 |-------|-------------|------------------|-------------|
 | `group_cache` | 1 hour | 250 | Group metadata |
-| `device_cache` | 1 hour | 5,000 | Device lists |
 | `device_registry_cache` | 1 hour | 5,000 | Device registry |
 | `lid_pn_cache` | 1 hour (TTI) | 10,000 | LID-to-phone mapping |
 | `retried_group_messages` | 5 minutes | 2,000 | Retry tracking |
@@ -718,7 +717,6 @@ You can replace any of the pluggable caches with a custom `CacheStore` backend (
 | Field | Cache | Description |
 |-------|-------|-------------|
 | `cache_stores.group_cache` | Group metadata | Group info lookups |
-| `cache_stores.device_cache` | Device lists | Per-user device lists |
 | `cache_stores.device_registry_cache` | Device registry | Device registry entries |
 | `cache_stores.lid_pn_cache` | LID-PN mapping | LID-to-phone bidirectional lookups |
 
@@ -732,7 +730,7 @@ let redis = Arc::new(MyRedisCacheStore::new("redis://localhost:6379"));
 let config = CacheConfig {
     cache_stores: CacheStores {
         group_cache: Some(redis.clone()),
-        device_cache: Some(redis.clone()),
+        device_registry_cache: Some(redis.clone()),
         ..Default::default()
     },
     ..Default::default()
@@ -761,7 +759,7 @@ let config = CacheConfig {
     // Disable TTL for group cache (entries only evicted by capacity)
     group_cache: CacheEntryConfig::new(None, 500),
     // Shorter TTL for device cache
-    device_cache: CacheEntryConfig::new(Some(Duration::from_secs(1800)), 3_000),
+    device_registry_cache: CacheEntryConfig::new(Some(Duration::from_secs(1800)), 3_000),
     // Enable L1 in-memory cache for sent messages (faster retry lookups)
     recent_messages: CacheEntryConfig::new(Some(Duration::from_secs(300)), 1_000),
     // Use defaults for everything else

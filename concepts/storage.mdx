@@ -1008,7 +1008,6 @@ The `CacheStores` struct controls which caches use custom backends:
 ```rust
 pub struct CacheStores {
     pub group_cache: Option<Arc<dyn CacheStore>>,
-    pub device_cache: Option<Arc<dyn CacheStore>>,
     pub device_registry_cache: Option<Arc<dyn CacheStore>>,
     pub lid_pn_cache: Option<Arc<dyn CacheStore>>,
 }
@@ -1035,7 +1034,7 @@ let bot = Bot::builder()
     .with_cache_config(CacheConfig {
         cache_stores: CacheStores {
             group_cache: Some(redis.clone()),
-            device_cache: Some(redis.clone()),
+            device_registry_cache: Some(redis.clone()),
             ..Default::default()
         },
         ..Default::default()
@@ -1079,7 +1078,7 @@ Granular patching is implemented in three areas:
 
 **Device registry** (`src/client/device_registry.rs`)
 
-When a device notification arrives, the client patches both the `device_cache` (keyed by JID, stores `Vec<Jid>`) and `device_registry_cache` (keyed by user string, stores `DeviceListRecord`) simultaneously:
+When a device notification arrives, the client patches the `device_registry_cache` (keyed by user string, stores `DeviceListRecord`):
 
 - `patch_device_add` — appends a new device JID to the cached list and persists the updated `DeviceListRecord` to the backend store
 - `patch_device_remove` — removes a device by ID using `retain`, then persists

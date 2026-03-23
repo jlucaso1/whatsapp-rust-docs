@@ -457,12 +457,40 @@ When you call `send_message` or `send_message_with_options`, the library automat
 |---|---|
 | `pin_in_chat_message` | Sets the `edit="2"` attribute on the message stanza |
 | `poll_creation_message` (v1, v2, v3) | Adds a `<meta polltype="creation"/>` child node |
+| `poll_update_message` (with vote) | Adds a `<meta polltype="vote"/>` child node |
 | `event_message` | Adds a `<meta event_type="creation"/>` child node |
+| `enc_event_response_message` | Adds a `<meta event_type="response"/>` child node |
 
 This means you can construct a raw `wa::Message` with any of these fields set and pass it directly to `send_message_with_options` — the correct protocol metadata is derived automatically. Any nodes you provide via `extra_stanza_nodes` in `SendOptions` are merged with the auto-inferred nodes.
 
 <Note>
   The `pin_message()` and `unpin_message()` convenience methods already handle this internally. Auto-detection is most useful when you build a `wa::Message` manually and send it through `send_message` or `send_message_with_options`.
+</Note>
+
+---
+
+## Decrypt-fail suppression
+
+Certain infrastructure messages set `decrypt-fail="hide"` on their `<enc>` nodes so recipients don't see "waiting for this message" placeholders when decryption fails. The library applies this automatically based on message content — you don't need to handle it manually.
+
+The following message types are marked with `decrypt-fail="hide"`:
+
+| Message type | Condition |
+|---|---|
+| `reaction_message` | Always |
+| `enc_reaction_message` | Always |
+| `pin_in_chat_message` | Always |
+| `edited_message` | Always |
+| `keep_in_chat_message` | Always |
+| `enc_event_response_message` | Always |
+| `poll_update_message` | Only when `.vote` is present |
+
+Additionally, `decrypt-fail="hide"` is applied for:
+- Messages with an `edit` attribute (except `Empty` and `AdminRevoke` — the server rejects admin revokes with this attribute)
+- Sender Key Distribution Message (SKDM) stanzas — always hidden since they are infrastructure-only
+
+<Note>
+  Wrapper messages (`ephemeral_message`, `view_once_message`, etc.) are unwrapped before checking. The `decrypt-fail` attribute is set on the inner `<enc>` node, not the outer `<message>` stanza.
 </Note>
 
 ---

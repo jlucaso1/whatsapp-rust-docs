@@ -577,114 +577,149 @@ pub struct Device {
   As of v0.4, the `whatsapp-rust-sqlite-storage` crate bundles SQLite by default via the `bundled-sqlite` feature. You no longer need SQLite installed as a system dependency. To link against a system SQLite instead, disable the default features on the crate.
 </Note>
 
-### Database Schema
+### Database schema
+
+The device table uses named columns for each field, making the schema self-documenting and reducing the risk of column mix-ups when fields are added:
 
 ```sql
--- Device table
+-- Device table (named columns, not a serialized blob)
 CREATE TABLE device (
-    device_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data BLOB NOT NULL
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lid TEXT NOT NULL,
+    pn TEXT NOT NULL,
+    registration_id INTEGER NOT NULL,
+    noise_key BLOB NOT NULL,
+    identity_key BLOB NOT NULL,
+    signed_pre_key BLOB NOT NULL,
+    signed_pre_key_id INTEGER NOT NULL,
+    signed_pre_key_signature BLOB NOT NULL,
+    adv_secret_key BLOB NOT NULL,
+    account BLOB,
+    push_name TEXT NOT NULL DEFAULT '',
+    app_version_primary INTEGER NOT NULL DEFAULT 0,
+    app_version_secondary INTEGER NOT NULL DEFAULT 0,
+    app_version_tertiary BIGINT NOT NULL DEFAULT 0,
+    app_version_last_fetched_ms BIGINT NOT NULL DEFAULT 0,
+    edge_routing_info BLOB,
+    props_hash TEXT,
+    next_pre_key_id INTEGER NOT NULL DEFAULT 0
 );
 
 -- Signal protocol tables
 CREATE TABLE identities (
-    device_id INTEGER NOT NULL,
     address TEXT NOT NULL,
     key BLOB NOT NULL,
-    PRIMARY KEY (device_id, address)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (address, device_id)
 );
 
 CREATE TABLE sessions (
-    device_id INTEGER NOT NULL,
     address TEXT NOT NULL,
     record BLOB NOT NULL,
-    PRIMARY KEY (device_id, address)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (address, device_id)
 );
 
 CREATE TABLE prekeys (
-    device_id INTEGER NOT NULL,
-    prekey_id INTEGER NOT NULL,
-    record BLOB NOT NULL,
-    uploaded BOOLEAN NOT NULL,
-    PRIMARY KEY (device_id, prekey_id)
+    id INTEGER NOT NULL,
+    key BLOB NOT NULL,
+    uploaded BOOLEAN NOT NULL DEFAULT FALSE,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (id, device_id)
 );
 
 CREATE TABLE signed_prekeys (
-    device_id INTEGER NOT NULL,
-    signed_prekey_id INTEGER NOT NULL,
+    id INTEGER NOT NULL,
     record BLOB NOT NULL,
-    PRIMARY KEY (device_id, signed_prekey_id)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (id, device_id)
 );
 
 CREATE TABLE sender_keys (
-    device_id INTEGER NOT NULL,
     address TEXT NOT NULL,
     record BLOB NOT NULL,
-    PRIMARY KEY (device_id, address)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (address, device_id)
 );
 
 -- App state sync tables
-CREATE TABLE app_state_sync_keys (
-    device_id INTEGER NOT NULL,
+CREATE TABLE app_state_keys (
     key_id BLOB NOT NULL,
     key_data BLOB NOT NULL,
-    fingerprint BLOB NOT NULL,
-    timestamp INTEGER NOT NULL,
-    PRIMARY KEY (device_id, key_id)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (key_id, device_id)
 );
 
 CREATE TABLE app_state_versions (
-    device_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    hash BLOB,
-    PRIMARY KEY (device_id, name)
+    state_data BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (name, device_id)
 );
 
 CREATE TABLE app_state_mutation_macs (
-    device_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    version INTEGER NOT NULL,
+    version BIGINT NOT NULL,
     index_mac BLOB NOT NULL,
     value_mac BLOB NOT NULL,
-    PRIMARY KEY (device_id, name, version, index_mac)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (name, index_mac, device_id)
 );
 
 -- Protocol tables
 CREATE TABLE skdm_recipients (
-    device_id INTEGER NOT NULL,
     group_jid TEXT NOT NULL,
     device_jid TEXT NOT NULL,
-    timestamp INTEGER NOT NULL,
-    PRIMARY KEY (device_id, group_jid, device_jid)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    PRIMARY KEY (group_jid, device_jid, device_id)
 );
 
-CREATE TABLE lid_pn_mappings (
-    device_id INTEGER NOT NULL,
+CREATE TABLE lid_pn_mapping (
     lid TEXT NOT NULL,
     phone_number TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
+    created_at BIGINT NOT NULL,
     learning_source TEXT NOT NULL,
-    PRIMARY KEY (device_id, lid)
+    updated_at BIGINT NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (lid, device_id)
 );
 
-CREATE TABLE device_lists (
-    device_id INTEGER NOT NULL,
-    user TEXT NOT NULL,
-    devices BLOB NOT NULL,
+CREATE TABLE base_keys (
+    address TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    base_key BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    PRIMARY KEY (address, message_id, device_id)
+);
+
+CREATE TABLE device_registry (
+    user_id TEXT NOT NULL,
+    devices_json TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
     phash TEXT,
-    PRIMARY KEY (device_id, user)
+    device_id INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    PRIMARY KEY (user_id, device_id)
+);
+
+CREATE TABLE sender_key_status (
+    group_jid TEXT NOT NULL,
+    participant TEXT NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    marked_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    PRIMARY KEY (group_jid, participant, device_id)
 );
 
 CREATE TABLE tc_tokens (
-    device_id INTEGER NOT NULL,
     jid TEXT NOT NULL,
     token BLOB NOT NULL,
-    token_timestamp INTEGER NOT NULL,
-    sender_timestamp INTEGER,
-    PRIMARY KEY (device_id, jid)
+    token_timestamp BIGINT NOT NULL,
+    sender_timestamp BIGINT,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (jid, device_id)
 );
 
 -- Sent message store for retry handling
@@ -693,7 +728,7 @@ CREATE TABLE sent_messages (
     message_id TEXT NOT NULL,
     payload BLOB NOT NULL,
     device_id INTEGER NOT NULL DEFAULT 1,
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    created_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
     PRIMARY KEY (chat_jid, message_id, device_id)
 );
 

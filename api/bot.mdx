@@ -248,7 +248,7 @@ Bot::builder()
 ```
 
 <Note>
-By default, the client automatically fetches the latest version. Only use this if you need to pin a specific version.
+By default, the client automatically fetches the latest WhatsApp Web version from `web.whatsapp.com/sw.js` on each connect and caches it for 24 hours. Use `with_version` to pin a specific version when you need deterministic behavior — for example, in integration tests or CI environments where external HTTP requests are undesirable.
 </Note>
 
 ### with_device_props

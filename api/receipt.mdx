@@ -127,7 +127,7 @@ let mut builder = NodeBuilder::new("receipt")
     .attr("id", &info.id)
     .jid_attr("to", info.source.chat.clone());
 
-if info.category == "peer" {
+if info.category == MessageCategory::Peer {
     builder = builder.attr("type", "peer_msg");
 }
 

@@ -979,31 +979,47 @@ Fetches privacy settings (last seen, profile photo, about, etc.). See [Privacy A
 ```rust
 pub async fn set_privacy_setting(
     &self,
-    category: &str,
-    value: &str,
-) -> Result<(), IqError>
+    category: PrivacyCategory,
+    value: PrivacyValue,
+) -> Result<SetPrivacySettingResponse, IqError>
 ```
 
-Sets a privacy setting for a specific category.
+Sets a privacy setting for a specific category using type-safe enums.
 
-<ParamField path="category" type="&str" required>
-  Privacy category: `"last"`, `"online"`, `"profile"`, `"status"`, `"groupadd"`, or `"readreceipts"`
+<ParamField path="category" type="PrivacyCategory" required>
+  Privacy category enum: `Last`, `Online`, `Profile`, `Status`, `GroupAdd`, `ReadReceipts`, `CallAdd`, `Messages`, or `DefenseMode`
 </ParamField>
 
-<ParamField path="value" type="&str" required>
-  Privacy value: `"all"`, `"contacts"`, `"none"`, `"contact_blacklist"`, or `"match_last_seen"`
+<ParamField path="value" type="PrivacyValue" required>
+  Privacy value enum: `All`, `Contacts`, `None`, `ContactBlacklist`, `MatchLastSeen`, `Known`, `Off`, or `OnStandard`
 </ParamField>
 
 **Example:**
 ```rust
+use whatsapp_rust::privacy_settings::{PrivacyCategory, PrivacyValue};
+
 // Hide last seen from everyone
-client.set_privacy_setting("last", "none").await?;
+client.set_privacy_setting(PrivacyCategory::Last, PrivacyValue::None).await?;
 
 // Show profile photo only to contacts
-client.set_privacy_setting("profile", "contacts").await?;
+client.set_privacy_setting(PrivacyCategory::Profile, PrivacyValue::Contacts).await?;
 ```
 
-See [Privacy API](/api/privacy) for all categories and values.
+See [Privacy API](/api/privacy) for all categories, values, and valid combinations.
+
+### set_privacy_disallowed_list
+
+```rust
+pub async fn set_privacy_disallowed_list(
+    &self,
+    category: PrivacyCategory,
+    update: DisallowedListUpdate,
+) -> Result<SetPrivacySettingResponse, IqError>
+```
+
+Updates a privacy category's disallowed list (contacts-except-specific-users mode). Only available for `Last`, `Profile`, `Status`, and `GroupAdd`.
+
+See [Privacy API](/api/privacy#set_privacy_disallowed_list) for details and examples.
 
 ### set_default_disappearing_mode
 

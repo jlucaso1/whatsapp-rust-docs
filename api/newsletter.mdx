@@ -379,8 +379,8 @@ pub struct NewsletterMessage {
     pub server_id: u64,
     /// Message timestamp (Unix seconds).
     pub timestamp: u64,
-    /// Message type ("text", "media", etc.).
-    pub message_type: String,
+    /// Message type (Text, Media, Reaction, etc.).
+    pub message_type: NewsletterMessageType,
     /// Whether the viewer is the sender.
     pub is_sender: bool,
     /// Decoded protobuf message (from plaintext bytes).
@@ -389,6 +389,27 @@ pub struct NewsletterMessage {
     pub reactions: Vec<NewsletterReactionCount>,
 }
 ```
+
+### NewsletterMessageType
+
+The type of a newsletter message. Uses a `StringEnum` for type-safe wire-protocol mapping.
+
+```rust
+pub enum NewsletterMessageType {
+    Text,          // "text"
+    Media,         // "media"
+    Reaction,      // "reaction"
+    Revoke,        // "revoke"
+    PollCreation,  // "poll_creation"
+    PollVote,      // "poll_vote"
+    Edit,          // "edit"
+    Other(String), // Unknown/future types
+}
+```
+
+**Methods:**
+- `as_str()` - Returns the wire-protocol string representation
+- `From<&str>` - Parse from wire string, unknown values become `Other(String)`
 
 ### NewsletterReactionCount
 

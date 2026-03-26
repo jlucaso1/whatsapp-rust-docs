@@ -97,7 +97,7 @@ Type-safe IQ request/response specifications:
 - **`passive`** - Passive IQ handling
 - **`prekeys`** - Prekey distribution
 - **`privacy`** - Privacy settings
-- **`props`** - Server properties
+- **`props`** - Server properties and A/B experiment configs (includes `config_codes` for well-known experiment flags)
 - **`spam_report`** - Spam reporting
 - **`tctoken`** - Temporary client tokens
 - **`usync`** - User synchronization
@@ -130,6 +130,7 @@ pub mod store;
 - **`Device`** - Core device state structure
 - **`DeviceCommand`** - State mutation commands
 - **`traits`** - Backend trait definitions (`Backend`, `SessionStore`, etc.)
+- **`ab_props`** - In-memory A/B experiment property cache (`AbPropsCache`), populated from `fetch_props()` on each connection. Features query this cache to check server-side experiment flags (e.g., privacy token attachment on group operations).
 
 See [State Management](/advanced/state-management) for the command pattern.
 

@@ -964,7 +964,36 @@ All offline sync state (counters, timing, concurrency semaphore) is fully reset 
 pub async fn fetch_props(&self) -> Result<(), IqError>
 ```
 
-Fetches account properties from WhatsApp servers.
+Fetches A/B experiment properties from WhatsApp servers and updates the in-memory `AbPropsCache`.
+
+When a stored props hash exists **and** the cache has been seeded (at least one full fetch has occurred), the request includes the hash for a delta update — the server only returns changed props. Otherwise, a full fetch is performed and all cached props are replaced.
+
+After the response is applied to the cache, the new hash (if present) is persisted for future delta requests.
+
+Features like group privacy token attachment query the `AbPropsCache` to check whether specific experiment flags are enabled. See [AB props cache](#ab-props-cache) for details.
+
+### AB props cache
+
+The client maintains an in-memory `AbPropsCache` that stores server-side A/B experiment properties. The cache is populated each time `fetch_props()` runs (automatically on connect) and is **not persisted** — props are re-fetched on every connection.
+
+Features query the cache via `client.ab_props().is_enabled(config_code)` to check whether a specific experiment flag is active. A prop is considered enabled when its value is `"1"`, `"true"`, or `"enabled"` (case-insensitive).
+
+#### Well-known config codes
+
+The following config codes control privacy token behavior on group operations:
+
+| Constant | Code | Description |
+|----------|------|-------------|
+| `PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES` | `10518` | Attach privacy tokens to all 1:1 messages |
+| `PRIVACY_TOKEN_ON_GROUP_CREATE` | `11261` | Attach privacy tokens when creating groups |
+| `PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD` | `11262` | Attach privacy tokens when adding group participants |
+| `PRIVACY_TOKEN_ONLY_CHECK_LID` | `15491` | Only resolve tokens via LID mappings (skip PN fallback) |
+
+These constants are defined in `wacore::iq::props::config_codes`.
+
+<Note>
+The AB props cache is internal to the client. You don't need to interact with it directly — the library automatically checks relevant flags when performing group operations like `create_group` and `add_participants`.
+</Note>
 
 ### fetch_privacy_settings
 

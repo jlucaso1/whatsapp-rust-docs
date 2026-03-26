@@ -274,12 +274,67 @@ pub struct PreparedGroupStanza {
 **Incremental targeting:**
 
 Rather than distributing the sender key to all group devices on every message, the client:
-1. Loads the per-device sender key map from persistent storage via `get_sender_key_devices`
+1. Loads the per-device sender key map — first checking the in-memory cache, falling back to the database via `get_sender_key_devices`
 2. Resolves all current group participant devices
 3. Computes the diff — only devices with `has_key=false` or not yet tracked receive the SKDM
 4. Passes the targeted device list to `prepare_group_stanza` via the `skdm_target_devices` parameter
 
 Location: `src/send.rs`, `src/client/sender_keys.rs`, `wacore/src/send.rs`
+
+### In-memory sender key device cache
+
+The `SenderKeyDeviceCache` provides an in-memory caching layer over the per-device sender key tracking data stored in the database. Without this cache, every group send would require a database round-trip to load the sender key device map — the cache eliminates that overhead after the first load for each group.
+
+```rust
+pub(crate) struct SenderKeyDeviceCache {
+    inner: Cache<String, Arc<SenderKeyDeviceMap>>,
+}
+```
+
+**Key design decisions:**
+
+- **Time-to-idle eviction:** The cache uses TTI semantics (default: 1 hour, 500 entries), so entries for inactive groups are automatically evicted while frequently-used groups stay cached
+- **Pre-parsed, pre-indexed maps:** Database rows are parsed into a `SenderKeyDeviceMap` struct that provides O(1) lookups by user and device ID, avoiding per-query string parsing
+- **Single-flight initialization:** The `get_or_init` method uses moka's built-in coalescing — if multiple concurrent group sends for the same group trigger a cache miss simultaneously, only one database read executes and all callers share the result
+- **Explicit invalidation:** The cache is invalidated when sender key state changes (rotation, error recovery, retry failures) so stale data is never served
+
+```rust
+// Atomic get-or-init: concurrent callers for the same group
+// share the single database read result
+let cached_map = self
+    .sender_key_device_cache
+    .get_or_init(group_jid, async {
+        let db_rows = pm.get_sender_key_devices(group_jid).await.unwrap_or_default();
+        Arc::new(SenderKeyDeviceMap::from_db_rows(&db_rows))
+    })
+    .await;
+```
+
+**`SenderKeyDeviceMap` structure:**
+
+The `SenderKeyDeviceMap` pre-parses JID strings from the database into a user-to-devices HashMap for efficient lookup:
+
+```rust
+pub(crate) struct SenderKeyDeviceMap {
+    /// user → (device_id → has_key)
+    devices: HashMap<Arc<str>, HashMap<u16, bool>>,
+    /// Users with at least one has_key=false device
+    forgotten_users: HashSet<Arc<str>>,
+}
+```
+
+**Cache invalidation points:**
+
+| Event | Action |
+|-------|--------|
+| Sender key rotation (`rotateKey`) | Invalidate group entry |
+| `NoSenderKeyState` error during send | Invalidate group entry |
+| Retry failure for a group message | Invalidate group entry |
+| Server rejects group stanza | Invalidate group entry |
+
+You can tune the cache capacity and TTI via the `sender_key_devices_cache` field in [`CacheConfig`](/api/bot#cache-configuration-reference).
+
+Location: `src/sender_key_device_cache.rs`, `src/send.rs`
 
 ## Cryptographic Primitives
 

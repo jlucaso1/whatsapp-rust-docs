@@ -687,9 +687,10 @@ pub struct CacheEntryConfig {
 | `recent_messages` | 5 minutes | 0 (disabled) | Optional L1 in-memory cache for sent messages (retry support) |
 | `message_retry_counts` | 5 minutes | 1,000 | Retry count tracking |
 | `pdo_pending_requests` | 30 seconds | 500 | PDO pending requests |
+| `sender_key_devices_cache` | 1 hour (TTI) | 500 | Per-group SKDM distribution state |
 
 <Note>
-The `lid_pn_cache` uses time-to-idle (TTI) semantics — entries expire after being idle for the timeout period. All other caches use time-to-live (TTL) semantics.
+The `lid_pn_cache` and `sender_key_devices_cache` use time-to-idle (TTI) semantics — entries expire after being idle for the timeout period. All other caches use time-to-live (TTL) semantics.
 </Note>
 
 <Note>

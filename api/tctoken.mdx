@@ -1,9 +1,11 @@
 ---
 title: TC Token
-description: Manage trusted contact privacy tokens
+description: Manage trusted contact privacy tokens and cstoken fallback
 ---
 
 The `TcToken` feature provides APIs for issuing and managing trusted contact privacy tokens (TC tokens). These tokens are used for privacy-gated operations like fetching profile pictures.
+
+The library also supports **cstoken** (client-side token / NCT) as a fallback when no TC token exists for a recipient. This matches WhatsApp Web's `MsgCreateFanoutStanza.js` behavior.
 
 ## Access
 
@@ -150,10 +152,17 @@ pub struct TcTokenEntry {
 
 ## Automatic usage
 
-The library automatically uses TC tokens when making privacy-gated requests:
+The library automatically includes privacy tokens in outgoing 1:1 message stanzas using a fallback chain that matches WhatsApp Web:
+
+1. **tctoken** -- Use the stored trusted contact token if it exists and hasn't expired
+2. **cstoken** -- Compute an HMAC-SHA256 fallback using the NCT salt and recipient LID (for first-contact scenarios)
+3. **No token** -- Send without a token if neither is available (the server may return a 463 error)
 
 ```rust
-// TC tokens are automatically included when fetching profile pictures
+// TC tokens are automatically included when sending messages
+client.send_message(jid, message).await?;
+
+// And when fetching profile pictures
 let picture = client.contacts().get_profile_picture(&jid, true).await?;
 ```
 
@@ -161,6 +170,37 @@ You typically don't need to manage tokens manually unless:
 - Pre-issuing tokens for a batch of contacts
 - Pruning expired tokens to save storage
 - Debugging token-related issues
+
+## cstoken (NCT fallback)
+
+When no valid TC token exists for a recipient, the library falls back to a **cstoken** (client-side token). This is computed using an NCT salt that is provisioned by the server via app state sync.
+
+### How it works
+
+1. The server provides an NCT salt through the `nct_salt_sync` app state mutation (or via history sync during initial pairing)
+2. The salt is stored in the `Device` struct as `nct_salt`
+3. When sending a message to a recipient with no stored TC token, the library computes `HMAC-SHA256(nct_salt, recipient_lid)` and includes it as a `<cstoken>` stanza child
+
+### Wire format
+
+```xml
+<!-- TC token (preferred) -->
+<tctoken><!-- raw token bytes --></tctoken>
+
+<!-- CS token (NCT fallback) -->
+<cstoken><!-- HMAC-SHA256(nct_salt, recipient_lid) --></cstoken>
+```
+
+### NCT salt provisioning
+
+The NCT salt is delivered through two channels:
+
+- **App state sync** -- The `nct_salt_sync` mutation in the `RegularHigh` syncd collection sets or removes the salt. This is the authoritative source.
+- **History sync** -- During initial pairing, the salt may be included in the history sync payload. This is a backfill-only source and won't overwrite a salt already set via app state sync.
+
+<Note>
+The cstoken fallback is fully automatic. You don't need to manage the NCT salt or compute tokens manually. The library handles salt storage, LID resolution, and token computation transparently during message sending.
+</Note>
 
 ## Token lifecycle
 
@@ -177,14 +217,25 @@ sequenceDiagram
     Client->>Backend: Store tokens
     Client-->>App: Vec<ReceivedTcToken>
     
-    Note over Client,Backend: Later, when fetching profile...
+    Note over Client,Backend: Later, when sending a message...
     
-    App->>Client: get_profile_picture(jid1)
-    Client->>Backend: Get token for jid1
-    Backend-->>Client: TcTokenEntry
-    Client->>Server: Request with token
-    Server-->>Client: Profile picture
-    Client-->>App: ProfilePicture
+    App->>Client: send_message(jid1, msg)
+    Client->>Backend: Get tc_token for jid1
+    
+    alt TC token exists and not expired
+        Backend-->>Client: TcTokenEntry
+        Client->>Server: Message with <tctoken>
+    else No TC token, NCT salt available
+        Backend-->>Client: None
+        Client->>Client: HMAC-SHA256(nct_salt, recipient_lid)
+        Client->>Server: Message with <cstoken>
+    else No TC token, no NCT salt
+        Backend-->>Client: None
+        Client->>Server: Message without token
+    end
+    
+    Server-->>Client: Ack
+    Client-->>App: message_id
 ```
 
 ## Expiration

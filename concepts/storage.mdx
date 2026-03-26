@@ -562,6 +562,10 @@ pub struct Device {
     pub props_hash: Option<String>,          // A/B experiment tracking
     #[serde(default)]
     pub next_pre_key_id: u32,               // Monotonic counter for prekey IDs
+    #[serde(default)]
+    pub nct_salt: Option<Vec<u8>>,           // NCT salt for cstoken computation
+    #[serde(skip)]
+    pub nct_salt_sync_seen: bool,            // Runtime flag: authoritative sync seen
 }
 ```
 
@@ -602,7 +606,8 @@ CREATE TABLE device (
     app_version_last_fetched_ms BIGINT NOT NULL DEFAULT 0,
     edge_routing_info BLOB,
     props_hash TEXT,
-    next_pre_key_id INTEGER NOT NULL DEFAULT 0
+    next_pre_key_id INTEGER NOT NULL DEFAULT 0,
+    nct_salt BLOB
 );
 
 -- Signal protocol tables
@@ -774,6 +779,8 @@ pub enum DeviceCommand {
     SetPlatform(String),
     SetAccount(Option<wa::AdvSignedDeviceIdentity>),
     SetNextPreKeyId(u32),
+    SetNctSalt(Option<Vec<u8>>),
+    SetNctSaltFromHistorySync(Vec<u8>),
     // ... more commands
 }
 ```

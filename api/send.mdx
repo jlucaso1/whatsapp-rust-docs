@@ -551,6 +551,24 @@ Additionally, `decrypt-fail="hide"` is applied for:
 
 ---
 
+## Privacy token attachment
+
+When you send a 1:1 message (not to groups, newsletters, or yourself), the library automatically attaches a privacy token to the outgoing stanza. This follows WhatsApp Web's `MsgCreateFanoutStanza.js` fallback chain:
+
+| Priority | Token type | Condition | Stanza node |
+|---|---|---|---|
+| 1 | **tctoken** | Stored TC token exists and hasn't expired (within 28-day rolling window) | `<tctoken>` |
+| 2 | **cstoken** | No valid TC token, but NCT salt and recipient LID are available | `<cstoken>` |
+| 3 | None | Neither token nor salt available | No token node |
+
+After sending, if the TC token bucket boundary has been crossed (7-day buckets), the library automatically issues a new TC token to the recipient in the background.
+
+<Note>
+Privacy token selection is fully automatic. The library resolves the recipient's LID (using the LID-PN cache), looks up stored TC tokens, and falls back to cstoken computation when needed. See the [TC Token API](/api/tctoken) for details on the token lifecycle and NCT salt provisioning.
+</Note>
+
+---
+
 ## Stanza types
 
 When you send a message, the library automatically determines two protocol-level type attributes based on the protobuf message content. You don't need to set these manually, but understanding them can help with debugging.

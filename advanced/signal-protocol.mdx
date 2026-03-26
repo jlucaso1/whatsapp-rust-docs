@@ -244,29 +244,42 @@ pub async fn group_decrypt(
   Group decryption maintains up to MAX_FORWARD_JUMPS (25000) cached message keys per sender. This prevents resource exhaustion attacks but limits tolerance for extreme out-of-order delivery.
 </Warning>
 
-### Deferred SKDM recipient caching
+### Per-device sender key tracking
 
-To avoid resending Sender Key Distribution Messages on every group message, the client tracks which devices have already received the sender key for each group. This cache is stored in the `skdm_recipients` table (see [Storage - ProtocolStore](/concepts/storage#protocolstore)).
+To avoid resending Sender Key Distribution Messages on every group message, the client tracks sender key distribution status **per device** for each group. This uses a unified `sender_key_devices` table (see [Storage - ProtocolStore](/concepts/storage#protocolstore)) that matches WhatsApp Web's `participant.senderKey Map<deviceJid, boolean>` model — a single boolean per device per group indicating whether that device has a valid sender key (`true`) or needs fresh SKDM distribution (`false`).
 
-The cache update is **deferred until after the server acknowledges** the message stanza. This matches WhatsApp Web's behavior where `markHasSenderKey()` is only called after the server confirms receipt.
+The tracking update is **deferred until after the server acknowledges** the message stanza. This matches WhatsApp Web's behavior where `markHasSenderKey()` is only called after the server confirms receipt.
 
-**Why deferred?** If the cache were updated immediately after building the stanza (but before sending), a network failure between stanza build and send would leave stale entries — devices would be marked as having the sender key when they never actually received it. Subsequent messages would skip SKDM for those devices, causing decryption failures.
+**Why deferred?** If the tracking were updated immediately after building the stanza (but before sending), a network failure between stanza build and send would leave stale entries — devices would be marked as having the sender key when they never actually received it. Subsequent messages would skip SKDM for those devices, causing decryption failures.
+
+**`PreparedGroupStanza` return value:**
+
+`prepare_group_stanza` returns a `PreparedGroupStanza` struct containing the stanza `node` and a `skdm_devices: Vec<Jid>` field listing exactly which devices received SKDM in this stanza. This eliminates the need for callers to re-resolve devices after sending, closing a race window where the device list could change between stanza preparation and post-ACK tracking update.
+
+```rust
+pub struct PreparedGroupStanza {
+    pub node: Node,
+    /// Devices that received SKDM in this stanza. Empty when no SKDM was distributed.
+    pub skdm_devices: Vec<Jid>,
+}
+```
 
 **Implementation:**
 
-- **Group path:** An `SkdmUpdate` struct captures the deferred update data (`group_jid`, `devices`, `is_full_distribution`, `participants`) during stanza preparation. The update is only applied after `send_node()` succeeds.
-- **Status path:** A late-init boolean tracks whether full distribution occurred. The SKDM recipient cache is only updated after the status stanza is successfully sent.
-- **Error recovery:** If `prepare_group_stanza` fails with `NoSenderKeyState`, all cached SKDM recipients for that group are cleared and the send is retried with full distribution.
+- **Group path:** After `send_node()` succeeds, the caller uses the `skdm_devices` list from `PreparedGroupStanza` to call `set_sender_key_status(group, devices, true)`. No re-resolution needed.
+- **Status path:** A late-init boolean tracks whether full distribution occurred. The sender key tracking is only updated after the status stanza is successfully sent.
+- **Error recovery:** If `prepare_group_stanza` fails with `NoSenderKeyState`, all sender key device tracking for that group is cleared and the send is retried with full distribution.
+- **Sender key rotation:** On `rotateKey`, the Signal sender key is also deleted for forward secrecy (matching WhatsApp Web's `deleteGroupSenderKeyInfo`), and all device tracking is cleared via `clear_sender_key_devices`.
 
 **Incremental targeting:**
 
 Rather than distributing the sender key to all group devices on every message, the client:
-1. Loads known recipients from persistent storage
+1. Loads the per-device sender key map from persistent storage via `get_sender_key_devices`
 2. Resolves all current group participant devices
-3. Computes the diff — only new devices receive the SKDM
-4. Merges any "forget marks" from retry handling (devices that need fresh SKDMs due to prior failures)
+3. Computes the diff — only devices with `has_key=false` or not yet tracked receive the SKDM
+4. Passes the targeted device list to `prepare_group_stanza` via the `skdm_target_devices` parameter
 
-Location: `src/send.rs`, `src/client/sender_keys.rs`
+Location: `src/send.rs`, `src/client/sender_keys.rs`, `wacore/src/send.rs`
 
 ## Cryptographic Primitives
 

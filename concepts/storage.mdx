@@ -383,13 +383,12 @@ pub struct AppStateSyncKey {
 ```rust
 #[async_trait]
 pub trait ProtocolStore: Send + Sync {
-    // SKDM Tracking (Sender Key Distribution Messages)
-    // These are updated only AFTER the server ACKs the message stanza,
+    // Per-Device Sender Key Tracking (matches WA Web's participant.senderKey Map)
+    // Updated only AFTER the server ACKs the message stanza,
     // preventing stale entries from network failures mid-send.
-    // See: Signal Protocol - Deferred SKDM recipient caching
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>>;
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()>;
-    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
+    async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>>;
+    async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()>;
+    async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
     // LID-PN Mapping (Long-term ID to Phone Number)
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>>;
@@ -405,10 +404,6 @@ pub trait ProtocolStore: Send + Sync {
     // Device Registry
     async fn update_device_list(&self, record: DeviceListRecord) -> Result<()>;
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
-
-    // Sender Key Status (Lazy Deletion)
-    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()>;
-    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>>;
 
     // TcToken Storage (Trusted Contact Tokens)
     async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>>;
@@ -672,11 +667,13 @@ CREATE TABLE app_state_mutation_macs (
 );
 
 -- Protocol tables
-CREATE TABLE skdm_recipients (
+-- Unified per-device sender key tracking (matches WA Web's participant.senderKey Map)
+CREATE TABLE sender_key_devices (
     group_jid TEXT NOT NULL,
     device_jid TEXT NOT NULL,
+    has_key INTEGER NOT NULL DEFAULT 0,
     device_id INTEGER NOT NULL DEFAULT 1,
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     PRIMARY KEY (group_jid, device_jid, device_id)
 );
 
@@ -707,14 +704,6 @@ CREATE TABLE device_registry (
     device_id INTEGER NOT NULL DEFAULT 1,
     updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     PRIMARY KEY (user_id, device_id)
-);
-
-CREATE TABLE sender_key_status (
-    group_jid TEXT NOT NULL,
-    participant TEXT NOT NULL,
-    device_id INTEGER NOT NULL DEFAULT 1,
-    marked_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    PRIMARY KEY (group_jid, participant, device_id)
 );
 
 CREATE TABLE tc_tokens (

@@ -159,19 +159,22 @@ async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Resu
 
 Handles WhatsApp protocol alignment and tracking.
 
-### SKDM Tracking
+### Per-device sender key tracking
 
-Tracks which devices have received Sender Key Distribution Messages in groups:
+Tracks sender key distribution status per device in groups, matching WhatsApp Web's `participant.senderKey Map<deviceJid, boolean>` model. Each device has a boolean indicating whether it holds a valid sender key (`true`) or needs a fresh SKDM (`false`).
 
 ```rust
-/// Get device JIDs that have received SKDM for a group
-async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>>;
+/// Get sender key distribution status for all known devices in a group.
+/// Returns (device_jid_string, has_key) pairs.
+async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>>;
 
-/// Record devices that have received SKDM for a group
-async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()>;
+/// Set sender key status for devices. Use has_key=true after successful
+/// SKDM distribution (WA Web: markHasSenderKey), or has_key=false to mark
+/// devices as needing fresh SKDM (WA Web: markForgetSenderKey).
+async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()>;
 
-/// Clear SKDM recipients for a group (call when sender key is rotated)
-async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
+/// Clear all sender key device tracking for a group (on sender key rotation).
+async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 ```
 
 ### LID-PN Mapping
@@ -218,19 +221,6 @@ async fn update_device_list(&self, record: DeviceListRecord) -> Result<()>;
 
 /// Get all known devices for a user
 async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
-```
-
-### Sender Key Status
-
-Lazy deletion tracking for sender keys:
-
-```rust
-/// Mark a participant's sender key as needing regeneration for a group
-async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()>;
-
-/// Get participants that need fresh SKDM (marked for forget)
-/// Consumes the marks (deletes them after reading)
-async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>>;
 ```
 
 ### TcToken Storage
@@ -391,7 +381,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let version = backend.get_version("regular").await?;
     
     // ProtocolStore
-    let devices = backend.get_skdm_recipients("group@g.us").await?;
+    let devices = backend.get_sender_key_devices("group@g.us").await?;
     
     // DeviceStore
     if backend.exists().await? {

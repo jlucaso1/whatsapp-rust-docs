@@ -939,6 +939,10 @@ Returns `true` if history sync is currently being skipped.
 
 The client automatically manages offline message sync when reconnecting. During sync, message processing is restricted to sequential mode (1 concurrent task) to preserve ordering.
 
+### Semaphore transition safety
+
+When offline sync completes, the concurrency semaphore is swapped from 1 permit to 64 permits. Tasks that were already waiting on the old semaphore use a **generation-checked re-acquire loop** to safely transition — they detect the swap via an atomic generation counter, drop the stale permit, and re-acquire from the new semaphore. This prevents `pkmsg` messages (which carry SKDM for group decryption) from being silently dropped during the transition. See [Concurrency gating](/concepts/architecture#offline-sync) for details.
+
 ### Timeout fallback
 
 If the server advertises offline messages but never completes delivery, a 60-second timeout ensures startup is not blocked indefinitely. On timeout:

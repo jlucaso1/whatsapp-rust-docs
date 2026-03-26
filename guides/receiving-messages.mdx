@@ -318,6 +318,10 @@ Exceptions where `skmsg` is still processed even without successful session decr
   This matches WhatsApp Web's `canDecryptNext` pattern. It prevents unnecessary retry receipts for `skmsg` nodes that can never succeed without the SKDM.
 </Note>
 
+<Warning>
+  Because `pkmsg` messages carry SKDM, silently dropping a `pkmsg` during processing causes all subsequent `skmsg` messages from that sender to fail with `NoSenderKeyState`. The client uses a generation-checked re-acquire loop during the offline-to-online semaphore transition to ensure `pkmsg` messages are never dropped. See [Concurrency gating](/concepts/architecture#offline-sync) for details on how this works.
+</Warning>
+
 ### Decrypt-fail mode
 
 Each incoming message has a `decrypt_fail_mode` attribute parsed from the `<enc>` nodes:

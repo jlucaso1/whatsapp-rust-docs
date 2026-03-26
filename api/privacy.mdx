@@ -3,15 +3,17 @@ title: Privacy
 description: Privacy settings management - fetch, update, and configure account privacy
 ---
 
-The privacy API allows you to fetch and update account-level privacy settings, such as who can see your last seen, profile photo, about text, and online status.
+The privacy API allows you to fetch and update account-level privacy settings, such as who can see your last seen, profile photo, about text, and online status. All methods use type-safe enums for categories and values.
 
 ## Access
 
 Privacy operations are available directly on the `Client`:
 
 ```rust
+use whatsapp_rust::privacy_settings::{PrivacyCategory, PrivacyValue};
+
 let settings = client.fetch_privacy_settings().await?;
-client.set_privacy_setting("last", "contacts").await?;
+client.set_privacy_setting(PrivacyCategory::Last, PrivacyValue::Contacts).await?;
 ```
 
 ## Methods
@@ -29,6 +31,8 @@ pub async fn fetch_privacy_settings(&self) -> Result<PrivacySettingsResponse, Iq
 
 **Example:**
 ```rust
+use whatsapp_rust::privacy_settings::{PrivacyCategory, PrivacyValue};
+
 let response = client.fetch_privacy_settings().await?;
 
 for setting in &response.settings {
@@ -36,8 +40,6 @@ for setting in &response.settings {
 }
 
 // Look up a specific category
-use whatsapp_rust::privacy_settings::PrivacyCategory;
-
 if let Some(value) = response.get_value(&PrivacyCategory::Last) {
     println!("Last seen: {:?}", value);
 }
@@ -50,28 +52,92 @@ Update a specific privacy setting.
 ```rust
 pub async fn set_privacy_setting(
     &self,
-    category: &str,
-    value: &str,
-) -> Result<(), IqError>
+    category: PrivacyCategory,
+    value: PrivacyValue,
+) -> Result<SetPrivacySettingResponse, IqError>
 ```
 
 **Parameters:**
-- `category` - Privacy category string (see `PrivacyCategory` below)
-- `value` - Privacy value string (see `PrivacyValue` below)
+- `category` - A `PrivacyCategory` enum variant
+- `value` - A `PrivacyValue` enum variant (must be valid for the category)
+
+**Returns:**
+- `SetPrivacySettingResponse` - Contains an optional `dhash` field (present only for `ContactBlacklist` operations)
 
 **Example:**
 ```rust
+use whatsapp_rust::privacy_settings::{PrivacyCategory, PrivacyValue};
+
 // Hide last seen from everyone
-client.set_privacy_setting("last", "none").await?;
+client.set_privacy_setting(PrivacyCategory::Last, PrivacyValue::None).await?;
 
 // Show profile photo only to contacts
-client.set_privacy_setting("profile", "contacts").await?;
+client.set_privacy_setting(PrivacyCategory::Profile, PrivacyValue::Contacts).await?;
 
 // Allow everyone to add you to groups
-client.set_privacy_setting("groupadd", "all").await?;
+client.set_privacy_setting(PrivacyCategory::GroupAdd, PrivacyValue::All).await?;
 
 // Disable read receipts
-client.set_privacy_setting("readreceipts", "none").await?;
+client.set_privacy_setting(PrivacyCategory::ReadReceipts, PrivacyValue::None).await?;
+
+// Restrict calls to known contacts only
+client.set_privacy_setting(PrivacyCategory::CallAdd, PrivacyValue::Known).await?;
+```
+
+<Note>
+Each `PrivacyCategory` only accepts specific `PrivacyValue` variants. See the [valid combinations table](#valid-category-value-combinations) below.
+</Note>
+
+### set_privacy_disallowed_list
+
+Update a privacy category's disallowed list (contacts-except-specific-users mode). Only available for categories that support `ContactBlacklist`: `Last`, `Profile`, `Status`, and `GroupAdd`.
+
+```rust
+pub async fn set_privacy_disallowed_list(
+    &self,
+    category: PrivacyCategory,
+    update: DisallowedListUpdate,
+) -> Result<SetPrivacySettingResponse, IqError>
+```
+
+**Parameters:**
+- `category` - Must be `Last`, `Profile`, `Status`, or `GroupAdd`
+- `update` - A `DisallowedListUpdate` containing the `dhash` and user entries to add/remove
+
+**Returns:**
+- `SetPrivacySettingResponse` - Contains the updated `dhash` for conflict detection
+
+**Example:**
+```rust
+use whatsapp_rust::privacy_settings::{
+    PrivacyCategory, DisallowedListUpdate, DisallowedListUserEntry, DisallowedListAction,
+};
+
+// First, set the category to contact_blacklist mode
+client.set_privacy_setting(
+    PrivacyCategory::Last,
+    PrivacyValue::ContactBlacklist,
+).await?;
+
+// Then update the disallowed list
+let update = DisallowedListUpdate {
+    dhash: "current_hash".to_string(), // from previous response
+    users: vec![
+        DisallowedListUserEntry {
+            action: DisallowedListAction::Add,
+            jid: blocked_user_lid,
+            pn_jid: Some(blocked_user_pn),
+        },
+    ],
+};
+
+let response = client.set_privacy_disallowed_list(
+    PrivacyCategory::Last,
+    update,
+).await?;
+
+// Save the new dhash for future updates
+let new_dhash = response.dhash;
 ```
 
 ### set_default_disappearing_mode
@@ -105,6 +171,8 @@ This sets the default for **new** chats only. Existing chats keep their current 
 
 ### PrivacyCategory
 
+Controls which privacy setting is being read or written. Each category maps to a wire-protocol string value.
+
 ```rust
 pub enum PrivacyCategory {
     Last,           // "last" — Last seen visibility
@@ -113,11 +181,16 @@ pub enum PrivacyCategory {
     Status,         // "status" — Status/story visibility
     GroupAdd,       // "groupadd" — Who can add you to groups
     ReadReceipts,   // "readreceipts" — Read receipt visibility
-    Other(String),  // Unknown/custom category
+    CallAdd,        // "calladd" — Who can call you
+    Messages,       // "messages" — Who can message you
+    DefenseMode,    // "defense" — Defense mode configuration
+    Other(String),  // Unknown/future category
 }
 ```
 
 ### PrivacyValue
+
+The value assigned to a privacy category.
 
 ```rust
 pub enum PrivacyValue {
@@ -126,9 +199,28 @@ pub enum PrivacyValue {
     None,             // "none" — Not visible to anyone
     ContactBlacklist, // "contact_blacklist" — Contacts except specific list
     MatchLastSeen,    // "match_last_seen" — Match the other person's setting
-    Other(String),    // Unknown/custom value
+    Known,            // "known" — Known contacts (for calls)
+    Off,              // "off" — Feature disabled (defense mode)
+    OnStandard,       // "on_standard" — Standard mode (defense mode)
+    Other(String),    // Unknown/future value
 }
 ```
+
+### Valid category-value combinations
+
+Not all values are valid for every category. Use `PrivacyCategory::is_valid_value()` to check at runtime.
+
+| Category | Valid values |
+| --- | --- |
+| `Last` | `All`, `Contacts`, `ContactBlacklist`, `None` |
+| `Online` | `All`, `MatchLastSeen` |
+| `Profile` | `All`, `Contacts`, `ContactBlacklist`, `None` |
+| `Status` | `All`, `Contacts`, `ContactBlacklist`, `None` |
+| `GroupAdd` | `All`, `Contacts`, `ContactBlacklist`, `None` |
+| `ReadReceipts` | `All`, `None` |
+| `CallAdd` | `All`, `Known`, `Contacts` |
+| `Messages` | `All`, `Contacts` |
+| `DefenseMode` | `Off`, `OnStandard` |
 
 ### PrivacySetting
 
@@ -151,6 +243,46 @@ pub struct PrivacySettingsResponse {
 - `get(&self, category: &PrivacyCategory) -> Option<&PrivacySetting>` - Look up a setting by category
 - `get_value(&self, category: &PrivacyCategory) -> Option<&PrivacyValue>` - Look up a value directly
 
+### SetPrivacySettingResponse
+
+```rust
+pub struct SetPrivacySettingResponse {
+    pub dhash: Option<String>,
+}
+```
+
+The `dhash` field is populated when setting a `ContactBlacklist` value or updating a disallowed list. Use it for conflict detection on subsequent updates.
+
+### DisallowedListUpdate
+
+Used with `set_privacy_disallowed_list` to add or remove users from a category's disallowed list.
+
+```rust
+pub struct DisallowedListUpdate {
+    pub dhash: String,
+    pub users: Vec<DisallowedListUserEntry>,
+}
+```
+
+### DisallowedListUserEntry
+
+```rust
+pub struct DisallowedListUserEntry {
+    pub action: DisallowedListAction,
+    pub jid: Jid,
+    pub pn_jid: Option<Jid>,
+}
+```
+
+### DisallowedListAction
+
+```rust
+pub enum DisallowedListAction {
+    Add,    // "add" — Add user to disallowed list (default)
+    Remove, // "remove" — Remove user from disallowed list
+}
+```
+
 ## Common patterns
 
 ### Fetch and display all settings
@@ -167,6 +299,9 @@ let categories = [
     PrivacyCategory::Status,
     PrivacyCategory::GroupAdd,
     PrivacyCategory::ReadReceipts,
+    PrivacyCategory::CallAdd,
+    PrivacyCategory::Messages,
+    PrivacyCategory::DefenseMode,
 ];
 
 for category in &categories {
@@ -180,12 +315,31 @@ for category in &categories {
 ### Maximum privacy configuration
 
 ```rust
-client.set_privacy_setting("last", "none").await?;
-client.set_privacy_setting("online", "match_last_seen").await?;
-client.set_privacy_setting("profile", "contacts").await?;
-client.set_privacy_setting("status", "contacts").await?;
-client.set_privacy_setting("groupadd", "contacts").await?;
-client.set_privacy_setting("readreceipts", "none").await?;
+use whatsapp_rust::privacy_settings::{PrivacyCategory, PrivacyValue};
+
+client.set_privacy_setting(PrivacyCategory::Last, PrivacyValue::None).await?;
+client.set_privacy_setting(PrivacyCategory::Online, PrivacyValue::MatchLastSeen).await?;
+client.set_privacy_setting(PrivacyCategory::Profile, PrivacyValue::Contacts).await?;
+client.set_privacy_setting(PrivacyCategory::Status, PrivacyValue::Contacts).await?;
+client.set_privacy_setting(PrivacyCategory::GroupAdd, PrivacyValue::Contacts).await?;
+client.set_privacy_setting(PrivacyCategory::ReadReceipts, PrivacyValue::None).await?;
+client.set_privacy_setting(PrivacyCategory::CallAdd, PrivacyValue::Contacts).await?;
+client.set_privacy_setting(PrivacyCategory::Messages, PrivacyValue::Contacts).await?;
+```
+
+### Validate before setting
+
+```rust
+use whatsapp_rust::privacy_settings::{PrivacyCategory, PrivacyValue};
+
+let category = PrivacyCategory::Online;
+let value = PrivacyValue::None;
+
+if category.is_valid_value(&value) {
+    client.set_privacy_setting(category, value).await?;
+} else {
+    eprintln!("Invalid value for category");
+}
 ```
 
 ## See also

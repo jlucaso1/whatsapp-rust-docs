@@ -548,7 +548,7 @@ pub enum DecryptFailMode {
 **`DecryptFailMode`** is determined by the `decrypt-fail` attribute on incoming `<enc>` nodes. If any `<enc>` node has `decrypt-fail="hide"`, the entire message uses `Hide` mode.
 
 - **`Show`** — Default. The application should display a "waiting for this message" placeholder. Used for regular user-visible messages.
-- **`Hide`** — The application should silently discard the failure. Used for infrastructure messages (reactions, poll votes, pin changes, edit messages, event responses, and SKDM stanzas) that don't need user-visible placeholders.
+- **`Hide`** — The application should silently discard the failure. Used for infrastructure messages (reactions, poll votes, pin changes, edit messages, event responses, message history notices, secret encrypted event/poll edits, certain protocol messages, and SKDM stanzas) that don't need user-visible placeholders.
 
 See [Decrypt-fail suppression](/api/send#decrypt-fail-suppression) for the full list of message types that set this attribute on outgoing stanzas.
 

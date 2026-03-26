@@ -460,6 +460,7 @@ When you call `send_message` or `send_message_with_options`, the library automat
 | `poll_update_message` (with vote) | Adds a `<meta polltype="vote"/>` child node |
 | `event_message` | Adds a `<meta event_type="creation"/>` child node |
 | `enc_event_response_message` | Adds a `<meta event_type="response"/>` child node |
+| `secret_encrypted_message` with `SecretEncType::EventEdit` | Adds a `<meta event_type="edit"/>` child node |
 
 This means you can construct a raw `wa::Message` with any of these fields set and pass it directly to `send_message_with_options` — the correct protocol metadata is derived automatically. Any nodes you provide via `extra_stanza_nodes` in `SendOptions` are merged with the auto-inferred nodes.
 
@@ -535,6 +536,10 @@ The following message types are marked with `decrypt-fail="hide"`:
 | `keep_in_chat_message` | Always |
 | `enc_event_response_message` | Always |
 | `poll_update_message` | Only when `.vote` is present |
+| `message_history_notice` | Always |
+| `secret_encrypted_message` | Only when `SecretEncType` is `EventEdit` or `PollEdit` |
+| `bot_invoke_message` | Only when the inner `protocol_message` has type `RequestWelcomeMessage` |
+| `protocol_message` | When type is `EphemeralSyncResponse`, `RequestWelcomeMessage`, or `GroupMemberLabelChange`, or when `edited_message` is present |
 
 Additionally, `decrypt-fail="hide"` is applied for:
 - Messages with an `edit` attribute (except `Empty` and `AdminRevoke` — the server rejects admin revokes with this attribute)
@@ -556,10 +561,11 @@ The `type` attribute on the outer `<message>` XML node is determined by `stanza_
 
 | Stanza type | Message types |
 |---|---|
-| `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `extended_text_message` (without `matched_text`) |
+| `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `extended_text_message` (without `matched_text`), `secret_encrypted_message` with `SecretEncType::MessageEdit`, `poll_result_snapshot_message`, `poll_result_snapshot_message_v3` |
 | `"media"` | `image_message`, `video_message`, `audio_message`, `document_message`, `sticker_message`, `location_message`, `contact_message`, `extended_text_message` (with `matched_text`), and all other media types |
 | `"reaction"` | `reaction_message`, `enc_reaction_message` |
-| `"poll"` | `poll_creation_message`, `poll_creation_message_v2`, `poll_creation_message_v3`, `poll_update_message` |
+| `"poll"` | `poll_creation_message`, `poll_creation_message_v2`, `poll_creation_message_v3`, `poll_creation_message_v5`, `poll_update_message`, `secret_encrypted_message` with `SecretEncType::PollEdit` |
+| `"event"` | `event_message`, `enc_event_response_message`, `secret_encrypted_message` with `SecretEncType::EventEdit` |
 
 ### Encrypted media type
 

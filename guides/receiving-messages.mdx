@@ -323,7 +323,7 @@ Exceptions where `skmsg` is still processed even without successful session decr
 Each incoming message has a `decrypt_fail_mode` attribute parsed from the `<enc>` nodes:
 
 - **`DecryptFailMode::Show`** — the recipient should show a "waiting for this message" placeholder in the chat
-- **`DecryptFailMode::Hide`** — the message should be silently hidden on failure (used for infrastructure messages like reactions, poll votes, and pin changes)
+- **`DecryptFailMode::Hide`** — the message should be silently hidden on failure (used for infrastructure messages like reactions, poll votes, pin changes, secret encrypted event/poll edits, message history notices, and certain protocol messages)
 
 If any `<enc>` node in the stanza has `decrypt-fail="hide"`, the entire message uses `Hide` mode. See [Decrypt-fail suppression](/api/send#decrypt-fail-suppression) for which outgoing message types set this attribute.
 

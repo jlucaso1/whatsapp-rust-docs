@@ -1386,7 +1386,16 @@ Sets passive mode. When `false` (active), the server starts sending offline mess
 pub async fn send_digest_key_bundle(&self) -> Result<(), IqError>
 ```
 
-Sends Signal Protocol prekey bundle digest to the server.
+Validates that the server's copy of the Signal Protocol key bundle matches local keys by querying a digest endpoint and comparing SHA-1 hashes. This matches WhatsApp Web's `WAWebDigestKeyJob.digestKey()` flow.
+
+**Behavior:**
+
+- Queries the server for the current key bundle digest (identity key, signed pre-key, pre-key IDs, and a SHA-1 hash)
+- If the server returns **404** (no record), triggers a full pre-key re-upload
+- On success, loads local keys, computes the same SHA-1 digest, and compares
+- Hash mismatches or missing keys are logged but do not trigger re-upload — only 404 does
+
+See [Signal Protocol - Digest key validation](/advanced/signal-protocol#digest-key-validation) for the wire format and detailed validation process.
 
 ---
 

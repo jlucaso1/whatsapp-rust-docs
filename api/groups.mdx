@@ -140,6 +140,8 @@ pub async fn create_group(
 **Returns:**
 - `CreateGroupResult` with `gid: Jid` field
 
+When the `PRIVACY_TOKEN_ON_GROUP_CREATE` AB prop is enabled, the library automatically resolves and attaches privacy tokens (`tc_token`) to each participant during group creation. This is handled internally — you don't need to manage tokens yourself.
+
 **Example:**
 ```rust
 use whatsapp_rust::features::groups::{GroupCreateOptions, GroupParticipantOptions};
@@ -243,6 +245,8 @@ pub async fn add_participants(
 
 **Returns:**
 - `Vec<ParticipantChangeResponse>` - Result for each participant
+
+When the `PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD` AB prop is enabled, the library automatically resolves and attaches privacy tokens (`tc_token`) to each participant. This is handled internally — you don't need to manage tokens yourself.
 
 **Example:**
 ```rust
@@ -775,7 +779,7 @@ pub enum MembershipApprovalMode {
 
 ### GroupParticipantOptions
 
-Options for specifying a participant when creating a group.
+Options for specifying a participant when creating or modifying a group.
 
 ```rust
 pub struct GroupParticipantOptions {
@@ -789,6 +793,14 @@ pub struct GroupParticipantOptions {
 - `GroupParticipantOptions::new(jid)` - Create from a JID
 - `GroupParticipantOptions::from_phone(phone_number)` - Create from a phone number JID
 - `GroupParticipantOptions::from_lid_and_phone(lid, phone_number)` - Create from a LID and phone number
+
+**Builder methods:**
+- `.with_phone_number(jid)` - Attach a phone number JID (for LID participants)
+- `.with_privacy(token)` - Attach a privacy token (`tc_token` bytes)
+
+<Note>
+You typically don't need to set the `privacy` field manually. When AB props are enabled, the library automatically resolves and attaches privacy tokens during `create_group` and `add_participants` operations.
+</Note>
 
 **Example:**
 ```rust

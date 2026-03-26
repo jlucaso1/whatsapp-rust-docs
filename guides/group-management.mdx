@@ -491,6 +491,26 @@ let options = GroupCreateOptions {
 };
 ```
 
+## Privacy tokens on group operations
+
+When server-side A/B experiment flags are enabled, the library automatically attaches privacy tokens (`tc_token`) to participants during group creation and participant addition. This matches WhatsApp Web's behavior and requires no changes to your code.
+
+The following AB prop flags control this behavior:
+
+| Flag | Effect |
+|------|--------|
+| `PRIVACY_TOKEN_ON_GROUP_CREATE` | Attaches tokens to participants when creating a group |
+| `PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD` | Attaches tokens to participants when adding them to a group |
+| `PRIVACY_TOKEN_ONLY_CHECK_LID` | Only resolves tokens via LID mappings, skipping phone number fallback |
+
+These flags are fetched from the server automatically on each connection via `fetch_props()`. Token resolution uses the LID-to-phone-number cache and the `tc_token` store — if a valid, non-expired token exists for a participant, it is attached to the IQ request.
+
+<Note>
+Privacy token attachment is fully automatic. You don't need to call any extra methods or manage tokens manually. If the AB flags are disabled on the server, group operations work exactly as before.
+</Note>
+
+See [Client API - AB props cache](/api/client#ab-props-cache) for more details on experiment flags, and [TC Token API](/api/tctoken) for token management.
+
 ## Addressing Modes
 
 Groups can use different addressing modes:

@@ -361,6 +361,58 @@ This approach prevents ID collisions when pre-keys are consumed non-sequentially
 
 Location: `src/prekeys.rs`
 
+### Digest key validation
+
+After connection, the client validates that the server's copy of the key bundle matches local keys. This matches WhatsApp Web's `WAWebDigestKeyJob.digestKey()` flow.
+
+**Wire format:**
+
+```xml
+<!-- Request -->
+<iq xmlns="encrypt" type="get" to="s.whatsapp.net" id="...">
+  <digest/>
+</iq>
+
+<!-- Response -->
+<iq from="s.whatsapp.net" id="..." type="result">
+  <digest>
+    <registration>[4-byte BE registration ID]</registration>
+    <type>[1-byte: 5]</type>
+    <identity>[32-byte identity public key]</identity>
+    <skey>
+      <id>[3-byte BE signed pre-key ID]</id>
+      <value>[32-byte signed pre-key public]</value>
+      <signature>[64-byte signature]</signature>
+    </skey>
+    <list>
+      <id>[3-byte BE prekey ID]</id>
+      ...
+    </list>
+    <hash>[20-byte SHA-1 hash]</hash>
+  </digest>
+</iq>
+```
+
+**Validation process:**
+
+1. Query the server for the key bundle digest via `DigestKeyBundleSpec`
+2. If the server returns **404** (no record), trigger a full pre-key re-upload
+3. If the server returns **406/503** or other errors, log and skip
+4. On success, compare registration IDs
+5. Load each pre-key referenced by the server and extract its public key
+6. Compute a local SHA-1 digest over: identity public key + signed pre-key public + signed pre-key signature + all pre-key public keys
+7. Compare the local hash against the server-provided hash
+
+<Note>
+  The `<list>` node contains `<id>` children (not `<key>` children). The parser iterates all children of `<list>` without tag filtering, matching WhatsApp Web's `mapChildren` behavior which does not filter by tag name.
+</Note>
+
+<Warning>
+  Hash mismatches or missing local pre-keys are logged but do **not** trigger a re-upload. Only a 404 response (server has no record) triggers re-upload. This matches WhatsApp Web's behavior where `validateLocalKeyBundle` exceptions are caught without re-uploading — the normal `RotateKeyJob` eventually refreshes keys.
+</Warning>
+
+Location: `src/prekeys.rs:218-344`, `wacore/src/iq/prekeys.rs:170-302`
+
 ## Storage Integration
 
 whatsapp-rust integrates Signal Protocol storage through a layered architecture:

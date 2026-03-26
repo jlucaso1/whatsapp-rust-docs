@@ -321,35 +321,32 @@ use wacore_binary::jid::Jid;
 
 #[async_trait]
 impl ProtocolStore for MyCustomStore {
-    // --- SKDM Tracking ---
+    // --- Per-Device Sender Key Tracking ---
     
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>> {
+    async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>> {
         let rows = self.connection.query(
-            "SELECT device_jid FROM skdm_recipients WHERE group_jid = ?",
+            "SELECT device_jid, has_key FROM sender_key_devices WHERE group_jid = ?",
             &[group_jid],
         ).await?;
         
-        rows.into_iter()
-            .map(|r| {
-                let jid_str: String = r.get(0);
-                jid_str.parse().map_err(|e| StoreError::Parse(format!("{}", e)))
-            })
-            .collect()
+        Ok(rows.into_iter()
+            .map(|r| (r.get::<String>(0), r.get::<i32>(1) != 0))
+            .collect())
     }
     
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()> {
-        for device_jid in device_jids {
+    async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()> {
+        for (device_jid, has_key) in entries {
             self.connection.execute(
-                "INSERT OR IGNORE INTO skdm_recipients (group_jid, device_jid) VALUES (?, ?)",
-                &[group_jid, &device_jid.to_string()],
+                "INSERT OR REPLACE INTO sender_key_devices (group_jid, device_jid, has_key, updated_at) VALUES (?, ?, ?, strftime('%s', 'now'))",
+                &[group_jid, device_jid, &(*has_key as i32)],
             ).await?;
         }
         Ok(())
     }
     
-    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()> {
+    async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()> {
         self.connection.execute(
-            "DELETE FROM skdm_recipients WHERE group_jid = ?",
+            "DELETE FROM sender_key_devices WHERE group_jid = ?",
             &[group_jid],
         ).await?;
         Ok(())
@@ -446,7 +443,7 @@ impl ProtocolStore for MyCustomStore {
         Ok(count as u32)
     }
 
-    // ... Implement remaining methods (base_key, device_list, forget_marks, tc_token)
+    // ... Implement remaining methods (base_key, device_list, tc_token)
 }
 ```
 

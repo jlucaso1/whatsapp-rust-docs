@@ -77,6 +77,10 @@ pub struct Message {
     pub edit_message: Option<Box<EditMessage>>,
     pub keep_in_chat_message: Option<Box<KeepInChatMessage>>,
     
+    // Album (grouped media)
+    pub album_message: Option<Box<AlbumMessage>>,
+    pub associated_child_message: Option<Box<FutureProofMessage>>,
+    
     // AI/Bot messages
     pub ai_rich_response_message: Option<Box<AiRichResponseMessage>>,
     pub bot_feedback_message: Option<Box<BotFeedbackMessage>>,
@@ -343,6 +347,30 @@ pub struct EditMessage {
 }
 ```
 
+#### AlbumMessage
+
+Parent message for grouped media albums. Declares expected image/video counts so WhatsApp clients know how many items to group together.
+
+```rust
+pub struct AlbumMessage {
+    pub expected_image_count: Option<u32>,
+    pub expected_video_count: Option<u32>,
+    pub context_info: Option<Box<ContextInfo>>,
+}
+```
+
+Each child media message is wrapped in `associated_child_message` (a `FutureProofMessage`) and linked to the parent via a `MessageAssociation`:
+
+```rust
+pub struct MessageAssociation {
+    pub association_type: Option<i32>,       // MediaAlbum = 1
+    pub parent_message_key: Option<MessageKey>,
+    pub message_index: Option<i32>,
+}
+```
+
+Use `whatsapp_rust::proto_helpers::wrap_as_album_child` to construct album children. See [Sending Messages - Album messages](/guides/sending-messages#album-messages) for usage examples.
+
 ### AI & Bot Messages
 
 #### AiRichResponseMessage
@@ -377,6 +405,7 @@ pub struct MessageContextInfo {
     pub message_secret: Option<Vec<u8>>,
     pub padding: Option<Vec<u8>>,
     pub message_add_on_duration_in_secs: Option<u32>,
+    pub message_association: Option<MessageAssociation>, // Album/child linking
     // ...
 }
 ```

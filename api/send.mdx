@@ -1,6 +1,6 @@
 ---
 title: "send"
-description: "Send, edit, revoke, pin, and unpin messages with advanced options"
+description: "Send, edit, revoke, pin, and unpin messages with advanced options, including album support"
 ---
 
 ## send_message
@@ -12,7 +12,7 @@ pub async fn send_message(
     &self,
     to: Jid,
     message: wa::Message,
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 <ParamField path="to" type="Jid" required>
@@ -35,11 +35,29 @@ pub async fn send_message(
   - `sticker_message` - Sticker
   - `location_message` - GPS location
   - `contact_message` - Contact card
+  - `album_message` - Album (grouped media) parent message
 </ParamField>
 
-<ResponseField name="message_id" type="String">
-  Unique message ID generated for this message. Use this ID to track delivery receipts and edit/revoke the message.
+<ResponseField name="SendResult" type="SendResult">
+  Contains the `message_id` (unique ID for tracking receipts, edits, revokes) and `to` (resolved recipient JID). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
 </ResponseField>
+
+### SendResult
+
+Result of a successfully sent message. Provides the message ID and a convenience method to construct a `MessageKey` for follow-up operations like album child linking.
+
+```rust
+pub struct SendResult {
+    pub message_id: String,
+    pub to: Jid,
+}
+
+impl SendResult {
+    /// Returns a MessageKey for this sent message.
+    /// Useful for album child linking, pinning, and other operations.
+    pub fn message_key(&self) -> wa::MessageKey;
+}
+```
 
 ### Example: Text Message
 
@@ -51,12 +69,12 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(
+let result = client.send_message(
     "15551234567@s.whatsapp.net".parse()?,
     message
 ).await?;
 
-println!("Message sent with ID: {}", message_id);
+println!("Message sent with ID: {}", result.message_id);
 ```
 
 ### Example: Newsletter message
@@ -72,7 +90,7 @@ let message = wa::Message {
 };
 
 // Newsletter messages are sent as plaintext automatically
-let message_id = client.send_message(newsletter_jid, message).await?;
+let result = client.send_message(newsletter_jid, message).await?;
 ```
 
 <Note>
@@ -103,8 +121,53 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(chat_jid, message).await?;
+let result = client.send_message(chat_jid, message).await?;
 ```
+
+### Example: Album (grouped media)
+
+Send multiple images and/or videos as a single grouped album. First send the parent `AlbumMessage` with expected counts, then send each child media wrapped with `wrap_as_album_child`:
+
+```rust
+use waproto::whatsapp as wa;
+use whatsapp_rust::proto_helpers::wrap_as_album_child;
+
+// 1. Send the parent album message with expected media counts
+let album_parent = wa::Message {
+    album_message: Some(Box::new(wa::message::AlbumMessage {
+        expected_image_count: Some(2),
+        expected_video_count: Some(1),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let parent_result = client.send_message(chat_jid.clone(), album_parent).await?;
+let parent_key = parent_result.message_key();
+
+// 2. Send each child media wrapped as an album child
+let image1 = wa::Message {
+    image_message: Some(Box::new(wa::message::ImageMessage {
+        url: Some(upload1.url),
+        direct_path: Some(upload1.direct_path),
+        media_key: Some(upload1.media_key),
+        file_sha256: Some(upload1.file_sha256),
+        file_enc_sha256: Some(upload1.file_enc_sha256),
+        file_length: Some(upload1.file_length),
+        media_key_timestamp: Some(upload1.media_key_timestamp),
+        mimetype: Some("image/jpeg".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let wrapped = wrap_as_album_child(image1, parent_key.clone());
+client.send_message(chat_jid.clone(), wrapped).await?;
+
+// Repeat for each additional image/video in the album
+```
+
+See the [Sending Messages guide](/guides/sending-messages#album-messages) for a complete walkthrough.
 
 ---
 
@@ -118,7 +181,7 @@ pub async fn send_message_with_options(
     to: Jid,
     message: wa::Message,
     options: SendOptions,
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 <ParamField path="to" type="Jid" required>
@@ -133,8 +196,8 @@ pub async fn send_message_with_options(
   Additional send options (see below)
 </ParamField>
 
-<ResponseField name="message_id" type="String">
-  Unique message ID
+<ResponseField name="SendResult" type="SendResult">
+  Contains the message ID and recipient JID
 </ResponseField>
 
 ### SendOptions
@@ -169,13 +232,13 @@ let options = SendOptions {
     ..Default::default()
 };
 
-let message_id = client.send_message_with_options(
+let result = client.send_message_with_options(
     chat_jid,
     message,
     options
 ).await?;
 
-assert_eq!(message_id, "3EB0ABC123");
+assert_eq!(result.message_id, "3EB0ABC123");
 ```
 
 ### Example: Send with extra stanza nodes
@@ -193,7 +256,7 @@ let options = SendOptions {
     ..Default::default()
 };
 
-let message_id = client.send_message_with_options(
+let result = client.send_message_with_options(
     chat_jid,
     message,
     options
@@ -237,7 +300,7 @@ pub async fn edit_message(
 use waproto::whatsapp as wa;
 
 // Send original message
-let msg_id = client.send_message(
+let result = client.send_message(
     chat_jid.clone(),
     wa::Message {
         conversation: Some("Hello!".to_string()),
@@ -248,7 +311,7 @@ let msg_id = client.send_message(
 // Edit it
 let edit_id = client.edit_message(
     chat_jid,
-    &msg_id,
+    &result.message_id,
     wa::Message {
         conversation: Some("Hello, edited!".to_string()),
         ..Default::default()
@@ -317,7 +380,7 @@ pub enum RevokeType {
 
 ```rust
 // Send a message
-let message_id = client.send_message(
+let result = client.send_message(
     chat_jid,
     message
 ).await?;
@@ -325,7 +388,7 @@ let message_id = client.send_message(
 // Delete it (sender revoke)
 client.revoke_message(
     chat_jid,
-    &message_id,
+    &result.message_id,
     RevokeType::Sender
 ).await?;
 ```
@@ -710,6 +773,10 @@ The `wa::Message` protobuf supports various message types. Set exactly one of th
 
 <ParamField path="event_message" type="EventMessage">
   Calendar event message. The required `<meta event_type="creation"/>` stanza node is injected automatically when sent through `send_message` or `send_message_with_options`.
+</ParamField>
+
+<ParamField path="album_message" type="AlbumMessage">
+  Album parent message declaring the expected number of grouped media items. Set `expected_image_count` and/or `expected_video_count`. After sending the parent, use `wrap_as_album_child` to wrap each child media message and link it to the parent via `SendResult::message_key()`. See [album messages](/guides/sending-messages#album-messages).
 </ParamField>
 
 ### Example: Extended text with quote

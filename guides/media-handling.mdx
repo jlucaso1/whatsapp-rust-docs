@@ -309,8 +309,12 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(to, message).await?;
+let result = client.send_message(to, message).await?;
 ```
+
+### Sending media as an album
+
+You can group multiple images and/or videos into an album. See [Sending Messages - Album messages](/guides/sending-messages#album-messages) for a full walkthrough of the parent/child album pattern using `AlbumMessage` and `wrap_as_album_child`.
 
 ### Resumable uploads
 

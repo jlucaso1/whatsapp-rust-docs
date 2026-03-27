@@ -109,8 +109,8 @@ let message = wa::Message {
 };
 
 // Send the message
-let message_id = client.send_message(chat_jid, message).await?;
-println!("Image sent: {}", message_id);
+let result = client.send_message(chat_jid, message).await?;
+println!("Image sent: {}", result.message_id);
 ```
 
 ### Example: Upload Video with Progress
@@ -162,7 +162,7 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(chat_jid, message).await?;
+let result = client.send_message(chat_jid, message).await?;
 ```
 
 ### Example: Upload Audio (Voice Note)
@@ -190,7 +190,7 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(chat_jid, message).await?;
+let result = client.send_message(chat_jid, message).await?;
 ```
 
 ---

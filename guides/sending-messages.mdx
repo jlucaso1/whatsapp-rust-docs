@@ -1,11 +1,11 @@
 ---
 title: Sending Messages
-description: Learn how to send text messages, reactions, quoted replies, and edit messages in whatsapp-rust
+description: Learn how to send text messages, reactions, quoted replies, album messages, and edit messages in whatsapp-rust
 ---
 
 ## Overview
 
-This guide covers sending messages, including text, reactions, quotes, and message editing operations using the whatsapp-rust library.
+This guide covers sending messages, including text, reactions, quotes, album messages (grouped media), and message editing operations using the whatsapp-rust library.
 
 ## Sending Text Messages
 
@@ -24,9 +24,11 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(to, message).await?;
-println!("Message sent with ID: {}", message_id);
+let result = client.send_message(to, message).await?;
+println!("Message sent with ID: {}", result.message_id);
 ```
+
+`send_message` returns a `SendResult` containing the `message_id` and recipient `to` JID. Use `result.message_key()` to get a `wa::MessageKey` for follow-up operations like album child linking.
 
 ### Extended Text Message
 
@@ -46,7 +48,7 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(to, message).await?;
+let result = client.send_message(to, message).await?;
 ```
 
 ## Quoted Replies
@@ -80,7 +82,7 @@ let reply = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(to, reply).await?;
+let result = client.send_message(to, reply).await?;
 ```
 
 ### Cross-platform quoted replies with remoteJid
@@ -113,7 +115,7 @@ let reply = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(chat_jid, reply).await?;
+let result = client.send_message(chat_jid, reply).await?;
 ```
 
 The `build_quote_context_with_info` function handles two important details:
@@ -152,7 +154,7 @@ let context = build_quote_context_with_info(
 
 reply.set_context_info(context);
 
-let message_id = client.send_message(chat_jid, reply).await?;
+let result = client.send_message(chat_jid, reply).await?;
 ```
 
 ## Reactions
@@ -184,7 +186,7 @@ let reaction = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(chat_jid, reaction).await?;
+let result = client.send_message(chat_jid, reaction).await?;
 ```
 
 ### Removing a Reaction
@@ -249,7 +251,7 @@ let edited = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(chat_jid, edited).await?;
+let result = client.send_message(chat_jid, edited).await?;
 ```
 
 <Note>
@@ -305,7 +307,7 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.send_message(newsletter_jid, message).await?;
+let result = client.send_message(newsletter_jid, message).await?;
 ```
 
 The correct stanza `type` (text, media, reaction, poll), `mediatype` attributes, and `<meta>` nodes (for polls, events, etc.) are inferred automatically from the message content. See the [Newsletters guide](/guides/newsletters) for more details.
@@ -313,6 +315,98 @@ The correct stanza `type` (text, media, reaction, poll), `mediatype` attributes,
 <Note>
 Newsletter reactions use a different protocol format. Use `client.newsletter().send_reaction()` for reactions instead of `send_message()`.
 </Note>
+
+## Album messages
+
+Album messages let you send multiple images and/or videos as a grouped media album — the collapsed album bubble that WhatsApp displays when someone sends several photos at once.
+
+An album consists of:
+1. A **parent `AlbumMessage`** declaring the expected image and video counts
+2. Multiple **child messages** (individual media messages) wrapped with `wrap_as_album_child` and linked to the parent
+
+### Sending an album
+
+```rust
+use waproto::whatsapp as wa;
+use whatsapp_rust::proto_helpers::wrap_as_album_child;
+
+let chat_jid: Jid = "1234567890@s.whatsapp.net".parse()?;
+
+// Step 1: Send the parent album message
+let album_parent = wa::Message {
+    album_message: Some(Box::new(wa::message::AlbumMessage {
+        expected_image_count: Some(3),
+        expected_video_count: Some(0),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let parent_result = client.send_message(chat_jid.clone(), album_parent).await?;
+let parent_key = parent_result.message_key();
+
+// Step 2: Upload and send each child image
+for image_data in [image1_bytes, image2_bytes, image3_bytes] {
+    let upload = client.upload(image_data, MediaType::Image).await?;
+
+    let image_msg = wa::Message {
+        image_message: Some(Box::new(wa::message::ImageMessage {
+            url: Some(upload.url),
+            direct_path: Some(upload.direct_path),
+            media_key: Some(upload.media_key),
+            file_sha256: Some(upload.file_sha256),
+            file_enc_sha256: Some(upload.file_enc_sha256),
+            file_length: Some(upload.file_length),
+            media_key_timestamp: Some(upload.media_key_timestamp),
+            mimetype: Some("image/jpeg".to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    // Wrap as album child and send
+    let wrapped = wrap_as_album_child(image_msg, parent_key.clone());
+    client.send_message(chat_jid.clone(), wrapped).await?;
+}
+```
+
+### How it works
+
+The `wrap_as_album_child` function (from `whatsapp_rust::proto_helpers`) takes a media `wa::Message` and a parent `wa::MessageKey`, then:
+
+1. Wraps the inner message in an `associated_child_message` (`FutureProofMessage` envelope)
+2. Attaches a `MessageAssociation` with type `MediaAlbum` pointing to the parent
+3. Lifts any existing `message_context_info` from the inner message to the outer wrapper
+
+<Note>
+The parent `AlbumMessage` declares the total expected counts so WhatsApp clients know how many media items to group together. Each child is sent as a separate message linked back to the parent via `MessageAssociation`.
+</Note>
+
+### Mixed albums (images and videos)
+
+You can mix images and videos in the same album:
+
+```rust
+let album_parent = wa::Message {
+    album_message: Some(Box::new(wa::message::AlbumMessage {
+        expected_image_count: Some(2),
+        expected_video_count: Some(1),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let parent_result = client.send_message(chat_jid.clone(), album_parent).await?;
+let parent_key = parent_result.message_key();
+
+// Send image children
+let image_wrapped = wrap_as_album_child(image_msg, parent_key.clone());
+client.send_message(chat_jid.clone(), image_wrapped).await?;
+
+// Send video children
+let video_wrapped = wrap_as_album_child(video_msg, parent_key.clone());
+client.send_message(chat_jid.clone(), video_wrapped).await?;
+```
 
 ## Forwarding media messages
 
@@ -351,13 +445,13 @@ let options = SendOptions {
     ..Default::default()
 };
 
-let message_id = client.send_message_with_options(
+let result = client.send_message_with_options(
     to,
     message,
     options,
 ).await?;
 
-// message_id will be "3EB0ABC123"
+// result.message_id will be "3EB0ABC123"
 ```
 
 ### Adding extra stanza nodes
@@ -377,7 +471,7 @@ let options = SendOptions {
     ..Default::default()
 };
 
-let message_id = client.send_message_with_options(
+let result = client.send_message_with_options(
     to,
     message,
     options,
@@ -428,9 +522,9 @@ async fn send_safe_message(
     };
 
     match client.send_message(to.clone(), message).await {
-        Ok(id) => {
-            println!("✅ Message sent: {}", id);
-            Ok(id)
+        Ok(result) => {
+            println!("✅ Message sent: {}", result.message_id);
+            Ok(result.message_id)
         }
         Err(e) => {
             eprintln!("❌ Failed to send: {:?}", e);
@@ -450,15 +544,19 @@ async fn send_safe_message(
 - **Links/formatting**: Use `extended_text_message`
 - **Replies**: Use `extended_text_message` with `context_info`
 - **Media**: Use specific media message types with optional captions
+- **Albums**: Use `album_message` parent + `wrap_as_album_child` for grouped media
 
 ### Handle Message IDs
 
 ```rust
-// Store message ID for later operations
-let message_id = client.send_message(to, message).await?;
+// Store the result for later operations
+let result = client.send_message(to, message).await?;
 
-// Use it for reactions, edits, or deletes
-client.revoke_message(to, &message_id, RevokeType::Sender).await?;
+// Use the message ID for reactions, edits, or deletes
+client.revoke_message(to, &result.message_id, RevokeType::Sender).await?;
+
+// Use message_key() for album child linking or pinning
+let key = result.message_key();
 ```
 
 ### Quote context best practices

@@ -27,7 +27,7 @@ pub async fn send_text(
     font: i32,
     recipients: Vec<Jid>,
     options: StatusSendOptions,
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 **Parameters:**
@@ -38,7 +38,7 @@ pub async fn send_text(
 - `options` - Privacy and delivery options
 
 **Returns:**
-- Message ID of the sent status
+- `SendResult` containing the `message_id` and `to` JID. Use `result.message_key()` to get a `wa::MessageKey` for revocation or other follow-up operations.
 
 **Example:**
 ```rust
@@ -49,7 +49,7 @@ let recipients = vec![
     Jid::pn("15559876543"),
 ];
 
-let message_id = client.status()
+let result = client.status()
     .send_text(
         "Hello from Rust!",
         0xFF1E6E4F, // Green background
@@ -59,7 +59,7 @@ let message_id = client.status()
     )
     .await?;
 
-println!("Status sent: {}", message_id);
+println!("Status sent: {}", result.message_id);
 ```
 
 ### send_image
@@ -74,7 +74,7 @@ pub async fn send_image(
     caption: Option<&str>,
     recipients: Vec<Jid>,
     options: StatusSendOptions,
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 **Parameters:**
@@ -97,7 +97,7 @@ let thumbnail = create_thumbnail(&image_data)?;
 
 let recipients = vec![Jid::pn("15551234567")];
 
-let message_id = client.status()
+let result = client.status()
     .send_image(
         &upload,
         thumbnail,
@@ -121,7 +121,7 @@ pub async fn send_video(
     caption: Option<&str>,
     recipients: Vec<Jid>,
     options: StatusSendOptions,
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 **Parameters:**
@@ -142,7 +142,7 @@ let thumbnail = extract_video_thumbnail(&video_data)?;
 
 let recipients = vec![Jid::pn("15551234567")];
 
-let message_id = client.status()
+let result = client.status()
     .send_video(
         &upload,
         thumbnail,
@@ -164,7 +164,7 @@ pub async fn send_raw(
     message: wa::Message,
     recipients: Vec<Jid>,
     options: StatusSendOptions,
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 **Example:**
@@ -179,7 +179,7 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let message_id = client.status()
+let result = client.status()
     .send_raw(message, recipients, StatusSendOptions::default())
     .await?;
 ```
@@ -194,7 +194,7 @@ pub async fn revoke(
     message_id: impl Into<String>,
     recipients: Vec<Jid>,
     options: StatusSendOptions,
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 **Parameters:**
@@ -205,13 +205,13 @@ pub async fn revoke(
 **Example:**
 ```rust
 // Send a status
-let message_id = client.status()
+let result = client.status()
     .send_text("Temporary status", 0xFF000000, 0, recipients.clone(), Default::default())
     .await?;
 
 // Later, revoke it
 client.status()
-    .revoke(message_id, recipients, Default::default())
+    .revoke(&result.message_id, recipients, Default::default())
     .await?;
 ```
 

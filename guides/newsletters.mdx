@@ -113,7 +113,7 @@ See [Newsletter API reference](/api/newsletter#update) for details.
 
 ## Sending messages
 
-Newsletter messages are plaintext — they bypass Signal encryption entirely.
+Newsletter messages are plaintext — they bypass Signal encryption entirely. You send newsletter messages through the unified `client.send_message()` method, just like regular and group messages.
 
 ### Text messages
 
@@ -125,12 +125,12 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let msg_id = client.newsletter()
-    .send_message(&newsletter_jid, &message)
-    .await?;
+let msg_id = client.send_message(newsletter_jid, message).await?;
 
 println!("Sent message: {}", msg_id);
 ```
+
+The library automatically detects that the recipient is a newsletter JID and sends the message as plaintext (no Signal encryption). It also infers the correct `type` attribute (text, media, reaction, poll) and `mediatype` attribute from the message content, matching WhatsApp Web behavior.
 
 <Note>
 For media messages (images, videos, etc.), you must upload the media separately using the newsletter-specific upload endpoint before sending. Text messages work directly.
@@ -152,7 +152,7 @@ client.newsletter()
     .await?;
 ```
 
-See [Newsletter API reference](/api/newsletter#send_message) for details.
+See [Send API reference](/api/send#send_message) for details.
 
 ## Fetching message history
 

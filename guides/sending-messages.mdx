@@ -431,6 +431,121 @@ if let Some(img) = &received_message.image_message {
 
 This works because `send_message` accepts any `wa::Message`. If the message already contains CDN fields (`url`, `direct_path`, `media_key`, etc.) from a received message, the server accepts it as-is. See [Media handling - CDN reuse](/guides/media-handling#forwarding-media-via-cdn-reuse) for details on all supported media types and when to fall back to download + re-upload.
 
+## Ephemeral (disappearing) messages
+
+WhatsApp supports disappearing messages that automatically delete after a set duration. When a chat has disappearing messages enabled, you should set the ephemeral expiration on outgoing messages so recipients see the correct countdown timer.
+
+### Sending a disappearing message
+
+Use `send_message_with_options` with `ephemeral_expiration` set to the chat's timer value:
+
+```rust
+use whatsapp_rust::send::SendOptions;
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    conversation: Some("This message will disappear!".to_string()),
+    ..Default::default()
+};
+
+let options = SendOptions {
+    ephemeral_expiration: Some(604800), // 7 days, matching the chat's timer
+    ..Default::default()
+};
+
+let result = client.send_message_with_options(chat_jid, message, options).await?;
+```
+
+This sets `contextInfo.expiration` on the protobuf message, which tells WhatsApp clients to display the disappearing countdown.
+
+### Common timer values
+
+| Duration | Value (seconds) |
+|---|---|
+| 24 hours | `86400` |
+| 7 days | `604800` |
+| 90 days | `7776000` |
+| Disabled | `0` |
+
+### Getting the chat's ephemeral timer
+
+For groups, read the timer from group metadata:
+
+```rust
+let metadata = client.groups().get_metadata(&group_jid).await?;
+let expiration = metadata.ephemeral_expiration; // 0 if disabled
+```
+
+For incoming messages, read it from `MessageInfo`:
+
+```rust
+Event::Message(message, info) => {
+    if let Some(expiration) = info.ephemeral_expiration {
+        println!("Chat has {}s disappearing timer", expiration);
+    }
+}
+```
+
+### Configuring disappearing messages
+
+**Per-group:** Use `set_ephemeral` to enable or disable disappearing messages on a group:
+
+```rust
+// Enable 7-day disappearing messages
+client.groups().set_ephemeral(&group_jid, 604800).await?;
+
+// Disable disappearing messages
+client.groups().set_ephemeral(&group_jid, 0).await?;
+```
+
+**Account-level default:** Use `set_default_disappearing_mode` to set the default for all new 1-on-1 chats:
+
+```rust
+// Enable 24-hour default for new chats
+client.set_default_disappearing_mode(86400).await?;
+
+// Disable default disappearing messages
+client.set_default_disappearing_mode(0).await?;
+```
+
+<Note>
+The account-level default only applies to **new** chats. Existing chats keep their current setting. To change a specific group's timer, use [`set_ephemeral`](/api/groups#set_ephemeral).
+</Note>
+
+### Listening for timer changes
+
+When a contact changes their default disappearing messages setting, you receive a `DisappearingModeChanged` event:
+
+```rust
+Event::DisappearingModeChanged(change) => {
+    println!("Contact {} set disappearing to {}s", change.from, change.duration);
+}
+```
+
+When a group's ephemeral setting changes, you receive a `GroupUpdate` event with a `GroupNotificationAction::Ephemeral` action containing the new `expiration` value.
+
+See [Events reference](/concepts/events#disappearingmodechanged) for details.
+
+### Creating groups with disappearing messages
+
+You can enable disappearing messages at group creation time:
+
+```rust
+use whatsapp_rust::features::groups::{GroupCreateOptions, GroupParticipantOptions};
+
+let options = GroupCreateOptions::builder()
+    .subject("Ephemeral Group")
+    .participants(vec![
+        GroupParticipantOptions::new(participant_jid),
+    ])
+    .ephemeral_expiration(604800) // 7-day timer
+    .build();
+
+let result = client.groups().create_group(options).await?;
+```
+
+See [Send API reference](/api/send#sendoptions) for the full `SendOptions` type.
+
 ## Send Options
 
 ### Specifying a custom message ID
@@ -545,6 +660,7 @@ async fn send_safe_message(
 - **Replies**: Use `extended_text_message` with `context_info`
 - **Media**: Use specific media message types with optional captions
 - **Albums**: Use `album_message` parent + `wrap_as_album_child` for grouped media
+- **Disappearing chats**: Use `send_message_with_options` with `ephemeral_expiration` matching the chat's timer
 
 ### Handle Message IDs
 

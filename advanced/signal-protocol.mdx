@@ -135,7 +135,7 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
   The implementation optimizes memory by using take/restore patterns to avoid cloning session states during decryption attempts (see `session_cipher.rs:495-619`).
 </Note>
 
-### Chain Key Ratcheting
+### Chain key ratcheting
 
 Message keys are derived from chain keys, which advance with each message:
 
@@ -146,15 +146,50 @@ pub struct ChainKey {
 }
 
 impl ChainKey {
-    pub fn step_with_message_keys(self) -> (MessageKeyGenerator, ChainKey) {
+    pub fn step_with_message_keys(self) -> Result<(MessageKeyGenerator, ChainKey)> {
         let message_key_gen = MessageKeyGenerator::new(self.key, self.index);
-        let next_chain_key = self.next_chain_key();
-        (message_key_gen, next_chain_key)
+        let next_chain_key = self.next_chain_key()?;
+        Ok((message_key_gen, next_chain_key))
     }
 }
 ```
 
 Location: `wacore/libsignal/src/protocol/ratchet/keys.rs`
+
+### Chain key overflow protection
+
+The chain key index is a `u32` that increments with each message. Without overflow protection, the index could silently wrap past `u32::MAX` (4,294,967,295) back to 0, creating a counter reuse vulnerability that breaks cryptographic guarantees (nonce reuse in message key derivation).
+
+Both 1:1 and group chain keys use `checked_add()` to return a typed error instead of wrapping:
+
+```rust
+// 1:1 chain keys (ratchet/keys.rs)
+pub fn next_chain_key(&self) -> crate::protocol::Result<Self> {
+    Ok(Self {
+        key: self.calculate_base_material(Self::CHAIN_KEY_SEED),
+        index: self.index.checked_add(1).ok_or_else(|| {
+            SignalProtocolError::InvalidState(
+                "next_chain_key",
+                "chain key index overflow (u32::MAX)".to_string(),
+            )
+        })?,
+    })
+}
+
+// Group sender chain keys (sender_keys.rs)
+let new_iteration = self.iteration.checked_add(1).ok_or_else(|| {
+    SignalProtocolError::InvalidState(
+        "sender_chain_key_next",
+        "Sender chain is too long".into(),
+    )
+})?;
+```
+
+<Warning>
+  A chain key reaching `u32::MAX` iterations indicates an abnormally long-lived session. In practice this should never occur — ratchet key rotations reset the chain counter with each new Diffie-Hellman exchange.
+</Warning>
+
+Location: `wacore/libsignal/src/protocol/ratchet/keys.rs`, `wacore/libsignal/src/protocol/sender_keys.rs`
 
 ### Forward Jumps
 
@@ -410,7 +445,7 @@ const MIN_PRE_KEY_COUNT: usize = 5;
 - **WANTED_PRE_KEY_COUNT (812)**: Number of pre-keys uploaded in each batch, matching WhatsApp Web
 - **MIN_PRE_KEY_COUNT (5)**: Minimum server-side pre-key count before triggering upload
 
-### Pre-key ID Counter
+### Pre-key ID counter and wrap-around
 
 Pre-key IDs use a persistent monotonic counter (`Device::next_pre_key_id`) that only increases, matching WhatsApp Web's `NEXT_PK_ID` pattern:
 
@@ -426,6 +461,28 @@ let start_id = if device_snapshot.next_pre_key_id > 0 {
 ```
 
 This approach prevents ID collisions when pre-keys are consumed non-sequentially from the store.
+
+**24-bit wrap-around:**
+
+WhatsApp Web uses 24-bit pre-key IDs on the wire (3-byte big-endian), so valid IDs range from 1 to 16,777,215 (2^24 − 1). When the persistent counter grows past this boundary, modular arithmetic wraps IDs back into the valid range:
+
+```rust
+const MAX_PREKEY_ID: u32 = 16777215; // 2^24 - 1
+
+// Wrap start ID into valid [1, MAX_PREKEY_ID] range
+let start_id = ((raw_start as u64 - 1) % MAX_PREKEY_ID as u64) as u32 + 1;
+
+// Each key ID in the batch is also wrapped
+let pre_key_id = (((start_id as u64 - 1) + i as u64) % (MAX_PREKEY_ID as u64)) as u32 + 1;
+
+// After upload, the persisted next_pre_key_id wraps too
+let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64)
+    % (MAX_PREKEY_ID as u64)) as u32 + 1;
+```
+
+<Note>
+  If the counter wraps while unconsumed high-ID pre-keys still exist in the store, the database upsert (`ON CONFLICT DO UPDATE`) silently overwrites them. This is an accepted trade-off because the server consumes keys well before a full 16M cycle completes.
+</Note>
 
 Location: `src/prekeys.rs`
 
@@ -555,7 +612,24 @@ if chain_index > counter {
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:822-827`
 
-### Session State Corruption
+### Log level discipline
+
+The protocol layer follows strict rules about what cryptographic material appears in logs and at which level:
+
+- **No private keys or secrets are ever logged** — `ChainKey`, `MessageKeys`, and `RootKey` types do not expose their key bytes through logging
+- **Public keys appear only at `warn`/`error` levels** — and only when something has gone wrong (untrusted identity, MAC failure)
+- **MAC key fingerprints are truncated** — only the first 4 bytes (8 hex chars) are logged during MAC verification failures, not the full key:
+  ```rust
+  let mac_key_fingerprint: String = hex::encode(mac_key_bytes).chars().take(8).collect();
+  ```
+- **Ratchet keys in debug logs** — successful decryptions log the sender ratchet public key (never private) at `debug` level for diagnostics
+- **Pre-key operations** use `debug` for routine operations and `warn`/`info` for exceptional conditions
+
+<Note>
+  The Signal protocol layer (`wacore/libsignal/src/protocol/`) uses no `trace!`-level logging. Sensitive operations stay at `debug` or above to avoid leaking material in verbose log configurations.
+</Note>
+
+### Session state corruption
 
 Detailed logging helps diagnose crypto failures:
 
@@ -575,7 +649,24 @@ This generates comprehensive error logs showing:
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
 
-## Performance Optimizations
+### Protocol safety limits
+
+The implementation enforces several hard limits to prevent resource exhaustion and cryptographic failures:
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `MAX_PREKEY_ID` | 16,777,215 (2^24 − 1) | Maximum valid pre-key ID (24-bit wire format) |
+| `MAX_FORWARD_JUMPS` | 25,000 | Maximum message skip in a ratchet chain |
+| `MAX_MESSAGE_KEYS` | 2,000 | Maximum cached out-of-order message keys per chain |
+| `MAX_RECEIVER_CHAINS` | 5 | Maximum receiver chains per session |
+| `ARCHIVED_STATES_MAX_LENGTH` | 40 | Maximum archived session states |
+| `MAX_SENDER_KEY_STATES` | 5 | Maximum sender key states per group |
+| `MESSAGE_KEY_PRUNE_THRESHOLD` | 50 | Amortized eviction trigger for old message keys |
+| Chain key index | u32::MAX | Overflow returns `InvalidState` error (not silent wrap) |
+
+Location: `wacore/libsignal/src/protocol/consts.rs`
+
+## Performance optimizations
 
 ### Session object cache
 

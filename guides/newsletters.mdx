@@ -130,7 +130,7 @@ let msg_id = client.send_message(newsletter_jid, message).await?;
 println!("Sent message: {}", msg_id);
 ```
 
-The library automatically detects that the recipient is a newsletter JID and sends the message as plaintext (no Signal encryption). It also infers the correct `type` attribute (text, media, reaction, poll) and `mediatype` attribute from the message content, matching WhatsApp Web behavior.
+The library automatically detects that the recipient is a newsletter JID and sends the message as plaintext (no Signal encryption). It also infers the correct `type` attribute (text, media, reaction, poll) and `mediatype` attribute from the message content. Stanza-level `<meta>` nodes (for polls, events, etc.) are also injected automatically, matching WhatsApp Web behavior.
 
 <Note>
 For media messages (images, videos, etc.), you must upload the media separately using the newsletter-specific upload endpoint before sending. Text messages work directly.

@@ -473,7 +473,7 @@ client.unpin_message(chat_jid, key).await?;
 
 ## Automatic stanza metadata
 
-When you call `send_message` or `send_message_with_options`, the library automatically infers and injects stanza-level metadata that WhatsApp servers expect for certain message types. You never need to set these manually — the library handles it for you.
+When you call `send_message` or `send_message_with_options`, the library automatically infers and injects stanza-level metadata that WhatsApp servers expect for certain message types. This applies to all recipient types — direct messages, groups, and newsletters. You never need to set these manually — the library handles it for you.
 
 | Message type | Auto-injected metadata |
 |---|---|

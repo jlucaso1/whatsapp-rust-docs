@@ -208,6 +208,54 @@ if jump > MAX_FORWARD_JUMPS {
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:832-847`
 
+## DM device partitioning
+
+When sending a direct message, the library must encrypt two different plaintexts for two categories of devices:
+
+- **Recipient devices** receive the actual message content
+- **Own other devices** (your other linked devices) receive a `DeviceSentMessage` wrapper containing the message plus the destination JID, so your other devices can display the sent message in the correct chat
+
+The `partition_dm_devices` function splits all resolved devices into these two groups, and excludes the exact sender device (the current device) entirely:
+
+```rust
+fn partition_dm_devices(
+    all_devices: Vec<Jid>,
+    own_jid: &Jid,
+    own_lid: Option<&Jid>,
+) -> (Vec<Jid>, Vec<Jid>)
+```
+
+### Sender device exclusion
+
+The exact sender device is identified by matching both the user **and** device ID against your phone number JID (PN) or your Linked Identity JID (LID):
+
+```rust
+fn is_exact_dm_sender_device(device_jid: &Jid, own_jid: &Jid, own_lid: Option<&Jid>) -> bool {
+    (device_jid.is_same_user_as(own_jid) && device_jid.device == own_jid.device)
+        || own_lid.is_some_and(|lid|
+            device_jid.is_same_user_as(lid) && device_jid.device == lid.device
+        )
+}
+```
+
+### Own device recognition
+
+After excluding the sender device, the remaining devices are classified using `matches_user_or_lid`, which checks if a device JID belongs to the same user as either your PN or LID:
+
+```rust
+pub fn matches_user_or_lid(&self, user: &Jid, lid: Option<&Jid>) -> bool {
+    self.is_same_user_as(user) || lid.is_some_and(|l| self.is_same_user_as(l))
+}
+```
+
+This ensures that your own devices registered under your LID (common in multi-device setups) are correctly classified as "own" devices and receive the `DeviceSentMessage` plaintext — not the recipient plaintext. Without LID matching, your own LID-based devices would be misclassified as recipient devices, causing them to receive the wrong message format.
+
+<Note>
+  Both PN-based and LID-based devices must be checked because WhatsApp's multi-device architecture uses both addressing schemes. A user's devices may appear under either their phone number JID (`@s.whatsapp.net`) or their Linked Identity JID (`@lid`), depending on the device type and registration path.
+</Note>
+
+Location: `wacore/src/send.rs:590-619`
+
 ## Sender Keys (Group Encryption)
 
 Groups use the Sender Key protocol for efficient multi-recipient encryption.

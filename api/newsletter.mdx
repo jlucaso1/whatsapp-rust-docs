@@ -201,7 +201,7 @@ let message = wa::Message {
 let msg_id = client.send_message(newsletter_jid, message).await?;
 ```
 
-The library detects newsletter recipients automatically and sends messages as plaintext (no Signal encryption), with the correct `type` and `mediatype` stanza attributes inferred from the message content.
+The library detects newsletter recipients automatically and sends messages as plaintext (no Signal encryption), with the correct `type` and `mediatype` stanza attributes inferred from the message content. Stanza-level `<meta>` nodes (for polls, events, etc.) are also included automatically, matching WhatsApp Web behavior.
 
 <Note>
 `Newsletter::send_message()` was removed. Use `client.send_message()` instead — it accepts newsletter, group, and direct message JIDs.

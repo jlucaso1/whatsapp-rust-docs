@@ -308,7 +308,7 @@ let message = wa::Message {
 let message_id = client.send_message(newsletter_jid, message).await?;
 ```
 
-The correct stanza `type` (text, media, reaction, poll) and `mediatype` attributes are inferred automatically from the message content. See the [Newsletters guide](/guides/newsletters) for more details.
+The correct stanza `type` (text, media, reaction, poll), `mediatype` attributes, and `<meta>` nodes (for polls, events, etc.) are inferred automatically from the message content. See the [Newsletters guide](/guides/newsletters) for more details.
 
 <Note>
 Newsletter reactions use a different protocol format. Use `client.newsletter().send_reaction()` for reactions instead of `send_message()`.

@@ -88,7 +88,14 @@ println!("From me: {}", info.source.is_from_me);
 if info.source.chat.is_group() {
     println!("Group message from participant: {}", info.source.sender);
 }
+
+// Check ephemeral (disappearing) message duration
+if let Some(expiration) = info.ephemeral_expiration {
+    println!("Disappearing message timer: {}s", expiration);
+}
 ```
+
+The `ephemeral_expiration` field contains the disappearing messages timer in seconds, extracted from the message's `contextInfo.expiration`. This tells you how long the message will be visible before it auto-deletes. Use this value when sending replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
 
 ### Message Content Extraction
 
@@ -112,10 +119,15 @@ let base = message.get_base_message();
 
 // Check wrapper types
 if message.is_ephemeral() {
-    println!("This is an ephemeral message");
+    println!("This is a disappearing message");
 }
 if message.is_view_once() {
     println!("This is a view-once message");
+}
+
+// Get the ephemeral timer from the message itself
+if let Some(exp) = message.get_ephemeral_expiration() {
+    println!("Disappears after {}s", exp);
 }
 
 // Access message context info (thread metadata, bot info, etc.)

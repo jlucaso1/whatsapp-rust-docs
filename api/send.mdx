@@ -211,6 +211,10 @@ pub struct SendOptions {
     pub message_id: Option<String>,
     /// Extra XML child nodes on the message stanza.
     pub extra_stanza_nodes: Vec<Node>,
+    /// Ephemeral duration in seconds. Sets `contextInfo.expiration` on the
+    /// message for disappearing messages support.
+    /// Common values: 86400 (24h), 604800 (7d), 7776000 (90d).
+    pub ephemeral_expiration: Option<u32>,
 }
 ```
 
@@ -220,6 +224,10 @@ pub struct SendOptions {
 
 <ParamField path="extra_stanza_nodes" type="Vec<Node>" default="[]">
   Additional XML nodes to include in the message stanza. Used for advanced protocol features like quoted replies, mentions, or custom metadata.
+</ParamField>
+
+<ParamField path="ephemeral_expiration" type="Option<u32>" default="None">
+  Sets the ephemeral (disappearing) message duration in seconds by injecting `contextInfo.expiration` on the protobuf message. When the recipient's chat has disappearing messages enabled, set this to match the chat's ephemeral timer. Common values: `86400` (24 hours), `604800` (7 days), `7776000` (90 days). Pass `0` or `None` to send a non-ephemeral message.
 </ParamField>
 
 ### Example: Send with a custom message ID
@@ -240,6 +248,27 @@ let result = client.send_message_with_options(
 
 assert_eq!(result.message_id, "3EB0ABC123");
 ```
+
+### Example: Send an ephemeral (disappearing) message
+
+```rust
+use whatsapp_rust::send::SendOptions;
+
+let options = SendOptions {
+    ephemeral_expiration: Some(604800), // 7 days
+    ..Default::default()
+};
+
+let result = client.send_message_with_options(
+    chat_jid,
+    message,
+    options
+).await?;
+```
+
+<Note>
+The `ephemeral_expiration` value should match the chat's disappearing messages timer. You can get this from `GroupMetadata.ephemeral_expiration` for groups, or from `MessageInfo.ephemeral_expiration` on received messages. See the [sending messages guide](/guides/sending-messages#ephemeral-disappearing-messages) for a complete walkthrough.
+</Note>
 
 ### Example: Send with extra stanza nodes
 

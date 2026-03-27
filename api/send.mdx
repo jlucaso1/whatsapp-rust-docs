@@ -5,7 +5,7 @@ description: "Send, edit, revoke, pin, and unpin messages with advanced options"
 
 ## send_message
 
-Send a message to a chat.
+Send a message to a user, group, or newsletter. Newsletter messages are sent as plaintext (no E2E encryption) automatically when the recipient is a newsletter JID.
 
 ```rust
 pub async fn send_message(
@@ -20,6 +20,8 @@ pub async fn send_message(
   - Direct message: `15551234567@s.whatsapp.net`
   - Group: `120363040237990503@g.us`
   - Newsletter: `120363999999999999@newsletter`
+
+  When the recipient is a newsletter JID, the message is sent as plaintext with the correct `type` and `mediatype` stanza attributes inferred automatically.
 </ParamField>
 
 <ParamField path="message" type="wa::Message" required>
@@ -56,6 +58,26 @@ let message_id = client.send_message(
 
 println!("Message sent with ID: {}", message_id);
 ```
+
+### Example: Newsletter message
+
+```rust
+use waproto::whatsapp as wa;
+
+let newsletter_jid: Jid = "120363999999999999@newsletter".parse()?;
+
+let message = wa::Message {
+    conversation: Some("Hello subscribers!".to_string()),
+    ..Default::default()
+};
+
+// Newsletter messages are sent as plaintext automatically
+let message_id = client.send_message(newsletter_jid, message).await?;
+```
+
+<Note>
+Newsletter reactions use a different stanza format and are still sent through `client.newsletter().send_reaction()`. See the [Newsletter API](/api/newsletter#send_reaction).
+</Note>
 
 ### Example: Image with Caption
 

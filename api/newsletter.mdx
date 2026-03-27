@@ -3,7 +3,9 @@ title: Newsletter
 description: Newsletter (channel) operations — create, manage, subscribe, and send messages to WhatsApp channels
 ---
 
-The `Newsletter` feature provides methods for managing WhatsApp newsletter channels, including creation, subscription management, messaging, reactions, and live updates. Newsletter operations use MEX (GraphQL) for metadata/management and IQ stanzas for message operations.
+The `Newsletter` feature provides methods for managing WhatsApp newsletter channels, including creation, subscription management, reactions, and live updates. Newsletter operations use MEX (GraphQL) for metadata/management and IQ stanzas for message operations.
+
+Newsletter message sending is handled by the unified `client.send_message()` method — see the [Send API](/api/send#send_message). Reactions remain on the `Newsletter` struct because they use a different stanza format.
 
 <Note>
 Newsletter messages are **plaintext** — they are not encrypted with the Signal protocol.
@@ -183,26 +185,10 @@ let updated = client.newsletter()
 println!("Updated: {}", updated.name);
 ```
 
-### send_message
+### Sending messages
 
-Send a message to a newsletter. Newsletter messages are plaintext (no Signal E2E encryption).
+Newsletter message sending is handled by the unified `client.send_message()` method. See the [Send API reference](/api/send#send_message) for full details.
 
-```rust
-pub async fn send_message(
-    &self,
-    jid: &Jid,
-    message: &wa::Message,
-) -> Result<String, anyhow::Error>
-```
-
-**Parameters:**
-- `jid` — Newsletter JID
-- `message` — Protobuf message to send
-
-**Returns:**
-- `String` — Client-assigned message ID
-
-**Example:**
 ```rust
 use waproto::whatsapp as wa;
 
@@ -211,13 +197,14 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let msg_id = client.newsletter()
-    .send_message(&newsletter_jid, &message)
-    .await?;
+// Pass a newsletter JID directly to send_message
+let msg_id = client.send_message(newsletter_jid, message).await?;
 ```
 
+The library detects newsletter recipients automatically and sends messages as plaintext (no Signal encryption), with the correct `type` and `mediatype` stanza attributes inferred from the message content.
+
 <Note>
-For media messages (images, videos, etc.), the media must be uploaded separately using the newsletter-specific upload endpoint before sending. Text messages work directly.
+`Newsletter::send_message()` was removed. Use `client.send_message()` instead — it accepts newsletter, group, and direct message JIDs.
 </Note>
 
 ### send_reaction
@@ -433,7 +420,7 @@ pub enum MexError {
 }
 ```
 
-Message operations (`send_message`, `send_reaction`, `get_messages`, `subscribe_live_updates`) return `anyhow::Error`.
+Message operations (`send_reaction`, `get_messages`, `subscribe_live_updates`) return `anyhow::Error`. Newsletter message sending uses `client.send_message()` which also returns `anyhow::Error`.
 
 ```rust
 match client.newsletter().create("Test", None).await {

@@ -120,6 +120,8 @@ pub trait Runtime: Send + Sync + 'static {
 }
 ```
 
+`AbortHandle` is `#[must_use]` — dropping the handle aborts the spawned task. Call `.detach()` on the handle for fire-and-forget tasks that should run to completion independently. See [custom backends — AbortHandle](/guides/custom-backends#aborthandle) for implementation details.
+
 The `yield_frequency()` method controls how often the client cooperatively yields during tight async loops (such as processing incoming frames). It returns the number of items to process before yielding. The default value is `10`. Single-threaded runtimes should return `1` to avoid starving the event loop, while multi-threaded runtimes can use higher values or rely on `yield_now()` returning `None`.
 
 On WASM targets, `Send` bounds are automatically removed via `#[cfg(target_arch = "wasm32")]`.
@@ -316,11 +318,31 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 **Connection timeout:** Both the transport connection and version fetch are wrapped in a 20-second timeout (`TRANSPORT_CONNECT_TIMEOUT`), matching WhatsApp Web's MQTT and DGW defaults. This prevents dead networks from blocking on the OS TCP SYN timeout (~60-75s). Both operations run in parallel via `tokio::join!`.
 
 **Reconnection flow:**
-1. Connection lost → `cleanup_connection_state()`
+1. Connection lost → `cleanup_connection_state()` (see [disconnect cleanup](#disconnect-cleanup))
 2. Check `enable_auto_reconnect` → exit if disabled (401, 409, 516 disable this)
 3. Check `expected_disconnect` → immediate reconnect if expected (e.g., 515)
 4. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
 5. Wait → attempt reconnection (with 20s connect timeout)
+
+### Disconnect cleanup
+
+When a connection is lost or `disconnect()` is called, `cleanup_connection_state()` resets all connection-scoped state to prevent stale data from leaking into the next connection:
+
+| Resource | Action | Reason |
+|----------|--------|--------|
+| Transport, events, noise socket | Set to `None` | Release connection resources |
+| `is_connected` | Set to `false` (Release ordering) | After socket is `None` so no task sees connected with a cleared socket |
+| `message_queues` | Invalidated | Drop per-chat queue senders so workers exit via channel close — prevents stale workers from the old connection surviving reconnects with outdated signal/crypto state |
+| `pending_retries` | Cleared | Stale keys from detached scope guard cleanup would otherwise suppress the first retry after reconnect |
+| `signal_cache` | Cleared | Prevents stale signal state from leaking across connections |
+| `response_waiters` | Drained | Pending IQ waiters fail fast with `InternalChannelClosed` instead of hanging until the 75s timeout |
+| Offline sync state | Reset | Counters, timing, and semaphore replaced with fresh single-permit instance |
+| Dead-socket timestamps | Reset to 0 | Prevents stale values from triggering an immediate reconnect on the next connection |
+| `app_state_key_requests`, `app_state_syncing` | Replaced with empty maps | Prevents unbounded growth across reconnections |
+
+<Note>
+Message queue invalidation is critical for correctness. Without it, stale message processing workers from the previous connection survive reconnects, holding outdated Signal session state that causes decryption failures on the new connection.
+</Note>
 
 **Stream error behavior:**
 - **401 (unauthorized)**: Disables auto-reconnect, emits `LoggedOut`

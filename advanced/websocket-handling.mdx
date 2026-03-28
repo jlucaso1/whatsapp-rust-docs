@@ -641,17 +641,27 @@ impl Client {
 
 ### 4. Disconnect
 
+On disconnect, the client runs `cleanup_connection_state()` which resets all connection-scoped state:
+
 ```rust
 impl Client {
-    pub async fn disconnect(&self) -> Result<()> {
-        if let Some(socket) = self.noise_socket.swap(None) {
-            // Transport will close connection
-            socket.transport.disconnect().await;
-        }
-        Ok(())
+    async fn cleanup_connection_state(&self) {
+        self.shutdown_notifier.notify(usize::MAX);
+        *self.transport.lock().await = None;
+        *self.noise_socket.lock().await = None;
+        self.is_connected.store(false, Ordering::Release);
+
+        // Drop per-chat message queue senders so workers exit via channel close.
+        // Without this, stale workers from the old connection survive reconnects
+        // holding outdated signal/crypto state.
+        self.message_queues.invalidate_all();
+
+        // Clear signal cache, pending retries, IQ waiters, offline sync state...
     }
 }
 ```
+
+Key cleanup actions include invalidating message queues (so stale message processing workers don't survive with outdated crypto state), clearing the signal cache, draining IQ response waiters, and resetting offline sync state. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list.
 
 ### Connection state tracking
 

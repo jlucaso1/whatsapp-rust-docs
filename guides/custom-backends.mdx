@@ -589,7 +589,21 @@ impl Runtime for MyRuntime {
 
 ### AbortHandle
 
-`AbortHandle` is a type-erased cancellation handle. It calls the abort function on drop, ensuring spawned tasks are cleaned up. Call `.detach()` to prevent automatic cancellation for fire-and-forget tasks.
+`AbortHandle` is a type-erased cancellation handle marked `#[must_use]`. Dropping an `AbortHandle` aborts the spawned task, ensuring cleanup. Call `.detach()` to prevent automatic cancellation for fire-and-forget tasks where the task should run to completion even if the parent scope is dropped.
+
+<Warning>
+Because `AbortHandle` is `#[must_use]`, the compiler warns if you discard the return value of `Runtime::spawn()`. You must either store the handle (to abort later), call `.detach()` (to let the task run freely), or explicitly call `.abort()`.
+</Warning>
+
+```rust
+// Store the handle to abort later
+let handle = runtime.spawn(Box::pin(my_task()));
+// ...
+handle.abort(); // Cancel the task
+
+// Detach for fire-and-forget tasks
+runtime.spawn(Box::pin(background_work())).detach();
+```
 
 ### Using your runtime
 

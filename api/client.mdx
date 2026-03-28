@@ -158,7 +158,7 @@ client.logout().await?;
 pub async fn disconnect(self: &Arc<Self>)
 ```
 
-Disconnects gracefully and disables auto-reconnect.
+Disconnects gracefully and disables auto-reconnect. Internally calls `cleanup_connection_state()`, which resets all connection-scoped state — including invalidating per-chat message queues so stale workers exit, clearing the signal cache, draining pending IQ waiters, and resetting offline sync state. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources cleaned up.
 
 ### reconnect
 

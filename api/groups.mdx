@@ -49,6 +49,8 @@ pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, 
 **Returns:**
 - `HashMap<String, GroupMetadata>` - Map of group JID strings to metadata
 
+`GroupMetadata` implements `PartialEq` and `Eq`, allowing direct comparison of group metadata instances.
+
 **GroupMetadata fields:**
 - `id: Jid` - Group JID
 - `subject: String` - Group name
@@ -74,6 +76,8 @@ pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, 
 - `allow_non_admin_sub_group_creation: bool` - Whether non-admin community members can create subgroups
 
 See [Community API](/api/community) for community-specific operations.
+
+`GroupParticipant` implements `PartialEq` and `Eq`.
 
 **GroupParticipant fields:**
 - `jid: Jid` - Participant JID
@@ -138,7 +142,7 @@ pub async fn create_group(
   - `ephemeral_expiration: Option<u32>` - Disappearing messages timer in seconds (default: `0`)
 
 **Returns:**
-- `CreateGroupResult` with `gid: Jid` field
+- `CreateGroupResult` with `gid: Jid` field. Implements `PartialEq` and `Eq`.
 
 When the `PRIVACY_TOKEN_ON_GROUP_CREATE` AB prop is enabled, the library automatically resolves and attaches privacy tokens (`tc_token`) to each participant during group creation. This is handled internally — you don't need to manage tokens yourself.
 

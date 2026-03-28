@@ -275,9 +275,10 @@ for p in &participants {
 
 ### CreateCommunityOptions
 
-Options for creating a new community.
+Options for creating a new community. Implements `PartialEq` and `Eq`.
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateCommunityOptions {
     pub name: String,
     pub description: Option<String>,
@@ -301,9 +302,10 @@ let options = CreateCommunityOptions::new("My Community");
 
 ### CreateCommunityResult
 
-Result of creating a community.
+Result of creating a community. Implements `PartialEq` and `Eq`.
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateCommunityResult {
     pub gid: Jid,
 }
@@ -311,9 +313,10 @@ pub struct CreateCommunityResult {
 
 ### CommunitySubgroup
 
-A subgroup within a community.
+A subgroup within a community. Implements `PartialEq` and `Eq`.
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommunitySubgroup {
     pub id: Jid,
     pub subject: String,
@@ -332,9 +335,10 @@ pub struct CommunitySubgroup {
 
 ### LinkSubgroupsResult
 
-Result of linking subgroups to a community.
+Result of linking subgroups to a community. Implements `PartialEq` and `Eq`.
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkSubgroupsResult {
     pub linked_jids: Vec<Jid>,
     pub failed_groups: Vec<(Jid, u32)>,
@@ -343,9 +347,10 @@ pub struct LinkSubgroupsResult {
 
 ### UnlinkSubgroupsResult
 
-Result of unlinking subgroups from a community.
+Result of unlinking subgroups from a community. Implements `PartialEq` and `Eq`.
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlinkSubgroupsResult {
     pub unlinked_jids: Vec<Jid>,
     pub failed_groups: Vec<(Jid, u32)>,
@@ -354,9 +359,11 @@ pub struct UnlinkSubgroupsResult {
 
 ### GroupType
 
-Classification of a group within the community hierarchy.
+Classification of a group within the community hierarchy. Implements `PartialEq` and `Eq`.
 
 ```rust
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupType {
     Default,
     Community,
@@ -365,6 +372,8 @@ pub enum GroupType {
     LinkedGeneralGroup,
 }
 ```
+
+`GroupType` is `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
 
 **Variants:**
 - `Default` — Regular standalone group

@@ -208,6 +208,7 @@ match group_type(&metadata) {
     GroupType::LinkedAnnouncementGroup => println!("This is the default announcement subgroup"),
     GroupType::LinkedGeneralGroup => println!("This is the general chat subgroup"),
     GroupType::Default => println!("This is a regular group"),
+    _ => println!("Unknown group type"),
 }
 ```
 

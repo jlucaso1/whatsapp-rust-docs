@@ -306,9 +306,10 @@ println!("Subscribed for {}s", duration);
 
 ### NewsletterMetadata
 
-Metadata for a newsletter channel.
+Metadata for a newsletter channel. Implements `PartialEq` and `Eq` for direct comparison.
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewsletterMetadata {
     pub jid: Jid,
     pub name: String,
@@ -327,6 +328,8 @@ pub struct NewsletterMetadata {
 ### NewsletterVerification
 
 ```rust
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NewsletterVerification {
     Verified,
     Unverified,
@@ -336,6 +339,8 @@ pub enum NewsletterVerification {
 ### NewsletterState
 
 ```rust
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NewsletterState {
     Active,
     Suspended,
@@ -348,6 +353,8 @@ pub enum NewsletterState {
 The viewer's role in a newsletter.
 
 ```rust
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NewsletterRole {
     Owner,
     Admin,
@@ -355,6 +362,8 @@ pub enum NewsletterRole {
     Guest,
 }
 ```
+
+All newsletter enums are `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
 
 ### NewsletterMessage
 
@@ -379,9 +388,10 @@ pub struct NewsletterMessage {
 
 ### NewsletterMessageType
 
-The type of a newsletter message. Uses a `StringEnum` for type-safe wire-protocol mapping.
+The type of a newsletter message. Uses a `StringEnum` for type-safe wire-protocol mapping. Implements `PartialEq` and `Eq`.
 
 ```rust
+#[non_exhaustive]
 pub enum NewsletterMessageType {
     Text,          // "text"
     Media,         // "media"

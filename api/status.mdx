@@ -25,7 +25,7 @@ pub async fn send_text(
     text: &str,
     background_argb: u32,
     font: i32,
-    recipients: Vec<Jid>,
+    recipients: &[Jid],
     options: StatusSendOptions,
 ) -> Result<SendResult, anyhow::Error>
 ```
@@ -34,7 +34,7 @@ pub async fn send_text(
 - `text` - Status text content
 - `background_argb` - Background color as ARGB (e.g., `0xFF1E6E4F`)
 - `font` - Font style index (0-4)
-- `recipients` - List of recipient JIDs
+- `recipients` - Slice of recipient JIDs
 - `options` - Privacy and delivery options
 
 **Returns:**
@@ -44,7 +44,7 @@ pub async fn send_text(
 ```rust
 use whatsapp_rust::{Jid, StatusSendOptions};
 
-let recipients = vec![
+let recipients = [
     Jid::pn("15551234567"),
     Jid::pn("15559876543"),
 ];
@@ -54,7 +54,7 @@ let result = client.status()
         "Hello from Rust!",
         0xFF1E6E4F, // Green background
         0,          // Default font
-        recipients,
+        &recipients,
         StatusSendOptions::default(),
     )
     .await?;
@@ -72,7 +72,7 @@ pub async fn send_image(
     upload: &UploadResponse,
     thumbnail: Vec<u8>,
     caption: Option<&str>,
-    recipients: Vec<Jid>,
+    recipients: &[Jid],
     options: StatusSendOptions,
 ) -> Result<SendResult, anyhow::Error>
 ```
@@ -81,7 +81,7 @@ pub async fn send_image(
 - `upload` - Upload response from `client.upload()`
 - `thumbnail` - JPEG thumbnail bytes
 - `caption` - Optional caption text
-- `recipients` - List of recipient JIDs
+- `recipients` - Slice of recipient JIDs
 - `options` - Privacy options
 
 **Example:**
@@ -95,14 +95,12 @@ let upload = client.upload(image_data, MediaType::Image, Default::default()).awa
 // Create thumbnail (simplified - use proper JPEG encoding)
 let thumbnail = create_thumbnail(&image_data)?;
 
-let recipients = vec![Jid::pn("15551234567")];
-
 let result = client.status()
     .send_image(
         &upload,
         thumbnail,
         Some("Check this out!"),
-        recipients,
+        &[Jid::pn("15551234567")],
         StatusSendOptions::default(),
     )
     .await?;
@@ -119,7 +117,7 @@ pub async fn send_video(
     thumbnail: Vec<u8>,
     duration_seconds: u32,
     caption: Option<&str>,
-    recipients: Vec<Jid>,
+    recipients: &[Jid],
     options: StatusSendOptions,
 ) -> Result<SendResult, anyhow::Error>
 ```
@@ -129,7 +127,7 @@ pub async fn send_video(
 - `thumbnail` - JPEG thumbnail bytes
 - `duration_seconds` - Video duration
 - `caption` - Optional caption text
-- `recipients` - List of recipient JIDs
+- `recipients` - Slice of recipient JIDs
 - `options` - Privacy options
 
 **Example:**
@@ -140,15 +138,13 @@ let video_data = std::fs::read("video.mp4")?;
 let upload = client.upload(video_data, MediaType::Video, Default::default()).await?;
 let thumbnail = extract_video_thumbnail(&video_data)?;
 
-let recipients = vec![Jid::pn("15551234567")];
-
 let result = client.status()
     .send_video(
         &upload,
         thumbnail,
         30, // 30 seconds
         None,
-        recipients,
+        &[Jid::pn("15551234567")],
         StatusSendOptions::default(),
     )
     .await?;
@@ -162,7 +158,7 @@ Send a custom message type as a status update.
 pub async fn send_raw(
     &self,
     message: wa::Message,
-    recipients: Vec<Jid>,
+    recipients: &[Jid],
     options: StatusSendOptions,
 ) -> Result<SendResult, anyhow::Error>
 ```
@@ -192,7 +188,7 @@ Delete a previously sent status update.
 pub async fn revoke(
     &self,
     message_id: impl Into<String>,
-    recipients: Vec<Jid>,
+    recipients: &[Jid],
     options: StatusSendOptions,
 ) -> Result<SendResult, anyhow::Error>
 ```
@@ -206,12 +202,12 @@ pub async fn revoke(
 ```rust
 // Send a status
 let result = client.status()
-    .send_text("Temporary status", 0xFF000000, 0, recipients.clone(), Default::default())
+    .send_text("Temporary status", 0xFF000000, 0, &recipients, Default::default())
     .await?;
 
 // Later, revoke it
 client.status()
-    .revoke(&result.message_id, recipients, Default::default())
+    .revoke(&result.message_id, &recipients, Default::default())
     .await?;
 ```
 
@@ -222,6 +218,7 @@ client.status()
 Privacy setting for status delivery.
 
 ```rust
+#[non_exhaustive]
 pub enum StatusPrivacySetting {
     /// Send to all contacts in address book (default)
     Contacts,
@@ -231,6 +228,8 @@ pub enum StatusPrivacySetting {
     DenyList,
 }
 ```
+
+`StatusPrivacySetting` is `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
 
 ### StatusSendOptions
 
@@ -288,18 +287,22 @@ let overlay = 0x80000000_u32;
 
 ## Recipient management
 
-Recipients should be JIDs of users who can see the status:
+Recipients should be JIDs of users who can see the status. You can pass any `&[Jid]` — an array literal, a slice of a `Vec`, or a fixed-size array:
 
 ```rust
-// Single recipient
-let recipients = vec![Jid::pn("15551234567")];
+// Single recipient (array literal)
+let recipients = &[Jid::pn("15551234567")];
 
 // Multiple recipients
-let recipients = vec![
+let recipients = &[
     Jid::pn("15551234567"),
     Jid::pn("15559876543"),
     "15557654321@s.whatsapp.net".parse()?,
 ];
+
+// From an existing Vec
+let jids = vec![Jid::pn("15551234567")];
+let recipients = &jids;
 ```
 
 <Note>

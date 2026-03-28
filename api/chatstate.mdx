@@ -189,7 +189,7 @@ let audio_data = record_audio();
 client.chatstate().send_paused(&recipient).await?;
 
 // Upload and send audio message
-let upload = client.upload(audio_data, MediaType::Audio).await?;
+let upload = client.upload(audio_data, MediaType::Audio, Default::default()).await?;
 let message = wa::Message {
     audio_message: Some(Box::new(wa::message::AudioMessage {
         url: Some(upload.url),

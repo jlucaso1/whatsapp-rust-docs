@@ -529,7 +529,7 @@ The client manages media connections internally. Use the high-level `upload` met
 use whatsapp_rust::download::MediaType;
 
 // Upload handles encryption, auth, and CDN host selection automatically
-let upload_response = client.upload(media_bytes, MediaType::Image).await?;
+let upload_response = client.upload(media_bytes, MediaType::Image, Default::default()).await?;
 ```
 
 Under the hood, the client uses the HTTP client to:

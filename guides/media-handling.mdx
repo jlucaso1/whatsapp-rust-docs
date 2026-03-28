@@ -126,7 +126,7 @@ Set the `jpeg_thumbnail` field on image, video, or document messages:
 ```rust
 use waproto::whatsapp as wa;
 
-let upload = client.upload(image_data, MediaType::Image).await?;
+let upload = client.upload(image_data, MediaType::Image, Default::default()).await?;
 
 let message = wa::Message {
     image_message: Some(Box::new(wa::message::ImageMessage {
@@ -167,7 +167,7 @@ When re-uploading media (for example, after processing or transcoding), you can 
 ```rust
 if let Some(img) = &message.image_message {
     let data = client.download(img.as_ref()).await?;
-    let upload = client.upload(data, MediaType::Image).await?;
+    let upload = client.upload(data, MediaType::Image, Default::default()).await?;
 
     let reply = wa::Message {
         image_message: Some(Box::new(wa::message::ImageMessage {
@@ -275,7 +275,7 @@ use whatsapp_rust::upload::UploadResponse;
 let data = std::fs::read("photo.jpg")?;
 
 // Upload with automatic encryption
-let upload: UploadResponse = client.upload(data, MediaType::Image).await?;
+let upload: UploadResponse = client.upload(data, MediaType::Image, Default::default()).await?;
 
 println!("URL: {}", upload.url);
 println!("Direct path: {}", upload.direct_path);
@@ -289,7 +289,7 @@ See [Upload API reference](/api/upload) for full details.
 ```rust
 use waproto::whatsapp as wa;
 
-let upload = client.upload(image_data, MediaType::Image).await?;
+let upload = client.upload(image_data, MediaType::Image, Default::default()).await?;
 
 let message = wa::Message {
     image_message: Some(Box::new(wa::message::ImageMessage {
@@ -334,7 +334,7 @@ Resumable upload detection is fully transparent. You call `client.upload()` the 
 ```rust
 // Large files automatically use resumable upload logic
 let video_bytes = std::fs::read("large_video.mp4")?; // e.g., 50 MiB
-let upload = client.upload(video_bytes, MediaType::Video).await?;
+let upload = client.upload(video_bytes, MediaType::Video, Default::default()).await?;
 // If a partial upload existed, only the remaining bytes were sent
 ```
 
@@ -352,6 +352,7 @@ pub enum MediaType {
     AppState,
     Sticker,
     StickerPack,
+    StickerPackThumbnail,
     LinkThumbnail,
     ProductCatalogImage,
 }
@@ -401,7 +402,7 @@ Media is automatically encrypted before upload:
 ```rust
 // Encryption happens automatically in upload()
 let data = std::fs::read("file.pdf")?;
-let upload = client.upload(data, MediaType::Document).await?;
+let upload = client.upload(data, MediaType::Document, Default::default()).await?;
 
 // The UploadResponse contains all encryption metadata
 assert_eq!(upload.media_key.len(), 32);
@@ -521,7 +522,7 @@ async fn safe_upload(
     data: Vec<u8>,
     media_type: MediaType,
 ) -> Result<UploadResponse> {
-    match client.upload(data, media_type).await {
+    match client.upload(data, media_type, Default::default()).await {
         Ok(upload) => {
             println!("✅ Uploaded to: {}", upload.url);
             Ok(upload)
@@ -646,7 +647,7 @@ The client automatically manages media connection tokens, including refreshing t
 
 ```rust
 // Automatically refreshed when expired or rejected
-let upload = client.upload(data, MediaType::Image).await?;
+let upload = client.upload(data, MediaType::Image, Default::default()).await?;
 let download = client.download(downloadable).await?;
 
 // No manual token management needed!

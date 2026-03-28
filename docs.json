@@ -80,6 +80,7 @@
               "api/send",
               "api/download",
               "api/upload",
+              "api/media-reupload",
               "api/receipt"
             ]
           },
@@ -100,6 +101,7 @@
               "api/newsletter",
               "api/community",
               "api/polls",
+              "api/spam-report",
               "api/tctoken"
             ]
           },

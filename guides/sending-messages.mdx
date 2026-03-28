@@ -1,11 +1,11 @@
 ---
 title: Sending Messages
-description: Learn how to send text messages, reactions, quoted replies, album messages, and edit messages in whatsapp-rust
+description: Learn how to send text messages, reactions, quoted replies, album messages, sticker packs, and edit messages in whatsapp-rust
 ---
 
 ## Overview
 
-This guide covers sending messages, including text, reactions, quotes, album messages (grouped media), and message editing operations using the whatsapp-rust library.
+This guide covers sending messages, including text, reactions, quotes, album messages (grouped media), sticker packs, and message editing operations using the whatsapp-rust library.
 
 ## Sending Text Messages
 
@@ -347,7 +347,7 @@ let parent_key = parent_result.message_key();
 
 // Step 2: Upload and send each child image
 for image_data in [image1_bytes, image2_bytes, image3_bytes] {
-    let upload = client.upload(image_data, MediaType::Image).await?;
+    let upload = client.upload(image_data, MediaType::Image, Default::default()).await?;
 
     let image_msg = wa::Message {
         image_message: Some(Box::new(wa::message::ImageMessage {
@@ -407,6 +407,114 @@ client.send_message(chat_jid.clone(), image_wrapped).await?;
 let video_wrapped = wrap_as_album_child(video_msg, parent_key.clone());
 client.send_message(chat_jid.clone(), video_wrapped).await?;
 ```
+
+## Sticker packs
+
+Sticker packs let you send a collection of stickers as a single message — the inline sticker pack bubble that WhatsApp displays with a tray icon, pack name, and publisher info.
+
+A sticker pack requires:
+1. **Sticker images** — 512x512 WebP files
+2. **Cover image** — WebP file used as the tray icon
+3. **Thumbnail** — JPEG uploaded separately with the same `media_key` as the ZIP
+4. **Metadata** — pack ID, name, and publisher
+
+### Sending a sticker pack
+
+```rust
+use wacore::sticker_pack::{
+    StickerInput, StickerPackMetadata,
+    create_sticker_pack_zip, build_sticker_pack_message,
+};
+use wacore::download::MediaType;
+use whatsapp_rust::upload::UploadOptions;
+
+let chat_jid: Jid = "1234567890@s.whatsapp.net".parse()?;
+
+// Step 1: Create sticker inputs with optional emojis
+let stickers = vec![
+    StickerInput::new(&webp_bytes_1).with_emojis(vec!["😀".into()]),
+    StickerInput::new(&webp_bytes_2).with_emojis(vec!["🎉".into()]),
+    StickerInput::new(&webp_bytes_3),
+];
+
+// Step 2: Bundle stickers into a ZIP with the cover image
+let zip_result = create_sticker_pack_zip("my-pack-id", &stickers, &cover_webp)?;
+
+// Step 3: Upload the ZIP
+let zip_upload = client.upload(
+    zip_result.zip_bytes.clone(),
+    MediaType::StickerPack,
+    UploadOptions::default(),
+).await?;
+
+// Step 4: Upload the thumbnail JPEG with the same media_key
+let thumb_upload = client.upload(
+    thumbnail_jpeg,
+    MediaType::StickerPackThumbnail,
+    UploadOptions::new().with_media_key(zip_upload.media_key.clone()),
+).await?;
+
+// Step 5: Build and send the message
+let metadata = StickerPackMetadata::new(
+    "my-pack-id".into(),
+    "My Sticker Pack".into(),
+    "My Name".into(),
+);
+
+let msg = build_sticker_pack_message(
+    &zip_result,
+    &zip_upload.into(),
+    &thumb_upload.into(),
+    metadata,
+);
+
+client.send_message(chat_jid, msg).await?;
+```
+
+### How it works
+
+The sticker pack flow uses two helper functions from `wacore::sticker_pack`:
+
+- **`create_sticker_pack_zip`** — bundles stickers and a cover image into a ZIP file. Filenames use `base64url(sha256).webp`, and identical stickers are deduplicated. Returns a `StickerPackZipResult` containing the ZIP bytes and proto metadata.
+- **`build_sticker_pack_message`** — constructs a `wa::Message` with a `StickerPackMessage` from the ZIP result and upload responses.
+
+The thumbnail must be uploaded with `MediaType::StickerPackThumbnail` and the same `media_key` as the ZIP upload. The `UploadResponse` implements `Into<MediaUploadInfo>` for convenience.
+
+### Sticker format requirements
+
+| Field | Requirement |
+|---|---|
+| Sticker images | 512x512 WebP |
+| Cover image | WebP, stored in ZIP as `{pack_id}.webp` |
+| Thumbnail | JPEG, uploaded separately with same `media_key` |
+| Pack ID | Non-empty, max 128 bytes, no path separators or control chars |
+| Sticker count | 1 to 60 per pack |
+
+### Sticker metadata
+
+Each sticker supports optional metadata:
+
+```rust
+StickerInput::new(&webp_bytes)
+    .with_emojis(vec!["😀".into(), "🎉".into()])
+    .with_accessibility_label("happy face".into())
+```
+
+Pack-level metadata supports optional description and caption:
+
+```rust
+let metadata = StickerPackMetadata::new(
+    "pack-id".into(),
+    "Pack Name".into(),
+    "Publisher".into(),
+)
+.with_description("A fun sticker pack".into())
+.with_caption("Check out my stickers!".into());
+```
+
+<Note>
+Animated stickers are automatically detected from the WebP data. The `is_animated` field on each sticker proto entry is set based on whether the WebP file contains animation frames.
+</Note>
 
 ## Forwarding media messages
 
@@ -660,6 +768,7 @@ async fn send_safe_message(
 - **Replies**: Use `extended_text_message` with `context_info`
 - **Media**: Use specific media message types with optional captions
 - **Albums**: Use `album_message` parent + `wrap_as_album_child` for grouped media
+- **Sticker packs**: Use `create_sticker_pack_zip` + `build_sticker_pack_message` with two uploads (ZIP + thumbnail)
 - **Disappearing chats**: Use `send_message_with_options` with `ephemeral_expiration` matching the chat's timer
 
 ### Handle Message IDs

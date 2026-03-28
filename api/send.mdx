@@ -33,6 +33,7 @@ pub async fn send_message(
   - `document_message` - Document/file
   - `audio_message` - Audio/voice note
   - `sticker_message` - Sticker
+  - `sticker_pack_message` - Sticker pack (grouped sticker collection)
   - `location_message` - GPS location
   - `contact_message` - Contact card
   - `album_message` - Album (grouped media) parent message
@@ -103,7 +104,7 @@ Newsletter reactions use a different stanza format and are still sent through `c
 use waproto::whatsapp as wa;
 
 // First upload the image
-let upload_result = client.upload(image_bytes, MediaType::Image).await?;
+let upload_result = client.upload(image_bytes, MediaType::Image, Default::default()).await?;
 
 let message = wa::Message {
     image_message: Some(Box::new(wa::message::ImageMessage {
@@ -694,7 +695,7 @@ The `type` attribute on the outer `<message>` XML node is determined by `stanza_
 | Stanza type | Message types |
 |---|---|
 | `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `extended_text_message` (without `matched_text`), `secret_encrypted_message` with `SecretEncType::MessageEdit`, `poll_result_snapshot_message`, `poll_result_snapshot_message_v3` |
-| `"media"` | `image_message`, `video_message`, `audio_message`, `document_message`, `sticker_message`, `location_message`, `contact_message`, `extended_text_message` (with `matched_text`), and all other media types |
+| `"media"` | `image_message`, `video_message`, `audio_message`, `document_message`, `sticker_message`, `sticker_pack_message`, `location_message`, `contact_message`, `extended_text_message` (with `matched_text`), and all other media types |
 | `"reaction"` | `reaction_message`, `enc_reaction_message` |
 | `"poll"` | `poll_creation_message`, `poll_creation_message_v2`, `poll_creation_message_v3`, `poll_creation_message_v5`, `poll_update_message`, `secret_encrypted_message` with `SecretEncType::PollEdit` |
 | `"event"` | `event_message`, `enc_event_response_message`, `secret_encrypted_message` with `SecretEncType::EventEdit` |
@@ -713,6 +714,7 @@ The `mediatype` attribute on the inner `<enc>` XML node provides a more specific
 | `"audio"` | `audio_message` with `ptt` not set or `false` |
 | `"document"` | `document_message` present |
 | `"sticker"` | `sticker_message` present |
+| `"sticker_pack"` | `sticker_pack_message` present |
 | `"location"` | `location_message` with `is_live` not set or `false` |
 | `"livelocation"` | `location_message` with `is_live = true`, or `live_location_message` |
 | `"vcard"` | `contact_message` present |
@@ -772,6 +774,10 @@ The `wa::Message` protobuf supports various message types. Set exactly one of th
 
 <ParamField path="sticker_message" type="StickerMessage">
   Sticker image (WebP format)
+</ParamField>
+
+<ParamField path="sticker_pack_message" type="StickerPackMessage">
+  Sticker pack containing multiple stickers as a ZIP. Build using `create_sticker_pack_zip` and `build_sticker_pack_message` from `wacore::sticker_pack`. Requires two uploads: the sticker pack ZIP (`MediaType::StickerPack`) and a JPEG thumbnail (`MediaType::StickerPackThumbnail`) sharing the same `media_key`. See [sticker packs](/guides/sending-messages#sticker-packs).
 </ParamField>
 
 ### Other Messages

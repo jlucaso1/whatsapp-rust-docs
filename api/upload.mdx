@@ -15,7 +15,8 @@ Only use `upload` for new or modified media. To forward existing media unchanged
 pub async fn upload(
     &self,
     data: Vec<u8>,
-    media_type: MediaType
+    media_type: MediaType,
+    options: UploadOptions,
 ) -> Result<UploadResponse, anyhow::Error>
 ```
 
@@ -30,8 +31,14 @@ pub async fn upload(
   - `MediaType::Audio` - Audio files and voice notes
   - `MediaType::Document` - Documents and other files
   - `MediaType::Sticker` - Sticker images
+  - `MediaType::StickerPack` - Sticker pack ZIP files
+  - `MediaType::StickerPackThumbnail` - Sticker pack thumbnail images
   - `MediaType::LinkThumbnail` - Link preview thumbnails
   - `MediaType::ProductCatalogImage` - Product catalog images (unencrypted)
+</ParamField>
+
+<ParamField path="options" type="UploadOptions" required>
+  Upload options. Use `Default::default()` or `UploadOptions::new()` for default behavior. See [UploadOptions](#uploadoptions) below.
 </ParamField>
 
 <ResponseField name="UploadResponse" type="struct">
@@ -89,7 +96,7 @@ use std::fs;
 let image_bytes = fs::read("photo.jpg")?;
 
 // Upload image to WhatsApp CDN
-let upload = client.upload(image_bytes, MediaType::Image).await?;
+let upload = client.upload(image_bytes, MediaType::Image, Default::default()).await?;
 
 // Create image message with upload metadata
 let message = wa::Message {
@@ -122,7 +129,7 @@ use std::fs;
 let video_bytes = fs::read("video.mp4")?;
 println!("Uploading {} bytes...", video_bytes.len());
 
-let upload = client.upload(video_bytes, MediaType::Video).await?;
+let upload = client.upload(video_bytes, MediaType::Video, Default::default()).await?;
 println!("Upload complete!");
 println!("  URL: {}", upload.url);
 println!("  Path: {}", upload.direct_path);
@@ -144,7 +151,7 @@ let filename = doc_path.file_name()
     .and_then(|n| n.to_str())
     .unwrap_or("document.pdf");
 
-let upload = client.upload(doc_bytes, MediaType::Document).await?;
+let upload = client.upload(doc_bytes, MediaType::Document, Default::default()).await?;
 
 let message = wa::Message {
     document_message: Some(Box::new(wa::message::DocumentMessage {
@@ -172,7 +179,7 @@ use wacore::download::MediaType;
 use waproto::whatsapp as wa;
 
 let audio_bytes = fs::read("voice.ogg")?;
-let upload = client.upload(audio_bytes, MediaType::Audio).await?;
+let upload = client.upload(audio_bytes, MediaType::Audio, Default::default()).await?;
 
 let message = wa::Message {
     audio_message: Some(Box::new(wa::message::AudioMessage {
@@ -191,6 +198,56 @@ let message = wa::Message {
 };
 
 let result = client.send_message(chat_jid, message).await?;
+```
+
+---
+
+## UploadOptions
+
+Options for customizing upload behavior.
+
+```rust
+pub struct UploadOptions {
+    /// Reuse an existing media key instead of generating a fresh one.
+    pub media_key: Option<Vec<u8>>,
+}
+```
+
+<ParamField path="media_key" type="Option<Vec<u8>>" default="None">
+  When set, reuses the provided 32-byte media key instead of generating a new one. This is required when uploading a sticker pack thumbnail, which must share the same `media_key` as the sticker pack ZIP.
+</ParamField>
+
+### Creating options
+
+```rust
+use whatsapp_rust::upload::UploadOptions;
+
+// Default options (generates a new media key)
+let options = UploadOptions::default();
+
+// Reuse an existing media key
+let options = UploadOptions::new().with_media_key(existing_key.clone());
+```
+
+### Example: Upload sticker pack thumbnail with shared key
+
+```rust
+use whatsapp_rust::upload::UploadOptions;
+use wacore::download::MediaType;
+
+// Upload the sticker pack ZIP first
+let zip_upload = client.upload(
+    zip_bytes,
+    MediaType::StickerPack,
+    UploadOptions::default(),
+).await?;
+
+// Upload the thumbnail with the same media_key
+let thumb_upload = client.upload(
+    thumbnail_jpeg,
+    MediaType::StickerPackThumbnail,
+    UploadOptions::new().with_media_key(zip_upload.media_key.clone()),
+).await?;
 ```
 
 ---
@@ -465,6 +522,7 @@ MediaType::Audio              → "WhatsApp Audio Keys"
 MediaType::Document           → "WhatsApp Document Keys"
 MediaType::Sticker            → "WhatsApp Image Keys"
 MediaType::StickerPack        → "WhatsApp Sticker Pack Keys"
+MediaType::StickerPackThumbnail → "WhatsApp Sticker Pack Thumbnail Keys"
 MediaType::LinkThumbnail      → "WhatsApp Link Thumbnail Keys"
 MediaType::History            → "WhatsApp History Keys"
 MediaType::AppState           → "WhatsApp App State Keys"
@@ -501,6 +559,7 @@ pub enum MediaType {
     AppState,
     Sticker,
     StickerPack,
+    StickerPackThumbnail,
     LinkThumbnail,
     ProductCatalogImage,
 }
@@ -535,7 +594,11 @@ pub enum MediaType {
 </ParamField>
 
 <ParamField path="StickerPack" type="variant">
-  Sticker pack metadata. Uses `/mms/sticker-pack` endpoint and `"WhatsApp Sticker Pack Keys"` for HKDF.
+  Sticker pack ZIP files. Uses `/mms/sticker-pack` endpoint and `"WhatsApp Sticker Pack Keys"` for HKDF.
+</ParamField>
+
+<ParamField path="StickerPackThumbnail" type="variant">
+  Sticker pack thumbnail images (JPEG). Uses `/mms/thumbnail-sticker-pack` endpoint and `"WhatsApp Sticker Pack Thumbnail Keys"` for HKDF. Must be uploaded with the same `media_key` as the corresponding sticker pack ZIP — use `UploadOptions::new().with_media_key(...)`.
 </ParamField>
 
 <ParamField path="LinkThumbnail" type="variant">
@@ -596,7 +659,7 @@ For non-auth HTTP errors (such as 500), the client tries the next available CDN 
   CDN returned error status. Auth errors (401/403) are retried automatically with fresh credentials. Other errors are tried against alternate CDN hosts.
   
   ```rust
-  match client.upload(data, media_type).await {
+  match client.upload(data, media_type, Default::default()).await {
       Err(e) if e.to_string().contains("Upload failed") => {
           eprintln!("CDN error: {}", e);
           // Retry or use fallback
@@ -619,7 +682,7 @@ For non-auth HTTP errors (such as 500), the client tries the next available CDN 
   Failed to encrypt media (rare, usually indicates invalid input).
   
   ```rust
-  match client.upload(data, media_type).await {
+  match client.upload(data, media_type, Default::default()).await {
       Err(e) if e.to_string().contains("encrypt") => {
           eprintln!("Encryption error: {}", e);
       }
@@ -642,7 +705,7 @@ let max_attempts = 3;
 let upload = loop {
     attempts += 1;
     
-    match client.upload(data.clone(), MediaType::Image).await {
+    match client.upload(data.clone(), MediaType::Image, Default::default()).await {
         Ok(upload) => break upload,
         Err(e) if attempts < max_attempts => {
             eprintln!("Upload attempt {} failed: {}", attempts, e);

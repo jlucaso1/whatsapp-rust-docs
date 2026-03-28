@@ -207,11 +207,14 @@ let result = client.send_message(chat_jid, message).await?;
 Options for customizing upload behavior.
 
 ```rust
+#[non_exhaustive]
 pub struct UploadOptions {
     /// Reuse an existing media key instead of generating a fresh one.
     pub media_key: Option<Vec<u8>>,
 }
 ```
+
+`UploadOptions` is `#[non_exhaustive]`, so it cannot be constructed using struct literal syntax from outside the crate. Use `UploadOptions::default()` or `UploadOptions::new()` with builder methods instead.
 
 <ParamField path="media_key" type="Option<Vec<u8>>" default="None">
   When set, reuses the provided 32-byte media key instead of generating a new one. This is required when uploading a sticker pack thumbnail, which must share the same `media_key` as the sticker pack ZIP.

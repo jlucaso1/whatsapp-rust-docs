@@ -97,12 +97,15 @@ println!("Cleared typing indicator");
 ## ChatStateType Enum
 
 ```rust
+#[non_exhaustive]
 pub enum ChatStateType {
     Composing,  // Typing text
     Recording,  // Recording audio
     Paused,     // Stopped typing/recording
 }
 ```
+
+`ChatStateType` is `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
 
 **Methods:**
 - `as_str()` - Returns `"composing"`, `"recording"`, or `"paused"`

@@ -119,11 +119,14 @@ println!("Unsubscribed from {}'s presence", contact_jid);
 ## PresenceStatus Enum
 
 ```rust
+#[non_exhaustive]
 pub enum PresenceStatus {
     Available,    // Online
     Unavailable,  // Offline
 }
 ```
+
+`PresenceStatus` is `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
 
 **Methods:**
 - `as_str()` - Returns `"available"` or `"unavailable"`

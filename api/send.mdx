@@ -48,6 +48,7 @@ pub async fn send_message(
 Result of a successfully sent message. Provides the message ID and a convenience method to construct a `MessageKey` for follow-up operations like album child linking.
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendResult {
     pub message_id: String,
     pub to: Jid,
@@ -389,6 +390,7 @@ pub async fn revoke_message(
 Specifies who is revoking (deleting) the message.
 
 ```rust
+#[non_exhaustive]
 pub enum RevokeType {
     /// The message sender deleting their own message
     Sender,
@@ -397,6 +399,8 @@ pub enum RevokeType {
     Admin { original_sender: Jid },
 }
 ```
+
+`RevokeType` is `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
 
 <ParamField path="Sender" type="variant">
   Default variant. Use when deleting your own message. Works in both DMs and groups.
@@ -474,12 +478,15 @@ pub async fn pin_message(
 Specifies how long a message stays pinned. Defaults to 7 days (matches WhatsApp Web behavior).
 
 ```rust
+#[non_exhaustive]
 pub enum PinDuration {
     Hours24,
     Days7,   // default
     Days30,
 }
 ```
+
+`PinDuration` is `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
 
 <ParamField path="Hours24" type="variant">
   Pin for 24 hours

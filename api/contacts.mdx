@@ -1,9 +1,9 @@
 ---
 title: Contacts
-description: Contact information and profile picture operations
+description: Contact lookup, profile picture, and user info operations
 ---
 
-The `Contacts` struct provides methods for checking WhatsApp registration status, fetching contact information, and retrieving profile pictures.
+The `Contacts` struct provides methods for checking WhatsApp registration status and retrieving profile pictures and user information.
 
 ## Access
 
@@ -17,87 +17,68 @@ let contacts = client.contacts();
 
 ### is_on_whatsapp
 
-Check if phone numbers are registered on WhatsApp.
+Check if JIDs are registered on WhatsApp. Accepts both PN JIDs and LID JIDs.
 
 ```rust
 pub async fn is_on_whatsapp(
     &self,
-    phones: &[&str],
+    jids: &[Jid],
 ) -> Result<Vec<IsOnWhatsAppResult>, anyhow::Error>
 ```
 
 **Parameters:**
-- `phones` - Array of phone numbers (with or without `+` prefix)
+- `jids` - Array of JIDs to check. Supports `Jid::pn("phone_number")` for phone number lookups and `Jid::lid("lid_value")` for LID lookups. Non-PN/non-LID JIDs (groups, newsletters) are skipped with a warning.
 
 **Returns:**
-- `Vec<IsOnWhatsAppResult>` - Registration status for each number
+- `Vec<IsOnWhatsAppResult>` - Registration status for each JID
 
 **IsOnWhatsAppResult fields:**
-- `jid: Jid` - WhatsApp JID for the number
-- `is_registered: bool` - Whether the number is on WhatsApp
+- `jid: Jid` - WhatsApp JID for the user
+- `is_registered: bool` - Whether the JID is on WhatsApp
+- `lid: Option<Jid>` - LID (Linked Identity) if available
+- `pn_jid: Option<Jid>` - Phone number JID, present when the server returns LID as the primary JID
+- `is_business: bool` - Whether this is a WhatsApp Business account
 
-**Example:**
+<Note>
+`IsOnWhatsAppResult` is marked `#[non_exhaustive]`, so new fields may be added in future versions without a breaking change.
+</Note>
+
+**Example — phone number lookup:**
 ```rust
-let phones = vec!["15551234567", "+15559876543"];
-let results = client.contacts().is_on_whatsapp(&phones).await?;
+let results = client.contacts().is_on_whatsapp(&[
+    Jid::pn("15551234567"),
+    Jid::pn("15559876543"),
+]).await?;
 
 for result in results {
     if result.is_registered {
         println!("{} is on WhatsApp", result.jid);
+        if let Some(lid) = &result.lid {
+            println!("  LID: {}", lid);
+        }
+        if result.is_business {
+            println!("  Business account");
+        }
     } else {
         println!("{} is NOT on WhatsApp", result.jid);
     }
 }
 ```
 
-### get_info
-
-Get detailed contact information for phone numbers.
-
+**Example — LID lookup:**
 ```rust
-pub async fn get_info(
-    &self,
-    phones: &[&str],
-) -> Result<Vec<ContactInfo>, anyhow::Error>
-```
+let results = client.contacts().is_on_whatsapp(&[
+    Jid::lid("100000001"),
+]).await?;
 
-**Parameters:**
-- `phones` - Array of phone numbers (with or without `+` prefix)
-
-**Returns:**
-- `Vec<ContactInfo>` - Detailed info for each registered number
-
-**ContactInfo fields:**
-- `jid: Jid` - WhatsApp JID
-- `lid: Option<Jid>` - LID (privacy identifier) if available
-- `is_registered: bool` - Whether on WhatsApp
-- `is_business: bool` - Whether this is a business account
-- `status: Option<String>` - Status message/about
-- `picture_id: Option<u64>` - Profile picture ID
-
-**Example:**
-```rust
-let phones = vec!["15551234567"];
-let contacts = client.contacts().get_info(&phones).await?;
-
-for contact in contacts {
-    println!("JID: {}", contact.jid);
-    println!("  Registered: {}", contact.is_registered);
-    println!("  Business: {}", contact.is_business);
-    
-    if let Some(status) = contact.status {
-        println!("  Status: {}", status);
-    }
-    
-    if let Some(lid) = contact.lid {
-        println!("  LID: {}", lid);
-    }
-    
-    if let Some(pic_id) = contact.picture_id {
-        println!("  Picture ID: {}", pic_id);
+for result in results {
+    if let Some(pn) = &result.pn_jid {
+        println!("LID {} maps to phone {}", result.jid, pn);
     }
 }
 ```
+
+PN and LID queries use different wire protocols (matching WhatsApp Web's ExistsJob), so mixed inputs are automatically split into separate requests. LID-PN mappings discovered from results are persisted to the local cache.
 
 ### get_profile_picture
 
@@ -159,7 +140,7 @@ if let Some(pic) = client.contacts().get_profile_picture(&group_jid, true).await
 
 ### get_user_info
 
-Get user information by JID (more detailed than `get_info`).
+Get user information by JID.
 
 ```rust
 pub async fn get_user_info(
@@ -178,7 +159,7 @@ pub async fn get_user_info(
 - `jid: Jid` - WhatsApp JID
 - `lid: Option<Jid>` - LID if available
 - `status: Option<String>` - Status message
-- `picture_id: Option<String>` - Profile picture ID (String format)
+- `picture_id: Option<String>` - Profile picture ID
 - `is_business: bool` - Whether business account
 
 **Example:**
@@ -193,34 +174,18 @@ let user_info = client.contacts().get_user_info(&jids).await?;
 for (jid, info) in user_info {
     println!("User: {}", jid);
     println!("  Business: {}", info.is_business);
-    
+
     if let Some(status) = info.status {
         println!("  Status: {}", status);
     }
-    
+
     if let Some(pic_id) = info.picture_id {
         println!("  Picture ID: {}", pic_id);
     }
 }
 ```
 
-## Type Differences
-
-### ContactInfo vs UserInfo
-
-Both types provide similar information but with different use cases:
-
-**ContactInfo** (from `get_info`):
-- Input: phone numbers
-- `picture_id: Option<u64>` - Numeric picture ID
-- Used for batch phone number lookups
-
-**UserInfo** (from `get_user_info`):
-- Input: JIDs
-- `picture_id: Option<String>` - String picture ID (may include non-numeric prefixes)
-- Used for detailed JID-based queries
-
-## Privacy & TC Tokens
+## Privacy & TC tokens
 
 For user JIDs (not groups/newsletters), the library automatically includes TC tokens when fetching profile pictures. TC tokens are used for privacy-gated operations.
 
@@ -229,17 +194,16 @@ The implementation automatically:
 - Includes tokens in profile picture requests
 - Skips tokens for groups and newsletters
 
-## Error Handling
+## Error handling
 
 All methods return `Result<T, anyhow::Error>`. Common errors:
 
-- Invalid phone number format
 - Invalid JID format
 - Network errors
 - Rate limiting
 
 ```rust
-match client.contacts().is_on_whatsapp(&["15551234567"]).await {
+match client.contacts().is_on_whatsapp(&[Jid::pn("15551234567")]).await {
     Ok(results) => {
         for result in results {
             println!("Registered: {}", result.is_registered);
@@ -249,17 +213,17 @@ match client.contacts().is_on_whatsapp(&["15551234567"]).await {
 }
 ```
 
-## Batch Operations
+## Batch operations
 
 All lookup methods support batch operations for efficiency:
 
 ```rust
-// Check multiple numbers at once
-let phones = vec!["15551111111", "15552222222", "15553333333"];
-let results = client.contacts().is_on_whatsapp(&phones).await?;
-
-// Get info for multiple numbers
-let contacts = client.contacts().get_info(&phones).await?;
+// Check multiple JIDs at once
+let results = client.contacts().is_on_whatsapp(&[
+    Jid::pn("15551111111"),
+    Jid::pn("15552222222"),
+    Jid::pn("15553333333"),
+]).await?;
 
 // Get info for multiple JIDs
 let jids = vec![
@@ -296,7 +260,21 @@ See the [events reference](/concepts/events#contact-notification-events) for ful
 Passing empty arrays returns empty results without making network requests:
 
 ```rust
-let empty: Vec<&str> = vec![];
+let empty: Vec<Jid> = vec![];
 let results = client.contacts().is_on_whatsapp(&empty).await?;
 assert!(results.is_empty());
 ```
+
+## Migration from previous versions
+
+The `is_on_whatsapp` method previously accepted `&[&str]` (phone number strings). It now takes `&[Jid]`:
+
+```rust
+// Before
+let results = client.contacts().is_on_whatsapp(&["1234567890"]).await?;
+
+// After
+let results = client.contacts().is_on_whatsapp(&[Jid::pn("1234567890")]).await?;
+```
+
+The `get_info` method and `ContactInfo` type have been removed. Use `is_on_whatsapp` for registration checks (now includes `lid`, `pn_jid`, and `is_business` fields) or `get_user_info` for detailed profile data (status, picture ID).

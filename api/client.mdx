@@ -586,8 +586,7 @@ pub fn contacts(&self) -> Contacts<'_>
 Access contact operations.
 
 **Methods:**
-- `is_on_whatsapp(phones: &[&str])` - Check phone numbers on WhatsApp
-- `get_info(phones: &[&str])` - Get contact info for phone numbers (LID, business status, picture ID)
+- `is_on_whatsapp(jids: &[Jid])` - Check if JIDs are registered on WhatsApp (supports PN and LID JIDs)
 - `get_user_info(jids: &[Jid])` - Get profile info for users by JID
 - `get_profile_picture(jid: &Jid, preview: bool)` - Get profile picture URL (preview or full size)
 

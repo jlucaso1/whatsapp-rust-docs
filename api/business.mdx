@@ -163,12 +163,11 @@ See [Events](/concepts/events#businessstatusupdate) for the full `BusinessStatus
 You can check if a contact is a business account using the contacts API:
 
 ```rust
-let phones = ["15551234567"];
-let results = client.contacts().get_info(&phones).await?;
+let results = client.contacts().is_on_whatsapp(&[Jid::pn("15551234567")]).await?;
 
-for contact in &results {
-    if contact.is_business {
-        println!("{} is a business account", contact.jid);
+for result in &results {
+    if result.is_business {
+        println!("{} is a business account", result.jid);
     }
 }
 ```

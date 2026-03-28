@@ -1,0 +1,149 @@
+---
+title: Media reupload
+description: Request re-upload of media with expired CDN URLs
+---
+
+The `MediaReupload` struct provides a method to request the server to re-upload media when the original CDN URL has expired. This is essential for long-running bots that need to download media from older messages.
+
+## Access
+
+Access media reupload operations through the client:
+
+```rust
+let media_reupload = client.media_reupload();
+```
+
+## Methods
+
+### request
+
+Request the server to re-upload media for a message with an expired URL.
+
+```rust
+pub async fn request(
+    &self,
+    req: &MediaReuploadRequest<'_>,
+) -> Result<MediaRetryResult>
+```
+
+<ParamField path="req" type="&MediaReuploadRequest" required>
+  Parameters identifying the media message to re-upload.
+</ParamField>
+
+<ResponseField name="MediaRetryResult" type="MediaRetryResult">
+  The result of the reupload request. On success, contains a new `direct_path` for downloading.
+</ResponseField>
+
+**Example:**
+
+```rust
+use whatsapp_rust::features::media_reupload::{MediaReuploadRequest, MediaRetryResult};
+
+let result = client.media_reupload().request(&MediaReuploadRequest {
+    msg_id: "3EB0ABC123",
+    chat_jid: &chat_jid,
+    media_key: &media_key_bytes,
+    is_from_me: false,
+    participant: Some(&sender_jid), // Required for group messages
+}).await?;
+
+match result {
+    MediaRetryResult::Success { direct_path } => {
+        println!("New download path: {}", direct_path);
+        // Use direct_path to download the media
+    }
+    MediaRetryResult::NotFound => {
+        eprintln!("Media no longer available on server");
+    }
+    MediaRetryResult::GeneralError => {
+        eprintln!("Server returned an error");
+    }
+    MediaRetryResult::DecryptionError => {
+        eprintln!("Failed to decrypt server response");
+    }
+}
+```
+
+## Protocol flow
+
+1. The client encrypts a `ServerErrorReceipt` protobuf using an HKDF-derived key from the media key
+2. A `<receipt type="server-error">` stanza is sent with the encrypted payload and `<rmr>` metadata
+3. The client waits up to 30 seconds for a `<notification type="mediaretry">` response
+4. The response is decrypted and the new `directPath` is extracted
+
+## Types
+
+### MediaReuploadRequest
+
+```rust
+pub struct MediaReuploadRequest<'a> {
+    pub msg_id: &'a str,
+    pub chat_jid: &'a Jid,
+    pub media_key: &'a [u8],
+    pub is_from_me: bool,
+    pub participant: Option<&'a Jid>,
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `msg_id` | `&str` | The message ID containing the media |
+| `chat_jid` | `&Jid` | The chat JID where the message was received |
+| `media_key` | `&[u8]` | Raw media key bytes (32 bytes, from the message's `mediaKey` field) |
+| `is_from_me` | `bool` | Whether the message was sent by you |
+| `participant` | `Option<&Jid>` | For group/broadcast messages, the participant JID who sent the message |
+
+### MediaRetryResult
+
+```rust
+pub enum MediaRetryResult {
+    Success { direct_path: String },
+    GeneralError,
+    NotFound,
+    DecryptionError,
+}
+```
+
+| Variant | Description |
+|---------|-------------|
+| `Success` | Server re-uploaded the media. Contains the new `direct_path` for downloading. |
+| `GeneralError` | Server returned a general error. |
+| `NotFound` | Media is no longer available on the server. |
+| `DecryptionError` | Failed to decrypt the server response. |
+
+## Error handling
+
+The method returns `Result<MediaRetryResult>`. The `MediaRetryResult` enum itself distinguishes between server-side success and failure. Additional errors can occur for:
+
+- **Newsletter messages** — Media reupload is not supported for newsletter messages
+- **Timeout** — The server did not respond within 30 seconds
+- **Encryption failure** — Failed to encrypt the retry request
+- **Not logged in** — Cannot determine own JID
+
+```rust
+match client.media_reupload().request(&req).await {
+    Ok(MediaRetryResult::Success { direct_path }) => {
+        // Re-download using new path
+    }
+    Ok(other) => {
+        eprintln!("Reupload failed: {:?}", other);
+    }
+    Err(e) => {
+        eprintln!("Request error: {}", e);
+    }
+}
+```
+
+<Note>
+Media reupload requests have a 30-second timeout. If the server does not respond in time, the request fails with a timeout error.
+</Note>
+
+<Warning>
+Media reupload is not supported for newsletter messages. Newsletter messages do not have media keys, so the encrypted retry protocol cannot be used.
+</Warning>
+
+## See also
+
+- [Media handling guide](/guides/media-handling) - Upload and download media
+- [Upload API](/api/upload) - Upload media files
+- [Download API](/api/download) - Download media files

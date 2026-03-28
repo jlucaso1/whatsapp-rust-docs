@@ -157,7 +157,7 @@ pub trait Runtime: Send + Sync + 'static {
 
 | Method | Purpose |
 |--------|---------|
-| `spawn` | Spawn a background task, returning an `AbortHandle` for cancellation |
+| `spawn` | Spawn a background task, returning an `AbortHandle` for cancellation. The handle is `#[must_use]` — dropping it aborts the task. Call `.detach()` for fire-and-forget tasks |
 | `sleep` | Return a future that completes after a duration |
 | `spawn_blocking` | Offload a blocking closure to a thread pool |
 | `yield_now` | Cooperatively yield; return `None` if unnecessary (e.g., multi-threaded runtimes) |

@@ -369,7 +369,7 @@ pub async fn send_message(
     &self,
     to: Jid,
     message: wa::Message
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
 Sends an encrypted message to a chat.
@@ -382,8 +382,8 @@ Sends an encrypted message to a chat.
   Protobuf message content
 </ParamField>
 
-<ParamField path="Returns" type="Result<String, anyhow::Error>">
-  Message ID on success
+<ParamField path="Returns" type="Result<SendResult, anyhow::Error>">
+  A [`SendResult`](/api/send#sendresult) containing the `message_id` and destination `to` JID
 </ParamField>
 
 **Example:**
@@ -395,7 +395,8 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let msg_id = client.send_message(jid, message).await?;
+let result = client.send_message(jid, message).await?;
+println!("Sent message ID: {}", result.message_id);
 ```
 
 ### send_message_with_options
@@ -406,13 +407,13 @@ pub async fn send_message_with_options(
     to: Jid,
     message: wa::Message,
     options: SendOptions
-) -> Result<String, anyhow::Error>
+) -> Result<SendResult, anyhow::Error>
 ```
 
-Sends a message with advanced options like a custom message ID or extra stanza nodes.
+Sends a message with advanced options like a custom message ID, extra stanza nodes, or ephemeral expiration.
 
 <ParamField path="options" type="SendOptions" required>
-  Configuration for message sending behavior. Supports `message_id` (override the auto-generated ID) and `extra_stanza_nodes` (custom XML nodes on the stanza).
+  Configuration for message sending behavior. Supports `message_id` (override the auto-generated ID), `extra_stanza_nodes` (custom XML nodes on the stanza), and `ephemeral_expiration` (disappearing message duration in seconds).
 </ParamField>
 
 See [Send API reference](/api/send#sendoptions) for available options.

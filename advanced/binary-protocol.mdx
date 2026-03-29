@@ -847,6 +847,134 @@ The `Jid` variant is emitted by `AttrParser::optional_jid` when a string attribu
 
 Location: `wacore/binary/src/error.rs`
 
+## Derive Macros
+
+whatsapp-rust provides derive macros in `wacore-derive` for type-safe protocol node generation. These macros reduce boilerplate and ensure consistent serialization/deserialization.
+
+### ProtocolNode
+
+Derive macro for implementing `ProtocolNode` on structs with attributes.
+
+```rust
+use wacore::{ProtocolNode, StringEnum};
+
+#[derive(ProtocolNode)]
+#[protocol(tag = "message")]
+pub struct MessageStanza {
+    #[attr(name = "from", jid)]
+    pub from: Jid,
+    
+    #[attr(name = "to", jid)]
+    pub to: Jid,
+    
+    #[attr(name = "id")]
+    pub id: String,
+    
+    #[attr(name = "sender_lid", jid, optional)]
+    pub sender_lid: Option<Jid>,
+}
+```
+
+**Supported attribute types:**
+
+| Marker | Field Type | Description |
+|--------|------------|-------------|
+| (none) | `String` | String attribute (required) |
+| `default = "value"` | `String` | String with default value |
+| `jid` | `Jid` | Required JID attribute |
+| `jid, optional` | `Option<Jid>` | Optional JID attribute |
+| `string_enum` | enum | Type implementing `StringEnum` |
+| `u64` | `u64` / `Option<u64>` | Numeric attribute |
+| `u32` | `u32` / `Option<u32>` | Numeric attribute |
+
+**Example with all attribute types:**
+
+```rust
+#[derive(ProtocolNode)]
+#[protocol(tag = "query")]
+pub struct QueryRequest {
+    #[attr(name = "request", default = "interactive")]
+    pub request_type: String,
+    
+    #[attr(name = "target", jid)]
+    pub target: Jid,
+    
+    #[attr(name = "action", string_enum)]
+    pub action: QueryAction,
+    
+    #[attr(name = "epoch", u64)]
+    pub epoch: u64,
+    
+    #[attr(name = "limit", u32)]
+    pub limit: Option<u32>,
+}
+```
+
+### EmptyNode
+
+For protocol nodes with only a tag (no attributes):
+
+```rust
+use wacore::EmptyNode;
+
+#[derive(EmptyNode)]
+#[protocol(tag = "participants")]
+pub struct ParticipantsRequest;
+```
+
+This generates a unit struct that implements `ProtocolNode` with the specified tag.
+
+### StringEnum
+
+For enums with string representations used in protocol attributes:
+
+```rust
+use wacore::StringEnum;
+
+#[derive(StringEnum)]
+pub enum MemberAddMode {
+    #[str = "admin_add"]
+    AdminAdd,
+    #[string_default]
+    #[str = "all_member_add"]
+    AllMemberAdd,
+}
+
+// Usage
+assert_eq!(MemberAddMode::AdminAdd.as_str(), "admin_add");
+assert_eq!(MemberAddMode::try_from("all_member_add").unwrap(), MemberAddMode::AllMemberAdd);
+```
+
+**Generated implementations:**
+
+- `as_str(&self) -> &'static str` - Convert to string
+- `std::fmt::Display` - Formatting
+- `TryFrom<&str>` - Parse from string
+- `Default` - First variant or `#[string_default]` marked variant
+
+**Fallback variant for unknown values:**
+
+```rust
+#[derive(StringEnum)]
+pub enum PrivacyCategory {
+    #[str = "last"]
+    Last,
+    #[str = "online"]
+    Online,
+    #[string_fallback]
+    Other(String),
+}
+
+// Unknown values are captured instead of erroring
+assert_eq!(PrivacyCategory::from("unknown"), PrivacyCategory::Other("unknown".to_string()));
+```
+
+When `#[string_fallback]` is present:
+- Generates `From<&str>` instead of `TryFrom<&str>`
+- `as_str()` returns `&str` instead of `&'static str`
+
+Location: `wacore/derive/src/lib.rs`
+
 ## Related Components
 
 - [Signal Protocol](/advanced/signal-protocol) - How messages are encrypted before marshaling
@@ -858,3 +986,4 @@ Location: `wacore/binary/src/error.rs`
 - Source: `wacore/binary/src/`
 - Token dictionary: `wacore/binary/src/token.rs`
 - Node builder: `wacore/binary/src/builder.rs`
+- Derive macros: `wacore/derive/src/lib.rs`

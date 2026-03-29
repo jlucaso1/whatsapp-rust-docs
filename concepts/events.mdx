@@ -521,7 +521,7 @@ Event::Receipt(receipt) => {
 
 ### UndecryptableMessage
 
-**Emitted:** When a message cannot be decrypted
+**Emitted:** When a message cannot be decrypted, including group messages that fail with `NoSenderKeyState` (missing sender key). For group decrypt failures, the event is dispatched before the retry receipt is sent, ensuring your application is immediately notified.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]

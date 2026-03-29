@@ -326,7 +326,7 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 
 ### Disconnect cleanup
 
-When a connection is lost or `disconnect()` is called, `cleanup_connection_state()` resets all connection-scoped state to prevent stale data from leaking into the next connection:
+When a connection is lost or `disconnect()` is called, `cleanup_connection_state()` resets all connection-scoped state to prevent stale data from leaking into the next connection. This cleanup runs exactly once — in the `run()` method after the message loop exits — rather than being duplicated inside the message loop on transport disconnect events:
 
 | Resource | Action | Reason |
 |----------|--------|--------|
@@ -441,10 +441,11 @@ For bots that don't need chat history, `skip_history_sync()` sends a receipt so 
 
 ### Per-Chat Message Queues
 
-Prevents race conditions where a later message is processed before the PreKey message:
+Prevents race conditions where a later message is processed before the PreKey message. Each chat gets a bounded channel with a capacity of **500** messages, providing backpressure to prevent memory amplification when many chats are active simultaneously:
 
 ```rust
 pub(crate) message_queues: Cache<String, mpsc::Sender<Arc<Node>>>,
+// Each queue: async_channel::bounded::<Arc<Node>>(500)
 ```
 
 ### Per-Device Session Locks

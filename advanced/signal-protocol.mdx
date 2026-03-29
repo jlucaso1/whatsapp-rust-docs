@@ -279,6 +279,10 @@ pub async fn group_decrypt(
   Group decryption maintains up to MAX_FORWARD_JUMPS (25000) cached message keys per sender. This prevents resource exhaustion attacks but limits tolerance for extreme out-of-order delivery.
 </Warning>
 
+### Sender key existence check
+
+Before distributing sender keys, the group message path checks whether the local sender key already exists. This check uses the `SignalStoreCache` with a **read lock** (`get_sender_key()`), matching the status broadcast path. This avoids acquiring a write lock and prevents unnecessary SKDM re-distribution on every group send.
+
 ### Per-device sender key tracking
 
 To avoid resending Sender Key Distribution Messages on every group message, the client tracks sender key distribution status **per device** for each group. This uses a unified `sender_key_devices` table (see [Storage - ProtocolStore](/concepts/storage#protocolstore)) that matches WhatsApp Web's `participant.senderKey Map<deviceJid, boolean>` model — a single boolean per device per group indicating whether that device has a valid sender key (`true`) or needs fresh SKDM distribution (`false`).
@@ -549,7 +553,9 @@ src/store/
 └── signal_cache.rs         # Re-export of wacore::store::signal_cache::SignalStoreCache
 ```
 
-The `Device` struct implements the libsignal `SessionStore`, `IdentityKeyStore`, and other traits. These are wrapped by `SignalProtocolStoreAdapter`, which adds the `SignalStoreCache` layer — sessions are cached as `SessionRecord` objects (not bytes), with serialization deferred to `flush()`:
+The `Device` struct implements the libsignal `SessionStore`, `IdentityKeyStore`, and other traits. These are wrapped by `SignalProtocolStoreAdapter`, which adds the `SignalStoreCache` layer — sessions are cached as `SessionRecord` objects (not bytes), with serialization deferred to `flush()`.
+
+Each store (sessions, identities, sender keys) is flushed **independently** under its own lock. Only one store is locked during its I/O — the other two remain free for concurrent encrypt/decrypt operations. The lock is held from snapshot through write through clear, so mutations to the same store are blocked until flush completes, preventing dirty-set races:
 
 ```rust
 // SignalProtocolStoreAdapter reads/writes through the cache

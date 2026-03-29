@@ -641,7 +641,7 @@ impl Client {
 
 ### 4. Disconnect
 
-On disconnect, the client runs `cleanup_connection_state()` which resets all connection-scoped state:
+On disconnect, `cleanup_connection_state()` runs exactly once — in the `run()` method after the message loop exits — resetting all connection-scoped state:
 
 ```rust
 impl Client {
@@ -835,6 +835,10 @@ The keepalive loop monitors connection health, matching WhatsApp Web's behavior 
 | `KEEP_ALIVE_INTERVAL_MAX` | 30s | Maximum interval between pings |
 | `KEEP_ALIVE_RESPONSE_DEADLINE` | 20s | Timeout waiting for pong response |
 | `DEAD_SOCKET_TIME` | 20s | Max silence after a send before declaring socket dead |
+
+### Timestamp safety
+
+All timestamp conversions from `now_millis()` (which returns `i64`) to `u64` are guarded with `.max(0)` before casting. This prevents silent wrap-around on negative clock values (e.g., from NTP corrections or virtualized environments) that would otherwise produce incorrect timestamps.
 
 ### Keepalive loop behavior
 

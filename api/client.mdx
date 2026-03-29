@@ -1497,6 +1497,79 @@ pub enum ClientError {
 
 ---
 
+## Node Waiting
+
+The client provides a mechanism to wait for specific incoming protocol stanzas (nodes) by tag and attributes. This is useful for awaiting server-side notifications triggered by your actions.
+
+### NodeFilter
+
+```rust
+pub struct NodeFilter {
+    tag: String,
+    attrs: Vec<(String, String)>,
+}
+```
+
+A filter for matching incoming stanzas by tag and attributes.
+
+**Methods:**
+
+- `tag(tag: impl Into<String>)` - Create a filter matching nodes with the given tag
+- `attr(key: impl Into<String>, value: impl Into<String>)` - Add an attribute constraint (chainable)
+- `from_jid(jid: &Jid)` - Shorthand for `.attr("from", jid.to_string())`
+
+### wait_for_node
+
+```rust
+pub fn wait_for_node(&self, filter: NodeFilter) -> tokio::sync::oneshot::Receiver<Arc<Node>>
+```
+
+Registers a waiter that resolves when a matching node arrives. Zero-cost when no waiters are active (single atomic load per node).
+
+<ParamField path="filter" type="NodeFilter" required>
+  Filter specifying which node to wait for
+</ParamField>
+
+<ParamField path="Returns" type="oneshot::Receiver<Arc<Node>>">
+  A receiver that yields the matching node when it arrives
+</ParamField>
+
+**Example - Wait for group notification:**
+
+```rust
+use whatsapp_rust::NodeFilter;
+
+// Set up waiter BEFORE triggering the action
+let waiter = client.wait_for_node(
+    NodeFilter::tag("notification").attr("type", "w:gp2"),
+);
+
+// Trigger the action that will generate a notification
+client.groups().add_participants(&group_jid, &[new_member]).await?;
+
+// Await the notification
+let node = waiter.await.expect("notification arrived");
+```
+
+**Example - Wait for presence update:**
+
+```rust
+use whatsapp_rust::NodeFilter;
+
+let waiter = client.wait_for_node(
+    NodeFilter::tag("presence").from_jid(&contact_jid),
+);
+
+client.presence().subscribe(&contact_jid).await?;
+let presence_node = waiter.await?;
+```
+
+<Warning>
+Always set up the waiter **before** triggering the action that generates the expected stanza. Otherwise, the node may arrive before the waiter is registered.
+</Warning>
+
+---
+
 ## See Also
 
 - [Bot](/api/bot) - High-level builder with event handlers

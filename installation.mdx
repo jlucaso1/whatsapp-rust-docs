@@ -195,9 +195,9 @@ docker build -t whatsapp-rust .
 
 The build process:
 
-1. Uses `rust:slim` with musl toolchain to compile a fully static binary
-2. Targets `x86_64-unknown-linux-musl` for maximum portability
-3. Caches dependency compilation in a separate layer for fast rebuilds
+1. Uses `rust:alpine` with [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) for efficient dependency caching
+2. Compiles natively against musl on Alpine for a fully static binary
+3. Caches dependency compilation via `cargo chef cook` in a separate layer for fast rebuilds
 4. Produces a final image from `scratch` containing only the binary
 
 ### Run the container
@@ -206,7 +206,11 @@ The build process:
 docker run -v ./data:/data whatsapp-rust
 ```
 
-The container uses `/data` as its working directory, so mount a volume there to persist your SQLite database and session data across restarts.
+The container uses `/data` as its working directory, so mount a volume there to persist your SQLite database and session data across restarts. For pair code authentication, pass the `--phone` flag:
+
+```bash
+docker run -v ./data:/data whatsapp-rust --phone 15551234567
+```
 
 ### Graceful shutdown
 
@@ -215,7 +219,7 @@ The container supports graceful shutdown out of the box. When the `signal` featu
 Since the image is built from `scratch`, PID 1 is the binary itself. It handles signals directly — no init system like `tini` is needed.
 
 <Note>
-  The Dockerfile builds for `x86_64-unknown-linux-musl` only. For other architectures, you need to modify the target triple in the Dockerfile.
+  The Dockerfile uses `rust:alpine` which builds for the host architecture's musl target. For cross-compilation to other architectures, you need to modify the base image and build configuration in the Dockerfile.
 </Note>
 
 ## Next steps

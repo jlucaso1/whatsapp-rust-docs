@@ -1297,7 +1297,46 @@ client.core.event_bus.add_handler(Arc::new(MessageHandler));
 client.core.event_bus.add_handler(Arc::new(ConnectionHandler));
 ```
 
-### Async Event Handlers
+### ChannelEventHandler
+
+`ChannelEventHandler` is a built-in event handler that forwards events to an `async_channel` for async consumption. It uses `async-channel` (runtime-agnostic) instead of Tokio channels, so it works with any async executor — including WASM targets.
+
+Events are buffered in an unbounded channel, so events fired before the receiver starts listening are not lost.
+
+```rust
+use wacore::types::events::{ChannelEventHandler, Event};
+
+let (handler, event_rx) = ChannelEventHandler::new();
+client.register_handler(handler);
+
+// Wait for events asynchronously
+while let Ok(event) = event_rx.recv().await {
+    match event {
+        Event::Connected(_) => {
+            println!("Connected!");
+            break;
+        }
+        Event::Message(msg, info) => {
+            println!("Message from {}", info.source.sender);
+        }
+        _ => {}
+    }
+}
+```
+
+This is particularly useful for:
+
+- **Testing** — assert on specific event sequences without closures
+- **Custom event loops** — process events in your own async task with full control over ordering
+- **Runtime-agnostic code** — no dependency on Tokio's `mpsc` channels
+
+<Note>
+`ChannelEventHandler::new()` returns `(Arc<ChannelEventHandler>, async_channel::Receiver<Event>)`. The handler is already wrapped in `Arc` for direct use with `client.register_handler()`.
+</Note>
+
+### Custom async event handlers
+
+For custom channel-based patterns, you can implement `EventHandler` directly:
 
 ```rust
 use tokio::sync::mpsc;

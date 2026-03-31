@@ -1295,6 +1295,27 @@ impl EventHandler for MyHandler {
 client.register_handler(Arc::new(MyHandler));
 ```
 
+**Using ChannelEventHandler:**
+
+For channel-based event processing (useful for testing and custom event loops), use the built-in `ChannelEventHandler`:
+
+```rust
+use wacore::types::events::{ChannelEventHandler, Event};
+
+let (handler, event_rx) = ChannelEventHandler::new();
+client.register_handler(handler);
+
+// Process events asynchronously via async-channel (runtime-agnostic)
+while let Ok(event) = event_rx.recv().await {
+    match event {
+        Event::Connected(_) => break,
+        _ => {}
+    }
+}
+```
+
+See [ChannelEventHandler](/concepts/events#channeleventhandler) for details.
+
 ### register_chatstate_handler
 
 ```rust

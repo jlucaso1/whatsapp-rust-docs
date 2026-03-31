@@ -206,6 +206,43 @@ Bot::builder()
 
 See [Events Reference](/concepts/events) for all event types.
 
+### Using ChannelEventHandler
+
+For scenarios where you need to process events outside of a closure (e.g., testing, custom event loops, or runtime-agnostic code), use `ChannelEventHandler` with `register_handler` instead of `on_event`:
+
+```rust
+use wacore::types::events::{ChannelEventHandler, Event};
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
+    .build()
+    .await?;
+
+let client = bot.client();
+let (event_handler, event_rx) = ChannelEventHandler::new();
+client.register_handler(event_handler);
+
+let handle = bot.run().await?;
+
+// Process events in your own async loop
+while let Ok(event) = event_rx.recv().await {
+    match event {
+        Event::Connected(_) => println!("Connected!"),
+        Event::Message(msg, info) => {
+            println!("Message from {}", info.source.sender);
+        }
+        _ => {}
+    }
+}
+```
+
+<Note>
+`ChannelEventHandler` uses `async-channel` (runtime-agnostic) with an unbounded buffer, so events fired before the receiver starts listening are not lost. You can combine it with `on_event` — both handlers will receive all events.
+</Note>
+
 ### with_enc_handler
 
 ```rust

@@ -688,10 +688,13 @@ Access newsletter (channel) operations.
 - `join(jid: &Jid)` - Join a newsletter
 - `leave(jid: &Jid)` - Leave a newsletter
 - `update(jid, options)` - Update newsletter settings
-- `send_message(jid, message)` - Send a message to a newsletter
 - `send_reaction(jid, msg_server_id, reaction)` - React to a newsletter message
 - `get_messages(jid, count, before)` - Fetch newsletter messages
 - `subscribe_live_updates(jid: &Jid)` - Subscribe to real-time updates
+
+<Note>
+Newsletter message sending is handled by the unified [`client.send_message()`](#send_message) method — pass a newsletter JID and the message is sent as plaintext automatically. See the [Send API](/api/send#send_message) for details.
+</Note>
 
 **Example:**
 ```rust

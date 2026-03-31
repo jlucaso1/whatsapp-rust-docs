@@ -801,19 +801,34 @@ pub trait JidExt {
 **Usage in message processing:**
 
 ```rust
-// In message decryption (src/message.rs)
+// In message decryption (src/message.rs) — single lock per sender device
 let signal_addr_str = sender_encryption_jid.to_protocol_address_string();
 let session_mutex = self.session_locks
     .get_with(signal_addr_str.clone(), async {
-        Arc::new(tokio::sync::Mutex::new(()))
+        Arc::new(async_lock::Mutex::new(()))
     }).await;
 let _session_guard = session_mutex.lock().await;
 
-// In message encryption (src/send.rs)
+// In peer message encryption (src/send.rs) — single lock
 let signal_addr_str = encryption_jid.to_protocol_address_string();
+
+// In DM message encryption (src/send.rs) — per-device locks for all devices
+let lock_keys = self.build_session_lock_keys(&all_dm_devices).await;
+// Locks acquired in sorted order to prevent deadlocks
 ```
 
-Location: `wacore/src/types/jid.rs:4-68`
+**DM per-device locking:**
+
+The DM send path encrypts to multiple devices (the recipient's linked devices plus the sender's own linked devices). To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires per-device session locks for **all** devices involved — not just the primary device. The `build_session_lock_keys()` helper:
+
+1. Resolves each device JID to its encryption JID (handling LID-PN mapping)
+2. Converts each to a protocol address string
+3. Sorts and deduplicates the keys
+4. Acquires locks in sorted order to prevent deadlocks
+
+This ensures send and receive paths serialize on the exact same lock key for each device, matching the decrypt path's lock format (`message.rs`).
+
+Location: `wacore/src/types/jid.rs:4-68`, `src/send.rs:1288-1300`
 
 ### Take/Restore Pattern
 

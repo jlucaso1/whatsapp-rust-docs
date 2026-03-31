@@ -1,0 +1,148 @@
+---
+title: Spam reporting
+description: Report messages and contacts as spam to WhatsApp
+---
+
+The spam reporting API lets you report messages, contacts, or groups as spam to WhatsApp. Reports are sent as `spam_list` IQ stanzas.
+
+## Access
+
+Send a spam report directly through the client:
+
+```rust
+let result = client.send_spam_report(request).await?;
+```
+
+## send_spam_report
+
+```rust
+pub async fn send_spam_report(
+    &self,
+    request: SpamReportRequest,
+) -> Result<SpamReportResult, IqError>
+```
+
+<ParamField path="request" type="SpamReportRequest" required>
+  The spam report request containing message details, sender info, and the report flow type.
+</ParamField>
+
+<ResponseField name="SpamReportResult" type="SpamReportResult">
+  Contains an optional `report_id` returned by the server.
+</ResponseField>
+
+**Example:**
+
+```rust
+use whatsapp_rust::spam_report::{SpamReportRequest, SpamFlow};
+
+let result = client.send_spam_report(SpamReportRequest {
+    message_id: "3EB0ABC123".to_string(),
+    message_timestamp: 1234567890,
+    from_jid: Some("15551234567@s.whatsapp.net".parse()?),
+    spam_flow: SpamFlow::MessageMenu,
+    ..Default::default()
+}).await?;
+
+if let Some(report_id) = result.report_id {
+    println!("Report submitted: {}", report_id);
+}
+```
+
+### Group spam report
+
+```rust
+use whatsapp_rust::spam_report::{SpamReportRequest, SpamFlow};
+
+let result = client.send_spam_report(SpamReportRequest {
+    message_id: "3EB0DEF456".to_string(),
+    message_timestamp: 1234567890,
+    group_jid: Some("120363025918861132@g.us".parse()?),
+    group_subject: Some("Suspicious Group".to_string()),
+    participant_jid: Some("15551234567@s.whatsapp.net".parse()?),
+    spam_flow: SpamFlow::GroupInfoReport,
+    ..Default::default()
+}).await?;
+```
+
+## Types
+
+### SpamReportRequest
+
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct SpamReportRequest {
+    pub message_id: String,
+    pub message_timestamp: u64,
+    pub from_jid: Option<Jid>,
+    pub participant_jid: Option<Jid>,
+    pub group_jid: Option<Jid>,
+    pub group_subject: Option<String>,
+    pub spam_flow: SpamFlow,
+    pub raw_message: Option<Vec<u8>>,
+    pub media_type: Option<String>,
+    pub local_message_type: Option<String>,
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `message_id` | `String` | The message ID being reported |
+| `message_timestamp` | `u64` | Unix timestamp of the message |
+| `from_jid` | `Option<Jid>` | Sender JID |
+| `participant_jid` | `Option<Jid>` | For group messages, the participant who sent it |
+| `group_jid` | `Option<Jid>` | For group reports, the group JID |
+| `group_subject` | `Option<String>` | For group reports, the group name |
+| `spam_flow` | `SpamFlow` | The context in which the report was triggered |
+| `raw_message` | `Option<Vec<u8>>` | Raw protobuf-encoded message bytes |
+| `media_type` | `Option<String>` | Media type of the message (e.g., `"image"`) |
+| `local_message_type` | `Option<String>` | Local message type identifier |
+
+### SpamFlow
+
+The context from which the spam report was triggered.
+
+```rust
+pub enum SpamFlow {
+    MessageMenu,
+    GroupSpamBannerReport,
+    GroupInfoReport,
+    ContactInfo,
+    StatusReport,
+}
+```
+
+| Variant | Wire value | Description |
+|---------|-----------|-------------|
+| `MessageMenu` | `"MessageMenu"` | Report from message context menu (default) |
+| `GroupSpamBannerReport` | `"GroupSpamBannerReport"` | Report from group spam banner |
+| `GroupInfoReport` | `"GroupInfoReport"` | Report from group info screen |
+| `ContactInfo` | `"ContactInfo"` | Report from contact info screen |
+| `StatusReport` | `"StatusReport"` | Report from status view |
+
+### SpamReportResult
+
+```rust
+pub struct SpamReportResult {
+    pub report_id: Option<String>,
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `report_id` | `Option<String>` | Server-assigned report ID, if returned |
+
+## Error handling
+
+The method returns `Result<SpamReportResult, IqError>`. Common errors include network failures and server-side rejections.
+
+```rust
+match client.send_spam_report(request).await {
+    Ok(result) => println!("Report ID: {:?}", result.report_id),
+    Err(e) => eprintln!("Failed to report spam: {}", e),
+}
+```
+
+## See also
+
+- [Client API](/api/client) - Core client methods
+- [Blocking](/api/blocking) - Block and unblock contacts

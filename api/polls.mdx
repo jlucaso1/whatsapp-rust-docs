@@ -26,7 +26,7 @@ pub async fn create(
     name: &str,
     options: &[String],
     selectable_count: u32,
-) -> Result<(String, Vec<u8>)>
+) -> Result<(SendResult, Vec<u8>)>
 ```
 
 <ParamField path="to" type="&Jid" required>
@@ -45,8 +45,8 @@ pub async fn create(
   Maximum number of options a voter can select. Must be between 1 and the number of options. When set to 1, creates a single-select poll (uses `poll_creation_message_v3`). When greater than 1, creates a multi-select poll (uses `poll_creation_message`).
 </ParamField>
 
-<ResponseField name="(message_id, message_secret)" type="(String, Vec<u8>)">
-  A tuple containing the message ID and a 32-byte random secret. The `message_secret` is required to decrypt votes — store it securely.
+<ResponseField name="(send_result, message_secret)" type="(SendResult, Vec<u8>)">
+  A tuple containing a `SendResult` (with `message_id`, `to`, and `message_key()`) and a 32-byte random secret. The `message_secret` is required to decrypt votes — store it securely. See [SendResult](/api/send#sendresult) for details.
 </ResponseField>
 
 **Example:**
@@ -60,10 +60,12 @@ let options = vec![
     "Maybe".to_string(),
 ];
 
-let (msg_id, secret) = client
+let (result, secret) = client
     .polls()
     .create(&chat_jid, "Do you agree?", &options, 1)
     .await?;
+
+println!("Poll sent with ID: {}", result.message_id);
 ```
 
 ### vote
@@ -78,7 +80,7 @@ pub async fn vote(
     poll_creator_jid: &Jid,
     message_secret: &[u8],
     option_names: &[String],
-) -> Result<String>
+) -> Result<SendResult>
 ```
 
 <ParamField path="chat_jid" type="&Jid" required>
@@ -101,8 +103,8 @@ pub async fn vote(
   Names of the selected options. Pass an empty slice to clear your vote.
 </ParamField>
 
-<ResponseField name="message_id" type="String">
-  Message ID of the vote update message.
+<ResponseField name="SendResult" type="SendResult">
+  Result containing the message ID and recipient JID. See [SendResult](/api/send#sendresult).
 </ResponseField>
 
 **Example:**
@@ -110,7 +112,7 @@ pub async fn vote(
 ```rust
 let selected = vec!["Yes".to_string()];
 
-let vote_id = client
+let vote_result = client
     .polls()
     .vote(
         &chat_jid,
@@ -120,6 +122,8 @@ let vote_id = client
         &selected,
     )
     .await?;
+
+println!("Vote sent with ID: {}", vote_result.message_id);
 ```
 
 ### decrypt_vote
@@ -285,7 +289,7 @@ All methods return `Result<T, anyhow::Error>`. Common errors:
 
 ```rust
 match client.polls().create(&jid, "Question?", &options, 1).await {
-    Ok((id, secret)) => println!("Created poll: {}", id),
+    Ok((result, secret)) => println!("Created poll: {}", result.message_id),
     Err(e) => eprintln!("Failed: {}", e),
 }
 ```

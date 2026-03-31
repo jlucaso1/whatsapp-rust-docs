@@ -391,6 +391,42 @@ pub struct PairError {
 }
 ```
 
+### QrScannedWithoutMultidevice
+
+**Emitted:** When a QR code is scanned by a device that does not support multi-device
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct QrScannedWithoutMultidevice;
+```
+
+**Usage:**
+```rust
+Event::QrScannedWithoutMultidevice(_) => {
+    println!("QR scanned but device does not support multi-device");
+    // Prompt the user to update their WhatsApp app
+}
+```
+
+### ClientOutdated
+
+**Emitted:** When the server rejects the connection because the client version is too old (connect failure code 405)
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientOutdated;
+```
+
+**Usage:**
+```rust
+Event::ClientOutdated(_) => {
+    eprintln!("Client version is outdated — update whatsapp-rust");
+    // Auto-reconnect is disabled
+}
+```
+
+**Behavior:** Auto-reconnect is disabled. You must update to a newer version of the library.
+
 ## Message Events
 
 ### Message
@@ -544,6 +580,27 @@ pub enum DecryptFailMode {
     Hide,           // Hide from chat
 }
 ```
+
+### Notification
+
+**Emitted:** For raw notification stanzas that are not handled by a more specific event type
+
+```rust
+Event::Notification(Node)
+```
+
+This is a passthrough event that gives you access to the raw `Node` for notification types that the library does not parse into dedicated event structs. You can inspect the node's tag, attributes, and children directly.
+
+**Example:**
+```rust
+Event::Notification(node) => {
+    println!("Raw notification: {:?}", node);
+}
+```
+
+<Note>
+Most notifications are already parsed into specific event types (e.g., `GroupUpdate`, `DeviceListUpdate`, `ContactUpdated`). This event only fires for unhandled notification types.
+</Note>
 
 **`DecryptFailMode`** is determined by the `decrypt-fail` attribute on incoming `<enc>` nodes. If any `<enc>` node has `decrypt-fail="hide"`, the entire message uses `Hide` mode.
 
@@ -754,6 +811,77 @@ Event::GroupUpdate(update) => {
         update.group_jid, update.participant, update.action);
 }
 ```
+
+### GroupNotificationAction
+
+The `action` field on `GroupUpdate` is a `GroupNotificationAction` enum with the following variants:
+
+| Variant | Wire tag | Description |
+|---------|----------|-------------|
+| `Add { participants, reason }` | `<add>` | Members added to group |
+| `Remove { participants, reason }` | `<remove>` | Members removed from group |
+| `Promote { participants }` | `<promote>` | Members promoted to admin |
+| `Demote { participants }` | `<demote>` | Members demoted from admin |
+| `Modify { participants }` | `<modify>` | Member changed phone number |
+| `Subject { subject, subject_owner, subject_time }` | `<subject>` | Group name changed |
+| `Description { id, description }` | `<description>` | Group description changed or deleted |
+| `Locked { threshold }` | `<locked>` | Only admins can edit group info |
+| `Unlocked` | `<unlocked>` | All members can edit group info |
+| `Announce` | `<announcement>` | Only admins can send messages |
+| `NotAnnounce` | `<not_announcement>` | All members can send messages |
+| `Ephemeral { expiration, trigger }` | `<ephemeral>` | Disappearing messages setting changed |
+| `MembershipApprovalMode { enabled }` | `<membership_approval_mode>` | Join approval toggled |
+| `MemberAddMode { mode }` | `<member_add_mode>` | Who can add members (`admin_add` or `all_member_add`) |
+| `NoFrequentlyForwarded` | `<no_frequently_forwarded>` | Forwarding restricted |
+| `FrequentlyForwardedOk` | `<frequently_forwarded_ok>` | Forwarding allowed |
+| `Invite { code }` | `<invite>` | Member joined via invite link |
+| `RevokeInvite` | `<revoke>` | Invite link revoked |
+| `GrowthLocked { expiration, lock_type }` | `<growth_locked>` | Invite links unavailable |
+| `GrowthUnlocked` | `<growth_unlocked>` | Invite links available again |
+| `Create { raw }` | `<create>` | Group created |
+| `Delete { reason }` | `<delete>` | Group deleted |
+| `Link { link_type, raw }` | `<link>` | Subgroup linked (community) |
+| `Unlink { unlink_type, unlink_reason, raw }` | `<unlink>` | Subgroup unlinked (community) |
+| `Unknown { tag }` | varies | Unknown notification tag (forward compatibility) |
+
+Participant-related variants include a `participants` field of type `Vec<GroupParticipantInfo>`:
+
+```rust
+pub struct GroupParticipantInfo {
+    pub jid: Jid,
+    pub phone_number: Option<Jid>,
+}
+```
+
+**Example: handling specific group actions:**
+```rust
+use wacore::stanza::groups::GroupNotificationAction;
+
+Event::GroupUpdate(update) => {
+    match &update.action {
+        GroupNotificationAction::Add { participants, .. } => {
+            for p in participants {
+                println!("{} was added to {}", p.jid, update.group_jid);
+            }
+        }
+        GroupNotificationAction::Subject { subject, .. } => {
+            println!("Group {} renamed to {}", update.group_jid, subject);
+        }
+        GroupNotificationAction::Ephemeral { expiration, .. } => {
+            if *expiration == 0 {
+                println!("Disappearing messages disabled in {}", update.group_jid);
+            } else {
+                println!("Disappearing messages set to {}s in {}", expiration, update.group_jid);
+            }
+        }
+        _ => {}
+    }
+}
+```
+
+<Note>
+A single group notification from the server can contain multiple actions. The library dispatches a separate `GroupUpdate` event for each action, so your handler may receive multiple events from one notification.
+</Note>
 
 ## Contact Notification Events
 

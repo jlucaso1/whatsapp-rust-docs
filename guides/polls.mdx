@@ -23,15 +23,15 @@ let options = vec![
 ];
 
 // Create a single-select poll
-let (message_id, message_secret) = client
+let (result, message_secret) = client
     .polls()
     .create(&chat_jid, "What do you prefer?", &options, 1)
     .await?;
 
-println!("Poll sent with ID: {}", message_id);
+println!("Poll sent with ID: {}", result.message_id);
 ```
 
-The `create` method returns a tuple of `(message_id, message_secret)`. You must store the `message_secret` (a 32-byte key) to decrypt votes later.
+The `create` method returns a tuple of `(SendResult, message_secret)`. The `SendResult` contains the `message_id` and `to` JID (see [SendResult](/api/send#sendresult)). You must store the `message_secret` (a 32-byte key) to decrypt votes later.
 
 ### Multi-select polls
 
@@ -39,7 +39,7 @@ Set `selectable_count` to allow voters to pick multiple options:
 
 ```rust
 // Allow selecting up to 2 options
-let (message_id, message_secret) = client
+let (result, message_secret) = client
     .polls()
     .create(&chat_jid, "Pick your favorites", &options, 2)
     .await?;
@@ -59,7 +59,7 @@ let poll_creator_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
 
 let selected = vec!["Option A".to_string()];
 
-let vote_msg_id = client
+let vote_result = client
     .polls()
     .vote(
         &chat_jid,
@@ -153,8 +153,8 @@ async fn create_poll_safely(client: &Client) -> Result<()> {
     let options = vec!["Yes".to_string(), "No".to_string()];
 
     match client.polls().create(&jid, "Agree?", &options, 1).await {
-        Ok((msg_id, secret)) => {
-            println!("Poll created: {}", msg_id);
+        Ok((result, secret)) => {
+            println!("Poll created: {}", result.message_id);
             // Store secret for later vote decryption
         }
         Err(e) => {

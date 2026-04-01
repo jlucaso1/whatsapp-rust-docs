@@ -317,6 +317,18 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 
 **Connection timeout:** Both the transport connection and version fetch are wrapped in a 20-second timeout (`TRANSPORT_CONNECT_TIMEOUT`), matching WhatsApp Web's MQTT and DGW defaults. This prevents dead networks from blocking on the OS TCP SYN timeout (~60-75s). Both operations run in parallel via `tokio::join!`.
 
+**Post-login bootstrap sequence:**
+
+After successful authentication, the client runs a series of initialization tasks (each gated by a connection generation check to abort if the connection drops):
+
+1. Send unified session
+2. Establish session with primary phone for PDO (before passive mode exit)
+3. **Sync own device list** — calls the server to refresh the local device registry for both the PN and LID JIDs, bypassing cache. This ensures DM fan-out includes all companion devices (matches WhatsApp Web's `syncMyDeviceList()`)
+4. Upload pre-keys
+5. Exit passive mode (triggers offline message delivery)
+6. Wait for offline sync to complete
+7. Run post-connect tasks (fetch props, presence, dirty bits, etc.)
+
 **Reconnection flow:**
 1. Connection lost → `cleanup_connection_state()` (see [disconnect cleanup](#disconnect-cleanup))
 2. Check `enable_auto_reconnect` → exit if disabled (401, 409, 516 disable this)

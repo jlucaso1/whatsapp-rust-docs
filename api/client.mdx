@@ -226,6 +226,14 @@ pub async fn wait_for_connected(
 
 Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
 
+The post-login bootstrap sequence runs the following steps (each gated by a connection generation check):
+1. Send unified session
+2. Establish session with primary phone for PDO
+3. Sync own device list from the server (bypasses cache to ensure DM fan-out includes all companion devices)
+4. Upload pre-keys
+5. Exit passive mode (triggers offline message delivery)
+6. Wait for offline sync, then run background tasks (fetch props, presence, etc.)
+
 ### pair_with_code
 
 ```rust

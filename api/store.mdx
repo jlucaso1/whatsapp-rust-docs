@@ -620,13 +620,16 @@ pub struct DeviceListRecord {
     pub devices: Vec<DeviceInfo>,   // Known devices
     pub timestamp: i64,             // Last update timestamp
     pub phash: Option<String>,      // Participant hash from usync
+    pub raw_id: Option<u32>,        // ADV raw_id — identity change detection
 }
 
 pub struct DeviceInfo {
     pub device_id: u32,           // 0 = primary, 1+ = companions
-    pub key_index: Option<u32>,   // Key index if known
+    pub key_index: Option<u32>,   // Server key index from usync
 }
 ```
+
+The `key_index` field on `DeviceInfo` is parsed from the `key-index` attribute on `<device>` nodes in usync responses. The `raw_id` field on `DeviceListRecord` comes from `ADVKeyIndexList` and is used to detect identity changes — when it changes, all sessions and sender keys for the user must be cleared.
 
 ## Error Handling
 

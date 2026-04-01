@@ -750,6 +750,12 @@ impl HttpClient for MyCustomHttpClient {
             body: response.body,
         })
     }
+
+    // Override supports_streaming if you implement execute_streaming.
+    // When false (the default), download_to_writer falls back to buffered downloads.
+    fn supports_streaming(&self) -> bool {
+        true
+    }
     
     fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse, anyhow::Error> {
         // Return a streaming response with a reader
@@ -760,6 +766,10 @@ impl HttpClient for MyCustomHttpClient {
     }
 }
 ```
+
+<Note>
+If your HTTP client doesn't support streaming, you only need to implement `execute`. The `supports_streaming` method defaults to `false`, and `download_to_writer` will automatically use a buffered fallback.
+</Note>
 
 ## SQLite Reference Implementation
 

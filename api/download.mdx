@@ -109,9 +109,9 @@ println!("Video saved to video.mp4");
 
 ## download_to_writer
 
-Download media using streaming (constant memory usage).
+Download media using streaming when available, with automatic buffered fallback.
 
-The entire HTTP download, decryption, and file write happen in a single blocking thread. Memory usage is ~40KB regardless of file size.
+When the HTTP client supports streaming (`supports_streaming()` returns `true`), the entire HTTP download, decryption, and file write happen in a single blocking thread with ~40KB memory usage regardless of file size. When streaming is not available, the method automatically falls back to a buffered download — fetching the full response into memory, then decrypting and writing to the writer. This ensures `download_to_writer` works with any `HttpClient` implementation.
 
 ```rust
 pub async fn download_to_writer<W: Write + Seek + Send + 'static>(
@@ -144,7 +144,7 @@ let file = client.download_to_writer(video_msg.as_ref(), file).await?;
 ```
 
 <Note>
-  Use `download_to_writer` for large media files to avoid loading entire files into memory. Memory usage is constant ~40KB (8KB read buffer + decryption state).
+  When using an HTTP client that supports streaming (like the default `UreqHttpClient`), memory usage is constant ~40KB (8KB read buffer + decryption state). HTTP clients that don't support streaming fall back to buffered downloads, which load the full file into memory before writing.
 </Note>
 
 ---

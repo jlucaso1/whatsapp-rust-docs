@@ -74,7 +74,7 @@ if let Some(video) = &message.video_message {
 See [Download API reference](/api/download#download_to_writer) for streaming details.
 
 <Note>
-Streaming downloads use ~40KB of memory regardless of file size (8KB buffer + decryption state). The entire HTTP download, decryption, and file write happen in a single blocking thread for optimal performance.
+When the HTTP client supports streaming (like the default `UreqHttpClient`), downloads use ~40KB of memory regardless of file size (8KB buffer + decryption state). If the HTTP client doesn't support streaming, `download_to_writer` automatically falls back to a buffered download — the file is fetched into memory first, then decrypted and written. This fallback ensures the method works with any `HttpClient` implementation.
 </Note>
 
 ### From Raw Parameters
@@ -681,10 +681,14 @@ Media connection refresh and invalidation are managed internally by the client. 
 let data = client.download(video.as_ref()).await?;
 std::fs::write("video.mp4", data)?;
 
-// ✅ Good: Constant memory usage
+// ✅ Good: Constant memory usage (with streaming HTTP client)
 let file = File::create("video.mp4")?;
 let _file = client.download_to_writer(video.as_ref(), file).await?;
 ```
+
+<Note>
+`download_to_writer` works with any HTTP client. With streaming-capable clients (like `UreqHttpClient`), memory usage is constant ~40KB. With non-streaming clients, it falls back to buffered downloads automatically.
+</Note>
 
 ### Verify Media Type
 

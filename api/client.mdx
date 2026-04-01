@@ -1267,6 +1267,35 @@ let filter = NodeFilter::tag("notification")
     .from_jid(&group_jid);
 ```
 
+### wait_for_sent_node
+
+```rust
+pub fn wait_for_sent_node(&self, filter: NodeFilter) -> oneshot::Receiver<Arc<Node>>
+```
+
+Waits for a specific **outgoing** protocol node matching the given filter. Returns a receiver that resolves when a matching node is sent by the client. This is the outbound counterpart to `wait_for_node`.
+
+<ParamField path="filter" type="NodeFilter" required>
+  Filter specifying which outgoing node to intercept (by tag and attributes)
+</ParamField>
+
+**Example:**
+```rust
+// Assert that a privacy token was attached to an outgoing message stanza
+let waiter = client.wait_for_sent_node(
+    NodeFilter::tag("message").attr("to", "15551234567@s.whatsapp.net"),
+);
+
+client.send_message(jid, message).await?;
+
+let sent_node = waiter.await.expect("message stanza sent");
+// Inspect the stanza to verify tctoken or cstoken was attached
+```
+
+<Note>
+Register the waiter **before** performing the action that produces the outgoing node. When no sent-node waiters are active, this has zero cost (single atomic load per outgoing node). Useful for testing whether `<tctoken>` or `<cstoken>` was attached to a sent stanza.
+</Note>
+
 ### register_handler
 
 ```rust

@@ -572,10 +572,10 @@ pub struct MessageContext {
 ### send_message
 
 ```rust
-pub async fn send_message(&self, message: wa::Message) -> Result<String, anyhow::Error>
+pub async fn send_message(&self, message: wa::Message) -> Result<SendResult, anyhow::Error>
 ```
 
-Sends a message to the same chat.
+Sends a message to the same chat. Returns a [`SendResult`](/api/send#sendresult) containing the message ID and resolved recipient JID.
 
 ### build_quote_context
 

@@ -23,15 +23,33 @@ pub trait HttpClient: Send + Sync {
     /// Executes a given HTTP request and returns the response
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
 
+    /// Whether this client supports synchronous streaming downloads.
+    /// Defaults to `false`. Override to return `true` if you implement
+    /// `execute_streaming`.
+    fn supports_streaming(&self) -> bool { false }
+
     /// Synchronous streaming variant. Returns a reader over the response body
     /// instead of buffering it all in memory.
     /// 
     /// Must be called from a blocking context (e.g. inside `spawn_blocking`).
+    /// Returns an error by default if not implemented.
     fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse>;
 }
 ```
 
 ### Methods
+
+#### supports_streaming
+
+Returns whether this HTTP client supports synchronous streaming downloads via `execute_streaming`. The default implementation returns `false`. When this returns `false`, `download_to_writer` automatically falls back to a buffered download using `execute` instead.
+
+```rust
+fn supports_streaming(&self) -> bool { false }
+```
+
+**Returns:**
+- `true` if `execute_streaming` is implemented (e.g., `UreqHttpClient`)
+- `false` (default) if streaming is not supported
 
 #### execute
 
@@ -437,7 +455,9 @@ impl HttpClient for ReqwestHttpClient {
         Ok(HttpResponse { status_code, body })
     }
     
-    // Note: Streaming not implemented for this example
+    // supports_streaming() defaults to false, so download_to_writer
+    // will use a buffered fallback automatically — no need to implement
+    // execute_streaming.
 }
 ```
 

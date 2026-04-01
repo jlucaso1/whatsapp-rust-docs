@@ -3,9 +3,11 @@ title: TC Token
 description: Manage trusted contact privacy tokens and cstoken fallback
 ---
 
-The `TcToken` feature provides APIs for issuing and managing trusted contact privacy tokens (TC tokens). These tokens are used for privacy-gated operations like fetching profile pictures.
+The `TcToken` feature provides APIs for issuing and managing trusted contact privacy tokens (TC tokens). These tokens are used for privacy-gated operations like sending messages and fetching profile pictures.
 
 The library also supports **cstoken** (client-side token / NCT) as a fallback when no TC token exists for a recipient. This matches WhatsApp Web's `MsgCreateFanoutStanza.js` behavior.
+
+Token timing (bucket duration and count) is configurable via server-side AB props, with sensible defaults matching WhatsApp Web.
 
 ## Access
 
@@ -47,7 +49,7 @@ for token in &tokens {
 ```
 
 <Note>
-Issued tokens are automatically stored in the backend and used for subsequent operations like profile picture fetching.
+Issued tokens are automatically stored in the backend and used for subsequent operations like message sending and profile picture fetching. Tokens are also automatically issued after sending a message when the current bucket has expired (see [automatic usage](#automatic-usage)).
 </Note>
 
 ### prune_expired
@@ -68,7 +70,7 @@ println!("Pruned {} expired tokens", deleted);
 ```
 
 <Note>
-Tokens expire after 28 days. Call this periodically to clean up storage.
+By default, tokens expire after 28 days (4 buckets × 7 days). The server may override this via AB props. Expired tokens are also automatically pruned on connect. Call this method if you need to trigger pruning manually.
 </Note>
 
 ### get
@@ -150,13 +152,32 @@ pub struct TcTokenEntry {
 }
 ```
 
+### TcTokenConfig
+
+Runtime-configurable timing for token expiration, sourced from server AB props.
+
+```rust
+pub struct TcTokenConfig {
+    /// Receiver-side bucket duration in seconds (default: 604800 = 7 days)
+    pub bucket_duration: i64,
+    /// Number of receiver-side buckets (default: 4)
+    pub num_buckets: i64,
+    /// Sender-side bucket duration in seconds (default: 604800 = 7 days)
+    pub sender_bucket_duration: i64,
+    /// Number of sender-side buckets (default: 4)
+    pub sender_num_buckets: i64,
+}
+```
+
+The client builds this config from AB props at runtime, falling back to defaults. All values are clamped to safe ranges (durations between 1 and 180 days, counts ≥ 1).
+
 ## Automatic usage
 
 The library automatically includes privacy tokens in outgoing 1:1 message stanzas using a fallback chain that matches WhatsApp Web:
 
-1. **tctoken** -- Use the stored trusted contact token if it exists and hasn't expired
-2. **cstoken** -- Compute an HMAC-SHA256 fallback using the NCT salt and recipient LID (for first-contact scenarios)
-3. **No token** -- Send without a token if neither is available (the server may return a 463 error)
+1. **tctoken** — use the stored trusted contact token if it exists and hasn't expired
+2. **cstoken** — compute an HMAC-SHA256 fallback using the NCT salt and recipient LID (for first-contact scenarios)
+3. **No token** — send without a token if neither is available (the server may return a 463 error)
 
 ```rust
 // TC tokens are automatically included when sending messages
@@ -166,9 +187,42 @@ client.send_message(jid, message).await?;
 let picture = client.contacts().get_profile_picture(&jid, true).await?;
 ```
 
-You typically don't need to manage tokens manually unless:
+### AB prop gating
+
+Token inclusion on message stanzas is gated by server-side AB props:
+
+- **`PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES`** — controls whether tctoken/cstoken stanza children are attached to outgoing messages
+- **`NCT_TOKEN_SEND_ENABLED`** — controls whether the cstoken fallback is used when no tctoken is available
+
+Token *issuance scheduling* (requesting new tokens from the server after sending) runs regardless of these flags.
+
+### Post-send issuance
+
+After sending a 1:1 message, the library checks whether a new token should be issued for the recipient. If the sender-side bucket has rolled over since the last issuance, a background IQ request issues a fresh token and stores the response. This matches WhatsApp Web's `sendTcToken` behavior in `MsgJob.js`.
+
+### Incoming token notifications
+
+When a contact sends you a privacy token, the library handles it automatically:
+
+1. Parses the `<notification type="privacy_token">` stanza
+2. Resolves the sender to a LID for storage (using `sender_lid` attribute or LID-PN cache)
+3. Applies a timestamp monotonicity guard — older tokens don't overwrite newer ones
+4. Stores the token in the backend
+5. Re-subscribes presence for the sender to pick up the updated token
+
+### Startup pruning
+
+Expired tokens are automatically pruned when the client connects, matching WhatsApp Web's `PrivacyTokenJob`.
+
+### Skipped recipients
+
+Tokens are not sent to:
+- Your own JID
+- Bot JIDs
+- Status broadcast
+
+You typically don't need to manage tokens manually unless you are:
 - Pre-issuing tokens for a batch of contacts
-- Pruning expired tokens to save storage
 - Debugging token-related issues
 
 ## cstoken (NCT fallback)
@@ -211,14 +265,17 @@ sequenceDiagram
     participant Backend
     participant Server
     
+    Note over Client,Server: On connect: prune expired tokens
+    Client->>Backend: delete_expired_tc_tokens(cutoff)
+    
+    Note over App,Server: Manual issuance
     App->>Client: issue_tokens([jid1, jid2])
-    Client->>Server: IQ request
+    Client->>Server: IQ set (privacy namespace)
     Server-->>Client: Tokens with timestamps
     Client->>Backend: Store tokens
     Client-->>App: Vec<ReceivedTcToken>
     
-    Note over Client,Backend: Later, when sending a message...
-    
+    Note over Client,Server: Sending a message (automatic)
     App->>Client: send_message(jid1, msg)
     Client->>Backend: Get tc_token for jid1
     
@@ -236,32 +293,55 @@ sequenceDiagram
     
     Server-->>Client: Ack
     Client-->>App: message_id
+    
+    Note over Client,Server: Post-send issuance (if bucket rolled over)
+    Client->>Server: IQ set (issue new token)
+    Server-->>Client: Fresh token
+    Client->>Backend: Store token
+    
+    Note over Client,Server: Incoming token notification
+    Server->>Client: notification type="privacy_token"
+    Client->>Client: Resolve sender LID
+    Client->>Backend: Store token (monotonicity guard)
+    Client->>Server: Re-subscribe presence
 ```
 
 ## Expiration
 
-TC tokens expire after 28 days. The library provides utilities for managing expiration:
+TC token expiration uses a bucket-aligned system. By default, tokens expire after 28 days (4 buckets × 7-day duration). The server can override these defaults via AB props:
+
+| AB prop | Default | Description |
+| --- | --- | --- |
+| `tctoken_duration` | 604800 (7 days) | Receiver-side bucket duration in seconds |
+| `tctoken_num_buckets` | 4 | Number of receiver-side buckets |
+| `tctoken_duration_sender` | 604800 (7 days) | Sender-side bucket duration in seconds |
+| `tctoken_num_buckets_sender` | 4 | Number of sender-side buckets |
+
+Bucket durations are capped at 180 days. The expiration cutoff is bucket-aligned — it always falls on a bucket boundary, matching WhatsApp Web's `tokenExpirationCutoff` logic.
 
 ```rust
-use wacore::iq::tctoken::tc_token_expiration_cutoff;
+use wacore::iq::tctoken::{tc_token_expiration_cutoff, is_tc_token_expired};
 
-// Get the cutoff timestamp for expired tokens
+// Get the cutoff timestamp for expired tokens (using defaults)
 let cutoff = tc_token_expiration_cutoff();
 println!("Tokens before {} are expired", cutoff);
 
-// Prune expired tokens
+// Check a specific token
+let expired = is_tc_token_expired(some_timestamp);
+
+// Prune expired tokens (uses AB-prop-aware config)
 let deleted = client.tc_token().prune_expired().await?;
 ```
 
 ## Best practices
 
 1. **Pre-issue tokens** for contacts you frequently interact with
-2. **Prune periodically** to keep storage clean
-3. **Don't over-issue** - tokens are automatically issued when needed
-4. **Use LID JIDs** when issuing tokens for privacy features
+2. **Don't over-issue** — tokens are automatically issued after each message send when the bucket rolls over
+3. **Use LID JIDs** when issuing tokens manually
+4. **Let startup pruning handle cleanup** — expired tokens are pruned automatically on connect
 
 ```rust
-// Good: Issue tokens for frequent contacts on startup
+// Pre-issue tokens for frequent contacts
 async fn initialize_tokens(client: &Client, contacts: &[Jid]) -> anyhow::Result<()> {
     // Filter to LID JIDs only
     let lid_jids: Vec<_> = contacts.iter()
@@ -272,9 +352,6 @@ async fn initialize_tokens(client: &Client, contacts: &[Jid]) -> anyhow::Result<
     if !lid_jids.is_empty() {
         client.tc_token().issue_tokens(&lid_jids).await?;
     }
-    
-    // Prune old tokens
-    client.tc_token().prune_expired().await?;
     
     Ok(())
 }

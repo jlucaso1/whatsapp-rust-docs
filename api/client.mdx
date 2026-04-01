@@ -1394,6 +1394,28 @@ pub async fn register_chatstate_handler(
 
 Registers a handler for chat state events (typing indicators). The handler is wrapped in `Arc` for thread-safe sharing across the event dispatching system.
 
+### set_raw_node_forwarding
+
+```rust
+pub fn set_raw_node_forwarding(&self, enabled: bool)
+```
+
+Enable or disable raw node forwarding. When enabled, `Event::RawNode` is emitted for every decoded stanza before the stanza router dispatches it. Disabled by default to avoid overhead.
+
+<ParamField path="enabled" type="bool" required>
+  `true` to enable raw node forwarding, `false` to disable
+</ParamField>
+
+**Example:**
+```rust
+// Enable raw node forwarding for protocol-level debugging
+client.set_raw_node_forwarding(true);
+```
+
+<Note>
+When no raw node listeners are needed, keep this disabled. The check is a single atomic load per incoming stanza, but the event dispatch and cloning add overhead. See [RawNode event](/concepts/events#rawnode) for usage details.
+</Note>
+
 ---
 
 ## Call management

@@ -1250,7 +1250,7 @@ If the server does not complete offline sync within 60 seconds, the client force
 
 ### DeviceListUpdate
 
-**Emitted:** When a user's device list changes
+**Emitted:** When a user's device list changes (device added, removed, or updated)
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -1268,6 +1268,34 @@ pub enum DeviceListUpdateType {
     Add,
     Remove,
     Update,
+}
+```
+
+**DeviceNotificationInfo:**
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceNotificationInfo {
+    pub device_id: u32,
+    pub key_index: Option<u32>,
+}
+```
+
+**Fields:**
+- `user` - The user whose device list changed
+- `lid_user` - Optional LID user JID (for LID-PN mapping)
+- `update_type` - Whether a device was added, removed, or updated
+- `devices` - List of affected devices, each with a `device_id` and optional `key_index` (the server-assigned key index from the `key-index` attribute on `<device>` nodes in usync responses)
+- `key_index` - Signed key index info from the `<key-index-list>` element (required for add/remove operations)
+- `contact_hash` - Contact hash for update notifications (used for contact lookup)
+
+**Example:**
+```rust
+Event::DeviceListUpdate(update) => {
+    println!("{:?} devices for {}", update.update_type, update.user);
+    for device in &update.devices {
+        println!("  Device {}: key_index={:?}", device.device_id, device.key_index);
+    }
 }
 ```
 

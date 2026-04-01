@@ -390,6 +390,10 @@ pub trait ProtocolStore: Send + Sync {
     async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()>;
     async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
+    // Clear all sender key device tracking across ALL groups.
+    // Called on identity change (raw_id mismatch) to force SKDM redistribution.
+    async fn clear_all_sender_key_devices(&self) -> Result<()>;
+
     // LID-PN Mapping (Long-term ID to Phone Number)
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>>;
     async fn get_pn_mapping(&self, phone: &str) -> Result<Option<LidPnMappingEntry>>;
@@ -404,6 +408,9 @@ pub trait ProtocolStore: Send + Sync {
     // Device Registry
     async fn update_device_list(&self, record: DeviceListRecord) -> Result<()>;
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
+
+    // Delete a device list record, forcing a network re-fetch on next query.
+    async fn delete_devices(&self, user: &str) -> Result<()>;
 
     // TcToken Storage (Trusted Contact Tokens)
     async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>>;
@@ -494,6 +501,9 @@ pub struct DeviceListRecord {
     pub devices: Vec<DeviceInfo>,
     pub timestamp: i64,
     pub phash: Option<String>,
+    /// ADV raw_id from ADVKeyIndexList — used to detect identity changes.
+    /// When this changes, all sessions and sender keys for the user must be cleared.
+    pub raw_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

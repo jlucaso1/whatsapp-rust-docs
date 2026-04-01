@@ -69,7 +69,7 @@ Send an image status update.
 ```rust
 pub async fn send_image(
     &self,
-    upload: &UploadResponse,
+    upload: UploadResponse,
     thumbnail: Vec<u8>,
     caption: Option<&str>,
     recipients: &[Jid],
@@ -78,7 +78,7 @@ pub async fn send_image(
 ```
 
 **Parameters:**
-- `upload` - Upload response from `client.upload()`
+- `upload` - Upload response from `client.upload()` (takes ownership)
 - `thumbnail` - JPEG thumbnail bytes
 - `caption` - Optional caption text
 - `recipients` - Slice of recipient JIDs
@@ -97,7 +97,7 @@ let thumbnail = create_thumbnail(&image_data)?;
 
 let result = client.status()
     .send_image(
-        &upload,
+        upload,
         thumbnail,
         Some("Check this out!"),
         &[Jid::pn("15551234567")],
@@ -113,7 +113,7 @@ Send a video status update.
 ```rust
 pub async fn send_video(
     &self,
-    upload: &UploadResponse,
+    upload: UploadResponse,
     thumbnail: Vec<u8>,
     duration_seconds: u32,
     caption: Option<&str>,
@@ -123,7 +123,7 @@ pub async fn send_video(
 ```
 
 **Parameters:**
-- `upload` - Upload response from `client.upload()`
+- `upload` - Upload response from `client.upload()` (takes ownership)
 - `thumbnail` - JPEG thumbnail bytes
 - `duration_seconds` - Video duration
 - `caption` - Optional caption text
@@ -140,7 +140,7 @@ let thumbnail = extract_video_thumbnail(&video_data)?;
 
 let result = client.status()
     .send_video(
-        &upload,
+        upload,
         thumbnail,
         30, // 30 seconds
         None,

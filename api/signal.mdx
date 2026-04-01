@@ -1,0 +1,359 @@
+---
+title: Signal
+description: Low-level Signal protocol operations for encryption, decryption, and session management
+---
+
+The `Signal` struct provides direct access to Signal protocol operations including message encryption/decryption for both 1:1 and group conversations, session management, and participant node creation.
+
+<Warning>
+  These are low-level APIs that bypass the high-level message sending pipeline. Most users should use [`client.send_message()`](/api/client#send_message) which handles encryption automatically. Use these methods only when you need direct control over the Signal protocol layer.
+</Warning>
+
+## Access
+
+Access Signal protocol operations through the client:
+
+```rust
+let signal = client.signal();
+```
+
+## Methods
+
+### encrypt_message
+
+Encrypt plaintext for a single recipient using the Signal protocol.
+
+```rust
+pub async fn encrypt_message(
+    &self,
+    jid: &Jid,
+    plaintext: &[u8],
+) -> Result<(EncType, Vec<u8>)>
+```
+
+**Parameters:**
+- `jid` - Recipient JID. PN JIDs are resolved to LID when a LID session exists, matching the internal send path.
+- `plaintext` - Raw bytes to encrypt. The caller is responsible for padding if needed.
+
+**Returns:**
+- `(EncType, Vec<u8>)` - The encryption type and ciphertext bytes
+
+**EncType variants:**
+- `EncType::PreKeyMessage` - Session was just established (includes prekey bundle)
+- `EncType::Message` - Standard encrypted message
+
+**Example:**
+```rust
+use wacore::message_processing::EncType;
+
+let plaintext = b"Hello, world!";
+let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
+
+match enc_type {
+    EncType::PreKeyMessage => println!("New session established"),
+    EncType::Message => println!("Existing session used"),
+    _ => {}
+}
+```
+
+### decrypt_message
+
+Decrypt a Signal protocol message from a sender.
+
+```rust
+pub async fn decrypt_message(
+    &self,
+    jid: &Jid,
+    enc_type: EncType,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>>
+```
+
+**Parameters:**
+- `jid` - Sender JID. PN JIDs are resolved to LID when a LID session exists.
+- `enc_type` - The encryption type (`EncType::PreKeyMessage` or `EncType::Message`)
+- `ciphertext` - Encrypted bytes to decrypt
+
+**Returns:**
+- `Vec<u8>` - Raw padded plaintext. Use `MessageUtils::unpad_message_ref` with the stanza's `v` attribute if WhatsApp message unpadding is needed.
+
+<Note>
+  Passing `EncType::SenderKey` returns an error — use [`decrypt_group_message`](#decrypt_group_message) for sender-key encrypted group messages.
+</Note>
+
+**Example:**
+```rust
+let plaintext = client.signal().decrypt_message(
+    &sender_jid,
+    EncType::Message,
+    &ciphertext,
+).await?;
+```
+
+### encrypt_group_message
+
+Encrypt plaintext for a group using sender keys.
+
+```rust
+pub async fn encrypt_group_message(
+    &self,
+    group_jid: &Jid,
+    plaintext: &[u8],
+) -> Result<(Option<Vec<u8>>, Vec<u8>)>
+```
+
+**Parameters:**
+- `group_jid` - Group JID (`@g.us`)
+- `plaintext` - Raw bytes to encrypt
+
+**Returns:**
+- `(Option<Vec<u8>>, Vec<u8>)` - A tuple of optional SKDM bytes and ciphertext bytes. The SKDM is `Some` only when a new sender key was created (first encrypt for this group or after key rotation). You must distribute the SKDM to all group participants when present.
+
+<Warning>
+  Not safe to call concurrently with `decrypt_group_message` for the same group — sender key state is not internally locked.
+</Warning>
+
+**Example:**
+```rust
+let (skdm, ciphertext) = client.signal().encrypt_group_message(
+    &group_jid,
+    &plaintext,
+).await?;
+
+if let Some(skdm_bytes) = skdm {
+    // Distribute SKDM to all group participants
+    println!("New sender key created, SKDM must be distributed");
+}
+```
+
+### decrypt_group_message
+
+Decrypt a group (sender-key) message.
+
+```rust
+pub async fn decrypt_group_message(
+    &self,
+    group_jid: &Jid,
+    sender_jid: &Jid,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>>
+```
+
+**Parameters:**
+- `group_jid` - Group JID
+- `sender_jid` - Sender's JID within the group
+- `ciphertext` - Encrypted bytes to decrypt
+
+**Returns:**
+- `Vec<u8>` - Raw padded plaintext. Use `MessageUtils::unpad_message_ref` with the stanza's `v` attribute if WhatsApp message unpadding is needed.
+
+<Warning>
+  Not safe to call concurrently with `encrypt_group_message` for the same group — sender key state is not internally locked.
+</Warning>
+
+**Example:**
+```rust
+let plaintext = client.signal().decrypt_group_message(
+    &group_jid,
+    &sender_jid,
+    &ciphertext,
+).await?;
+```
+
+### validate_session
+
+Check whether a Signal session exists for a JID.
+
+```rust
+pub async fn validate_session(&self, jid: &Jid) -> Result<bool>
+```
+
+**Parameters:**
+- `jid` - JID to check. PN JIDs are resolved to LID when a LID mapping exists.
+
+**Returns:**
+- `bool` - `true` if a session exists, `false` otherwise
+
+**Example:**
+```rust
+if client.signal().validate_session(&jid).await? {
+    println!("Session exists for {}", jid);
+} else {
+    println!("No session — need to establish one first");
+}
+```
+
+### delete_sessions
+
+Delete Signal sessions and identity keys for the given JIDs.
+
+```rust
+pub async fn delete_sessions(&self, jids: &[Jid]) -> Result<()>
+```
+
+**Parameters:**
+- `jids` - JIDs whose sessions and identity keys should be deleted. PN JIDs are resolved to LID when a LID mapping exists.
+
+This matches WhatsApp Web's `deleteRemoteSession` behavior, which removes both the session and identity key as a paired operation. Changes are flushed to the persistent backend before returning.
+
+**Example:**
+```rust
+// Delete sessions for specific contacts
+client.signal().delete_sessions(&[jid1, jid2]).await?;
+```
+
+### create_participant_nodes
+
+Create encrypted participant `<to>` nodes for the given recipient JIDs.
+
+```rust
+pub async fn create_participant_nodes(
+    &self,
+    recipient_jids: &[Jid],
+    message: &waproto::whatsapp::Message,
+) -> Result<(Vec<Node>, bool)>
+```
+
+**Parameters:**
+- `recipient_jids` - JIDs to encrypt for
+- `message` - Protobuf message to encrypt
+
+**Returns:**
+- `(Vec<Node>, bool)` - The encrypted participant XML nodes and a boolean indicating whether a device identity node should be included in the stanza (true when any participant received a PreKey message).
+
+This method resolves devices, ensures Signal sessions exist, encrypts the message for each device, and returns the resulting XML nodes. It acquires per-device session locks matching the DM send path.
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+let message = wa::Message {
+    conversation: Some("Hello!".to_string()),
+    ..Default::default()
+};
+
+let (nodes, include_identity) = client.signal().create_participant_nodes(
+    &[recipient_jid],
+    &message,
+).await?;
+```
+
+### assert_sessions
+
+Ensure E2E sessions exist for the given JIDs.
+
+```rust
+pub async fn assert_sessions(&self, jids: &[Jid]) -> Result<()>
+```
+
+**Parameters:**
+- `jids` - JIDs to ensure sessions for
+
+If sessions do not exist, this method fetches prekey bundles from the server and establishes new sessions.
+
+**Example:**
+```rust
+// Ensure sessions exist before manual encryption
+client.signal().assert_sessions(&[jid1, jid2]).await?;
+```
+
+### get_user_devices
+
+Get all known device JIDs for the given user JIDs via usync.
+
+```rust
+pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>>
+```
+
+**Parameters:**
+- `jids` - User JIDs to query
+
+**Returns:**
+- `Vec<Jid>` - All device JIDs for the given users
+
+**Example:**
+```rust
+let devices = client.signal().get_user_devices(&[user_jid]).await?;
+println!("User has {} devices", devices.len());
+```
+
+## EncType
+
+The `EncType` enum represents the Signal protocol encryption type used for a message:
+
+```rust
+pub enum EncType {
+    /// Standard Signal message (existing session)
+    Message,
+    /// PreKey Signal message (new session establishment)
+    PreKeyMessage,
+    /// Sender key message (group encryption)
+    SenderKey,
+}
+```
+
+## Usage examples
+
+### Manual 1:1 encryption round-trip
+
+```rust
+// Ensure a session exists
+client.signal().assert_sessions(&[recipient_jid.clone()]).await?;
+
+// Encrypt
+let plaintext = b"Secret message";
+let (enc_type, ciphertext) = client.signal().encrypt_message(
+    &recipient_jid,
+    plaintext,
+).await?;
+
+// The recipient would decrypt with:
+// let decrypted = client.signal().decrypt_message(&sender_jid, enc_type, &ciphertext).await?;
+```
+
+### Check session before sending
+
+```rust
+let has_session = client.signal().validate_session(&jid).await?;
+
+if !has_session {
+    // Establish session first
+    client.signal().assert_sessions(&[jid.clone()]).await?;
+}
+
+let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
+```
+
+### Group encryption with SKDM handling
+
+```rust
+let (skdm, ciphertext) = client.signal().encrypt_group_message(
+    &group_jid,
+    &plaintext,
+).await?;
+
+if skdm.is_some() {
+    // First message in this group or after key rotation.
+    // The SKDM must be distributed to all participants
+    // so they can decrypt future messages.
+}
+```
+
+### Reset a broken session
+
+```rust
+// Delete the corrupted session
+client.signal().delete_sessions(&[jid.clone()]).await?;
+
+// Re-establish
+client.signal().assert_sessions(&[jid.clone()]).await?;
+
+// Now encryption should work again
+let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
+```
+
+## See also
+
+- [Signal Protocol implementation](/advanced/signal-protocol) - Deep dive into the protocol internals
+- [Client](/api/client) - Core client API
+- [Send](/api/send) - High-level message sending (handles encryption automatically)

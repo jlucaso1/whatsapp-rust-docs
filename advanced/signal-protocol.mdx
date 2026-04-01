@@ -927,11 +927,18 @@ fn get_buffer(&mut self) -> &mut Vec<u8> {
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`
 
+## Public API
+
+The `client.signal()` accessor exposes low-level Signal protocol operations for direct use. This includes 1:1 and group encryption/decryption, session validation, session deletion, participant node creation, and device resolution.
+
+See [Signal API reference](/api/signal) for full method documentation and examples.
+
 ## Related Components
 
 - [Binary Protocol](/advanced/binary-protocol) - How encrypted messages are serialized
 - [State Management](/advanced/state-management) - How session state is persisted
 - [WebSocket Handling](/advanced/websocket-handling) - Transport layer for encrypted messages
+- [Signal API](/api/signal) - Public API for Signal protocol operations
 
 ## References
 

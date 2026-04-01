@@ -776,6 +776,41 @@ let result = client.media_reupload().request(&MediaReuploadRequest {
 
 The request sends a `server-error` receipt and waits up to 30 seconds for a `mediaretry` notification with an updated download path.
 
+### signal
+
+```rust
+pub fn signal(&self) -> Signal<'_>
+```
+
+Access low-level Signal protocol operations for direct encryption, decryption, and session management.
+
+**Methods:**
+- `encrypt_message(jid: &Jid, plaintext: &[u8])` - Encrypt plaintext for a single recipient
+- `decrypt_message(jid: &Jid, enc_type: EncType, ciphertext: &[u8])` - Decrypt a Signal protocol message
+- `encrypt_group_message(group_jid: &Jid, plaintext: &[u8])` - Encrypt plaintext for a group using sender keys
+- `decrypt_group_message(group_jid: &Jid, sender_jid: &Jid, ciphertext: &[u8])` - Decrypt a group message
+- `validate_session(jid: &Jid)` - Check whether a Signal session exists
+- `delete_sessions(jids: &[Jid])` - Delete Signal sessions and identity keys
+- `create_participant_nodes(recipient_jids: &[Jid], message: &Message)` - Create encrypted participant nodes
+- `assert_sessions(jids: &[Jid])` - Ensure E2E sessions exist
+- `get_user_devices(jids: &[Jid])` - Get all device JIDs for users
+
+**Example:**
+```rust
+// Check if a session exists, then encrypt
+let has_session = client.signal().validate_session(&jid).await?;
+if !has_session {
+    client.signal().assert_sessions(&[jid.clone()]).await?;
+}
+let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
+```
+
+<Warning>
+These are low-level APIs that bypass the high-level message sending pipeline. Most users should use [`send_message()`](#send_message) which handles encryption automatically.
+</Warning>
+
+See [Signal API](/api/signal) for full documentation.
+
 ---
 
 ## Public fields

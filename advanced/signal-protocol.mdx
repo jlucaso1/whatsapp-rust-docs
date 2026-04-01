@@ -256,6 +256,73 @@ This ensures that your own devices registered under your LID (common in multi-de
 
 Location: `wacore/src/send.rs:590-619`
 
+## PN→LID session migration
+
+WhatsApp's multi-device architecture uses two addressing schemes: phone number JIDs (PN, `@s.whatsapp.net`) and Linked Identity JIDs (LID, `@lid`). WhatsApp Web always resolves PN→LID before any session operation via `createSignalAddress()`. whatsapp-rust mirrors this behavior — when a LID mapping is discovered for a phone number, any Signal sessions stored under the PN address are automatically migrated to the corresponding LID address.
+
+### Why migration is needed
+
+After pairing, the primary phone may initially establish sessions under a PN address. Once the LID mapping becomes known (from usync, incoming messages, or device notifications), the phone begins sending from the LID address. Without migration, the client holds a session under the PN address but receives messages addressed to the LID — causing `SessionNotFound` decryption failures.
+
+### Proactive migration at LID discovery
+
+When a new LID-PN mapping is learned (via `add_lid_pn_mapping`), the client scans devices 0–99 for PN-keyed sessions and migrates them:
+
+```rust
+// src/client/lid_pn.rs
+pub(crate) async fn migrate_signal_sessions_on_lid_discovery(&self, pn: &str, lid: &str) {
+    for device_id in 0..=99u16 {
+        // If PN session exists and no LID session → move session to LID address
+        // If both exist → delete the stale PN session
+        // Identity keys are migrated independently of sessions
+    }
+}
+```
+
+**Migration rules per device:**
+
+| PN session | LID session | Action |
+|-----------|-------------|--------|
+| Exists | Does not exist | Move session and identity from PN→LID address |
+| Exists | Exists | Delete stale PN session (LID takes precedence) |
+| Does not exist | Any | No action |
+
+Identity keys are migrated independently of sessions — they can outlive deleted sessions and survive session re-establishment.
+
+### On-the-fly migration during decryption
+
+If a message arrives from a LID address and decryption fails with `SessionNotFound`, the client attempts PN→LID migration as a fallback before requesting a retry:
+
+1. Look up the PN for the sender's LID
+2. Attempt to migrate PN sessions to LID (same logic as proactive migration)
+3. Reload the session and identity into the signal cache
+4. Retry decryption with the migrated session
+5. If `DuplicatedMessage` occurs during post-migration retry, it is silently ignored
+6. Fall back to retry receipt only if migration does not resolve the issue
+
+This ensures existing databases are fixed without requiring re-pairing.
+
+### Login-time session check
+
+At login, the client checks the session state of own device 0 (primary phone):
+
+- **LID session exists** — no action needed
+- **PN session only** — logged; migration deferred to first message via on-the-fly path
+- **No session** — will be established on first message exchange
+
+```rust
+// src/client/sessions.rs
+pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<()> {
+    // Checks LID session → logs PN-only state → defers migration to message path
+}
+```
+
+<Note>
+  The proactive migration runs synchronously when a LID mapping is first discovered. The on-the-fly migration handles the case where the database already contains stale PN sessions from before the mapping was known.
+</Note>
+
+Location: `src/client/lid_pn.rs`, `src/client/sessions.rs`, `src/message.rs`
+
 ## Sender Keys (Group Encryption)
 
 Groups use the Sender Key protocol for efficient multi-recipient encryption.

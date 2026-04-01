@@ -111,6 +111,7 @@ Delivery receipts are automatically sent for all incoming messages **except**:
 - Your own messages (`is_from_me = true`)
 - Messages without an ID
 - Status broadcast messages (`status@broadcast`)
+- Newsletter messages
 
 For group messages, the receipt includes a `participant` attribute identifying the sender.
 
@@ -120,19 +121,19 @@ For group messages, the receipt includes a `participant` attribute identifying t
 
 ### Wire format
 
-Internally, delivery receipts use `jid_attr()` for the `to` and `participant` attributes, storing JIDs directly without string conversion for better performance:
+Internally, delivery receipts pass JID values directly to the generic `.attr()` method, which accepts any type implementing `Into<AttrValue>`:
 
 ```rust
 let mut builder = NodeBuilder::new("receipt")
     .attr("id", &info.id)
-    .jid_attr("to", info.source.chat.clone());
+    .attr("to", info.source.chat.clone());
 
 if info.category == MessageCategory::Peer {
     builder = builder.attr("type", "peer_msg");
 }
 
 if info.source.is_group {
-    builder = builder.jid_attr("participant", info.source.sender.clone());
+    builder = builder.attr("participant", info.source.sender.clone());
 }
 
 let receipt_node = builder.build();

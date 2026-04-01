@@ -136,6 +136,9 @@ pub enum Event {
 
     // Notification Updates
     DisappearingModeChanged(DisappearingModeChanged),
+
+    // Raw stanza (opt-in)
+    RawNode(Arc<Node>),
 }
 ```
 
@@ -447,7 +450,7 @@ pub struct MessageInfo {
     pub r#type: String,
     pub push_name: String,
     pub timestamp: DateTime<Utc>,
-    pub category: String,
+    pub category: MessageCategory,
     pub multicast: bool,
     pub media_type: String,
     pub edit: EditAttribute,
@@ -468,6 +471,15 @@ pub struct MessageSource {
     pub recipient_alt: Option<Jid>,
     pub broadcast_list_owner: Option<Jid>,
     pub recipient: Option<Jid>,
+}
+```
+
+**MessageCategory:**
+```rust
+pub enum MessageCategory {
+    Empty,        // Default (empty string on the wire)
+    Peer,         // Self-synced message from primary phone
+    Other(String), // Unknown category (forward compatibility)
 }
 ```
 
@@ -1372,6 +1384,32 @@ Event::DisappearingModeChanged(change) => {
     println!("Contact {} changed disappearing messages: {}", change.from, status);
 }
 ```
+
+## Raw stanza events
+
+### RawNode
+
+**Emitted:** For every decoded stanza before router dispatch. This is an opt-in event gated by `Client::set_raw_node_forwarding(true)` — it is not emitted by default to avoid overhead.
+
+```rust
+Event::RawNode(Arc<Node>)
+```
+
+This is a library extension with no WhatsApp Web equivalent. It gives you access to every raw decoded stanza before any routing or parsing occurs.
+
+**Example:**
+```rust
+client.set_raw_node_forwarding(true);
+
+// In your event handler:
+Event::RawNode(node) => {
+    println!("Raw stanza: {:?}", node);
+}
+```
+
+<Note>
+`RawNode` is skipped during serialization (`#[serde(skip)]`). Enable it only when debugging or building protocol-level tooling, as it dispatches for every incoming stanza.
+</Note>
 
 ## Event Handler Patterns
 

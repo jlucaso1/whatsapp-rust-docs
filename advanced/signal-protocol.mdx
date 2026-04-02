@@ -394,6 +394,40 @@ pub async fn group_decrypt(
   Group decryption maintains up to MAX_FORWARD_JUMPS (25000) cached message keys per sender. This prevents resource exhaustion attacks but limits tolerance for extreme out-of-order delivery.
 </Warning>
 
+### Unknown device detection
+
+During group message decryption, the client checks whether the sender's device is present in the local device registry via `is_from_known_device()`. This detection triggers in two places within the group message processing path:
+
+1. **After successful `skmsg` decrypt** — if the sender device is not in the registry, the decrypted message is discarded and a retry receipt is sent with `RetryReason::UnknownCompanionNoPrekey`
+2. **After a `NoSenderKeyState` error** — if the sender device is unknown, the retry reason is upgraded from `NoSession` to `UnknownCompanionNoPrekey`
+
+In both cases, the client queues a device list synchronization for the sender's user JID. The behavior depends on the connection state:
+
+- **Online**: the client immediately invalidates the cached device registry for the user and fires a background usync request to refresh the device list
+- **Offline** (during offline sync): the unknown device's user JID is batched into a `PendingDeviceSync` set, which is flushed after offline sync completes (see [Deferred device sync](/concepts/architecture#deferred-device-sync))
+
+Primary devices (device ID 0) are always treated as known — the check only applies to companion devices.
+
+This mechanism ensures that messages from newly-paired companion devices are never silently dropped. The client discovers the new device through the sync and the retry receipt causes the sender to redeliver the message.
+
+```rust
+// src/message.rs — simplified flow
+async fn handle_unknown_device_sync(&self, info: &MessageInfo) {
+    let user_jid = info.source.sender.to_non_ad();
+    if !self.pending_device_sync.add(user_jid.clone()).await {
+        return; // already queued, dedup
+    }
+    if info.is_offline {
+        return; // batched for deferred flush
+    }
+    // Online: immediate sync
+    self.invalidate_device_cache(&user_jid.user).await;
+    self.get_user_devices(&[user_jid]).await.ok();
+}
+```
+
+Location: `src/message.rs`, `src/client/device_registry.rs`, `src/pending_device_sync.rs`
+
 ### Sender key existence check
 
 Before distributing sender keys, the group message path checks whether the local sender key already exists. This check uses the `SignalStoreCache` with a **read lock** (`get_sender_key()`), matching the status broadcast path. This avoids acquiring a write lock and prevents unnecessary SKDM re-distribution on every group send.

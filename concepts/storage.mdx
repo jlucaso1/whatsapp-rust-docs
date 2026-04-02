@@ -1131,7 +1131,11 @@ When a device notification arrives, the client patches the `device_registry_cach
 
 All three methods iterate over every known PN/LID alias for the user so stale alternate-key entries stay consistent. Device patches also persist to the backend store immediately, so changes survive cache eviction and restarts.
 
+The `patch_device_add` method also performs ADV (Account Device Verification) key index filtering. When `KeyIndexInfo` is present, the signed bytes are decoded via `wacore::adv::decode_key_index_list` to extract valid device indexes, and stale devices not in the valid set are filtered out. If the `raw_id` in the notification differs from the stored value, the client detects an identity change and clears all Signal sessions for that user's non-primary devices.
+
 When a notification arrives with only a hash (no device list), the client falls back to full invalidation and lets the next access re-fetch from the server.
+
+**LID migration**: When a new LID-PN mapping is discovered, the device registry re-keys entries from the PN key to the LID key via `migrate_device_registry_on_lid_discovery()`. This ensures lookups by either addressing scheme resolve to the same canonical record. The migration also invalidates stale PN-keyed entries from both cache and database.
 
 **Group metadata** (`src/handlers/notification.rs`, `src/features/groups.rs`)
 

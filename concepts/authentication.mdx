@@ -117,10 +117,18 @@ Event::PairingQrCode {
 }
 ```
 
-**Generated in:** `src/pair.rs:63-97`
+**Generated in:** `src/pair.rs:63-116`
+
+The rotation loop includes a **safety guard** that checks `is_logged_in()` before emitting each QR code. This prevents stale QR events from firing after pairing completes — important for single-threaded runtimes, fast auto-pair scenarios, and mock servers where the spawned task may not be polled until after pairing succeeds.
 
 ```rust
 for code in codes_clone {
+    // Safety guard: pairing may complete before this task gets polled
+    if client_clone.is_logged_in() {
+        info!("Already logged in, stopping QR rotation.");
+        return;
+    }
+
     let timeout = if is_first {
         is_first = false;
         Duration::from_secs(60)
@@ -130,15 +138,29 @@ for code in codes_clone {
 
     client.core.event_bus.dispatch(&Event::PairingQrCode { code, timeout });
 
-    tokio::select! {
-        _ = tokio::time::sleep(timeout) => {}
-        _ = stop_rx_clone.changed() => {
-            info!("Pairing complete. Stopping QR rotation.");
+    let sleep = client_clone.runtime.sleep(timeout);
+    let stop = stop_rx.recv();
+    futures::pin_mut!(sleep);
+    futures::pin_mut!(stop);
+    match futures::future::select(sleep, stop).await {
+        futures::future::Either::Left(_) => {
+            // Timeout elapsed — check again in case login happened during sleep
+            if client_clone.is_logged_in() {
+                info!("Logged in during QR timeout, stopping rotation.");
+                return;
+            }
+        }
+        futures::future::Either::Right(_) => {
+            info!("Pairing complete. Stopping QR code rotation.");
             return;
         }
     }
 }
 ```
+
+<Note>
+  The rotation uses `futures::future::select` with an `async_channel` stop signal rather than Tokio-specific primitives. This keeps the QR rotation compatible with any async runtime, since the `Client` uses the pluggable `Runtime` trait for sleep and spawn operations.
+</Note>
 
 ## Pair Code (Phone Number Linking)
 
@@ -386,23 +408,29 @@ let code = client.pair_with_code(options).await?;
 **State Management:**
 ```rust
 // src/client.rs
-pub(crate) pairing_cancellation_tx: Mutex<Option<watch::Sender<()>>>,
+pub(crate) pairing_cancellation_tx: Mutex<Option<async_channel::Sender<()>>>,
 pub(crate) pair_code_state: Mutex<PairCodeState>,
 ```
 
 **Cancellation:**
 ```rust
-// src/pair.rs:120-127
+// src/pair.rs:140-149
 async fn handle_pair_success(...) {
     // Cancel QR code rotation if active
     if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
-        let _ = tx.send(());
+        let _ = tx.try_send(());
+        debug!("Sent QR rotation stop signal");
+    } else {
+        // is_logged_in guard will stop the task even without the channel
+        debug!("QR rotation channel not yet stored — is_logged_in guard will stop the task");
     }
 
     // Clear pair code state if active
     *client.pair_code_state.lock().await = PairCodeState::Completed;
 }
 ```
+
+The `is_logged_in()` safety guard in the rotation loop acts as a fallback — even if the cancellation channel hasn't been stored yet (race condition on fast pairing), the rotation task will exit cleanly on its next iteration.
 
 ## Success Events
 

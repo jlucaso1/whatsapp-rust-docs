@@ -154,6 +154,16 @@ tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 
 The encoder/decoder automatically falls back to scalar code paths when SIMD is disabled. There is no functional difference — only a minor performance difference in binary protocol operations.
 
+## 32-bit target support
+
+whatsapp-rust uses [`portable-atomic`](https://crates.io/crates/portable-atomic) instead of `std::sync::atomic` for 64-bit atomic operations. This means the library works on **32-bit targets** (ARM32, MIPS, RISC-V 32, etc.) where `AtomicU64` is not natively available — `portable-atomic` provides a software fallback automatically.
+
+No extra configuration is needed. The `portable-atomic` dependency is included with the `fallback` feature enabled by default across all crates (`whatsapp-rust`, `wacore`, and `whatsapp-rust-sqlite-storage`).
+
+<Tip>
+  If you're building for a 32-bit embedded target or cross-compiling to `armv7-unknown-linux-gnueabihf`, whatsapp-rust will compile and run correctly out of the box.
+</Tip>
+
 ## Custom features example
 
 If you want to use only specific features:

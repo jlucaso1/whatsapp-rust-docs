@@ -38,6 +38,7 @@ whatsapp-rust/
 
 **Key Features:**
 - **Zero runtime dependencies** — no Tokio, no async-std, only `futures`, `async-trait`, `async-lock`, and `async-channel`
+- **32-bit target support** — uses `portable-atomic` for 64-bit atomics with a software fallback on platforms without native `AtomicU64` (ARM32, MIPS, etc.)
 - `Runtime` trait for pluggable async executors (Tokio, async-std, WASM, etc.)
 - `Transport`, `TransportFactory`, and `HttpClient` traits for pluggable networking
 - `Backend` trait for pluggable storage

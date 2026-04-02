@@ -1001,16 +1001,23 @@ let lock_keys = self.build_session_lock_keys(&all_dm_devices).await;
 // Locks acquired in sorted order to prevent deadlocks
 ```
 
+**DM server-side fanout:**
+
+The DM send path uses **bare recipient JID** addressing (device 0) for the recipient, relying on WhatsApp's server-side fanout to route the encrypted message to the correct recipient device. This matches WhatsApp Web's `MsgCreateFanoutStanza.js` behavior — for CHAT fanout with a single primary device, the client encrypts directly for that bare device only, and the server routes the `<enc>` to the correct recipient device.
+
+Own companion devices (your other linked devices) still receive per-device encryption for multi-device self-sync via `DeviceSentMessage`.
+
 **DM per-device locking:**
 
-The DM send path encrypts to multiple devices (the recipient's linked devices plus the sender's own linked devices). To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires per-device session locks for **all** devices involved — not just the primary device. The `build_session_lock_keys()` helper:
+To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires session locks for all devices involved — the bare recipient plus own companion devices. The `build_session_lock_keys()` helper:
 
-1. Resolves each device JID to its encryption JID (handling LID-PN mapping)
-2. Converts each to a protocol address string
-3. Sorts and deduplicates the keys
-4. Acquires locks in sorted order to prevent deadlocks
+1. Resolves the recipient to its bare encryption JID via `resolve_encryption_jid().to_non_ad()` (stripping device component)
+2. Resolves own companion device JIDs
+3. Converts each to a protocol address string
+4. Sorts and deduplicates the keys
+5. Acquires locks in sorted order to prevent deadlocks
 
-This ensures send and receive paths serialize on the exact same lock key for each device, matching the decrypt path's lock format (`message.rs`).
+The recipient lock key is always the bare form (e.g., `100000012345678@lid.0`), matching the decrypt path's lock format. This ensures send and receive paths serialize on the exact same lock key.
 
 Location: `wacore/src/types/jid.rs:4-68`, `src/send.rs:1288-1300`
 

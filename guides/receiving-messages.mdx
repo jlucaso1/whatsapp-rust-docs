@@ -322,6 +322,8 @@ The client decrypts these in two passes:
 
 If session messages fail to decrypt, the SKDM they carried is lost. In this case, the client skips `skmsg` decryption entirely (since it would always fail with `NoSenderKey`) and dispatches an `UndecryptableMessage` event. The retry receipt for the session message causes the sender to resend the entire message including the SKDM.
 
+Before looking up or storing sender keys, the client normalizes the sender JID to its bare form (stripping the device component via `to_non_ad()`). This is necessary because WhatsApp delivers `pkmsg` stanzas (carrying SKDM) with a device-qualified participant JID, while `skmsg` stanzas use a bare participant JID. Without normalization, the sender key stored during SKDM processing would not match the key looked up during `skmsg` decryption. See [Sender key address normalization](/advanced/signal-protocol#sender-key-address-normalization) for details.
+
 When a group `skmsg` decryption fails with `NoSenderKeyState` (the sender key is missing or was never received), the client dispatches an `UndecryptableMessage` event **before** spawning the retry receipt. This ensures your application is immediately notified that the message is pending decryption, matching the behavior of the session-based decrypt path.
 
 Exceptions where `skmsg` is still processed even without successful session decryption:

@@ -333,6 +333,35 @@ Location: `src/client/lid_pn.rs`, `src/client/sessions.rs`, `src/message.rs`
 
 Groups use the Sender Key protocol for efficient multi-recipient encryption.
 
+### Sender key address normalization
+
+Sender key records are keyed by a composite `SenderKeyName` containing the group JID and a sender protocol address string. WhatsApp delivers group stanzas with **inconsistent sender addressing** — the `pkmsg` (which carries the SKDM) arrives with a device-qualified participant JID (e.g., `100000000000001.1:75@lid`), while the `skmsg` (the actual encrypted group message) arrives with a bare participant JID (e.g., `100000000000001.1@lid`).
+
+Without normalization, the sender key would be stored under the device-qualified address during SKDM processing but looked up under the bare address during `skmsg` decryption, causing `NoSenderKeyState` failures.
+
+The client normalizes the sender JID to its bare form using `to_non_ad()` (which strips the device component, setting `device = 0, agent = 0`) at every point where a `SenderKeyName` is constructed:
+
+```rust
+// Decryption path (src/message.rs) — normalize before group_decrypt
+let sender_for_sk = info.source.sender.to_non_ad();
+let sender_address = sender_for_sk.to_protocol_address();
+let sender_key_name =
+    SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+
+// SKDM storage path (src/message.rs) — normalize before process_sender_key_distribution_message
+let sender_bare = sender_jid.to_non_ad();
+let sender_address = sender_bare.to_protocol_address();
+let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+```
+
+This ensures the cache key is always in the form `"{group}:{bare_user}@{server}.0"`, regardless of whether the original stanza used a device-qualified or bare JID.
+
+<Warning>
+  Custom implementations that construct `SenderKeyName` directly must also normalize the sender JID to its bare form. Failing to do so will cause sender key lookup mismatches and decryption failures for group messages.
+</Warning>
+
+Location: `src/message.rs`, `wacore/binary/src/jid.rs` (`to_non_ad()`)
+
 ### Sender Key Distribution
 
 Each participant generates and distributes a sender key:

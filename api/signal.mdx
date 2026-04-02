@@ -221,7 +221,7 @@ pub async fn create_participant_nodes(
 **Returns:**
 - `(Vec<Node>, bool)` - The encrypted participant XML nodes and a boolean indicating whether a device identity node should be included in the stanza (true when any participant received a PreKey message).
 
-This method resolves devices, ensures Signal sessions exist, encrypts the message for each device, and returns the resulting XML nodes. It acquires per-device session locks matching the DM send path.
+This method resolves devices, ensures Signal sessions exist, encrypts the message for each device, and returns the resulting XML nodes. It acquires session locks matching the DM send path (bare recipient JID for the recipient, per-device for own companion devices).
 
 **Example:**
 ```rust

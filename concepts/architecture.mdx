@@ -407,6 +407,36 @@ This prevents a critical issue where `pkmsg` messages (which carry Sender Key Di
 
 **State reset:** On reconnect or cleanup, all offline sync state is reset (counters, timing, and the semaphore is replaced with a fresh single-permit instance) so stale state does not leak into the next connection attempt.
 
+### Deferred device sync
+
+During offline sync, the client may receive group messages from devices not yet present in the local device registry (for example, a companion device that was paired while the client was offline). Rather than firing a network request for each unknown device individually, the client batches these into a `PendingDeviceSync` set.
+
+**Flow:**
+
+1. During offline message processing, `is_from_known_device()` detects an unrecognized sender device
+2. The sender's user JID is added to `PendingDeviceSync` (deduplicated — each user is queued at most once)
+3. A retry receipt is sent so the sender will redeliver the message after the device list is updated
+4. When `<ib><offline/>` arrives (offline sync complete), the client waits 2 seconds (`OFFLINE_DEVICE_SYNC_DELAY`, matching WhatsApp Web)
+5. All batched user JIDs are flushed in a single bulk usync request via `flush_pending_device_sync()`
+6. If the flush fails, the JIDs are re-enqueued for the next attempt
+
+This batching approach minimizes network overhead — instead of N individual usync requests for N unknown devices, a single bulk request resolves all pending users.
+
+When online (not during offline sync), unknown devices trigger an immediate background usync request instead of being batched.
+
+```rust
+// src/pending_device_sync.rs
+pub(crate) struct PendingDeviceSync {
+    pending: async_lock::Mutex<HashSet<Jid>>,
+}
+```
+
+The `PendingDeviceSync` state is cleared on reconnect to prevent stale entries from leaking across connections.
+
+Location: `src/pending_device_sync.rs`, `src/handlers/ib.rs`, `src/usync.rs`
+
+See also: [Unknown device detection](/advanced/signal-protocol#unknown-device-detection) for the detection mechanism during group message decryption.
+
 ## History Sync Pipeline
 
 History sync transfers chat history from the phone to the linked device. The pipeline is designed for minimal RAM usage through a multi-layered zero-copy strategy.

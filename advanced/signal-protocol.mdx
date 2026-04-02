@@ -266,16 +266,19 @@ After pairing, the primary phone may initially establish sessions under a PN add
 
 ### Proactive migration at LID discovery
 
-When a new LID-PN mapping is learned (via `add_lid_pn_mapping`), the client scans devices 0–99 for PN-keyed sessions and migrates them:
+When a new LID-PN mapping is learned (via `add_lid_pn_mapping`), the client scans devices 0–99 for PN-keyed sessions and migrates them. All reads and writes go through the `SignalStoreCache` rather than the backend directly — this prevents reading stale data when the cache has unflushed mutations (e.g., after SKDM encryption ratcheted the session). The migrated state is flushed to the backend at the end so it survives restarts.
 
 ```rust
 // src/client/lid_pn.rs
 pub(crate) async fn migrate_signal_sessions_on_lid_discovery(&self, pn: &str, lid: &str) {
     for device_id in 0..=99u16 {
-        // If PN session exists and no LID session → move session to LID address
-        // If both exist → delete the stale PN session
+        // Read from signal_cache (authoritative over backend)
+        // If PN session exists and no LID session → move session to LID via cache
+        // If both exist → delete the stale PN session from cache
         // Identity keys are migrated independently of sessions
     }
+    // Flush migrated state to backend so it survives restarts
+    self.signal_cache.flush(backend.as_ref()).await;
 }
 ```
 
@@ -289,16 +292,19 @@ pub(crate) async fn migrate_signal_sessions_on_lid_discovery(&self, pn: &str, li
 
 Identity keys are migrated independently of sessions — they can outlive deleted sessions and survive session re-establishment.
 
+<Warning>
+  The migration reads through the cache because the backend may contain stale session data when unflushed cache mutations exist. Reading directly from the backend could skip in-flight ratchet advances, causing the migrated session to decrypt with an outdated chain key.
+</Warning>
+
 ### On-the-fly migration during decryption
 
 If a message arrives from a LID address and decryption fails with `SessionNotFound`, the client attempts PN→LID migration as a fallback before requesting a retry:
 
 1. Look up the PN for the sender's LID
-2. Attempt to migrate PN sessions to LID (same logic as proactive migration)
-3. Reload the session and identity into the signal cache
-4. Retry decryption with the migrated session
-5. If `DuplicatedMessage` occurs during post-migration retry, it is silently ignored
-6. Fall back to retry receipt only if migration does not resolve the issue
+2. Attempt to migrate PN sessions to LID via the signal cache (same cache-first logic as proactive migration)
+3. Retry decryption with the migrated session (already in the cache — no reload needed)
+4. If `DuplicatedMessage` occurs during post-migration retry, it is silently ignored
+5. Fall back to retry receipt only if migration does not resolve the issue
 
 This ensures existing databases are fixed without requiring re-pairing.
 
@@ -318,7 +324,7 @@ pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<(
 ```
 
 <Note>
-  The proactive migration runs synchronously when a LID mapping is first discovered. The on-the-fly migration handles the case where the database already contains stale PN sessions from before the mapping was known.
+  Both migration paths route through the `SignalStoreCache`, ensuring they see the latest in-memory state. The proactive migration runs when a LID mapping is first discovered and flushes to the backend afterward. The on-the-fly migration handles the case where the database already contains stale PN sessions from before the mapping was known.
 </Note>
 
 Location: `src/client/lid_pn.rs`, `src/client/sessions.rs`, `src/message.rs`

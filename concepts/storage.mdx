@@ -484,7 +484,7 @@ cache.warm_up(entries).await;
 
 **Session migration on LID discovery:**
 
-When a new LID-PN mapping is added to the cache, the client automatically migrates any Signal sessions stored under the PN address to the corresponding LID address. This prevents `SessionNotFound` decryption failures when the phone switches from PN to LID addressing. See [Signal Protocol — PN→LID session migration](/advanced/signal-protocol#pnlid-session-migration) for details.
+When a new LID-PN mapping is added to the cache, the client automatically migrates any Signal sessions stored under the PN address to the corresponding LID address. The migration reads and writes through the `SignalStoreCache` (not the backend directly) to avoid stale reads when the cache has unflushed mutations, then flushes the migrated state to the backend. This prevents `SessionNotFound` decryption failures when the phone switches from PN to LID addressing. See [Signal Protocol — PN→LID session migration](/advanced/signal-protocol#pnlid-session-migration) for details.
 
 **Learning sources:**
 - `usync` - User sync responses

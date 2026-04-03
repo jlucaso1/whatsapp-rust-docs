@@ -577,40 +577,79 @@ impl Client {
 }
 ```
 
-### 2. Frame Receiver
+### 2. Message loop (read loop)
+
+The `read_messages_loop` runs on the `run()` caller's task — not spawned — so the keepalive loop (which runs in a separate spawned task) is never blocked by frame processing. This eliminates a class of bugs where a long-running batch of frames (e.g., offline sync) could starve the keepalive timer.
 
 ```rust
-async fn start_frame_receiver(
-    &self,
-    mut events: Receiver<TransportEvent>,
-    noise_socket: Arc<NoiseSocket>,
-) {
-    tokio::spawn(async move {
-        let mut frame_decoder = FrameDecoder::new();
-        
-        while let Ok(event) = events.recv().await {
-            match event {
-                TransportEvent::DataReceived(data) => {
-                    frame_decoder.feed(&data);
-                    
-                    while let Some(frame) = frame_decoder.decode_frame() {
-                        // Decrypt frame
-                        let plaintext = noise_socket
-                            .decrypt_frame(&frame)?;
-                        
-                        // Process message
-                        self.handle_frame(plaintext).await?;
-                    }
+async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
+    let transport_events = self.transport_events.lock().await.take()
+        .ok_or_else(|| anyhow!("Cannot start message loop: not connected"))?;
+    let mut frame_decoder = FrameDecoder::new();
+
+    loop {
+        futures::select_biased! {
+            _ = self.shutdown_notifier.listen().fuse() => {
+                return Ok(());
+            },
+            event_result = transport_events.recv().fuse() => {
+                match event_result {
+                    Ok(TransportEvent::DataReceived(data)) => {
+                        // Update dead-socket timer on arrival
+                        self.last_data_received_ms.store(now_millis(), Ordering::Relaxed);
+                        frame_decoder.feed(&data);
+
+                        let mut frames_in_batch: u32 = 0;
+                        while let Some(encrypted_frame) = frame_decoder.decode_frame() {
+                            if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
+                                // Inline vs spawned processing (see below)
+                                if is_critical(&node) {
+                                    self.process_decrypted_node(node).await;
+                                } else {
+                                    self.runtime.spawn(/* ... */).detach();
+                                }
+                            }
+
+                            // Cooperative yield every N frames
+                            frames_in_batch += 1;
+                            if frames_in_batch.is_multiple_of(self.runtime.yield_frequency()) {
+                                if let Some(yield_fut) = self.runtime.yield_now() {
+                                    yield_fut.await;
+                                }
+                            }
+                        }
+
+                        // Refresh timestamp after batch so keepalive sees
+                        // batch completion time, not just arrival time
+                        if frames_in_batch > 1 {
+                            self.last_data_received_ms.store(now_millis(), Ordering::Relaxed);
+                        }
+                    },
+                    Ok(TransportEvent::Disconnected) | Err(_) => { /* handle disconnect */ }
+                    _ => {}
                 }
-                TransportEvent::Disconnected => {
-                    self.handle_disconnect().await;
-                    break;
-                }
-                _ => {}
             }
         }
-    });
+    }
 }
+```
+
+**Key design decisions:**
+
+- **`select_biased!`** — the shutdown listener has priority over transport events, ensuring the loop exits promptly when `shutdown_notifier` fires (e.g., on stream error or disconnect)
+- **Batch timestamp refresh** — after processing multiple frames, `last_data_received_ms` is updated again so the keepalive loop sees the batch completion time rather than the arrival time. This prevents false-positive dead-socket triggers during large offline sync batches that take seconds to drain
+- **Cooperative yielding** — the loop yields to the runtime every `yield_frequency()` frames, preventing a large burst of frames from monopolizing the executor
+
+#### Inline vs concurrent node processing
+
+Frame decryption is always sequential (noise protocol counter ordering), but node processing uses a hybrid strategy:
+
+| Node tag | Processing | Reason |
+|----------|-----------|--------|
+| `success`, `failure`, `stream:error` | Inline | Critical for connection state transitions |
+| `message` | Inline | Preserves arrival order for per-chat queues (MessageHandler just enqueues + ACKs; heavy crypto runs in queue workers) |
+| `ib` | Inline | Ensures offline sync tracking (expected count) is set up before offline messages are processed |
+| Everything else | Spawned concurrently | Maximizes parallelism for non-ordering-sensitive stanzas |
 ```
 
 ### 3. Send Message
@@ -857,7 +896,9 @@ Dead socket detection mirrors WA Web's `deadSocketTimer` pattern:
 - **Cancelled** if data was received after the last send
 - **Fires** if `DEAD_SOCKET_TIME` (20s) has elapsed since the last send with no receive
 
-When a dead socket is detected after a transient keepalive failure, the client calls `reconnect_immediately()` and exits the keepalive loop.
+The dead-socket check runs on **every** keepalive tick — not just after a failed ping. This catches scenarios where pending IQs caused the ping to be skipped, or where the ping "succeeded" but the connection died immediately after. When a dead socket is detected, the client calls `reconnect_immediately()` and exits the keepalive loop.
+
+WA Web uses an independent 20s `deadSocketTimer` armed on every send and cancelled on every receive. The keepalive loop approximates this by checking `is_dead_socket(last_sent, last_recv)` unconditionally each iteration.
 
 ### Error classification
 

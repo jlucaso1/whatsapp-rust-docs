@@ -352,9 +352,20 @@ Message queue invalidation is critical for correctness. Without it, stale messag
 - **515 (expected)**: Immediate reconnect without backoff
 - **516 (device removed)**: Disables auto-reconnect, emits `LoggedOut`
 
-### Keepalive Loop
+### Message loop (read loop)
 
-Monitors connection health with periodic pings, matching WhatsApp Web's keepalive protocol:
+The `read_messages_loop` runs on the `run()` caller's task and uses `select_biased!` to multiplex shutdown signals with transport events. Frame decryption is sequential (noise counter ordering), but node processing uses a hybrid inline/concurrent strategy:
+
+- **Inline**: `success`, `failure`, `stream:error` (connection state), `message` (arrival order for per-chat queues), `ib` (offline sync tracking)
+- **Spawned concurrently**: all other stanzas (receipts, notifications, presence, etc.)
+
+After processing a batch of multiple frames, the loop refreshes `last_data_received_ms` so the keepalive loop sees the batch completion time rather than the arrival time — preventing false-positive dead-socket triggers during large offline sync batches. The loop also cooperatively yields every `yield_frequency()` frames to avoid starving other tasks.
+
+See [WebSocket & Noise Protocol - Message loop](/advanced/websocket-handling#2-message-loop-read-loop) for implementation details.
+
+### Keepalive loop
+
+The keepalive loop runs as a **separate spawned task**, fully decoupled from the read loop. This ensures keepalive pings are never blocked by frame processing — even during large offline sync batches that take seconds to drain. The two loops communicate solely through atomic timestamps (`last_data_received_ms`, `last_data_sent_ms`).
 
 ```rust
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(15);
@@ -368,6 +379,7 @@ const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
 - Skips ping if data was received within the minimum interval (connection proven alive)
 - Sends ping *before* dead-socket check to prevent false-positive reconnects on idle-but-healthy connections
 - Waits up to 20s for response
+- Checks dead socket on **every** tick (not just after failures) — catches scenarios where pending IQs caused the ping to be skipped, or where the ping succeeded but the connection died immediately after
 - Detects dead socket if no data received for 20s after a send, triggering immediate reconnection
 - Fatal errors (`Socket`, `Disconnected`, `NotConnected`, `InternalChannelClosed`) cause the keepalive loop to exit immediately
 - Error classification is exhaustive and compile-time enforced — adding a new error variant without handling it causes a build failure

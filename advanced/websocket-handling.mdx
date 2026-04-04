@@ -497,28 +497,23 @@ pub enum TransportEvent {
 
 Location: `src/transport/mod.rs`
 
-### WebSocket Implementation
+### WebSocket implementation
+
+The transport is generic over any `AsyncRead + AsyncWrite` stream. The `from_websocket` function wraps an already-upgraded `WebSocketStream` into a `Transport` + event channel:
 
 ```rust
-pub struct TungsteniteTransport {
-    write_tx: mpsc::Sender<Vec<u8>>,
-    disconnect_tx: Arc<Notify>,
-}
-
-#[async_trait]
-impl Transport for TungsteniteTransport {
-    async fn send(&self, data: Vec<u8>) -> Result<()> {
-        self.write_tx.send(data).await
-            .map_err(|_| anyhow!("transport closed"))
-    }
-    
-    async fn disconnect(&self) {
-        self.disconnect_tx.notify_one();
-    }
-}
+pub fn from_websocket<S>(
+    ws: WebSocketStream<S>,
+) -> (Arc<dyn Transport>, async_channel::Receiver<TransportEvent>)
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 ```
 
-Location: `src/transport/tungstenite.rs`
+Internally, the WebSocket is split into a write half (guarded by `Arc<Mutex>`) and a read half (moved to a spawned `read_pump` task). A `watch` channel coordinates graceful shutdown between the transport and the read pump.
+
+`TokioWebSocketTransportFactory` handles the default DNS/TCP/TLS connection and delegates to `from_websocket`. For custom connection strategies (IPv4 preference, TCP keepalive, proxies), call `from_websocket` directly.
+
+Location: `transports/tokio-transport/src/lib.rs`
 
 ## Connection Lifecycle
 

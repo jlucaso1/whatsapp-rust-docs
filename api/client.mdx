@@ -883,17 +883,61 @@ pub async fn get_lid(&self) -> Option<Jid>
 
 Returns the LID (Linked Identity).
 
-### get_phone_number_from_lid
+### get_lid_pn_entry
 
 ```rust
-pub async fn get_phone_number_from_lid(&self, lid: &str) -> Option<String>
+pub async fn get_lid_pn_entry(&self, jid: &Jid) -> Option<LidPnEntry>
 ```
 
-Resolves a LID (Linked Identity) to the corresponding phone number string. Returns `None` if the mapping is not cached.
+Unified LID-PN lookup that auto-routes based on the JID type. Pass a phone number JID (`@s.whatsapp.net`) to look up its LID, or a LID JID (`@lid`) to look up its phone number. Returns `None` for non-user JIDs (groups, newsletters, etc.) or if no mapping is cached.
 
-<ParamField path="lid" type="&str" required>
-  The LID user string to look up (e.g., `"ABC123"`)
+<ParamField path="jid" type="&Jid" required>
+  The JID to look up — either a PN JID or a LID JID
 </ParamField>
+
+<ResponseField name="LidPnEntry" type="Option<LidPnEntry>">
+  Contains `lid` (String), `phone_number` (String), `created_at` (i64 Unix timestamp), and `learning_source` ([`LearningSource`](#learningsource))
+</ResponseField>
+
+**Example:**
+```rust
+use wacore_binary::jid::Jid;
+
+// Look up by phone number JID
+let pn_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+if let Some(entry) = client.get_lid_pn_entry(&pn_jid).await {
+    println!("LID: {}", entry.lid);
+    println!("Phone: {}", entry.phone_number);
+}
+
+// Look up by LID JID
+let lid_jid: Jid = "100000012345678@lid".parse()?;
+if let Some(entry) = client.get_lid_pn_entry(&lid_jid).await {
+    println!("Phone: {}", entry.phone_number);
+}
+```
+
+<Note>
+  This replaces the previous `get_phone_number_from_lid` method. The new API accepts a full `Jid` instead of a raw string and supports bidirectional lookup — pass either a PN or LID JID to resolve the mapping in either direction.
+</Note>
+
+#### LearningSource
+
+The `LearningSource` enum indicates how a LID-PN mapping was discovered:
+
+| Variant | Description |
+|---------|-------------|
+| `Usync` | From a device sync query response |
+| `PeerPnMessage` | From an incoming message with `sender_lid` attribute (sender is PN) |
+| `PeerLidMessage` | From an incoming message with `sender_pn` attribute (sender is LID) |
+| `RecipientLatestLid` | From looking up a recipient's latest LID |
+| `MigrationSyncLatest` | From latest history sync migration |
+| `MigrationSyncOld` | From old history sync records |
+| `BlocklistActive` | From an active blocklist entry |
+| `BlocklistInactive` | From an inactive blocklist entry |
+| `Pairing` | From device pairing (own JID to LID) |
+| `DeviceNotification` | From a device notification with `lid` attribute |
+| `Other` | From an unknown source |
 
 ### persistence_manager
 

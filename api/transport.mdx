@@ -158,25 +158,32 @@ Emitted when the connection is closed (gracefully or due to error).
 TransportEvent::Disconnected
 ```
 
-## TokioWebSocketTransport
+## Tokio WebSocket transport
 
-The default implementation using tokio-websockets for async WebSocket connections.
+The default transport implementation using `tokio-websockets` for async WebSocket connections.
 
 ### Features
 
 - **Async I/O** - Built on Tokio runtime
-- **TLS Support** - Uses rustls with webpki-roots for certificate validation
-- **Split Architecture** - Separate read/write paths for efficiency
-- **Automatic Reconnection** - Handled by higher-level Client code
-- **Development Mode** - Optional `danger-skip-tls-verify` feature
+- **TLS support** - Uses rustls with webpki-roots for certificate validation
+- **Split architecture** - Separate read/write paths for efficiency
+- **Generic over streams** - Works with any `AsyncRead + AsyncWrite` stream type
+- **Automatic reconnection** - Handled by higher-level Client code
+- **Development mode** - Optional `danger-skip-tls-verify` feature
 
-### Creating a Transport Factory
+### TokioWebSocketTransportFactory
+
+The default factory handles DNS resolution, TCP connection, and TLS. For custom connection logic, use [`from_websocket`](#from_websocket) directly.
 
 ```rust
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
 // Default - connects to WhatsApp Web
 let factory = TokioWebSocketTransportFactory::new();
+
+// Custom URL
+let factory = TokioWebSocketTransportFactory::new()
+    .with_url("wss://custom-endpoint.example.com/ws");
 ```
 
 ### Usage with Bot builder
@@ -201,9 +208,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### TLS Configuration
+### from_websocket
 
-By default, TokioWebSocketTransport validates TLS certificates using webpki-roots:
+Wraps an already-upgraded `WebSocketStream` into a `Transport` + event channel. This is useful when you need custom connection strategies such as IPv4 preference, TCP keepalive tuning, or connecting through a proxy.
+
+```rust
+pub fn from_websocket<S>(
+    ws: WebSocketStream<S>,
+) -> (Arc<dyn Transport>, async_channel::Receiver<TransportEvent>)
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+```
+
+**Parameters:**
+- `ws` - An already-connected `WebSocketStream` over any async stream type
+
+**Returns:**
+- `Arc<dyn Transport>` - The transport instance for sending data
+- `async_channel::Receiver<TransportEvent>` - Stream of transport events
+
+The function splits the WebSocket into read/write halves, spawns a background read pump task, and synchronously enqueues a `Connected` event before the read pump starts — ensuring it always precedes any `DataReceived` events.
+
+**Example — IPv4-only connection with TCP keepalive:**
+
+```rust
+use whatsapp_rust_tokio_transport::from_websocket;
+use tokio::net::TcpStream;
+use tokio_websockets::ClientBuilder;
+
+// Custom TCP connection with keepalive
+let tcp = TcpStream::connect("web.whatsapp.com:443").await?;
+tcp.set_nodelay(true)?;
+
+let sock_ref = socket2::SockRef::from(&tcp);
+let keepalive = socket2::TcpKeepalive::new()
+    .with_time(Duration::from_secs(30))
+    .with_interval(Duration::from_secs(10));
+sock_ref.set_tcp_keepalive(&keepalive)?;
+
+// Upgrade to WebSocket (TLS handled externally)
+let (ws, _response) = ClientBuilder::from_uri("wss://web.whatsapp.com/ws/chat".parse()?)
+    .connect_on(tcp)
+    .await?;
+
+// Wrap into a Transport
+let (transport, events) = from_websocket(ws);
+```
+
+**Example — using with a custom TransportFactory:**
+
+```rust
+use whatsapp_rust_tokio_transport::from_websocket;
+use wacore::net::{Transport, TransportEvent, TransportFactory};
+
+struct MyTransportFactory;
+
+#[async_trait]
+impl TransportFactory for MyTransportFactory {
+    async fn create_transport(
+        &self,
+    ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
+        // Your custom connection logic here
+        let ws = establish_custom_websocket().await?;
+        Ok(from_websocket(ws))
+    }
+}
+```
+
+<Note>
+`TokioWebSocketTransportFactory` itself delegates to `from_websocket` internally. Use the factory when the default DNS/TCP/TLS behavior is sufficient, and `from_websocket` when you need full control over the connection.
+</Note>
+
+### TLS configuration
+
+By default, the transport validates TLS certificates using webpki-roots:
 
 ```rust
 let mut root_store = rustls::RootCertStore::empty();
@@ -214,9 +292,9 @@ let config = rustls::ClientConfig::builder()
     .with_no_client_auth();
 ```
 
-### Development Mode (Skip TLS Verification)
+### Development mode (skip TLS verification)
 
-**WARNING: Only use for development/testing!**
+<Warning>Only use for development and testing.</Warning>
 
 Enable the `danger-skip-tls-verify` feature to disable certificate verification:
 
@@ -227,7 +305,7 @@ whatsapp-rust-tokio-transport = { version = "*", features = ["danger-skip-tls-ve
 
 This allows connecting through MITM proxies or self-signed certificates.
 
-### Connection Settings
+### Connection settings
 
 The default WebSocket URL is:
 
@@ -239,36 +317,51 @@ pub const WHATSAPP_WEB_WS_URL: &str = "wss://web.whatsapp.com/ws/chat";
 The `Client` wraps `create_transport()` in a **20-second timeout** matching WhatsApp Web's connect timeout. The transport itself does not enforce this timeout — it is applied at the client layer. If you use a custom transport, be aware that the client will abort the connection attempt after 20 seconds regardless of the transport's own timeout behavior.
 </Note>
 
-### Internal Architecture
+### Internal architecture
 
-TokioWebSocketTransport splits the WebSocket into separate read/write paths:
+The transport is generic over any `AsyncRead + AsyncWrite` stream, split into separate read/write paths:
 
 ```rust
-let (sink, stream) = websocket.split();
+let (sink, stream) = ws.split();
 
 // Sink - wrapped in Arc<Mutex> for sending
-let ws_sink: Arc<Mutex<Option<WsSink>>> = Arc::new(Mutex::new(Some(sink)));
+let sink: Arc<Mutex<Option<Sink<S>>>> = Arc::new(Mutex::new(Some(sink)));
 
-// Stream - moved to read_pump task
-tokio::task::spawn(read_pump(stream, event_tx));
+// Stream - moved to read_pump task with shutdown signal
+tokio::task::spawn(read_pump(stream, event_tx, shutdown_rx));
 ```
 
-The read pump continuously processes incoming messages:
+The read pump uses `tokio::select!` with a shutdown watch channel to ensure clean termination:
 
 ```rust
-async fn read_pump(mut stream: WsStream, event_tx: async_channel::Sender<TransportEvent>) {
+async fn read_pump<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    mut stream: SplitStream<WebSocketStream<S>>,
+    tx: async_channel::Sender<TransportEvent>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     loop {
-        match stream.next().await {
-            Some(Ok(msg)) if msg.is_binary() => {
-                let payload = msg.into_payload();
-                event_tx.send(TransportEvent::DataReceived(Bytes::from(payload))).await;
-            }
-            Some(Ok(msg)) if msg.is_close() => break,
-            Some(Err(e)) => break,
-            None => break,
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            next = stream.next() => match next {
+                Some(Ok(msg)) if msg.is_binary() => {
+                    let payload = msg.into_payload();
+                    // Shutdown-aware send to prevent blocking on full channel
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.changed() => break,
+                        r = tx.send(TransportEvent::DataReceived(Bytes::from(payload))) => {
+                            if r.is_err() { break; }
+                        }
+                    }
+                }
+                Some(Ok(msg)) if msg.is_close() => break,
+                Some(Err(e)) => break,
+                None => break,
+            },
         }
     }
-    event_tx.send(TransportEvent::Disconnected).await;
+    let _ = tx.send(TransportEvent::Disconnected).await;
 }
 ```
 

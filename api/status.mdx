@@ -308,3 +308,7 @@ let recipients = &jids;
 <Note>
 The `recipients` list should match your privacy settings. When revoking a status, use the same recipients list that was used when posting.
 </Note>
+
+## Phash validation
+
+After sending a status update, the library validates the participant hash (`phash`) from the server's acknowledgment against the locally computed value. On mismatch, the sender key device cache is invalidated so the next status send re-fetches current device lists. This runs in the background and does not affect the send result. See [Signal Protocol — Phash validation](/advanced/signal-protocol#phash-validation-for-stale-device-list-detection) for details.

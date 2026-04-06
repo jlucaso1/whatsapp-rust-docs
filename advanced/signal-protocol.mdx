@@ -556,7 +556,7 @@ pub(crate) struct SenderKeyDeviceMap {
 | Server rejects group stanza | Invalidate group entry |
 | New device added (`patch_device_add`) | Invalidate all entries |
 | Device removed (`patch_device_remove`) | Invalidate all entries |
-| Identity change (`clear_device_record`) | Invalidate all entries |
+| Identity change (`clear_device_record`) | Invalidate all entries + delete `status@broadcast` sender key |
 
 You can tune the cache capacity and TTI via the `sender_key_devices_cache` field in [`CacheConfig`](/api/bot#cache-configuration-reference).
 

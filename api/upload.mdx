@@ -48,11 +48,21 @@ pub async fn upload(
   pub struct UploadResponse {
       pub url: String,
       pub direct_path: String,
-      pub media_key: Vec<u8>,
-      pub file_enc_sha256: Vec<u8>,
-      pub file_sha256: Vec<u8>,
+      pub media_key: [u8; 32],
+      pub file_enc_sha256: [u8; 32],
+      pub file_sha256: [u8; 32],
       pub file_length: u64,
       pub media_key_timestamp: i64,
+  }
+  ```
+
+  Helper methods are provided for protobuf message construction, which requires `Vec<u8>`:
+
+  ```rust
+  impl UploadResponse {
+      pub fn media_key_vec(&self) -> Vec<u8> { ... }
+      pub fn file_sha256_vec(&self) -> Vec<u8> { ... }
+      pub fn file_enc_sha256_vec(&self) -> Vec<u8> { ... }
   }
   ```
   
@@ -64,16 +74,16 @@ pub async fn upload(
     CDN path component (e.g., `/v/t62.7118-24/12345_67890`). Used for downloads.
   </ParamField>
   
-  <ParamField path="media_key" type="Vec<u8>">
-    32-byte encryption key. Required for the recipient to decrypt the media.
+  <ParamField path="media_key" type="[u8; 32]">
+    32-byte encryption key. Required for the recipient to decrypt the media. Use `media_key_vec()` when building protobuf messages.
   </ParamField>
   
-  <ParamField path="file_enc_sha256" type="Vec<u8>">
-    SHA-256 hash of the encrypted file. Used for integrity verification during download.
+  <ParamField path="file_enc_sha256" type="[u8; 32]">
+    SHA-256 hash of the encrypted file. Used for integrity verification during download. Use `file_enc_sha256_vec()` when building protobuf messages.
   </ParamField>
   
-  <ParamField path="file_sha256" type="Vec<u8>">
-    SHA-256 hash of the original (decrypted) file. Used for final validation after decryption.
+  <ParamField path="file_sha256" type="[u8; 32]">
+    SHA-256 hash of the original (decrypted) file. Used for final validation after decryption. Use `file_sha256_vec()` when building protobuf messages.
   </ParamField>
   
   <ParamField path="file_length" type="u64">
@@ -103,9 +113,9 @@ let message = wa::Message {
     image_message: Some(Box::new(wa::message::ImageMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
-        media_key: Some(upload.media_key),
-        file_enc_sha256: Some(upload.file_enc_sha256),
-        file_sha256: Some(upload.file_sha256),
+        media_key: Some(upload.media_key_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256_vec()),
+        file_sha256: Some(upload.file_sha256_vec()),
         file_length: Some(upload.file_length),
         media_key_timestamp: Some(upload.media_key_timestamp),
         caption: Some("Check out this photo!".to_string()),
@@ -157,9 +167,9 @@ let message = wa::Message {
     document_message: Some(Box::new(wa::message::DocumentMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
-        media_key: Some(upload.media_key),
-        file_enc_sha256: Some(upload.file_enc_sha256),
-        file_sha256: Some(upload.file_sha256),
+        media_key: Some(upload.media_key_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256_vec()),
+        file_sha256: Some(upload.file_sha256_vec()),
         file_length: Some(upload.file_length),
         media_key_timestamp: Some(upload.media_key_timestamp),
         file_name: Some(filename.to_string()),
@@ -185,9 +195,9 @@ let message = wa::Message {
     audio_message: Some(Box::new(wa::message::AudioMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
-        media_key: Some(upload.media_key),
-        file_enc_sha256: Some(upload.file_enc_sha256),
-        file_sha256: Some(upload.file_sha256),
+        media_key: Some(upload.media_key_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256_vec()),
+        file_sha256: Some(upload.file_sha256_vec()),
         file_length: Some(upload.file_length),
         media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("audio/ogg; codecs=opus".to_string()),
@@ -210,13 +220,13 @@ Options for customizing upload behavior.
 #[non_exhaustive]
 pub struct UploadOptions {
     /// Reuse an existing media key instead of generating a fresh one.
-    pub media_key: Option<Vec<u8>>,
+    pub media_key: Option<[u8; 32]>,
 }
 ```
 
 `UploadOptions` is `#[non_exhaustive]`, so it cannot be constructed using struct literal syntax from outside the crate. Use `UploadOptions::default()` or `UploadOptions::new()` with builder methods instead.
 
-<ParamField path="media_key" type="Option<Vec<u8>>" default="None">
+<ParamField path="media_key" type="Option<[u8; 32]>" default="None">
   When set, reuses the provided 32-byte media key instead of generating a new one. This is required when uploading a sticker pack thumbnail, which must share the same `media_key` as the sticker pack ZIP.
 </ParamField>
 
@@ -249,7 +259,7 @@ let zip_upload = client.upload(
 let thumb_upload = client.upload(
     thumbnail_jpeg,
     MediaType::StickerPackThumbnail,
-    UploadOptions::new().with_media_key(zip_upload.media_key.clone()),
+    UploadOptions::new().with_media_key(zip_upload.media_key),
 ).await?;
 ```
 

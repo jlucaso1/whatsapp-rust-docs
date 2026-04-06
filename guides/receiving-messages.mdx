@@ -518,11 +518,14 @@ For advanced cases (identity changes, session cleanup):
 
 ```rust
 // The library handles identity changes automatically:
-// - Detects UntrustedIdentity errors
-// - Clears old identity
-// - Retries decryption with new identity
-// - Preserves old session for in-flight messages
+// - Detects UntrustedIdentity errors during decryption
+// - Clears the old identity key (but preserves the session for in-flight messages)
+// - Retries decryption with the new identity
+// - Handles InvalidPreKeyId in the retry path by requesting a retry from the sender
+// - Re-issues TC tokens so the contact retains a valid privacy token
 ```
+
+When a contact reinstalls WhatsApp, you'll receive an [`IdentityChange`](/concepts/events#identitychange) event after the client has completed all session cleanup. The client also re-issues [TC tokens](/api/tctoken#identity-change-reissuance) in the background to maintain privacy token continuity.
 
 See [Signal Protocol](/advanced/signal-protocol) for more on session management.
 

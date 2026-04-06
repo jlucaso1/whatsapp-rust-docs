@@ -433,7 +433,7 @@ pub async fn group_decrypt(
 
 During group message decryption, the client checks whether the sender's device is present in the local device registry via `is_from_known_device()`. This detection triggers in two places within the group message processing path:
 
-1. **After successful `skmsg` decrypt** — if the sender device is not in the registry, the decrypted message is discarded and a retry receipt is sent with `RetryReason::UnknownCompanionNoPrekey`
+1. **After successful `skmsg` decrypt** — if the sender device is not in the registry, the decrypted message is still **processed and delivered normally**. Signal decryption success already proves the sender holds a valid session key, so discarding the message would only add latency via an unnecessary retry round-trip. A background device sync is triggered to update the local device registry.
 2. **After a `NoSenderKeyState` error** — if the sender device is unknown, the retry reason is upgraded from `NoSession` to `UnknownCompanionNoPrekey`
 
 In both cases, the client queues a device list synchronization for the sender's user JID. The behavior depends on the connection state:
@@ -443,7 +443,7 @@ In both cases, the client queues a device list synchronization for the sender's 
 
 Primary devices (device ID 0) are always treated as known — the check only applies to companion devices.
 
-This mechanism ensures that messages from newly-paired companion devices are never silently dropped. The client discovers the new device through the sync and the retry receipt causes the sender to redeliver the message.
+This mechanism ensures that group messages from newly-paired companion devices are delivered immediately without waiting for a retry round-trip. The background device sync updates the local registry so future messages from the same device are recognized directly.
 
 ```rust
 // src/message.rs — simplified flow

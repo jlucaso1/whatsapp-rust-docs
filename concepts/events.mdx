@@ -1293,7 +1293,7 @@ This event is dispatched after the client has already patched its internal devic
 
 ### IdentityChange
 
-**Emitted:** When a contact reinstalls WhatsApp (their identity key changed). The client automatically clears the device record (Signal sessions and sender keys) for the user before emitting this event, so fresh sessions are established and SKDM is redistributed on the next send.
+**Emitted:** When a contact reinstalls WhatsApp (their identity key changed). The client performs full session cleanup and proactive re-establishment before emitting this event, matching WhatsApp Web's identity change handling.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -1311,10 +1311,14 @@ pub struct IdentityChange {
 
 This event corresponds to WhatsApp Web's `WAWebHandleIdentityChange` flow. When the server sends an `<identity/>` notification inside a `type="encrypt"` stanza, the client:
 
-1. Clears the device record for the user (deletes Signal sessions for all non-primary devices)
-2. Invalidates the sender key device cache so SKDM is redistributed on the next group message
-3. Invalidates the device registry cache so the next send triggers a fresh device list sync
-4. Dispatches this event so your application can show a "security code changed" notice
+1. Clears the device record for the user (deletes Signal sessions for all non-primary devices and all sender key device tracking)
+2. Deletes the primary device session and identity key so a fresh session can be established (matching WhatsApp Web's `deleteRemoteInfo`)
+3. Deletes the `status@broadcast` sender key for forward secrecy on the next status send (matching WhatsApp Web's `markStatusSenderKeyRotate`)
+4. Invalidates the device registry cache so the next send triggers a fresh device list sync
+5. Dispatches this event so your application can show a "security code changed" notice
+6. Spawns a background `ensure_e2e_sessions` task to proactively re-establish the session (self-defers when the client is offline)
+
+The notification is processed immediately even when received during offline sync, because all cleanup operations are local-only. The background session re-establishment self-defers via `wait_for_offline_delivery_end` when the client is offline.
 
 <Note>
 Identity change notifications from companion devices (device ID != 0) and from your own JID are ignored — only primary device identity changes for other users are processed.

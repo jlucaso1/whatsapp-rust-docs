@@ -129,6 +129,7 @@ pub enum Event {
 
     // Device Updates
     DeviceListUpdate(DeviceListUpdate),
+    IdentityChange(IdentityChange),
     BusinessStatusUpdate(BusinessStatusUpdate),
 
     // Newsletter
@@ -1288,7 +1289,47 @@ pub struct DeviceNotificationInfo {
 | `key_index` | ADV key index info for device identity verification (add operations only) |
 | `contact_hash` | Server-side contact hash for update operations |
 
-This event is dispatched after the client has already patched its internal device registry cache. You can use it to track when contacts pair or unpair companion devices. The client also uses device list changes internally to manage [unknown device detection](/advanced/signal-protocol#unknown-device-detection) and Signal session cleanup.
+This event is dispatched after the client has already patched its internal device registry cache. You can use it to track when contacts pair or unpair companion devices. The client also uses device list changes internally to manage [unknown device detection](/advanced/signal-protocol#unknown-device-detection), Signal session cleanup, and sender key cache invalidation — when a device is added or removed, the sender key device cache is invalidated so SKDM is redistributed on the next group message.
+
+### IdentityChange
+
+**Emitted:** When a contact reinstalls WhatsApp (their identity key changed). The client automatically clears the device record (Signal sessions and sender keys) for the user before emitting this event, so fresh sessions are established and SKDM is redistributed on the next send.
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentityChange {
+    /// The user whose identity changed
+    pub user: Jid,
+    /// Optional LID for the user
+    pub lid_user: Option<Jid>,
+}
+```
+
+**Fields:**
+- `user` — The phone number JID of the user whose identity changed
+- `lid_user` — The user's LID JID, if provided in the notification
+
+This event corresponds to WhatsApp Web's `WAWebHandleIdentityChange` flow. When the server sends an `<identity/>` notification inside a `type="encrypt"` stanza, the client:
+
+1. Clears the device record for the user (deletes Signal sessions for all non-primary devices)
+2. Invalidates the sender key device cache so SKDM is redistributed on the next group message
+3. Invalidates the device registry cache so the next send triggers a fresh device list sync
+4. Dispatches this event so your application can show a "security code changed" notice
+
+<Note>
+Identity change notifications from companion devices (device ID != 0) and from your own JID are ignored — only primary device identity changes for other users are processed.
+</Note>
+
+**Example:**
+```rust
+Event::IdentityChange(change) => {
+    println!("Security code changed for user {}", change.user);
+    if let Some(lid) = &change.lid_user {
+        println!("LID: {}", lid);
+    }
+    // Show a "security code changed" notice in the chat
+}
+```
 
 ### BusinessStatusUpdate
 

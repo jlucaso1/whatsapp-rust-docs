@@ -197,9 +197,9 @@ let message = wa::Message {
     audio_message: Some(Box::new(wa::message::AudioMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
-        media_key: Some(upload.media_key),
-        file_enc_sha256: Some(upload.file_enc_sha256),
-        file_sha256: Some(upload.file_sha256),
+        media_key: Some(upload.media_key_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256_vec()),
+        file_sha256: Some(upload.file_sha256_vec()),
         file_length: Some(upload.file_length),
         mimetype: Some("audio/ogg; codecs=opus".to_string()),
         ptt: Some(true),

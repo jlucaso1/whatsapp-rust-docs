@@ -69,6 +69,7 @@ client.core.event_bus.add_handler(Arc::new(MyHandler));
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub enum Event {
     // Connection
     Connected(Connected),
@@ -142,6 +143,10 @@ pub enum Event {
     RawNode(Arc<Node>),
 }
 ```
+
+<Note>
+The `Event` enum is `#[non_exhaustive]`, so your `match` statements must include a wildcard arm (`_ => {}`). New variants may be added in minor releases without a breaking change.
+</Note>
 
 ## Connection Events
 

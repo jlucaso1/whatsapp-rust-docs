@@ -353,9 +353,9 @@ for image_data in [image1_bytes, image2_bytes, image3_bytes] {
         image_message: Some(Box::new(wa::message::ImageMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
-            media_key: Some(upload.media_key),
-            file_sha256: Some(upload.file_sha256),
-            file_enc_sha256: Some(upload.file_enc_sha256),
+            media_key: Some(upload.media_key_vec()),
+            file_sha256: Some(upload.file_sha256_vec()),
+            file_enc_sha256: Some(upload.file_enc_sha256_vec()),
             file_length: Some(upload.file_length),
             media_key_timestamp: Some(upload.media_key_timestamp),
             mimetype: Some("image/jpeg".to_string()),
@@ -451,7 +451,7 @@ let zip_upload = client.upload(
 let thumb_upload = client.upload(
     thumbnail_jpeg,
     MediaType::StickerPackThumbnail,
-    UploadOptions::new().with_media_key(zip_upload.media_key.clone()),
+    UploadOptions::new().with_media_key(zip_upload.media_key),
 ).await?;
 
 // Step 5: Build and send the message

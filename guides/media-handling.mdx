@@ -132,9 +132,9 @@ let message = wa::Message {
     image_message: Some(Box::new(wa::message::ImageMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
-        media_key: Some(upload.media_key),
-        file_sha256: Some(upload.file_sha256),
-        file_enc_sha256: Some(upload.file_enc_sha256),
+        media_key: Some(upload.media_key_vec()),
+        file_sha256: Some(upload.file_sha256_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256_vec()),
         file_length: Some(upload.file_length),
         media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("image/jpeg".to_string()),
@@ -173,9 +173,9 @@ if let Some(img) = &message.image_message {
         image_message: Some(Box::new(wa::message::ImageMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
-            media_key: Some(upload.media_key),
-            file_sha256: Some(upload.file_sha256),
-            file_enc_sha256: Some(upload.file_enc_sha256),
+            media_key: Some(upload.media_key_vec()),
+            file_sha256: Some(upload.file_sha256_vec()),
+            file_enc_sha256: Some(upload.file_enc_sha256_vec()),
             file_length: Some(upload.file_length),
             media_key_timestamp: Some(upload.media_key_timestamp),
             mimetype: img.mimetype.clone(),
@@ -295,9 +295,9 @@ let message = wa::Message {
     image_message: Some(Box::new(wa::message::ImageMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
-        media_key: Some(upload.media_key),
-        file_sha256: Some(upload.file_sha256),
-        file_enc_sha256: Some(upload.file_enc_sha256),
+        media_key: Some(upload.media_key_vec()),
+        file_sha256: Some(upload.file_sha256_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256_vec()),
         file_length: Some(upload.file_length),
         media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("image/jpeg".to_string()),
@@ -405,9 +405,9 @@ let data = std::fs::read("file.pdf")?;
 let upload = client.upload(data, MediaType::Document, Default::default()).await?;
 
 // The UploadResponse contains all encryption metadata
-assert_eq!(upload.media_key.len(), 32);
-assert_eq!(upload.file_sha256.len(), 32);
-assert_eq!(upload.file_enc_sha256.len(), 32);
+// media_key, file_sha256, file_enc_sha256 are [u8; 32] arrays
+println!("Media key: {:?}", upload.media_key);
+println!("File length: {} bytes", upload.file_length);
 ```
 
 ### Chunk-based encryption with MediaEncryptor
@@ -737,9 +737,9 @@ let message = wa::Message {
     image_message: Some(Box::new(wa::message::ImageMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
-        media_key: Some(upload.media_key),
-        file_sha256: Some(upload.file_sha256),
-        file_enc_sha256: Some(upload.file_enc_sha256),
+        media_key: Some(upload.media_key_vec()),
+        file_sha256: Some(upload.file_sha256_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256_vec()),
         file_length: Some(upload.file_length),
         media_key_timestamp: Some(upload.media_key_timestamp),
         mimetype: Some("image/jpeg".to_string()),

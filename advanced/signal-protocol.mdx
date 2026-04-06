@@ -562,6 +562,44 @@ You can tune the cache capacity and TTI via the `sender_key_devices_cache` field
 
 Location: `src/sender_key_device_cache.rs`, `src/send.rs`
 
+### Phash validation for stale device list detection
+
+When sending group or status messages, the library validates the participant hash (`phash`) returned in the server's acknowledgment against the locally computed `phash` from the outgoing stanza. A mismatch indicates that the server's view of group participants differs from the client's — meaning the local device list is stale.
+
+**How it works:**
+
+1. Before sending, the client reads the `phash` attribute from the prepared message stanza (if present)
+2. A oneshot ack waiter is registered for the message ID via `register_ack_waiter`
+3. The message stanza is sent to the server
+4. A background task (`spawn_phash_validation`) awaits the server's ack (with a 10-second timeout)
+5. The server's ack includes its own `phash` — if it differs from the local value, the client invalidates caches
+
+**On mismatch, the following caches are invalidated:**
+
+| Send path | Sender key device cache | Group info cache |
+|-----------|------------------------|-----------------|
+| Group messages | Invalidated | Invalidated |
+| Status messages | Invalidated | Not invalidated |
+
+This ensures the next send to the same group re-fetches the current participant device list and group metadata from the server, preventing repeated sends to stale device lists.
+
+```rust
+// src/send.rs — simplified phash validation flow
+let our_phash = stanza.attrs().optional_string("phash").map(|s| s.into_owned());
+
+if let Some(phash) = &our_phash {
+    let ack_rx = self.register_ack_waiter(&request_id).await;
+    self.send_node(stanza).await?;
+    self.spawn_phash_validation(ack_rx, phash.clone(), to.clone(), invalidate_group_cache);
+}
+```
+
+<Note>
+The phash validation runs asynchronously in the background and does not block the send path. If the server ack times out (after 10 seconds) or the oneshot channel is dropped, the validation is silently skipped. This matches WhatsApp Web's approach of using phash as a best-effort staleness detector rather than a hard requirement.
+</Note>
+
+Location: `src/send.rs`, `src/client.rs`
+
 ## Cryptographic Primitives
 
 ### AES-256-CBC (Message Content)

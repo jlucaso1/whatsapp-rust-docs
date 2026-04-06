@@ -571,6 +571,12 @@ client.unpin_message(chat_jid, key).await?;
 
 ---
 
+## Phash validation (stale device list detection)
+
+When sending group or status messages, the library automatically validates the participant hash (`phash`) from the server's acknowledgment against the locally computed value. If the hashes differ, the sender key device cache (and group info cache for group messages) is invalidated so the next send re-fetches current participant devices from the server. This runs asynchronously in the background and does not block the send path. See [Signal Protocol — Phash validation](/advanced/signal-protocol#phash-validation-for-stale-device-list-detection) for implementation details.
+
+---
+
 ## Automatic stanza metadata
 
 When you call `send_message` or `send_message_with_options`, the library automatically infers and injects stanza-level metadata that WhatsApp servers expect for certain message types. This applies to all recipient types — direct messages, groups, and newsletters. You never need to set these manually — the library handles it for you.

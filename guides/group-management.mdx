@@ -162,9 +162,10 @@ let info: GroupInfo = client.groups().query_info(&group_jid).await?;
 println!("Participants: {:?}", info.participants);
 println!("Addressing mode: {:?}", info.addressing_mode);
 
-// Access LID-to-phone mapping if available
-if let Some(mapping) = info.get_lid_to_pn_map() {
-    for (lid, pn) in mapping {
+    // Access LID-to-phone mapping if available
+    let mapping = info.lid_to_pn_map();
+    if !mapping.is_empty() {
+        for (lid, pn) in mapping {
         println!("LID {} -> Phone {}", lid, pn);
     }
 }
@@ -603,10 +604,9 @@ let info = client.groups().query_info(&group_jid).await?;
 
 if info.addressing_mode == AddressingMode::Lid {
     // Get LID-to-phone mapping
-    if let Some(mapping) = info.get_lid_to_pn_map() {
-        for (lid, pn_jid) in mapping {
-            println!("LID {} maps to phone {}", lid, pn_jid);
-        }
+    let mapping = info.lid_to_pn_map();
+    for (lid, pn_jid) in mapping {
+        println!("LID {} maps to phone {}", lid, pn_jid);
     }
 }
 ```

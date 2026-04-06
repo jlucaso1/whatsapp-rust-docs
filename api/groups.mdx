@@ -62,9 +62,12 @@ pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, 
 - `subject_owner: Option<Jid>` - Subject owner JID
 - `description: Option<String>` - Group description body text
 - `description_id: Option<String>` - Description ID (for conflict detection)
+- `description_owner: Option<Jid>` - JID of the participant who set the description
+- `description_time: Option<u64>` - Timestamp when the description was set (Unix seconds)
 - `is_locked: bool` - Whether only admins can edit group info
 - `is_announcement: bool` - Whether only admins can send messages
 - `ephemeral_expiration: u32` - Disappearing messages timer in seconds (0 = disabled)
+- `ephemeral_trigger: Option<u32>` - Disappearing mode trigger value (from the `trigger` attribute on `<ephemeral>`)
 - `membership_approval: bool` - Whether admin approval is required to join
 - `member_add_mode: Option<MemberAddMode>` - Who can add members
 - `member_link_mode: Option<MemberLinkMode>` - Who can use invite links

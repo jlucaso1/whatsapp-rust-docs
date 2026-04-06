@@ -63,11 +63,11 @@ if let Some(profile) = client.get_business_profile(&jid).await? {
     if let Some(configs) = &profile.business_hours.business_config {
         for config in configs {
             println!(
-                "  {}: {} ({}–{})",
+                "  {:?}: {:?} ({}–{})",
                 config.day_of_week,
                 config.mode,
-                config.open_time.as_deref().unwrap_or("N/A"),
-                config.close_time.as_deref().unwrap_or("N/A"),
+                config.open_time,
+                config.close_time,
             );
         }
     }
@@ -114,10 +114,36 @@ pub struct BusinessHours {
 
 ```rust
 pub struct BusinessHoursConfig {
-    pub day_of_week: String,
-    pub mode: String,
-    pub open_time: Option<String>,
-    pub close_time: Option<String>,
+    pub day_of_week: DayOfWeek,
+    pub mode: BusinessHourMode,
+    pub open_time: u32,
+    pub close_time: u32,
+}
+```
+
+### DayOfWeek
+
+```rust
+pub enum DayOfWeek {
+    Sunday,       // "sun"
+    Monday,       // "mon"
+    Tuesday,      // "tue"
+    Wednesday,    // "wed"
+    Thursday,     // "thu"
+    Friday,       // "fri"
+    Saturday,     // "sat"
+    Other(String),
+}
+```
+
+### BusinessHourMode
+
+```rust
+pub enum BusinessHourMode {
+    Open24H,          // "open_24h"
+    SpecificHours,    // "specific_hours"
+    AppointmentOnly,  // "appointment_only"
+    Other(String),
 }
 ```
 

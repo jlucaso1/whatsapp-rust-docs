@@ -200,6 +200,22 @@ Token *issuance scheduling* (requesting new tokens from the server after sending
 
 After sending a 1:1 message, the library checks whether a new token should be issued for the recipient. If the sender-side bucket has rolled over since the last issuance, a background IQ request issues a fresh token and stores the response. This matches WhatsApp Web's `sendTcToken` behavior in `MsgJob.js`.
 
+### Identity change reissuance
+
+When a contact reinstalls WhatsApp and their identity key changes, the library automatically re-issues TC tokens so the contact retains a valid privacy token. This matches WhatsApp Web's `sendTcTokenWhenDeviceIdentityChange` behavior.
+
+The reissuance is triggered when an `UntrustedIdentity` error is encountered during message decryption. After handling the identity change (clearing the old identity and retrying decryption), the client spawns a background task that:
+
+1. Checks if a token was previously issued to the sender (via `sender_timestamp`)
+2. Verifies the token hasn't expired on the sender side
+3. Re-issues the token using the original issuance timestamp to preserve the bucket window
+
+This ensures that privacy-gated operations (like profile picture fetching) continue to work after a contact reinstalls, without requiring manual token management.
+
+<Note>
+Token reissuance is skipped for bot JIDs and status broadcast senders. The operation is deduplicated via session locks to prevent concurrent reissuance for the same sender.
+</Note>
+
 ### Incoming token notifications
 
 When a contact sends you a privacy token, the library handles it automatically:

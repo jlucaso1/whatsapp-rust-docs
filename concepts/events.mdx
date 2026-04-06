@@ -1323,6 +1323,12 @@ This event corresponds to WhatsApp Web's `WAWebHandleIdentityChange` flow. When 
 5. Dispatches this event so your application can show a "security code changed" notice
 6. Spawns a background `ensure_e2e_sessions` task to proactively re-establish the session (self-defers when the client is offline)
 
+Additionally, when a message triggers an `UntrustedIdentity` error during decryption (indicating the sender reinstalled WhatsApp), the client:
+
+7. Clears the old identity key and retries decryption with the new identity, preserving the old session for in-flight messages
+8. Handles `InvalidPreKeyId` errors in the retry path by sending a retry receipt so the sender can establish a new session
+9. Re-issues [TC tokens](/api/tctoken) for the sender in the background (matching WhatsApp Web's `sendTcTokenWhenDeviceIdentityChange` behavior) so the contact retains a valid privacy token
+
 The notification is processed immediately even when received during offline sync, because all cleanup operations are local-only. The background session re-establishment self-defers via `wait_for_offline_delivery_end` when the client is offline.
 
 <Note>

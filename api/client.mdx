@@ -1227,6 +1227,26 @@ Sends a raw protocol node (advanced usage).
 - `ClientError::NotConnected` - Not connected
 - `ClientError::EncryptSend` - Encryption/send failure
 
+### send_raw_bytes
+
+```rust
+pub async fn send_raw_bytes(&self, plaintext: Vec<u8>) -> Result<(), ClientError>
+```
+
+Send pre-marshaled plaintext bytes through the noise socket. The bytes must be a valid WABinary-marshaled stanza (as produced by `wacore_binary::marshal::marshal_to`). Sending malformed data will cause the server to close the connection.
+
+<ParamField path="plaintext" type="Vec<u8>" required>
+  WABinary-marshaled stanza bytes
+</ParamField>
+
+**Errors:**
+- `ClientError::NotConnected` - Not connected
+- `ClientError::EncryptSend` - Encryption/send failure
+
+<Warning>
+This bypasses node logging and `wait_for_sent_node` waiter resolution. Use [`send_node`](#send_node) for normal stanza sending. This method is intended for performance-critical paths where you already have marshaled bytes.
+</Warning>
+
 ### generate_message_id
 
 ```rust
@@ -1437,6 +1457,35 @@ pub async fn register_chatstate_handler(
 ```
 
 Registers a handler for chat state events (typing indicators). The handler is wrapped in `Arc` for thread-safe sharing across the event dispatching system.
+
+### set_raw_node_forwarding
+
+```rust
+pub fn set_raw_node_forwarding(&self, enabled: bool)
+```
+
+Enable or disable raw node forwarding. When enabled, `Event::RawNode` is emitted for every decoded stanza before the stanza router dispatches it. Disabled by default to avoid overhead.
+
+<ParamField path="enabled" type="bool" required>
+  Whether to emit `Event::RawNode` for every incoming stanza
+</ParamField>
+
+**Example:**
+```rust
+// Enable raw protocol access (e.g. for voice call stanzas)
+client.set_raw_node_forwarding(true);
+
+// Handle raw nodes in your event handler
+bot.on_event(|event, _client| async move {
+    if let Event::RawNode(node) = event {
+        println!("Raw stanza: {} {:?}", node.tag, node.attrs);
+    }
+});
+```
+
+<Warning>
+Only enable this when you need raw protocol access. Every decoded stanza triggers the event, which adds overhead to the message processing pipeline.
+</Warning>
 
 ---
 

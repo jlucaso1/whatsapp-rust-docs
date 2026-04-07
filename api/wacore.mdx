@@ -481,7 +481,11 @@ Each benchmark produces instruction counts and optionally generates flamegraph S
 
 ### CI integration
 
-The repository includes a GitHub Actions workflow (`.github/workflows/benchmark.yml`) that runs benchmarks on every push to `main` and on pull requests. It uses [Bencher](https://bencher.dev/) to track performance over time with a 5% regression threshold on instruction counts.
+The repository includes a GitHub Actions workflow (`.github/workflows/benchmark.yml`) that runs benchmarks on every push to `main` and on pull requests. It uses [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark) to track performance over time with self-hosted trend charts on GitHub Pages. A custom parser script (`.github/scripts/iai-to-benchmark-json.py`) converts iai-callgrind instruction counts into the `customSmallerIsBetter` JSON format.
+
+- **Pushes to `main`** store the baseline and update the gh-pages trend charts
+- **Pull requests** compare against the baseline, always post a comment, and fail the check at a 5% regression threshold
+- Raw benchmark output is uploaded as artifacts (retained for 30 days) for debugging
 
 ## Next steps
 

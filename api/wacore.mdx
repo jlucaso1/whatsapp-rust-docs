@@ -443,7 +443,47 @@ Strong typing throughout:
 - `AttrParserRef` for attribute iteration
 - `marshal_ref` for encoding without cloning
 
-## Next Steps
+## Benchmarks
+
+wacore includes a suite of [iai-callgrind](https://github.com/iai-callgrind/iai-callgrind) benchmarks that measure instruction counts for core protocol operations. These benchmarks run under Valgrind's Callgrind tool, producing deterministic, low-noise measurements that are suitable for CI regression tracking.
+
+### Prerequisites
+
+Running the benchmarks requires:
+
+- **Nightly Rust** (the project pins `nightly-2026-04-05`)
+- **Valgrind** installed on your system
+- **iai-callgrind-runner** (`cargo install iai-callgrind-runner --version 0.16.1`)
+
+### Available benchmark suites
+
+| Suite | Location | What it measures |
+|-------|----------|-----------------|
+| `send_receive_benchmark` | `wacore/benches/send_receive_benchmark.rs` | Full send/receive pipeline — DM send, DM receive, group send (steady-state skmsg), group send with SKDM distribution (10/50/256 participants), and group receive. Uses real `prepare_peer_stanza` and `prepare_group_stanza` functions with in-memory Signal stores |
+| `reporting_token_benchmark` | `wacore/benches/reporting_token_benchmark.rs` | Reporting token generation — key derivation, token calculation, and full generation pipeline for simple and extended messages |
+| `binary_benchmark` | `wacore/binary/benches/binary_benchmark.rs` | Binary protocol encoding/decoding — marshal and unmarshal operations for various node sizes and structures |
+| `libsignal_benchmark` | `wacore/libsignal/benches/libsignal_benchmark.rs` | Signal Protocol operations — session establishment, message encrypt/decrypt, sender key distribution, and group cipher operations |
+
+### Running benchmarks
+
+```bash
+# Run all benchmarks across the workspace
+cargo bench --workspace
+
+# Run a specific benchmark suite
+cargo bench -p wacore --bench send_receive_benchmark
+cargo bench -p wacore --bench reporting_token_benchmark
+cargo bench -p wacore-binary --bench binary_benchmark
+cargo bench -p wacore-libsignal --bench libsignal_benchmark
+```
+
+Each benchmark produces instruction counts and optionally generates flamegraph SVGs for profiling hotspots.
+
+### CI integration
+
+The repository includes a GitHub Actions workflow (`.github/workflows/benchmark.yml`) that runs benchmarks on every push to `main` and on pull requests. It uses [Bencher](https://bencher.dev/) to track performance over time with a 5% regression threshold on instruction counts.
+
+## Next steps
 
 <CardGroup cols={2}>
   <Card title="waproto" icon="file-code" href="/api/waproto">

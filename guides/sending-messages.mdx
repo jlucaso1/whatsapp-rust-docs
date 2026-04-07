@@ -513,7 +513,7 @@ let metadata = StickerPackMetadata::new(
 ```
 
 <Note>
-Animated stickers are automatically detected from the WebP data. The `is_animated` field on each sticker proto entry is set based on whether the WebP file contains animation frames.
+Animated stickers are automatically detected from the WebP data. The `is_animated` field on each sticker proto entry is set based on whether the WebP file contains animation frames. You can also use [`whatsapp_rust::webp::is_animated()`](/api/wacore#is_animated) directly to check WebP files before processing.
 </Note>
 
 ## Forwarding media messages

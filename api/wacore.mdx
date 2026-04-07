@@ -214,8 +214,46 @@ On WASM targets (`target_arch = "wasm32"`), all `Send` bounds are automatically 
 - **`reporting_token`** - Reporting token generation
 - **`request`** - Request building utilities
 - **`stanza`** - Common stanza builders
+- **`sticker_pack`** - Sticker pack creation helpers (see [sticker packs](/guides/sending-messages#sticker-packs))
 - **`types`** - Common type definitions (JID, events, messages)
 - **`version`** - WhatsApp version constants
+- **`webp`** - WebP format utilities (animated sticker detection)
+
+### webp module
+
+The `webp` module provides utilities for working with WebP image files. It is re-exported as `whatsapp_rust::webp`.
+
+#### is_animated
+
+Detects whether a WebP file contains animation frames by parsing RIFF/VP8X headers and scanning for ANIM/ANMF chunks.
+
+```rust
+pub fn is_animated(data: &[u8]) -> bool
+```
+
+<ParamField path="data" type="&[u8]" required>
+  Raw WebP file bytes.
+</ParamField>
+
+Returns `true` if the WebP file is animated, `false` otherwise (including for invalid or too-short input).
+
+**Example:**
+
+```rust
+use whatsapp_rust::webp;
+
+let webp_bytes = std::fs::read("sticker.webp")?;
+
+if webp::is_animated(&webp_bytes) {
+    println!("Animated sticker");
+} else {
+    println!("Static sticker");
+}
+```
+
+<Note>
+This function is used internally by `create_sticker_pack_zip` to set the `is_animated` field on each sticker proto entry. You can also use it directly when you need to classify WebP files before processing.
+</Note>
 
 ## Submodule Packages
 

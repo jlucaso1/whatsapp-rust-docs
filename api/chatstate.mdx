@@ -94,6 +94,84 @@ client.chatstate().send_paused(&recipient).await?;
 println!("Cleared typing indicator");
 ```
 
+## Receiving chat state events
+
+### ChatStateEvent
+
+Incoming chatstate stanzas (typing indicators from other users) are dispatched as `ChatStateEvent` values. Register a handler with [`register_chatstate_handler`](/api/client#register_chatstate_handler) to receive them.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct ChatStateEvent {
+    /// The chat where the event occurred (user JID for 1:1, group JID for groups)
+    pub chat: Jid,
+    /// For group chats, the participant who triggered the event
+    pub participant: Option<Jid>,
+    /// The chat state (typing, recording_audio, or idle)
+    pub state: ReceivedChatState,
+}
+```
+
+<ParamField path="chat" type="Jid">
+  The chat where the event occurred. For direct messages this is the sender's JID; for groups this is the group JID.
+</ParamField>
+
+<ParamField path="participant" type="Option<Jid>">
+  For group chats, the participant who triggered the event. `None` for 1:1 chats.
+</ParamField>
+
+<ParamField path="state" type="ReceivedChatState">
+  The parsed chat state — see `ReceivedChatState` below.
+</ParamField>
+
+**Example:**
+
+```rust
+use whatsapp_rust::ChatStateEvent;
+use std::sync::Arc;
+
+client.register_chatstate_handler(Arc::new(|event: ChatStateEvent| {
+    match event.state {
+        ReceivedChatState::Typing => {
+            println!("{} is typing in {}", event.participant.as_ref().unwrap_or(&event.chat), event.chat);
+        }
+        ReceivedChatState::RecordingAudio => {
+            println!("{} is recording audio", event.chat);
+        }
+        ReceivedChatState::Idle => {
+            println!("{} stopped typing", event.chat);
+        }
+        _ => {}
+    }
+})).await;
+```
+
+### ReceivedChatState
+
+The state values for incoming chatstate events, aligned with WhatsApp Web's `WAChatState` constants.
+
+```rust
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceivedChatState {
+    Typing,        // User is typing text
+    RecordingAudio, // User is recording a voice message
+    Idle,          // User stopped typing/recording (default)
+}
+```
+
+`ReceivedChatState` is `#[non_exhaustive]`, so match statements should include a wildcard arm.
+
+**Wire format mapping:**
+
+| XML stanza | ReceivedChatState |
+|---|---|
+| `<composing/>` | `Typing` |
+| `<composing media="audio"/>` | `RecordingAudio` |
+| `<paused/>` | `Idle` |
+
+## Sending chat state updates
+
 ## ChatStateType Enum
 
 ```rust

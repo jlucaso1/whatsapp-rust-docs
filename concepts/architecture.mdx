@@ -166,7 +166,7 @@ pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
-    save_notify: Arc<Notify>,
+    save_notify: Arc<Event>,  // event_listener::Event (runtime-agnostic)
 }
 ```
 
@@ -277,24 +277,26 @@ pub async fn handle_message(client: &Arc<Client>, node: &Node) {
 
 ```rust
 // src/send.rs
-pub async fn send_message(client: &Arc<Client>, msg: &Message) {
-    // 1. Encrypt via Signal Protocol
-    // 2. Build protocol node
-    // 3. Send via NoiseSocket
+impl Client {
+    pub async fn send_message(&self, to: Jid, message: wa::Message) -> Result<SendResult> {
+        // 1. Encrypt via Signal Protocol
+        // 2. Build protocol node
+        // 3. Send via NoiseSocket
+    }
 }
 ```
 
 ### Socket Communication
 
-**Flow:** `src/socket/` → Noise framing → Transport
+**Flow:** `src/client.rs` → Noise framing → Transport
 
 ```rust
-// src/socket/mod.rs
-impl NoiseSocket {
-    pub async fn send_node(&self, node: Node) -> Result<()> {
+// src/client.rs
+impl Client {
+    pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
         // 1. Marshal to binary
         // 2. Encrypt with Noise
-        // 3. Frame and send
+        // 3. Frame and send via transport
     }
 }
 ```

@@ -739,7 +739,7 @@ pub fn polls(&self) -> Polls<'_>
 Access poll operations.
 
 **Methods:**
-- `create(to: &Jid, name: &str, options: &[String], selectable_count: u32)` - Create a poll (returns message ID and secret)
+- `create(to: &Jid, name: &str, options: &[String], selectable_count: u32)` - Create a poll (returns `(SendResult, Vec<u8>)` — the send result and message secret)
 - `vote(chat_jid, poll_msg_id, poll_creator_jid, message_secret, option_names)` - Cast a vote on a poll
 - `decrypt_vote(enc_payload, enc_iv, message_secret, poll_msg_id, poll_creator_jid, voter_jid)` - Decrypt a vote (static method)
 - `aggregate_votes(poll_options, votes, message_secret, poll_msg_id, poll_creator_jid)` - Tally all votes (static method)
@@ -747,7 +747,7 @@ Access poll operations.
 **Example:**
 ```rust
 let options = vec!["Yes".to_string(), "No".to_string()];
-let (msg_id, secret) = client.polls().create(&chat_jid, "Agree?", &options, 1).await?;
+let (send_result, secret) = client.polls().create(&chat_jid, "Agree?", &options, 1).await?;
 ```
 
 See [Polls API](/api/polls) for full documentation.
@@ -986,7 +986,7 @@ let (client, mut sync_receiver) = Client::new(/* ... */).await;
 tokio::spawn({
     let client = client.clone();
     async move {
-        while let Some(task) = sync_receiver.recv().await {
+        while let Ok(task) = sync_receiver.recv().await {
             client.process_sync_task(task).await;
         }
     }

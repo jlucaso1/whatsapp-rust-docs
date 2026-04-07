@@ -500,9 +500,9 @@ pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 // Key examples: "5511999887766@c.us.0", "123456789:33@lid.0"
 ```
 
-The DM send path uses a **bare recipient JID** (device 0) for the recipient, relying on server-side fanout to deliver the encrypted message to the correct device. Own companion devices still receive per-device encryption for multi-device self-sync. Session locks are acquired for all involved devices — the bare recipient plus own companion devices — in sorted order to prevent deadlocks. The `build_session_lock_keys()` helper resolves encryption JIDs (normalizing the recipient to bare form via `to_non_ad()`), sorts, and deduplicates the keys before acquisition.
+The DM send path uses a **bare recipient JID** (device 0) for the recipient, relying on server-side fanout to deliver the encrypted message to the correct device. Own companion devices still receive per-device encryption for multi-device self-sync. Session locks are acquired for all involved devices — the bare recipient plus own companion devices — in sorted order to prevent deadlocks. The `build_session_lock_keys()` helper resolves encryption JIDs (normalizing the recipient to bare form via `to_non_ad()`), sorts by `(server, user, device)` using `cmp_for_lock_order()`, and deduplicates. The `session_mutexes_for()` helper then converts the sorted JIDs to session mutexes, reusing a single `String` buffer to avoid per-JID heap allocations.
 
-The peer message path (single-device) acquires a single lock for the resolved encryption JID. Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`.
+The peer message path (single-device) acquires a single lock for the resolved encryption JID. Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`. Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
 
 ### Background Saver
 

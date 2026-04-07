@@ -1011,6 +1011,8 @@ pub trait JidExt {
 
 `to_protocol_address_string()` is used on hot paths (message encryption and decryption) as the key for `session_locks`. It pre-sizes the output buffer and builds the string in a single allocation, avoiding the two-allocation overhead of constructing a `ProtocolAddress` and then calling `.to_string()`.
 
+The `write_protocol_address_to()` free function provides the same formatting but writes into a caller-supplied `&mut String` buffer, enabling buffer reuse across multiple JIDs (used by `session_mutexes_for()`).
+
 **Format examples:**
 
 | JID | Signal address | Protocol address string |
@@ -1039,8 +1041,9 @@ let _session_guard = session_mutex.lock().await;
 let signal_addr_str = encryption_jid.to_protocol_address_string();
 
 // In DM message encryption (src/send.rs) — per-device locks for all devices
-let lock_keys = self.build_session_lock_keys(&all_dm_devices).await;
-// Locks acquired in sorted order to prevent deadlocks
+let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
+let session_mutexes = self.session_mutexes_for(&lock_jids).await;
+// Guards acquired in sorted order to prevent deadlocks
 ```
 
 **DM server-side fanout:**
@@ -1051,17 +1054,57 @@ Own companion devices (your other linked devices) still receive per-device encry
 
 **DM per-device locking:**
 
-To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires session locks for all devices involved — the bare recipient plus own companion devices. The `build_session_lock_keys()` helper:
+To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires session locks for all devices involved — the bare recipient plus own companion devices. The `build_session_lock_keys()` helper resolves encryption JIDs and sorts them for deadlock-free lock acquisition:
 
 1. Resolves the recipient to its bare encryption JID via `resolve_encryption_jid().to_non_ad()` (stripping device component)
 2. Resolves own companion device JIDs
-3. Converts each to a protocol address string
-4. Sorts and deduplicates the keys
-5. Acquires locks in sorted order to prevent deadlocks
+3. Sorts by `(server, user, device)` using `cmp_for_lock_order()` and deduplicates
+4. Returns sorted `Vec<Jid>` — no intermediate `String` allocations needed for sorting
+
+The `session_mutexes_for()` helper then converts sorted JIDs to session mutexes, reusing a single `String` buffer via `write_protocol_address_to()` to avoid per-JID heap allocations:
+
+```rust
+// In DM message encryption (src/send.rs)
+let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
+let session_mutexes = self.session_mutexes_for(&lock_jids).await;
+// Guards acquired in sorted order to prevent deadlocks
+```
 
 The recipient lock key is always the bare form (e.g., `100000012345678@lid.0`), matching the decrypt path's lock format. This ensures send and receive paths serialize on the exact same lock key.
 
-Location: `wacore/src/types/jid.rs:4-68`, `src/send.rs:1288-1300`
+Location: `wacore/src/types/jid.rs:4-51`, `src/send.rs:1481-1507`
+
+### Zero-Allocation JID Deduplication
+
+Group stanza preparation needs to deduplicate participant JIDs at two stages: before device resolution (by user identity) and after LID conversion (by device identity). Two utility functions in `wacore/src/types/jid.rs` handle this with in-place sorted dedup instead of `HashSet` allocations:
+
+```rust
+/// Sort and deduplicate by user identity (user + server).
+pub fn sort_dedup_by_user(jids: &mut Vec<Jid>);
+
+/// Sort and deduplicate by device identity (user + server + agent + device).
+pub fn sort_dedup_by_device(jids: &mut Vec<Jid>);
+```
+
+Both use `sort_unstable_by` followed by `dedup_by`, comparing JID fields directly without allocating intermediate strings or hash sets. This is more efficient than the `HashSet<(String, String)>` approach because:
+
+- No per-JID `String::clone()` for hash keys
+- No `HashSet` allocation or hashing overhead
+- Stable dedup order (sorted) instead of hash-dependent iteration
+
+**Usage in group sends (`wacore/src/send.rs`):**
+
+```rust
+// Before device resolution — dedup participants by user identity
+sort_dedup_by_user(&mut jids_to_resolve);
+
+// After LID conversion — dedup devices by full device identity
+// Catches duplicates where both phone and LID queries resolve
+// to the same device (e.g., 559980000003:33 and 100000037037034:33@lid)
+sort_dedup_by_device(&mut resolved_list);
+```
+
+Location: `wacore/src/types/jid.rs:33-51`
 
 ### Take/Restore Pattern
 

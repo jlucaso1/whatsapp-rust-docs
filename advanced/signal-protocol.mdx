@@ -339,20 +339,21 @@ Sender key records are keyed by a composite `SenderKeyName` containing the group
 
 Without normalization, the sender key would be stored under the device-qualified address during SKDM processing but looked up under the bare address during `skmsg` decryption, causing `NoSenderKeyState` failures.
 
-The client normalizes the sender JID to its bare form using `to_non_ad()` (which strips the device component, setting `device = 0, agent = 0`) at every point where a `SenderKeyName` is constructed:
+The client normalizes the sender JID to its bare form using `to_non_ad()` (which strips the device component, setting `device = 0, agent = 0`) at every point where a `SenderKeyName` is constructed. The `SenderKeyName::from_jid()` convenience method handles the `to_string()` conversion automatically:
 
 ```rust
 // Decryption path (src/message.rs) — normalize before group_decrypt
 let sender_for_sk = info.source.sender.to_non_ad();
 let sender_address = sender_for_sk.to_protocol_address();
-let sender_key_name =
-    SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+let sender_key_name = SenderKeyName::from_jid(&info.source.chat, &sender_address);
 
 // SKDM storage path (src/message.rs) — normalize before process_sender_key_distribution_message
 let sender_bare = sender_jid.to_non_ad();
 let sender_address = sender_bare.to_protocol_address();
-let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_address);
 ```
+
+`SenderKeyName::from_jid()` is equivalent to `SenderKeyName::new(group_jid.to_string(), sender_address.to_string())` but avoids the manual `to_string()` calls and is the preferred constructor.
 
 This ensures the cache key is always in the form `"{group}:{bare_user}@{server}.0"`, regardless of whether the original stanza used a device-qualified or bare JID.
 
@@ -360,7 +361,7 @@ This ensures the cache key is always in the form `"{group}:{bare_user}@{server}.
   Custom implementations that construct `SenderKeyName` directly must also normalize the sender JID to its bare form. Failing to do so will cause sender key lookup mismatches and decryption failures for group messages.
 </Warning>
 
-Location: `src/message.rs`, `wacore/binary/src/jid.rs` (`to_non_ad()`)
+Location: `src/message.rs`, `wacore/libsignal/src/store/sender_key_name.rs`, `wacore/binary/src/jid.rs` (`to_non_ad()`)
 
 ### Sender Key Distribution
 

@@ -620,6 +620,7 @@ pub struct DeviceListRecord {
     pub devices: Vec<DeviceInfo>,   // Known devices
     pub timestamp: i64,             // Last update timestamp
     pub phash: Option<String>,      // Participant hash from usync
+    pub raw_id: Option<u32>,        // ADV raw_id for identity change detection
 }
 
 pub struct DeviceInfo {
@@ -627,6 +628,8 @@ pub struct DeviceInfo {
     pub key_index: Option<u32>,   // Key index if known
 }
 ```
+
+The `raw_id` field stores the ADV (Account Device Verification) key index list `raw_id` from device notifications. When this value changes for a user, it indicates an identity change (e.g., the user reinstalled WhatsApp). The client uses this to detect identity changes and clear all Signal sessions and sender key device tracking for that user, forcing SKDM redistribution on the next group message.
 
 ## Error Handling
 

@@ -413,7 +413,7 @@ Recipients decrypt using the sender's distributed key:
 // From wacore/libsignal/src/protocol/group_cipher.rs:162-250
 pub async fn group_decrypt(
     skm_bytes: &[u8],
-    sender_key_store: &mut dyn SenderKeyStore,
+    sender_key_store: &dyn SenderKeyStore,
     sender_key_name: &SenderKeyName,
 ) -> Result<Vec<u8>>
 ```
@@ -463,6 +463,16 @@ async fn handle_unknown_device_sync(&self, info: &MessageInfo) {
 ```
 
 Location: `src/message.rs`, `src/client/device_registry.rs`, `src/pending_device_sync.rs`
+
+### Immutable sender key loading
+
+The `SenderKeyStore` trait's `load_sender_key` method takes `&self` (not `&mut self`), allowing sender key lookups to proceed under a **read lock**. This is safe because loading a sender key is a pure read operation — no state is mutated. The `store_sender_key` method still requires `&mut self` since it modifies state.
+
+This means concurrent group decryptions for different senders can load sender keys in parallel without contention, while writes (SKDM processing) still serialize correctly.
+
+<Note>
+If you implement `SenderKeyStore` for a custom backend, `load_sender_key` must use `&self` (immutable reference). Implementations that previously required `&mut self` for internal caching should use interior mutability (e.g., `Mutex` or `RwLock`) instead.
+</Note>
 
 ### Sender key existence check
 
@@ -941,7 +951,7 @@ All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`,
 | `store_session` | clone all fields + prost encode | move (zero-cost) |
 | `load_session` | prost decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
 | `store_sender_key` | serialize to bytes + store bytes | store `SenderKeyRecord` object directly |
-| `load_sender_key` | load bytes + deserialize | return cached `SenderKeyRecord` object |
+    | `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |
 | `flush` (batched) | write bytes to DB | serialize sessions + sender keys + write bytes to DB |
 
 ### Arc previous sessions

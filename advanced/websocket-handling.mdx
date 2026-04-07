@@ -655,22 +655,16 @@ impl Client {
         let noise_socket = self.noise_socket.load()
             .ok_or_else(|| anyhow!("not connected"))?;
         
-        // Reuse buffers for efficiency
-        let mut plaintext_buf = Vec::with_capacity(1024);
-        let mut out_buf = Vec::with_capacity(1056);
-        
-        // Marshal node to binary
-        marshal_to_vec(node, &mut plaintext_buf)?;
+        // Marshal node to binary with auto-sized buffer
+        let plaintext_buf = marshal_auto(node)?;
         
         // Encrypt and send
-        (plaintext_buf, out_buf) = noise_socket
-            .encrypt_and_send(plaintext_buf, out_buf)
-            .await?;
-        
-        // Buffers returned for potential reuse
-        Ok(())
+        self.send_raw_bytes(plaintext_buf).await
     }
 }
+```
+
+The `marshal_auto` function automatically selects an appropriate buffer capacity based on the node's characteristics. For nodes exceeding certain thresholds (24+ attributes, 64+ children, or 8KB+ scalar content), it pre-estimates the capacity to avoid reallocations. For typical small nodes, it uses the default 1024-byte capacity. This replaces the previous manual `Vec::with_capacity(1024)` + `marshal_to` pattern.
 ```
 
 ### 4. Disconnect

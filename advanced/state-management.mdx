@@ -354,9 +354,9 @@ pub struct Client {
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
     /// are processed concurrently across different chats.
-    /// Keys are protocol address strings from to_protocol_address_string()
+    /// Keys are protocol address strings from write_protocol_address_to()
     /// (e.g., "5511999887766@c.us.0", "123456789:33@lid.0").
-    pub(crate) session_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+    pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
     /// Per-chat message queues for sequential message processing.
     /// Prevents race conditions where a later message is processed before
@@ -365,7 +365,7 @@ pub struct Client {
 
     /// Per-chat mutex for serializing message enqueue operations.
     /// Ensures messages are enqueued in the order they arrive.
-    pub(crate) message_enqueue_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+    pub(crate) message_enqueue_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
     // ...
 }
 ```

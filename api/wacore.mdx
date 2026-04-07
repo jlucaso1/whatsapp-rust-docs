@@ -215,7 +215,7 @@ On WASM targets (`target_arch = "wasm32"`), all `Send` bounds are automatically 
 - **`request`** - Request building utilities
 - **`stanza`** - Common stanza builders
 - **`sticker_pack`** - Sticker pack creation helpers (see [sticker packs](/guides/sending-messages#sticker-packs))
-- **`types`** - Common type definitions (JID, events, messages)
+- **`types`** - Common type definitions (JID, events, messages). Includes `types::jid` utilities for zero-allocation JID comparison (`cmp_for_lock_order`), buffer-reusing address formatting (`write_protocol_address_to`), and in-place sorted deduplication (`sort_dedup_by_user`, `sort_dedup_by_device`)
 - **`version`** - WhatsApp version constants
 - **`webp`** - WebP format utilities (animated sticker detection)
 

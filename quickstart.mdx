@@ -504,7 +504,7 @@ Session data is stored in the `/data` directory inside the container. Mount a vo
 
 ## Benchmarking
 
-The repository includes a benchmark example at `examples/benchmark.rs` that you can use for performance testing. It uses an in-memory SQLite database and supports a custom WebSocket URL via the `WHATSAPP_WS_URL` environment variable:
+The repository includes a benchmark example at `examples/benchmark.rs` that you can use for integration-level performance testing. It uses an in-memory SQLite database and supports a custom WebSocket URL via the `WHATSAPP_WS_URL` environment variable:
 
 ```bash
 cargo run --example benchmark --features danger-skip-tls-verify
@@ -513,6 +513,15 @@ cargo run --example benchmark --features danger-skip-tls-verify
 <Note>
   The benchmark example requires the `danger-skip-tls-verify` feature flag because it's designed for use with local test servers.
 </Note>
+
+For low-level protocol benchmarks, the `wacore` crate includes an [iai-callgrind](https://github.com/iai-callgrind/iai-callgrind) benchmark suite that measures instruction counts for the full send/receive pipeline (DM and group messaging with various participant counts), binary protocol encoding, Signal Protocol operations, and reporting token generation:
+
+```bash
+# Run all wacore benchmarks (requires valgrind and iai-callgrind-runner)
+cargo bench --workspace
+```
+
+See the [wacore benchmarks documentation](/api/wacore#benchmarks) for details on each suite and CI integration.
 
 ## Next steps
 

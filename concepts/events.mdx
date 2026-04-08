@@ -577,7 +577,12 @@ Event::Receipt(receipt) => {
 
 ### UndecryptableMessage
 
-**Emitted:** When a message cannot be decrypted, including group messages that fail with `NoSenderKeyState` (missing sender key). For group decrypt failures, the event is dispatched before the retry receipt is sent, ensuring your application is immediately notified.
+**Emitted:** When a message cannot be decrypted or is unavailable. This includes:
+- Decryption failures (no session, invalid keys, MAC errors)
+- Group messages that fail with `NoSenderKeyState` (missing sender key) — dispatched before the retry receipt is sent
+- Messages with an `<unavailable>` node (view-once already viewed, server-side unavailability) — the client automatically requests content from your primary phone via [PDO](/guides/receiving-messages#unavailable-message-recovery-via-pdo)
+
+When `is_unavailable` is `true`, the message had no encrypted content in the stanza. The client sends a PDO request to your primary phone, and if the phone responds successfully, a follow-up `Event::Message` is dispatched with the recovered content.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]

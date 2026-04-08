@@ -353,7 +353,8 @@ The library automatically:
 1. Detects decryption failures (no session, invalid keys, MAC errors)
 2. Sends retry receipts with fresh prekeys
 3. Tracks retry count (max 5 attempts)
-4. Falls back to PDO (Peer Data Operation) as last resort
+4. Sends a parallel PDO (Peer Data Operation) request on the first retry
+5. Falls back to immediate PDO as last resort when retries are exhausted
 
 ```rust
 // Retry reasons (internal, handled automatically)
@@ -365,6 +366,44 @@ enum RetryReason {
     // ... other reasons
 }
 ```
+
+### Unavailable message recovery via PDO
+
+When the server delivers a message with an `<unavailable>` child node instead of `<enc>` nodes, the message content is not present in the stanza. This happens when:
+
+- A view-once message has already been viewed on another device
+- The server cannot deliver the encrypted payload for other reasons
+
+Instead of silently dropping these messages, the client requests the content from your primary phone via PDO (Peer Data Operation). The flow is:
+
+1. The client detects the `<unavailable>` node and its type (e.g., `view_once` or unknown)
+2. An `UndecryptableMessage` event is dispatched immediately with `is_unavailable: true`
+3. A PDO request (`PlaceholderMessageResend`) is sent to your primary phone (device 0)
+4. The phone responds with the full `WebMessageInfo` containing the decrypted message
+5. The client dispatches the recovered message as a normal `Event::Message`
+
+```rust
+Event::UndecryptableMessage(undec) => {
+    if undec.is_unavailable {
+        // Message content is being requested from your phone via PDO.
+        // You'll receive an Event::Message when the phone responds.
+        match undec.unavailable_type {
+            UnavailableType::ViewOnce => {
+                println!("View-once message — requesting from phone");
+            }
+            UnavailableType::Unknown => {
+                println!("Unavailable message — requesting from phone");
+            }
+        }
+    }
+}
+```
+
+PDO is also used alongside retry receipts for normal decryption failures. On the first retry attempt, a parallel PDO request is sent with a 500ms delay to give the retry receipt time to resolve first. If all 5 retry attempts are exhausted, an immediate PDO request is sent as a last resort.
+
+<Note>
+PDO requests are deduplicated — if a request is already pending for a given message, subsequent requests are skipped. Pending requests expire after 30 seconds.
+</Note>
 
 ### Sent message retry (outbound)
 

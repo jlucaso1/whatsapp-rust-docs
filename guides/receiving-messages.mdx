@@ -93,9 +93,16 @@ if info.source.chat.is_group() {
 if let Some(expiration) = info.ephemeral_expiration {
     println!("Disappearing message timer: {}s", expiration);
 }
+
+// Check if this message was recovered via PDO
+if let Some(request_id) = &info.unavailable_request_id {
+    println!("Recovered via PDO request: {}", request_id);
+}
 ```
 
 The `ephemeral_expiration` field contains the disappearing messages timer in seconds, extracted from the message's `contextInfo.expiration`. This tells you how long the message will be visible before it auto-deletes. Use this value when sending replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
+
+The `unavailable_request_id` field is set when a message was recovered via PDO rather than normal decryption. It contains the PDO request message ID, which you can use to correlate recovered messages with the original `UndecryptableMessage` event.
 
 ### Message Content Extraction
 
@@ -378,9 +385,11 @@ Instead of silently dropping these messages, the client requests the content fro
 
 1. The client detects the `<unavailable>` node and its type (e.g., `view_once` or unknown)
 2. An `UndecryptableMessage` event is dispatched immediately with `is_unavailable: true`
-3. A PDO request (`PlaceholderMessageResend`) is sent to your primary phone (device 0)
+3. A PDO request (`PlaceholderMessageResend`) is sent to your own bare JID (server routes to all devices including device 0)
 4. The phone responds with the full `WebMessageInfo` containing the decrypted message
-5. The client dispatches the recovered message as a normal `Event::Message`
+5. The client validates the response came from device 0 (primary phone) and dispatches the recovered message as a normal `Event::Message`
+
+The recovered `MessageInfo` includes `unavailable_request_id` — the PDO request message ID — so you can correlate recovered messages with the original `UndecryptableMessage` event.
 
 ```rust
 Event::UndecryptableMessage(undec) => {
@@ -397,12 +406,19 @@ Event::UndecryptableMessage(undec) => {
         }
     }
 }
+
+// When the phone responds, the recovered message includes the request ID:
+Event::Message(msg, info) => {
+    if let Some(request_id) = &info.unavailable_request_id {
+        println!("Recovered via PDO (request: {})", request_id);
+    }
+}
 ```
 
 PDO is also used alongside retry receipts for normal decryption failures. On the first retry attempt, a parallel PDO request is sent with a 500ms delay to give the retry receipt time to resolve first. If all 5 retry attempts are exhausted, an immediate PDO request is sent as a last resort.
 
 <Note>
-PDO requests are deduplicated — if a request is already pending for a given message, subsequent requests are skipped. Pending requests expire after 30 seconds.
+PDO requests are deduplicated — if a request is already pending for a given message, subsequent requests are skipped. Pending requests expire after 30 seconds. The deduplication cache uses phone-number JIDs as keys (not LID JIDs) to ensure the cache key matches the JID format in the phone's response.
 </Note>
 
 ### Sent message retry (outbound)

@@ -339,6 +339,7 @@ pub enum MediaType {
     AppState,
     Sticker,
     StickerPack,
+    StickerPackThumbnail,
     LinkThumbnail,
     ProductCatalogImage,
 }
@@ -353,6 +354,7 @@ Each media type has specific HKDF info strings used for key derivation:
 - `History` → `"WhatsApp History Keys"`
 - `AppState` → `"WhatsApp App State Keys"`
 - `StickerPack` → `"WhatsApp Sticker Pack Keys"`
+- `StickerPackThumbnail` → `"WhatsApp Sticker Pack Thumbnail Keys"`
 - `LinkThumbnail` → `"WhatsApp Link Thumbnail Keys"`
 
 ### MediaType methods
@@ -375,6 +377,7 @@ Each media type has specific HKDF info strings used for key derivation:
 | `History` | `/mms/md-msg-hist` |
 | `AppState` | `/mms/md-app-state` |
 | `StickerPack` | `/mms/sticker-pack` |
+| `StickerPackThumbnail` | `/mms/thumbnail-sticker-pack` |
 | `LinkThumbnail` | `/mms/thumbnail-link` |
 | `ProductCatalogImage` | `/product/image` |
 

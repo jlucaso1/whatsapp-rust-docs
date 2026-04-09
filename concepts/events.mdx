@@ -60,7 +60,7 @@ impl EventHandler for MyHandler {
     }
 }
 
-client.core.event_bus.add_handler(Arc::new(MyHandler));
+client.register_handler(Arc::new(MyHandler));
 ```
 
 ## Event Enum
@@ -1542,8 +1542,8 @@ impl EventHandler for ConnectionHandler {
     }
 }
 
-client.core.event_bus.add_handler(Arc::new(MessageHandler));
-client.core.event_bus.add_handler(Arc::new(ConnectionHandler));
+client.register_handler(Arc::new(MessageHandler));
+client.register_handler(Arc::new(ConnectionHandler));
 ```
 
 ### ChannelEventHandler
@@ -1602,7 +1602,7 @@ impl EventHandler for AsyncHandler {
     }
 }
 
-client.core.event_bus.add_handler(Arc::new(AsyncHandler { tx }));
+client.register_handler(Arc::new(AsyncHandler { tx }));
 
 // Process events asynchronously
 tokio::spawn(async move {

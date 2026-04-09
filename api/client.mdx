@@ -986,7 +986,7 @@ let (client, mut sync_receiver) = Client::new(/* ... */).await;
 tokio::spawn({
     let client = client.clone();
     async move {
-        while let Some(task) = sync_receiver.recv().await {
+        while let Ok(task) = sync_receiver.recv().await {
             client.process_sync_task(task).await;
         }
     }

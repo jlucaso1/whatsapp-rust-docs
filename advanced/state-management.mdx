@@ -58,6 +58,12 @@ pub struct Device {
     pub props_hash: Option<String>,
     #[serde(default)]
     pub next_pre_key_id: u32,
+    #[serde(default)]
+    pub server_has_prekeys: bool,
+    #[serde(default)]
+    pub nct_salt: Option<Vec<u8>>,
+    #[serde(skip)]
+    pub nct_salt_sync_seen: bool,
 }
 ```
 
@@ -73,7 +79,8 @@ The `Device` struct uses several custom serde strategies:
 | `signed_pre_key_signature` | `BigArray` | Handles fixed-size arrays larger than 32 bytes |
 | `account` | `account_serde` | Bridges prost protobuf types to serde (see below) |
 | `device_props` | `#[serde(skip)]` | Transient, not persisted |
-| `edge_routing_info`, `props_hash`, `next_pre_key_id` | `#[serde(default)]` | Backward-compatible optional fields |
+| `edge_routing_info`, `props_hash`, `next_pre_key_id`, `server_has_prekeys`, `nct_salt` | `#[serde(default)]` | Backward-compatible optional fields |
+| `nct_salt_sync_seen` | `#[serde(skip)]` | Transient, not persisted |
 
 The `account` field holds an `AdvSignedDeviceIdentity` (a prost-generated protobuf type that lacks `serde::Deserialize`). The `account_serde` module bridges this gap by encoding the protobuf struct to bytes on serialization and decoding on deserialization:
 
@@ -106,11 +113,14 @@ pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
-    save_notify: Arc<Notify>,
+    save_notify: Arc<Event>,
+    saver_halted: Arc<AtomicBool>,
 }
 ```
 
-Location: `src/store/persistence_manager.rs:11-16`
+The `save_notify` field uses `event_listener::Event` (not `tokio::sync::Notify`) to keep the persistence layer runtime-agnostic. The `saver_halted` flag is set when the background saver encounters too many consecutive flush failures.
+
+Location: `src/store/persistence_manager.rs:13-20`
 
 ### Key Methods
 
@@ -135,16 +145,16 @@ where
 {
     let mut device_guard = self.device.write().await;
     let result = modifier(&mut device_guard);
-    
+
     // Mark dirty and notify background saver
     self.dirty.store(true, Ordering::Relaxed);
-    self.save_notify.notify_one();
-    
+    self.save_notify.notify(1);
+
     result
 }
 ```
 
-Location: `src/store/persistence_manager.rs:69-80`
+Location: `src/store/persistence_manager.rs:79-90`
 
 #### Command Processing
 
@@ -161,35 +171,51 @@ Location: `src/store/persistence_manager.rs:145-150`
 
 ### Background Saver
 
-The persistence manager runs a background task that periodically saves dirty state:
+The persistence manager runs a background task that periodically saves dirty state. It uses `event_listener::Event` and `futures::select!` instead of Tokio primitives to stay runtime-agnostic:
 
 ```rust
-pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
-    tokio::spawn(async move {
+pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+    let rt = runtime.clone();
+    let weak = Arc::downgrade(&self);
+    drop(self);
+    runtime.spawn(Box::pin(async move {
+        let mut consecutive_failures: u32 = 0;
         loop {
-            tokio::select! {
-                _ = self.save_notify.notified() => {
-                    debug!("Save notification received.");
-                }
-                _ = sleep(interval) => {}
+            let Some(this) = weak.upgrade() else { return; };
+            let listener = this.save_notify.listen();
+            drop(this);
+
+            futures::select! {
+                _ = listener.fuse() => {}
+                _ = rt.sleep(interval).fuse() => {}
             }
-            
-            if let Err(e) = self.save_to_disk().await {
-                error!("Error saving device state: {e}");
+
+            let Some(this) = weak.upgrade() else { return; };
+            if let Err(e) = this.save_to_disk().await {
+                consecutive_failures += 1;
+                if consecutive_failures >= 10 {
+                    this.saver_halted.store(true, Ordering::Release);
+                    error!("Background saver halted after {consecutive_failures} failures: {e}");
+                    return;
+                }
+            } else {
+                consecutive_failures = 0;
             }
         }
-    });
+    })).detach();
 }
 ```
 
 **How it works:**
 
-1. Wakes up when notified OR every `interval` (typically 30s)
-2. Checks if state is dirty (`dirty` flag)
-3. If dirty, serializes device state and saves to database
-4. Clears dirty flag
+1. Holds a `Weak<Self>` reference so the saver exits automatically when `PersistenceManager` is dropped
+2. Wakes up when notified OR every `interval` (typically 30s)
+3. Checks if state is dirty (`dirty` flag)
+4. If dirty, serializes device state and saves to database
+5. Clears dirty flag
+6. After 10 consecutive flush failures, sets `saver_halted` and stops to prevent silent data loss
 
-Location: `src/store/persistence_manager.rs:123-140`
+Location: `src/store/persistence_manager.rs:139-183`
 
 ### Initialization
 
@@ -215,7 +241,8 @@ pub async fn new(backend: Arc<dyn Backend>) -> Result<Self> {
         device: Arc::new(RwLock::new(device)),
         backend,
         dirty: Arc::new(AtomicBool::new(false)),
-        save_notify: Arc::new(Notify::new()),
+        save_notify: Arc::new(Event::new()),
+        saver_halted: Arc::new(AtomicBool::new(false)),
     })
 }
 ```
@@ -240,6 +267,9 @@ pub enum DeviceCommand {
     ),
     SetPropsHash(Option<String>),
     SetNextPreKeyId(u32),
+    SetAdvSecretKey([u8; 32]),
+    SetNctSalt(Option<Vec<u8>>),
+    SetNctSaltFromHistorySync(Vec<u8>),
 }
 ```
 
@@ -279,7 +309,20 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
             device.app_version_secondary = s;
             device.app_version_tertiary = t;
         }
-        // ... handle all variants
+        DeviceCommand::SetAdvSecretKey(key) => {
+            device.adv_secret_key = key;
+        }
+        DeviceCommand::SetNctSalt(salt) => {
+            device.nct_salt = salt;
+            device.nct_salt_sync_seen = true;
+        }
+        DeviceCommand::SetNctSaltFromHistorySync(salt) => {
+            // Only backfill if no SyncD mutation was seen and no salt exists
+            if !salt.is_empty() && !device.nct_salt_sync_seen && device.nct_salt.is_none() {
+                device.nct_salt = Some(salt);
+            }
+        }
+        // ... handle remaining variants
     }
 }
 ```
@@ -339,7 +382,7 @@ persistence_manager.modify_device(|device| {
 
 ### RwLock Semantics
 
-The `Device` is protected by a `tokio::sync::RwLock`:
+The `Device` is protected by an `async_lock::RwLock` (runtime-agnostic):
 
 - **Multiple readers**: `get_device_snapshot()` can be called concurrently
 - **Single writer**: `modify_device()` blocks all other access

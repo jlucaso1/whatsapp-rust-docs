@@ -1738,10 +1738,10 @@ let clone2 = shared.clone(); // O(1)
     }
 })
 
-async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
+async fn handle_event(event: Event, client: Arc<Client>) -> Result<()> {
     match event {
         Event::Message(msg, info) => {
-            process_message(msg, info, client).await?
+            process_message(&msg, &info, client).await?
         }
         _ => {}
     }

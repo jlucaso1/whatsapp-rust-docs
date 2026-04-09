@@ -249,7 +249,7 @@ let mut bot = Bot::builder()
 
 ## Using MessageContext
 
-For cleaner message handling, use `MessageContext` to wrap the message, metadata, and client together. This provides convenience methods like `send_message` (auto-targets the source chat), `build_quote_context`, and `edit_message`:
+For cleaner message handling, use `MessageContext` to wrap the message, metadata, and client together. This provides convenience methods like `send_message` (auto-targets the source chat), `build_quote_context`, `edit_message`, and `revoke_message`:
 
 ```rust
 use whatsapp_rust::bot::{Bot, MessageContext};

@@ -31,6 +31,7 @@ wacore/binary/src/
 A node represents a protocol message or message component:
 
 ```rust
+use compact_str::CompactString;
 use std::borrow::Cow;
 
 pub struct Node {
@@ -40,9 +41,9 @@ pub struct Node {
 }
 
 pub enum NodeContent {
-    Bytes(Vec<u8>),       // Binary payload
-    String(String),       // Text payload
-    Nodes(Vec<Node>),     // Child nodes
+    Bytes(Vec<u8>),             // Binary payload
+    String(CompactString),      // Text payload
+    Nodes(Vec<Node>),           // Child nodes
 }
 ```
 
@@ -55,9 +56,11 @@ Location: `wacore/binary/src/node.rs:366`
 Attributes are stored as key-value pairs with specialized value types:
 
 ```rust
+use compact_str::CompactString;
+
 pub enum NodeValue {
-    String(String),
-    Jid(Jid),         // Optimized for WhatsApp identifiers
+    String(CompactString),
+    Jid(Jid),                // Optimized for WhatsApp identifiers
 }
 
 pub struct Attrs(pub Vec<(Cow<'static, str>, NodeValue)>);
@@ -104,16 +107,19 @@ Location: `wacore/binary/src/node.rs:39-58`
 JIDs (Jabber IDs) like `15551234567@s.whatsapp.net` appear frequently in the protocol. Storing them as structured data avoids repeated parsing/formatting overhead:
 
 ```rust
+use compact_str::CompactString;
 use std::borrow::Cow;
 
 pub struct Jid {
-    pub user: String,                  // "15551234567"
+    pub user: CompactString,           // "15551234567"
     pub server: Cow<'static, str>,     // "s.whatsapp.net"
     pub agent: u8,                     // Agent byte (parsed from JID string)
     pub device: u16,                   // Device ID (0 for primary)
     pub integrator: u16,               // Integrator ID (used with interop server)
 }
 ```
+
+The `user` field uses `CompactString` (re-exported from `compact_str`) instead of `String`. `CompactString` stores short strings inline (up to 24 bytes on 64-bit platforms) without heap allocation, which benefits typical phone numbers and user identifiers. The library re-exports it as `wacore_binary::CompactString` and `whatsapp_rust::CompactString` for convenience. `CompactString` implements `From<&str>`, `From<String>`, and `Deref<Target = str>`, so it works as a drop-in replacement in most contexts — but code that relied on `Jid.user` being a `String` (e.g., passing it to functions expecting `&String` or calling `String`-specific methods) may need updating.
 
 The `server` field uses `Cow<'static, str>` so that known server constants are borrowed as zero-allocation static references, while unknown servers fall back to an owned `String`. This eliminates per-JID heap allocations on hot paths since most JIDs use one of the predefined server constants:
 
@@ -213,7 +219,7 @@ let message = NodeBuilder::new("message")
 | `attrs` | `attrs(self, attrs: impl IntoIterator<Item = (&'static str, V)>) -> Self` | Bulk-add attributes from an iterator |
 | `children` | `children(children: impl IntoIterator<Item = Node>) -> Self` | Set child nodes as content |
 | `bytes` | `bytes(bytes: impl Into<Vec<u8>>) -> Self` | Set raw bytes as content |
-| `string_content` | `string_content(s: impl Into<String>) -> Self` | Set string as content |
+| `string_content` | `string_content(s: impl Into<CompactString>) -> Self` | Set string as content |
 | `apply_content` | `apply_content(content: Option<NodeContent>) -> Self` | Set arbitrary content |
 | `build` | `build(self) -> Node` | Consume the builder and produce a `Node` |
 

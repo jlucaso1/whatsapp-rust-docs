@@ -492,6 +492,73 @@ pub enum MessageCategory {
 }
 ```
 
+**EditAttribute:**
+
+Indicates the type of edit or revocation applied to a message. Values correspond to the wire-format `edit` attribute on message stanzas.
+
+```rust
+pub enum EditAttribute {
+    Empty,            // "" — no edit (default)
+    MessageEdit,      // "1" — message text was edited
+    PinInChat,        // "2" — message was pinned/unpinned
+    AdminEdit,        // "3" — admin edited the message
+    SenderRevoke,     // "7" — sender deleted for everyone
+    AdminRevoke,      // "8" — admin deleted for everyone
+    Unknown(String),  // Forward-compatible fallback
+}
+```
+
+**MsgBotInfo:**
+
+Present when the message originates from a WhatsApp bot (AI-generated responses). Contains streaming edit metadata.
+
+```rust
+pub struct MsgBotInfo {
+    pub edit_type: Option<BotEditType>,
+    pub edit_target_id: Option<MessageId>,
+    pub edit_sender_timestamp_ms: Option<DateTime<Utc>>,
+}
+
+pub enum BotEditType {
+    First,  // Initial bot response
+    Inner,  // Streaming update (intermediate chunk)
+    Last,   // Final streaming update
+}
+```
+
+**MsgMetaInfo:**
+
+Additional metadata for message threading and targeting.
+
+```rust
+pub struct MsgMetaInfo {
+    pub target_id: Option<MessageId>,
+    pub target_sender: Option<Jid>,
+    pub deprecated_lid_session: Option<bool>,
+    pub thread_message_id: Option<MessageId>,
+    pub thread_message_sender_jid: Option<Jid>,
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `target_id` | ID of the message being targeted (for edits/revokes) |
+| `target_sender` | Sender of the targeted message |
+| `deprecated_lid_session` | Legacy LID session flag |
+| `thread_message_id` | ID of the thread parent message |
+| `thread_message_sender_jid` | Sender of the thread parent message |
+
+**DeviceSentMeta:**
+
+Present on device-synced messages (messages you sent from another device).
+
+```rust
+pub struct DeviceSentMeta {
+    pub destination_jid: String,
+    pub phash: String,
+}
+```
+
 **Example:**
 ```rust
 use waproto::whatsapp as wa;

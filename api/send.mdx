@@ -61,6 +61,17 @@ impl SendResult {
 }
 ```
 
+### ChatMessageId
+
+Identifies a specific message within a chat. Useful for operations that need both the chat and message ID together.
+
+```rust
+pub struct ChatMessageId {
+    pub chat: Jid,
+    pub id: MessageId,
+}
+```
+
 ### Example: Text Message
 
 ```rust

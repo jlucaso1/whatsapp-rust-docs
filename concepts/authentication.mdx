@@ -529,6 +529,9 @@ match client.pair_with_code(options).await {
 // No pairing needed - automatic reconnection
 let bot = Bot::builder()
     .with_backend(backend)
+    .with_transport_factory(TokioWebSocketTransportFactory::new())
+    .with_http_client(UreqHttpClient::new())
+    .with_runtime(TokioRuntime)
     .build()
     .await?;
 

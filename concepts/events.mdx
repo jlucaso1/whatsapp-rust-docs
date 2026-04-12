@@ -96,7 +96,7 @@ pub enum Event {
     LoggedOut(LoggedOut),
 
     // Messages
-    Message(Box<wa::Message>, MessageInfo),
+    Message(Box<wa::Message>, Arc<MessageInfo>),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
     Notification(Arc<OwnedNodeRef>),
@@ -450,7 +450,7 @@ Event::ClientOutdated(_) => {
 **Emitted:** For all incoming messages (text, media, etc.)
 
 ```rust
-Event::Message(Box<wa::Message>, MessageInfo)
+Event::Message(Box<wa::Message>, Arc<MessageInfo>)
 ```
 
 **MessageInfo structure:**
@@ -662,7 +662,7 @@ When `is_unavailable` is `true`, the message had no encrypted content in the sta
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct UndecryptableMessage {
-    pub info: MessageInfo,
+    pub info: Arc<MessageInfo>,
     pub is_unavailable: bool,
     pub unavailable_type: UnavailableType,
     pub decrypt_fail_mode: DecryptFailMode,
@@ -1769,7 +1769,7 @@ Event::JoinedGroup(lazy_conv) => {
 
 ### Arc\<Event\> dispatch
 
-With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `HistorySync` conversations and `Message(Box<wa::Message>, MessageInfo)`.
+With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `HistorySync` conversations and `Message(Box<wa::Message>, Arc<MessageInfo>)`. The `MessageInfo` inside `Event::Message` and `UndecryptableMessage` is also wrapped in `Arc`, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
 
 Combined with `LazyConversation`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_conv.get()` triggers the parse, and subsequent handlers reuse the cached result.
 

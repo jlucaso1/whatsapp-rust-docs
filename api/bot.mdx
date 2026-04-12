@@ -564,7 +564,7 @@ A convenience helper for message handling. You can construct it from the `Event:
 ```rust
 pub struct MessageContext {
     pub message: Box<wa::Message>,
-    pub info: MessageInfo,
+    pub info: Arc<MessageInfo>,
     pub client: Arc<Client>,
 }
 ```

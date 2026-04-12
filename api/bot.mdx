@@ -33,7 +33,7 @@ let mut bot = Bot::builder()
     .with_http_client(http_client)
     .with_runtime(TokioRuntime)
     .on_event(|event, client| async move {
-        match event {
+        match &*event {
             Event::Message(msg, info) => {
                 println!("Message from {}: {:?}", info.source.sender, msg);
             }
@@ -170,14 +170,14 @@ let bot = Bot::builder()
 ```rust
 pub fn on_event<F, Fut>(self, handler: F) -> Self
 where
-    F: Fn(Event, Arc<Client>) -> Fut + Send + Sync + 'static,
+    F: Fn(Arc<Event>, Arc<Client>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = ()> + Send + 'static
 ```
 
-Registers an async event handler.
+Registers an async event handler. The handler receives an `Arc<Event>` — use `&*event` to pattern-match on the inner event type.
 
 <ParamField path="handler" type="F" required>
-  Async function that receives events and client Arc
+  Async function that receives `Arc<Event>` and `Arc<Client>`
 </ParamField>
 
 **Example:**
@@ -186,14 +186,14 @@ use waproto::whatsapp as wa;
 
 Bot::builder()
     .on_event(|event, client| async move {
-        match event {
+        match &*event {
             Event::Message(msg, info) => {
                 // Reply to messages
                 let reply = wa::Message {
                     conversation: Some("Hello back!".to_string()),
                     ..Default::default()
                 };
-                let _ = client.send_message(info.source.chat, reply).await;
+                let _ = client.send_message(info.source.chat.clone(), reply).await;
             }
             Event::Connected(_) => {
                 println!("Bot online!");
@@ -229,7 +229,7 @@ let handle = bot.run().await?;
 
 // Process events in your own async loop
 while let Ok(event) = event_rx.recv().await {
-    match event {
+    match &*event {
         Event::Connected(_) => println!("Connected!"),
         Event::Message(msg, info) => {
             println!("Message from {}", info.source.sender);
@@ -388,7 +388,7 @@ Bot::builder()
         platform_display: "Chrome (Linux)".to_string(),
     })
     .on_event(|event, _client| async move {
-        match event {
+        match &*event {
             Event::PairingCode { code, timeout } => {
                 println!("Enter this code on your phone: {}", code);
                 println!("Expires in: {} seconds", timeout.as_secs());
@@ -596,8 +596,7 @@ use waproto::whatsapp as wa;
 use whatsapp_rust::bot::MessageContext;
 
 .on_event(|event, client| async move {
-    if let Event::Message(msg, info) = event {
-        let ctx = MessageContext { message: msg, info, client };
+    if let Some(ctx) = MessageContext::from_event(&event, client) {
         let reply = wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
                 text: Some("Quoted reply!".to_string()),
@@ -662,7 +661,7 @@ async fn main() -> anyhow::Result<()> {
         .with_runtime(TokioRuntime)
         .skip_history_sync() // Bot only needs new messages
         .on_event(|event, client| async move {
-            match event {
+            match &*event {
                 Event::Message(msg, info) => {
                     // Echo messages back
                     if let Some(text) = &msg.conversation {
@@ -670,7 +669,7 @@ async fn main() -> anyhow::Result<()> {
                             conversation: Some(format!("You said: {}", text)),
                             ..Default::default()
                         };
-                        let _ = client.send_message(info.source.chat, reply).await;
+                        let _ = client.send_message(info.source.chat.clone(), reply).await;
                     }
                 }
                 Event::Connected(_) => {

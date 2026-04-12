@@ -238,7 +238,7 @@ let mut bot = Bot::builder()
     .with_transport_factory(transport_factory)
     .with_http_client(http_client)
     .on_event(|event, client| async move {
-        if let Event::Receipt(receipt) = event {
+        if let Event::Receipt(receipt) = &*event {
             println!("Receipt type: {:?}", receipt.r#type);
             println!("From: {}", receipt.source.sender);
             println!("Message IDs: {:?}", receipt.message_ids);
@@ -345,8 +345,8 @@ let mut bot = Bot::builder()
     .on_event(move |event, _client| {
         let tracker = tracker_clone.clone();
         async move {
-            if let Event::Receipt(receipt) = event {
-                tracker.lock().await.track_receipt(&receipt);
+            if let Event::Receipt(receipt) = &*event {
+                tracker.lock().await.track_receipt(receipt);
             }
         }
     })

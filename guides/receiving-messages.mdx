@@ -22,7 +22,7 @@ let bot = Bot::builder()
     .with_transport_factory(transport_factory)
     .with_http_client(http_client)
     .on_event(|event, client| async move {
-        match event {
+        match &*event {
             Event::Message(message, info) => {
                 println!("📨 Message from: {}", info.source.sender);
                 println!("💬 Text: {:?}", message.text_content());
@@ -534,7 +534,7 @@ Use the type-safe JID methods (`is_group()`, `is_broadcast_list()`, `is_status_b
 use wacore_binary::jid::JidExt;
 
 .on_event(|event, _client| async move {
-    match event {
+    match &*event {
         Event::Message(message, info) => {
             // Ignore own messages
             if info.source.is_from_me {
@@ -588,10 +588,10 @@ See [Signal Protocol](/advanced/signal-protocol) for more on session management.
 
 ```rust
 .on_event(|event, client| async move {
-    match event {
+    match &*event {
         Event::Message(message, info) => {
             // Process message
-            if let Err(e) = process_message(&message, &info, client).await {
+            if let Err(e) = process_message(message, info, client).await {
                 eprintln!("Error processing message {}: {:?}", info.id, e);
             }
         }
@@ -647,7 +647,7 @@ let base = message.get_base_message();
 Always handle critical events:
 
 ```rust
-match event {
+match &*event {
     Event::Message(message, info) => { /* ... */ }
     Event::Connected(_) => { /* Initialize */ }
     Event::Disconnected(_) => { /* Cleanup */ }
@@ -662,15 +662,15 @@ Spawn tasks for long-running operations:
 
 ```rust
 .on_event(|event, client| async move {
-    match event {
-        Event::Message(message, info) => {
-            // Spawn task for heavy processing
-            let client = client.clone();
-            tokio::spawn(async move {
+    if let Event::Message(message, info) = &*event {
+        // Spawn task for heavy processing — Arc clone is O(1)
+        let client = client.clone();
+        let event = event.clone();
+        tokio::spawn(async move {
+            if let Event::Message(message, info) = &*event {
                 process_heavy_task(message, info, client).await;
-            });
-        }
-        _ => {}
+            }
+        });
     }
 })
 ```

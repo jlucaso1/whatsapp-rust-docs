@@ -1410,12 +1410,13 @@ Registers an event handler for protocol events.
 **Example:**
 ```rust
 use wacore::types::events::{Event, EventHandler};
+use std::sync::Arc;
 
 struct MyHandler;
 
 impl EventHandler for MyHandler {
-    fn handle_event(&self, event: &Event) {
-        match event {
+    fn handle_event(&self, event: Arc<Event>) {
+        match &*event {
             Event::Message(msg, info) => println!("New message from {}: {:?}", info.source.sender, msg),
             Event::Connected(_) => println!("Connected!"),
             _ => {}
@@ -1437,8 +1438,9 @@ let (handler, event_rx) = ChannelEventHandler::new();
 client.register_handler(handler);
 
 // Process events asynchronously via async-channel (runtime-agnostic)
+// event_rx yields Arc<Event>
 while let Ok(event) = event_rx.recv().await {
-    match event {
+    match &*event {
         Event::Connected(_) => break,
         _ => {}
     }
@@ -1477,7 +1479,7 @@ client.set_raw_node_forwarding(true);
 
 // Handle raw nodes in your event handler
 bot.on_event(|event, _client| async move {
-    if let Event::RawNode(node) = event {
+    if let Event::RawNode(node) = &*event {
         println!("Raw stanza: {} {:?}", node.tag, node.attrs);
     }
 });
@@ -1515,7 +1517,7 @@ Reject an incoming call. This is fire-and-forget — no server response is expec
 
 ```rust
 bot.on_event(|event, client| async move {
-    if let Event::Notification(node) = &event {
+    if let Event::Notification(node) = &*event {
         // Handle incoming call notification and reject it
         if let Some(call_id) = extract_call_id(&node) {
             let caller = extract_caller(&node);

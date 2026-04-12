@@ -407,7 +407,7 @@ Chat action changes are emitted as events that you can handle:
 use wacore::types::events::Event;
 
 .on_event(|event, _client| async move {
-    match event {
+    match &*event {
         Event::MuteUpdate(update) => {
             println!("Chat {} muted: {:?}", update.jid, update.action.muted);
         }

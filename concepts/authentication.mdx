@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_http_client(UreqHttpClient::new())
         .with_runtime(TokioRuntime)
         .on_event(|event, _client| async move {
-            match event {
+            match &*event {
                 Event::PairingQrCode { code, timeout } => {
                     println!("Scan this QR code (valid for {}s):", timeout.as_secs());
                     println!("{}", code);
@@ -578,7 +578,7 @@ let options = PairCodeOptions {
 
 ```rust
 .on_event(|event, client| async move {
-    match event {
+    match &*event {
         Event::PairingQrCode { code, timeout } => {
             // Display QR to user
             println!("Valid for: {}s", timeout.as_secs());

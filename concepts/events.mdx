@@ -20,9 +20,14 @@ pub struct CoreEventBus {
 }
 
 impl CoreEventBus {
-    pub fn dispatch(&self, event: &Event) {
-        for handler in self.handlers.read().expect("...").iter() {
-            handler.handle_event(event);
+    pub fn dispatch(&self, event: Event) {
+        let handlers = self.handlers.read().expect("...").clone();
+        if handlers.is_empty() {
+            return;
+        }
+        let event = Arc::new(event);
+        for handler in &handlers {
+            handler.handle_event(Arc::clone(&event));
         }
     }
 
@@ -33,7 +38,7 @@ impl CoreEventBus {
 ```
 
 **Features:**
-- Thread-safe event dispatching
+- Thread-safe event dispatching via `Arc<Event>` — each event is wrapped once and shared across all handlers, eliminating deep clones
 - Multiple handlers supported
 - Clone-cheap with `Arc`
 
@@ -41,17 +46,19 @@ impl CoreEventBus {
 
 ```rust
 pub trait EventHandler: Send + Sync {
-    fn handle_event(&self, event: &Event);
+    fn handle_event(&self, event: Arc<Event>);
 }
 ```
+
+Handlers receive `Arc<Event>` — a shared reference-counted pointer to the event. Since `Arc<Event>` implements `Deref<Target = Event>`, you can pattern-match on it directly.
 
 **Implementation:**
 ```rust
 struct MyHandler;
 
 impl EventHandler for MyHandler {
-    fn handle_event(&self, event: &Event) {
-        match event {
+    fn handle_event(&self, event: Arc<Event>) {
+        match &*event {
             Event::Message(msg, info) => {
                 println!("Message from {}: {:?}", info.source.sender, msg);
             }
@@ -1574,7 +1581,7 @@ use wacore::types::events::Event;
 let mut bot = Bot::builder()
     .with_backend(backend)
     .on_event(|event, client| async move {
-        match event {
+        match &*event {
             Event::Message(msg, info) => {
                 // Handle message
             }
@@ -1593,8 +1600,8 @@ let mut bot = Bot::builder()
 ```rust
 struct MessageHandler;
 impl EventHandler for MessageHandler {
-    fn handle_event(&self, event: &Event) {
-        if let Event::Message(msg, info) = event {
+    fn handle_event(&self, event: Arc<Event>) {
+        if let Event::Message(msg, info) = &*event {
             // Handle messages
         }
     }
@@ -1602,8 +1609,8 @@ impl EventHandler for MessageHandler {
 
 struct ConnectionHandler;
 impl EventHandler for ConnectionHandler {
-    fn handle_event(&self, event: &Event) {
-        match event {
+    fn handle_event(&self, event: Arc<Event>) {
+        match &*event {
             Event::Connected(_) => { /* ... */ }
             Event::Disconnected(_) => { /* ... */ }
             _ => {}
@@ -1623,13 +1630,14 @@ Events are buffered in an unbounded channel, so events fired before the receiver
 
 ```rust
 use wacore::types::events::{ChannelEventHandler, Event};
+use std::sync::Arc;
 
 let (handler, event_rx) = ChannelEventHandler::new();
 client.register_handler(handler);
 
 // Wait for events asynchronously
 while let Ok(event) = event_rx.recv().await {
-    match event {
+    match &*event {
         Event::Connected(_) => {
             println!("Connected!");
             break;
@@ -1649,7 +1657,7 @@ This is particularly useful for:
 - **Runtime-agnostic code** — no dependency on Tokio's `mpsc` channels
 
 <Note>
-`ChannelEventHandler::new()` returns `(Arc<ChannelEventHandler>, async_channel::Receiver<Event>)`. The handler is already wrapped in `Arc` for direct use with `client.register_handler()`.
+`ChannelEventHandler::new()` returns `(Arc<ChannelEventHandler>, async_channel::Receiver<Arc<Event>>)`. The handler is already wrapped in `Arc` for direct use with `client.register_handler()`. The receiver yields `Arc<Event>`, so use `&*event` or `event.as_ref()` to pattern-match.
 </Note>
 
 ### Custom async event handlers
@@ -1658,16 +1666,17 @@ For custom channel-based patterns, you can implement `EventHandler` directly:
 
 ```rust
 use tokio::sync::mpsc;
+use std::sync::Arc;
 
 let (tx, mut rx) = mpsc::unbounded_channel();
 
 struct AsyncHandler {
-    tx: mpsc::UnboundedSender<Event>,
+    tx: mpsc::UnboundedSender<Arc<Event>>,
 }
 
 impl EventHandler for AsyncHandler {
-    fn handle_event(&self, event: &Event) {
-        let _ = self.tx.send(event.clone());
+    fn handle_event(&self, event: Arc<Event>) {
+        let _ = self.tx.send(event);
     }
 }
 
@@ -1676,10 +1685,12 @@ client.register_handler(Arc::new(AsyncHandler { tx }));
 // Process events asynchronously
 tokio::spawn(async move {
     while let Some(event) = rx.recv().await {
-        // Async processing
+        // event is Arc<Event> — no cloning needed
     }
 });
 ```
+
+Since events are dispatched as `Arc<Event>`, you can forward them to channels without any cloning overhead.
 
 ## Performance Optimization
 
@@ -1756,28 +1767,11 @@ Event::JoinedGroup(lazy_conv) => {
 }
 ```
 
-### SharedData
+### Arc\<Event\> dispatch
 
-**Purpose:** Cheap cloning of large event data
+With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `HistorySync` conversations and `Message(Box<wa::Message>, MessageInfo)`.
 
-```rust
-// wacore/src/types/events.rs:14-39
-pub struct SharedData<T>(pub Arc<T>);
-
-impl<T> std::ops::Deref for SharedData<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-```
-
-**Usage:**
-```rust
-let shared = SharedData::new(expensive_data);
-let clone1 = shared.clone(); // O(1) - just increments Arc counter
-let clone2 = shared.clone(); // O(1)
-```
+Combined with `LazyConversation`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_conv.get()` triggers the parse, and subsequent handlers reuse the cached result.
 
 ## Best Practices
 
@@ -1786,7 +1780,7 @@ let clone2 = shared.clone(); // O(1)
 ```rust
 .on_event(|event, client| async move {
     // Only handle events you care about
-    match event {
+    match &*event {
         Event::Message(msg, info) if !info.source.is_from_me => {
             // Only handle messages from others
         }
@@ -1802,7 +1796,7 @@ let clone2 = shared.clone(); // O(1)
 
 ```rust
 .on_event(|event, client| async move {
-    if let Err(e) = handle_event(event, client).await {
+    if let Err(e) = handle_event(&event, client).await {
         eprintln!("Event handler error: {}", e);
     }
 })
@@ -1822,18 +1816,15 @@ async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
 
 ```rust
 .on_event(|event, client| async move {
-    match event {
-        Event::Message(msg, info) => {
-            let client = client.clone();
-            let msg = msg.clone();
-            let info = info.clone();
+    if let Event::Message(msg, info) = &*event {
+        let client = client.clone();
+        let event = event.clone(); // Arc clone — O(1)
 
-            tokio::spawn(async move {
-                // Process in background
-                process_message(&msg, &info, &client).await;
-            });
-        }
-        _ => {}
+        tokio::spawn(async move {
+            if let Event::Message(msg, info) = &*event {
+                process_message(msg, info, &client).await;
+            }
+        });
     }
 })
 ```

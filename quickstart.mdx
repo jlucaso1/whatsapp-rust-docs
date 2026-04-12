@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_http_client(UreqHttpClient::new())
         .with_runtime(TokioRuntime)
         .on_event(|event, client| async move {
-            match event {
+            match &*event {
                 Event::PairingQrCode { code, .. } => {
                     println!("Scan this QR code with WhatsApp:\n{}", code);
                 }
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   ```rust
   .on_event(|event, client| async move {
-      match event {
+      match &*event {
           Event::PairingQrCode { code, .. } => {
               println!("QR Code:\n{}", code);
           }
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   ```
 
   The event handler receives two parameters:
-  - `event`: The event type (QR code, message, connection status, etc.)
+  - `event`: An `Arc<Event>` — use `&*event` or `event.as_ref()` to pattern-match on the inner event type
   - `client`: An `Arc<Client>` you can use to send messages or call API methods
 </Step>
 
@@ -130,7 +130,7 @@ use wacore::proto_helpers::MessageExt;
 use waproto::whatsapp as wa;
 
 .on_event(|event, client| async move {
-    match event {
+    match &*event {
         Event::PairingQrCode { code, .. } => {
             println!("QR Code:\n{}", code);
         }
@@ -145,7 +145,7 @@ use waproto::whatsapp as wa;
                     };
 
                     // Send the reply
-                    if let Err(e) = client.send_message(info.source.chat, reply).await {
+                    if let Err(e) = client.send_message(info.source.chat.clone(), reply).await {
                         eprintln!("Failed to send reply: {}", e);
                     }
                 }
@@ -195,7 +195,7 @@ let mut bot = Bot::builder()
         platform_display: "Chrome (Linux)".to_string(),
     })
     .on_event(|event, client| async move {
-        match event {
+        match &*event {
             Event::PairingCode { code, .. } => {
                 println!("Enter this code on your phone: {}", code);
             }
@@ -255,16 +255,8 @@ For cleaner message handling, use `MessageContext` to wrap the message, metadata
 use whatsapp_rust::bot::{Bot, MessageContext};
 
 .on_event(|event, client| async move {
-    match event {
-        Event::Message(msg, info) => {
-            let ctx = MessageContext {
-                message: msg,
-                info,
-                client,
-            };
-            handle_message(&ctx).await;
-        }
-        _ => {}
+    if let Some(ctx) = MessageContext::from_event(&event, client) {
+        handle_message(&ctx).await;
     }
 })
 ```
@@ -356,16 +348,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_http_client(UreqHttpClient::new())
         .with_runtime(TokioRuntime)
         .on_event(|event, client| async move {
-            match event {
+            match &*event {
                 Event::PairingQrCode { code, .. } => {
                     println!("\n{}", code);
                 }
                 Event::Message(msg, info) => {
-                    let ctx = MessageContext {
-                        message: msg,
-                        info,
-                        client,
-                    };
+                    let ctx = MessageContext::from_parts(msg, info, client);
                     handle_message(&ctx).await;
                 }
                 Event::Connected(_) => info!("Bot connected!"),

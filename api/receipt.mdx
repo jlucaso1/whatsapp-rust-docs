@@ -121,19 +121,19 @@ For group messages, the receipt includes a `participant` attribute identifying t
 
 ### Wire format
 
-Internally, delivery receipts pass JID values directly to the generic `.attr()` method, which accepts any type implementing `Into<AttrValue>`:
+Internally, delivery receipts pass JID references directly to the `.attr()` method, avoiding allocations on the hot path:
 
 ```rust
 let mut builder = NodeBuilder::new("receipt")
     .attr("id", &info.id)
-    .attr("to", info.source.chat.clone());
+    .attr("to", &info.source.chat);
 
 if info.category == MessageCategory::Peer {
     builder = builder.attr("type", "peer_msg");
 }
 
 if info.source.is_group {
-    builder = builder.attr("participant", info.source.sender.clone());
+    builder = builder.attr("participant", &info.source.sender);
 }
 
 let receipt_node = builder.build();
@@ -143,13 +143,13 @@ Read receipts (`mark_as_read`) batch multiple message IDs using a `<list>` child
 
 ```rust
 let mut builder = NodeBuilder::new("receipt")
-    .attr("to", chat.to_string())
+    .attr("to", chat)
     .attr("type", "read")
     .attr("id", &message_ids[0])
     .attr("t", &timestamp);
 
 if let Some(sender) = sender {
-    builder = builder.attr("participant", sender.to_string());
+    builder = builder.attr("participant", sender);
 }
 
 // Additional message IDs beyond the first
@@ -265,17 +265,12 @@ let mut bot = Bot::builder()
 
 ```rust
 pub struct Receipt {
-    pub message_ids: Vec<String>,
     pub source: MessageSource,
+    pub message_ids: Vec<String>,
     pub timestamp: DateTime<Utc>,
     pub r#type: ReceiptType,
-    pub message_sender: Jid,
 }
 ```
-
-<ParamField path="message_ids" type="Vec<String>">
-  List of message IDs this receipt applies to. Usually contains a single ID, but can have multiple.
-</ParamField>
 
 <ParamField path="source" type="MessageSource">
   Source information:
@@ -284,16 +279,16 @@ pub struct Receipt {
   - `is_group` - Whether this is from a group
 </ParamField>
 
+<ParamField path="message_ids" type="Vec<String>">
+  List of message IDs this receipt applies to. Usually contains a single ID, but can have multiple.
+</ParamField>
+
 <ParamField path="timestamp" type="DateTime<Utc>">
   When the receipt was received (local time)
 </ParamField>
 
 <ParamField path="r#type" type="ReceiptType">
   Type of receipt (Delivered, Read, Played, etc.)
-</ParamField>
-
-<ParamField path="message_sender" type="Jid">
-  JID of the user who sent the receipt (same as `source.sender`)
 </ParamField>
 
 ---

@@ -92,7 +92,7 @@ pub enum Event {
     Message(Box<wa::Message>, MessageInfo),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
-    Notification(Node),
+    Notification(Arc<OwnedNodeRef>),
 
     // Presence
     ChatPresence(ChatPresenceUpdate),
@@ -140,7 +140,7 @@ pub enum Event {
     DisappearingModeChanged(DisappearingModeChanged),
 
     // Raw stanza (opt-in)
-    RawNode(Arc<Node>),
+    RawNode(Arc<OwnedNodeRef>),
 }
 ```
 
@@ -679,15 +679,16 @@ pub enum DecryptFailMode {
 **Emitted:** For raw notification stanzas that are not handled by a more specific event type
 
 ```rust
-Event::Notification(Node)
+Event::Notification(Arc<OwnedNodeRef>)
 ```
 
-This is a passthrough event that gives you access to the raw `Node` for notification types that the library does not parse into dedicated event structs. You can inspect the node's tag, attributes, and children directly.
+This is a passthrough event that gives you access to the raw node for notification types that the library does not parse into dedicated event structs. The `OwnedNodeRef` provides zero-copy access to the decoded stanza — call `.get()` to obtain a `NodeRef` for inspecting the tag, attributes, and children.
 
 **Example:**
 ```rust
 Event::Notification(node) => {
-    println!("Raw notification: {:?}", node);
+    let node_ref = node.get();
+    println!("Raw notification tag: {}", node_ref.tag);
 }
 ```
 
@@ -1542,10 +1543,10 @@ Event::DisappearingModeChanged(change) => {
 **Emitted:** For every decoded stanza before router dispatch. This is an opt-in event gated by `Client::set_raw_node_forwarding(true)` — it is not emitted by default to avoid overhead.
 
 ```rust
-Event::RawNode(Arc<Node>)
+Event::RawNode(Arc<OwnedNodeRef>)
 ```
 
-This is a library extension with no WhatsApp Web equivalent. It gives you access to every raw decoded stanza before any routing or parsing occurs.
+This is a library extension with no WhatsApp Web equivalent. It gives you access to every raw decoded stanza before any routing or parsing occurs. The `OwnedNodeRef` uses yoke-based zero-copy decoding, so string and byte payloads are borrowed directly from the network buffer without allocation.
 
 **Example:**
 ```rust
@@ -1553,7 +1554,8 @@ client.set_raw_node_forwarding(true);
 
 // In your event handler:
 Event::RawNode(node) => {
-    println!("Raw stanza: {:?}", node);
+    let node_ref = node.get();
+    println!("Raw stanza tag: {}, attrs: {:?}", node_ref.tag, node_ref.attrs);
 }
 ```
 

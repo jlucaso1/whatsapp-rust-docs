@@ -235,7 +235,7 @@ pub struct GroupQueryIq {
 impl IqSpec for GroupQueryIq {
     type Response = GroupInfoResponse;
     fn build_iq(&self) -> InfoQuery<'static> { /* ... */ }
-    fn parse_response(&self, response: &Node) -> Result<Self::Response> { /* ... */ }
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response> { /* ... */ }
 }
 ```
 
@@ -262,10 +262,12 @@ impl<'a> Groups<'a> {
 
 **Flow:** `src/message.rs` → Signal decryption → Event dispatch
 
+Incoming stanzas are decoded as `Arc<OwnedNodeRef>` (zero-copy from the network buffer) and routed through per-chat message queues:
+
 ```rust
 // src/message.rs
-pub async fn handle_message(client: &Arc<Client>, node: &Node) {
-    // 1. Extract encrypted message
+pub async fn handle_message(client: &Arc<Client>, node: &Arc<OwnedNodeRef>) {
+    // 1. Extract encrypted message from NodeRef
     // 2. Decrypt via Signal Protocol
     // 3. Dispatch Event::Message
 }
@@ -275,11 +277,13 @@ pub async fn handle_message(client: &Arc<Client>, node: &Node) {
 
 **Flow:** `src/send.rs` → Signal encryption → Socket send
 
+Outgoing stanzas are built as owned `Node` values via `NodeBuilder`:
+
 ```rust
 // src/send.rs
 pub async fn send_message(client: &Arc<Client>, msg: &Message) {
     // 1. Encrypt via Signal Protocol
-    // 2. Build protocol node
+    // 2. Build protocol node (owned Node)
     // 3. Send via NoiseSocket
 }
 ```
@@ -487,8 +491,8 @@ For bots that don't need chat history, `skip_history_sync()` sends a receipt so 
 Prevents race conditions where a later message is processed before the PreKey message. Each chat gets a bounded channel with a capacity of **500** messages, providing backpressure to prevent memory amplification when many chats are active simultaneously:
 
 ```rust
-pub(crate) message_queues: Cache<String, mpsc::Sender<Arc<Node>>>,
-// Each queue: async_channel::bounded::<Arc<Node>>(500)
+pub(crate) message_queues: Cache<String, async_channel::Sender<Arc<OwnedNodeRef>>>,
+// Each queue: async_channel::bounded::<Arc<OwnedNodeRef>>(500)
 ```
 
 ### Per-Device Session Locks

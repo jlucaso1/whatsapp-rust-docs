@@ -285,11 +285,11 @@ let decoded = unmarshal_ref(&bytes)?;
 
 **Key exports:**
 - `CompactString` - Re-export of `compact_str::CompactString`, used by `Jid.user`, `NodeValue::String`, and `NodeContent::String`
-- `jid::Jid` - WhatsApp JID (Jabber ID) parsing
-- `node::{Node, NodeRef, NodeValue}` - Protocol node types
+- `jid::{Jid, JidRef, Server, JidExt}` - WhatsApp JID types. `Server` is an enum (`#[repr(u8)]`) with variants for all known WhatsApp server domains (`Pn`, `Lid`, `Group`, `Broadcast`, `Newsletter`, `Hosted`, `HostedLid`, `Messenger`, `Interop`, `Bot`, `Legacy`). `JidExt` provides helper methods (`is_group()`, `is_newsletter()`, etc.) for both owned and borrowed JID types
+- `node::{Node, NodeRef, NodeValue, ValueRef, OwnedNodeRef}` - Protocol node types. `Node` (owned) for building outgoing stanzas, `NodeRef` (borrowed) for reading received stanzas, `OwnedNodeRef` for yoke-based zero-copy self-referential nodes shared as `Arc<OwnedNodeRef>`
 - `builder::NodeBuilder` - Fluent node builder with `new(&'static str)` / `new_dynamic(String)`, `attr()`, `jid_attr()`, `children()`, `bytes()`, `string_content()`, and `apply_content()` chaining methods
 - `marshal::*` - Binary marshaling functions
-- `attrs::AttrParser` - Attribute parsing utilities
+- `attrs::{AttrParser, AttrParserRef}` - Attribute parsing utilities for owned `Node` and borrowed `NodeRef` respectively
 - `token` - Token dictionary
 
 ### wacore-libsignal
@@ -433,14 +433,16 @@ This allows users to provide their own:
 ### Type Safety
 
 Strong typing throughout:
-- `Jid` for WhatsApp identifiers
-- `Node` for protocol messages
+- `Jid` with `Server` enum for WhatsApp identifiers — server type is an enum variant, not a string
+- `Node` / `NodeRef` for protocol messages (owned / borrowed)
 - Validated newtypes (e.g., `GroupSubject` with length limits)
 - Enum variants with `StringEnum` for protocol values
 
 ### Zero-Copy Where Possible
 
 - `Cow<'static, str>` for `Node.tag` and `Attrs` keys — known protocol strings (from the token dictionary) are borrowed as static references with zero heap allocation, while unknown strings fall back to owned `String`
+- `Server` enum (`#[repr(u8)]`) for `Jid.server` — a `Copy` type that requires zero allocation, replacing the previous `Cow<'static, str>` string-based server field
+- `OwnedNodeRef` — yoke-based self-referential node that owns the decompressed network buffer while `NodeRef` borrows string/byte payloads directly from it. Received stanzas flow through the system as `Arc<OwnedNodeRef>` for cheap shared zero-copy access
 - `NodeRef` for borrowed node parsing
 - `AttrParserRef` for attribute iteration
 - `marshal_ref` for encoding without cloning

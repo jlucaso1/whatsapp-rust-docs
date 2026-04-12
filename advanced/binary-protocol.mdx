@@ -108,11 +108,10 @@ JIDs (Jabber IDs) like `15551234567@s.whatsapp.net` appear frequently in the pro
 
 ```rust
 use compact_str::CompactString;
-use std::borrow::Cow;
 
 pub struct Jid {
     pub user: CompactString,           // "15551234567"
-    pub server: Cow<'static, str>,     // "s.whatsapp.net"
+    pub server: Server,                // Server::Pn (s.whatsapp.net)
     pub agent: u8,                     // Agent byte (parsed from JID string)
     pub device: u16,                   // Device ID (0 for primary)
     pub integrator: u16,               // Integrator ID (used with interop server)
@@ -121,41 +120,80 @@ pub struct Jid {
 
 The `user` field uses `CompactString` (re-exported from `compact_str`) instead of `String`. `CompactString` stores short strings inline (up to 24 bytes on 64-bit platforms) without heap allocation, which benefits typical phone numbers and user identifiers. The library re-exports it as `wacore_binary::CompactString` and `whatsapp_rust::CompactString` for convenience. `CompactString` implements `From<&str>`, `From<String>`, and `Deref<Target = str>`, so it works as a drop-in replacement in most contexts — but code that relied on `Jid.user` being a `String` (e.g., passing it to functions expecting `&String` or calling `String`-specific methods) may need updating.
 
-The `server` field uses `Cow<'static, str>` so that known server constants are borrowed as zero-allocation static references, while unknown servers fall back to an owned `String`. This eliminates per-JID heap allocations on hot paths since most JIDs use one of the predefined server constants:
+#### Server enum
 
-| Constant | Value | Description |
+The `server` field is a `Server` enum (`#[repr(u8)]`) that maps to the wire protocol's AD_JID domain type. This replaces the previous `Cow<'static, str>` string representation, eliminating all heap allocation for server identifiers and enabling `match`-based dispatch instead of string comparisons:
+
+```rust
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum Server {
+    #[default]
+    Pn = 0,          // s.whatsapp.net — Standard phone-number JIDs
+    Lid = 1,         // lid — Linked Identity JIDs
+    Group = 2,       // g.us — Group chat JIDs
+    Broadcast = 3,   // broadcast — Broadcast lists and status
+    Newsletter = 4,  // newsletter — Newsletter / channel JIDs
+    Hosted = 5,      // hosted — Cloud API business devices (phone-based)
+    HostedLid = 6,   // hosted.lid — Cloud API business devices (LID-based)
+    Messenger = 7,   // msgr — Messenger interop JIDs
+    Interop = 8,     // interop — Cross-platform interop JIDs
+    Bot = 9,         // bot — Bot JIDs
+    Legacy = 10,     // c.us — Legacy user server (pre-multidevice)
+}
+```
+
+`Server` implements `Display` (returns the wire string like `"s.whatsapp.net"`), `as_str()` for zero-cost string access, `TryFrom<&str>` for parsing, `Serialize`/`Deserialize` (as the wire string), and `PartialEq<str>` / `PartialEq<&str>` for backward-compatible string comparisons:
+
+```rust
+let server = Server::Pn;
+assert_eq!(server.as_str(), "s.whatsapp.net");
+assert!(server == "s.whatsapp.net");  // PartialEq<str> for backward compat
+
+let parsed = Server::try_from("g.us").unwrap();
+assert_eq!(parsed, Server::Group);
+```
+
+<Note>
+  If you previously compared `jid.server` to string constants like `"s.whatsapp.net"`, the `PartialEq<str>` impl on `Server` preserves backward compatibility. However, `match` on the enum variant is preferred for exhaustiveness checking and performance.
+</Note>
+
+String constants are still available for backward compatibility and use in non-JID contexts:
+
+| Constant | Value | Server variant |
 |---|---|---|
-| `DEFAULT_USER_SERVER` | `s.whatsapp.net` | Standard phone-number JIDs |
-| `HIDDEN_USER_SERVER` | `lid` | Linked Identity JIDs |
-| `GROUP_SERVER` | `g.us` | Group chat JIDs |
-| `BROADCAST_SERVER` | `broadcast` | Broadcast lists and status |
-| `NEWSLETTER_SERVER` | `newsletter` | Newsletter / channel JIDs |
-| `HOSTED_SERVER` | `hosted` | Cloud API business devices (phone-based) |
-| `HOSTED_LID_SERVER` | `hosted.lid` | Cloud API business devices (LID-based) |
-| `MESSENGER_SERVER` | `msgr` | Messenger interop JIDs |
-| `INTEROP_SERVER` | `interop` | Cross-platform interop JIDs |
-| `BOT_SERVER` | `bot` | Bot JIDs |
-| `LEGACY_USER_SERVER` | `c.us` | Legacy user server (pre-multidevice) |
+| `DEFAULT_USER_SERVER` | `s.whatsapp.net` | `Server::Pn` |
+| `HIDDEN_USER_SERVER` | `lid` | `Server::Lid` |
+| `GROUP_SERVER` | `g.us` | `Server::Group` |
+| `BROADCAST_SERVER` | `broadcast` | `Server::Broadcast` |
+| `NEWSLETTER_SERVER` | `newsletter` | `Server::Newsletter` |
+| `HOSTED_SERVER` | `hosted` | `Server::Hosted` |
+| `HOSTED_LID_SERVER` | `hosted.lid` | `Server::HostedLid` |
+| `MESSENGER_SERVER` | `msgr` | `Server::Messenger` |
+| `INTEROP_SERVER` | `interop` | `Server::Interop` |
+| `BOT_SERVER` | `bot` | `Server::Bot` |
+| `LEGACY_USER_SERVER` | `c.us` | `Server::Legacy` |
 
 #### Typed constructors
 
-Convenience constructors avoid specifying the server string directly:
+Convenience constructors avoid specifying the server directly:
 
 ```rust
-Jid::pn("15551234567")          // @s.whatsapp.net, device 0
-Jid::lid("ABC123")              // @lid, device 0
-Jid::group("12345678")          // @g.us
-Jid::pn_device("15551234567", 1) // @s.whatsapp.net, device 1
-Jid::lid_device("ABC123", 2)    // @lid, device 2
-Jid::status_broadcast()         // status@broadcast
-Jid::new("user", "custom.srv")  // arbitrary server (Cow-optimized)
+Jid::pn("15551234567")            // @s.whatsapp.net, device 0
+Jid::lid("ABC123")                // @lid, device 0
+Jid::group("12345678")            // @g.us
+Jid::newsletter("12345678")       // @newsletter
+Jid::pn_device("15551234567", 1)  // @s.whatsapp.net, device 1
+Jid::lid_device("ABC123", 2)      // @lid, device 2
+Jid::status_broadcast()           // status@broadcast
+Jid::new("user", Server::Pn)      // arbitrary server variant
 ```
 
 #### Borrowing types
 
 For zero-allocation lookups and comparisons, the protocol also provides:
 
-- **`JidRef<'a>`** — a borrowing version of `Jid` where both `user` and `server` are `Cow<'a, str>`, useful for temporary parsing results
+- **`JidRef<'a>`** — a borrowing version of `Jid` where `user` is `Cow<'a, str>` and `server` is the `Server` enum (already `Copy`). Used for zero-copy decoded JIDs in `NodeRef` attributes
 - **`DeviceKey<'a>`** — a lightweight key containing `(&'a str, &'a str, u16)` for user/server/device, used for `HashSet` lookups without cloning
 
 Location: `wacore/binary/src/node.rs:10-112`, `wacore/binary/src/jid.rs`
@@ -174,21 +212,21 @@ assert!(!jid.is_group());    // false — not a @g.us JID
 
 | Method | Returns `true` when |
 |---|---|
-| `is_ad()` | Server is `s.whatsapp.net`, `lid`, or `hosted` |
-| `is_group()` | Server is `g.us` |
-| `is_broadcast_list()` | Server is `broadcast` |
-| `is_status_broadcast()` | User is `"status"` and server is `broadcast` |
-| `is_newsletter()` | Server is `newsletter` |
-| `is_hosted()` | Device is 99, or server is `hosted` / `hosted.lid` |
-| `is_bot()` | Server is `bot`, or phone number starts with known bot prefixes |
-| `is_interop()` | Server is `interop` |
-| `is_messenger()` | Server is `msgr` |
-| `is_empty()` | User is empty and server is empty |
-| `is_same_user_as(other)` | Both JIDs share the same user and server |
+| `is_ad()` | Server is `Pn`, `Lid`, `Hosted`, or `HostedLid` and device > 0 |
+| `is_group()` | Server is `Group` |
+| `is_broadcast_list()` | Server is `Broadcast` and user is not `"status"` |
+| `is_status_broadcast()` | User is `"status"` and server is `Broadcast` |
+| `is_newsletter()` | Server is `Newsletter` |
+| `is_hosted()` | Device is 99, or server is `Hosted` / `HostedLid` |
+| `is_bot()` | Server is `Bot`, or phone number starts with known bot prefixes |
+| `is_interop()` | Server is `Interop` and integrator > 0 |
+| `is_messenger()` | Server is `Messenger` and device > 0 |
+| `is_empty()` | User is empty |
+| `is_same_user_as(other)` | Both JIDs share the same user |
 
-The trait also exposes basic accessor methods (`user()`, `server()`, `device()`, `integrator()`) that work uniformly across owned and borrowed JID types.
+The trait also exposes basic accessor methods (`user() -> &str`, `server() -> Server`, `device() -> u16`, `integrator() -> u16`) that work uniformly across owned and borrowed JID types. Additional helper methods `is_pn()` and `is_lid()` are available directly on `Jid` for the most common server checks.
 
-Location: `wacore/binary/src/jid.rs:218-279`
+Location: `wacore/binary/src/jid.rs:304-363`
 
 ### NodeBuilder API
 
@@ -445,20 +483,20 @@ Location: `wacore/binary/src/encoder.rs:706-715`
 // Format: AD_JID + domain_type + device + user
 // Example: "15551234567:1@s.whatsapp.net" (device 1)
 self.write_u8(token::AD_JID)?;
-self.write_u8(server_to_domain_type(&jid.server, jid.agent))?;
+self.write_u8(server_to_domain_type(jid.server, jid.agent))?;
 self.write_u8(device)?;            // Device number
 self.write_string(user)?;          // User part only
 ```
 
-The `domain_type` byte is **derived from the `server` field** at encoding time, not from the `agent` field directly. The mapping is:
+The `domain_type` byte is **derived from the `Server` enum variant** at encoding time, not from the `agent` field directly. Since `Server` is `#[repr(u8)]`, the mapping is a direct cast for known variants:
 
-| `domain_type` | Server | Description |
-|---|---|---|
-| `0` | `s.whatsapp.net` | Standard phone-number JIDs |
-| `1` | `lid` | Linked Identity JIDs |
-| `128` | `hosted` | Cloud API / Meta Business API (phone-based) |
-| `129` | `hosted.lid` | Cloud API / Meta Business API (LID-based) |
-| fallback | *(other)* | Uses the `agent` byte from the JID |
+| `domain_type` | Server variant | Wire string | Description |
+|---|---|---|---|
+| `0` | `Server::Pn` | `s.whatsapp.net` | Standard phone-number JIDs |
+| `1` | `Server::Lid` | `lid` | Linked Identity JIDs |
+| `128` | `Server::Hosted` | `hosted` | Cloud API / Meta Business API (phone-based) |
+| `129` | `Server::HostedLid` | `hosted.lid` | Cloud API / Meta Business API (LID-based) |
+| fallback | *(other)* | varies | Uses the `agent` byte from the JID |
 
 <Warning>
 The `domain_type` must be derived from the JID's `server` field via `server_to_domain_type()`, **not** from `jid.agent`. A previous bug wrote `jid.agent` (which is 0 for most JIDs) unconditionally, causing LID JIDs to be encoded with `domain_type=0` instead of `domain_type=1`. This made LID group messages silently rejected by the server with error 421.
@@ -540,7 +578,7 @@ Location: `wacore/binary/src/decoder.rs`
 
 ### Zero-Copy Decoding
 
-The decoder uses `NodeRef<'a>` to avoid allocations:
+The decoder uses `NodeRef<'a>` to avoid allocations. String and byte payloads borrow directly from the input buffer:
 
 ```rust
 pub struct NodeRef<'a> {
@@ -556,9 +594,43 @@ pub enum NodeContentRef<'a> {
 }
 ```
 
-Location: `wacore/binary/src/node.rs:316-321`, `288-293`
+Location: `wacore/binary/src/node.rs:364-369`, `336-341`
 
-The borrowed counterpart to `NodeValue` is `ValueRef<'a>`, used in the decoder path:
+### OwnedNodeRef (yoke zero-copy)
+
+`OwnedNodeRef` is a self-referential type that owns the decompressed network buffer while the inner `NodeRef` borrows string and byte payloads directly from it. This avoids copying payloads out of the buffer during decoding — only container allocations (attribute `Vec`, child `Vec`) occur.
+
+```rust
+pub struct OwnedNodeRef {
+    inner: Yoke<NodeRef<'static>, Vec<u8>>,
+}
+
+impl OwnedNodeRef {
+    /// Decode a node from an owned buffer.
+    pub fn new(buffer: Vec<u8>) -> Result<Self>;
+
+    /// Access the borrowed node.
+    pub fn get(&self) -> &NodeRef<'_>;
+
+    /// Convert to an owned Node (allocates — use sparingly).
+    pub fn to_owned_node(&self) -> Node;
+
+    // Convenience accessors: tag(), attrs(), get_attr(),
+    // children(), get_optional_child(), content_bytes(), etc.
+}
+```
+
+Received stanzas flow through the system as `Arc<OwnedNodeRef>`, giving handlers cheap shared access to the zero-copy decoded node. The `to_owned_node()` method is available as an escape hatch when you need a fully owned `Node`, but it allocates all strings and bytes — defeating the zero-copy benefit.
+
+Location: `wacore/binary/src/node.rs:594-693`
+
+#### Node vs NodeRef usage pattern
+
+- **`Node`** (owned) — used for building and sending outgoing stanzas. Constructed via `NodeBuilder`.
+- **`NodeRef<'a>`** (borrowed) — used for reading received stanzas. Borrows from the network buffer.
+- **`OwnedNodeRef`** — wraps a `NodeRef` with its backing buffer via `yoke`, enabling safe zero-copy sharing across handler tasks as `Arc<OwnedNodeRef>`.
+
+The borrowed counterpart to `NodeValue` is `ValueRef<'a>`, used in the decoder path and in `NodeRef` attributes:
 
 ```rust
 pub enum ValueRef<'a> {
@@ -567,9 +639,9 @@ pub enum ValueRef<'a> {
 }
 ```
 
-`ValueRef` provides four methods: `as_str()` (returns `Option<&str>`, only for `String` variant), `as_jid()` (returns `Option<&JidRef>`, only for `Jid` variant), `to_jid()` (converts either variant to owned `Jid`), and `to_string_cow()` (converts either variant to `Cow<'a, str>`).
+`ValueRef` provides three methods: `as_str()` (returns `Cow<'a, str>` — zero-copy for `String`, allocates for `Jid`), `as_jid()` (returns `Option<&JidRef>`, only for `Jid` variant), and `to_jid()` (converts either variant to owned `Jid`, parsing from string if necessary).
 
-Location: `wacore/binary/src/node.rs:267-316`
+Location: `wacore/binary/src/node.rs:282-313`
 
 ### Attribute parsing
 
@@ -643,7 +715,10 @@ The token lookup tables are generated at compile time via `phf` (perfect hash fu
 This optimization applies to:
 - **`Node.tag`** — protocol tags like `"message"`, `"iq"`, `"receipt"`
 - **`Attrs` keys** — attribute names like `"id"`, `"type"`, `"to"`, `"from"`
-- **`Jid.server`** — server constants like `"s.whatsapp.net"`, `"g.us"`, `"lid"`
+
+<Note>
+  `Jid.server` is now a `Server` enum (a `Copy` type, `#[repr(u8)]`), so it requires no allocation at all — neither heap nor interning. This is an improvement over the previous `Cow<'static, str>` approach.
+</Note>
 
 Location: `wacore/binary/src/node.rs:9-21`
 

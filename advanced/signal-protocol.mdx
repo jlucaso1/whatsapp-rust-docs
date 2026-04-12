@@ -1004,10 +1004,13 @@ On the hot path (put/delete for addresses already in the cache), this is always 
 
 ### Single-Allocation Session Lock Keys
 
-Session lock keys use the full Signal protocol address string (e.g., `5511999887766@c.us.0`). The `JidExt` trait provides two methods for generating these strings, both defined in `wacore/src/types/jid.rs`:
+Session lock keys use the full Signal protocol address string (e.g., `5511999887766@c.us.0`). The `JidExt` trait provides methods for generating these strings, defined in `wacore/src/types/jid.rs`:
 
 ```rust
 pub trait JidExt {
+    /// Construct a fresh ProtocolAddress for this JID.
+    fn to_protocol_address(&self) -> ProtocolAddress;
+
     /// Signal address string: `{user}[:device]@{server}`
     /// Device part only included when device != 0.
     fn to_signal_address_string(&self) -> String;
@@ -1016,6 +1019,10 @@ pub trait JidExt {
     /// Equivalent to `to_protocol_address().to_string()` but avoids the
     /// intermediate ProtocolAddress allocation — one String instead of two.
     fn to_protocol_address_string(&self) -> String;
+
+    /// Rewrite a reusable ProtocolAddress in place for this JID.
+    /// See [Reusable hot-loop address construction](#reusable-hot-loop-address-construction).
+    fn reset_protocol_address(&self, addr: &mut ProtocolAddress);
 }
 ```
 
@@ -1083,6 +1090,78 @@ let session_mutexes = self.session_mutexes_for(&lock_jids).await;
 The recipient lock key is always the bare form (e.g., `100000012345678@lid.0`), matching the decrypt path's lock format. This ensures send and receive paths serialize on the exact same lock key.
 
 Location: `wacore/src/types/jid.rs:4-51`, `src/send.rs:1481-1507`
+
+### Single-buffer ProtocolAddress
+
+The `ProtocolAddress` struct stores the full address string `"{name}.{device_id}"` in a single `String` buffer, with a `name_len` marker to split name from suffix. This halves the allocation count compared to storing name and device ID separately, and eliminates the copy when rewriting the address via `reset_with()`.
+
+```rust
+// wacore/libsignal/src/core/address.rs
+pub struct ProtocolAddress {
+    buf: String,       // "{name}.{device_id}" in one buffer
+    name_len: usize,   // marks where the name ends
+    device_id: DeviceId,
+}
+
+impl ProtocolAddress {
+    /// One-shot construction: takes ownership of `name` and appends the suffix.
+    pub fn new(name: String, device_id: DeviceId) -> Self;
+
+    /// Pre-allocated empty address for hot-loop reuse. Call `reset_with()` to fill.
+    pub fn with_capacity(capacity: usize, device_id: DeviceId) -> Self;
+
+    /// Rewrite the address in place via closure. Single write pass — no intermediate copy.
+    pub fn reset_with(&mut self, write_name: impl FnOnce(&mut String));
+
+    /// Zero-cost slice of the name portion.
+    pub fn name(&self) -> &str;
+
+    /// Zero-cost slice of the full buffer ("{name}.{device_id}").
+    pub fn as_str(&self) -> &str;
+}
+```
+
+Both `name()` and `as_str()` are zero-cost slices into the same buffer — no allocations on access.
+
+### Reusable hot-loop address construction
+
+When iterating over many devices (e.g., during group stanza preparation or session resolution), allocating a fresh `ProtocolAddress` per device is wasteful. The `JidExt` trait provides `reset_protocol_address()` to rewrite a pre-allocated address in place, and `make_reusable_protocol_address()` creates the initial buffer:
+
+```rust
+// wacore/src/types/jid.rs
+pub fn make_reusable_protocol_address() -> ProtocolAddress {
+    ProtocolAddress::with_capacity(64, SIGNAL_DEVICE_ID)
+}
+
+pub trait JidExt {
+    /// Rewrite a reusable ProtocolAddress in place for this JID.
+    fn reset_protocol_address(&self, addr: &mut ProtocolAddress);
+}
+```
+
+**Usage in group stanza preparation:**
+
+```rust
+// wacore/src/send.rs — session resolution loop
+let mut reusable_addr = make_reusable_protocol_address();
+
+for device_jid in devices {
+    // Rewrite the same buffer — no new allocation per device
+    device_jid.reset_protocol_address(&mut reusable_addr);
+
+    if stores.session_store.load_session(&reusable_addr).await?.is_some() {
+        // Session exists — use it
+    }
+}
+```
+
+This pattern eliminates one `String` allocation per device in the loop. For a group with 100 participant devices, that saves 100 heap allocations on the send path. The pre-allocated capacity of 64 bytes covers all known WhatsApp address formats without reallocation.
+
+<Note>
+  Use `to_protocol_address()` for one-shot address construction (e.g., cache keys, single lookups). Use `make_reusable_protocol_address()` + `reset_protocol_address()` when iterating over multiple JIDs in a tight loop.
+</Note>
+
+Location: `wacore/libsignal/src/core/address.rs`, `wacore/src/types/jid.rs`, `wacore/src/send.rs`
 
 ### Zero-Allocation JID Deduplication
 

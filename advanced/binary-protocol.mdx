@@ -49,7 +49,7 @@ pub enum NodeContent {
 
 The `tag` field uses `Cow<'static, str>` so that known protocol tags (like `"message"`, `"iq"`, `"receipt"`) are borrowed as zero-allocation static references from the token dictionary, while unknown tags fall back to an owned `String`.
 
-Location: `wacore/binary/src/node.rs:366`
+Location: `wacore/binary/src/node.rs:459`
 
 ### Attributes
 
@@ -193,7 +193,7 @@ Jid::new("user", Server::Pn)      // arbitrary server variant
 
 For zero-allocation lookups and comparisons, the protocol also provides:
 
-- **`JidRef<'a>`** — a borrowing version of `Jid` where `user` is `Cow<'a, str>` and `server` is the `Server` enum (already `Copy`). Used for zero-copy decoded JIDs in `NodeRef` attributes
+- **`JidRef<'a>`** — a borrowing version of `Jid` where `user` is `NodeStr<'a>` (borrowed or inline) and `server` is the `Server` enum (already `Copy`). Used for zero-copy decoded JIDs in `NodeRef` attributes
 - **`DeviceKey<'a>`** — a lightweight key containing `(&'a str, &'a str, u16)` for user/server/device, used for `HashSet` lookups without cloning
 
 Location: `wacore/binary/src/node.rs:10-112`, `wacore/binary/src/jid.rs`
@@ -261,7 +261,7 @@ let message = NodeBuilder::new("message")
 | `apply_content` | `apply_content(content: Option<NodeContent>) -> Self` | Set arbitrary content |
 | `build` | `build(self) -> Node` | Consume the builder and produce a `Node` |
 
-The `new` and `attr` methods accept `&'static str` for tags and keys, which creates `Cow::Borrowed` values with zero heap allocation. For rare cases where the tag is computed at runtime, use `new_dynamic`.
+The `new` and `attr` methods accept `&'static str` for tags and keys, which creates `Cow::Borrowed` values on the owned `Node` with zero heap allocation. For rare cases where the tag is computed at runtime, use `new_dynamic`.
 
 Location: `wacore/binary/src/builder.rs`
 
@@ -570,31 +570,43 @@ pub struct Decoder<'a> {
 impl<'a> Decoder<'a> {
     pub fn read_node_ref(&mut self) -> Result<NodeRef<'a>>
     pub fn read_list_size(&mut self) -> Result<usize>
-    pub fn read_string(&mut self) -> Result<Cow<'a, str>>
+    pub fn read_string(&mut self, len: usize) -> Result<NodeStr<'a>>
 }
 ```
 
 Location: `wacore/binary/src/decoder.rs`
 
-### Zero-Copy Decoding
+### Zero-copy decoding
 
-The decoder uses `NodeRef<'a>` to avoid allocations. String and byte payloads borrow directly from the input buffer:
+The decoder uses `NodeRef<'a>` to avoid allocations. String and byte payloads borrow directly from the input buffer. Decoded strings use `NodeStr<'a>` — a borrowed-or-inline string type that stores short owned values (up to 24 bytes) inline via `CompactString`, avoiding heap allocation:
 
 ```rust
+/// Borrowed-or-inline string for decoded nodes.
+pub enum NodeStr<'a> {
+    Borrowed(&'a str),        // Zero-copy: points into input buffer
+    Owned(CompactString),     // Inline for short strings (≤24 bytes)
+}
+
 pub struct NodeRef<'a> {
-    pub tag: Cow<'a, str>,         // Borrowed when possible
-    pub attrs: AttrsRef<'a>,       // Vec of borrowed pairs
+    pub tag: NodeStr<'a>,          // Borrowed or inline
+    pub attrs: AttrsRef<'a>,       // Vec<(NodeStr<'a>, ValueRef<'a>)>
     pub content: Option<Box<NodeContentRef<'a>>>,
 }
 
 pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),    // Zero-copy for byte content
-    String(Cow<'a, str>),    // Zero-copy when valid UTF-8
+    String(NodeStr<'a>),     // Borrowed or inline
     Nodes(Box<NodeVec<'a>>), // Recursive borrowing
 }
 ```
 
-Location: `wacore/binary/src/node.rs:364-369`, `336-341`
+`NodeStr` implements `Deref<Target = str>`, `AsRef<str>`, `PartialEq<str>`, and `PartialEq<&str>`, so you can use it anywhere a `&str` is expected. It also provides `to_compact_string()` for efficient conversion to an owned `CompactString`.
+
+<Note>
+  `NodeStr` replaces the previous `Cow<'a, str>` used in `NodeRef`, `AttrsRef`, `ValueRef`, and `NodeContentRef`. The key difference is that the `Owned` variant uses `CompactString` (inline up to 24 bytes) instead of `String` (always heap-allocated), reducing allocation pressure for the many short protocol strings that can't be statically interned.
+</Note>
+
+Location: `wacore/binary/src/node.rs:10-106`, `465-469`, `437-441`
 
 ### OwnedNodeRef (yoke zero-copy)
 
@@ -634,12 +646,12 @@ The borrowed counterpart to `NodeValue` is `ValueRef<'a>`, used in the decoder p
 
 ```rust
 pub enum ValueRef<'a> {
-    String(Cow<'a, str>),
+    String(NodeStr<'a>),
     Jid(JidRef<'a>),
 }
 ```
 
-`ValueRef` provides three methods: `as_str()` (returns `Cow<'a, str>` — zero-copy for `String`, allocates for `Jid`), `as_jid()` (returns `Option<&JidRef>`, only for `Jid` variant), and `to_jid()` (converts either variant to owned `Jid`, parsing from string if necessary).
+`ValueRef` provides three methods: `as_str()` (returns `Cow<'_, str>` — zero-copy for `String`, allocates for `Jid`), `as_jid()` (returns `Option<&JidRef>`, only for `Jid` variant), and `to_jid()` (converts either variant to owned `Jid`, parsing from string if necessary).
 
 Location: `wacore/binary/src/node.rs:282-313`
 
@@ -691,7 +703,7 @@ Location: `wacore/binary/src/decoder.rs:400-450`
 
 ## Performance Optimizations
 
-### Token Interning with Cow
+### Token interning with Cow
 
 When converting decoded `NodeRef` values to owned `Node` values, the `intern_cow` function maps known protocol strings to their static references:
 
@@ -720,7 +732,7 @@ This optimization applies to:
   `Jid.server` is now a `Server` enum (a `Copy` type, `#[repr(u8)]`), so it requires no allocation at all — neither heap nor interning. This is an improvement over the previous `Cow<'static, str>` approach.
 </Note>
 
-Location: `wacore/binary/src/node.rs:9-21`
+Location: `wacore/binary/src/node.rs:108-123`
 
 ### Two-Pass Encoding
 
@@ -764,9 +776,9 @@ impl StringHintCache {
 
 Location: `wacore/binary/src/encoder.rs:240-282`
 
-### Capacity Estimation
+### Capacity estimation
 
-Auto-sizing strategy samples node structure to estimate capacity. The `Cow<'static, str>` tag works transparently here since `Cow` implements `Deref<Target = str>`:
+Auto-sizing strategy samples node structure to estimate capacity. The `Cow<'static, str>` tag on owned `Node` works transparently since `Cow` implements `Deref<Target = str>`:
 
 ```rust
 fn estimate_capacity_node(node: &Node) -> usize {

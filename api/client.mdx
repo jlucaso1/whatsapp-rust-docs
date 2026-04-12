@@ -1200,12 +1200,11 @@ See [Business API](/api/business) for full type details.
 ```rust
 pub async fn clean_dirty_bits(
     &self,
-    type_: &str,
-    timestamp: Option<&str>
+    bit: wacore::iq::dirty::DirtyBit
 ) -> Result<(), IqError>
 ```
 
-Cleans app state dirty bits for a specific type.
+Cleans app state dirty bits. The `DirtyBit` struct contains a `dirty_type` (e.g., `AccountSync`, `Groups`, `SyncdAppState`, `NewsletterMetadata`) and an optional `timestamp`.
 
 ---
 

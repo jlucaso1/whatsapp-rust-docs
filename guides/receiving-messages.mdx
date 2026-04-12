@@ -44,7 +44,7 @@ See [Bot API reference](/api/bot#event-handling) for full details.
 ```rust
 pub enum Event {
     /// Successfully decrypted message
-    Message(Box<wa::Message>, MessageInfo),
+    Message(Box<wa::Message>, Arc<MessageInfo>),
     
     /// Message that couldn't be decrypted
     UndecryptableMessage(UndecryptableMessage),
@@ -508,7 +508,7 @@ impl EncHandler for CustomEncHandler {
         &self,
         client: Arc<Client>,
         node: &Node,
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
     ) -> Result<(), anyhow::Error> {
         // Custom decryption logic
         println!("Custom encryption type: {:?}", node.attrs().optional_string("type"));
@@ -606,7 +606,7 @@ See [Signal Protocol](/advanced/signal-protocol) for more on session management.
 
 async fn process_message(
     message: &wa::Message,
-    info: &MessageInfo,
+    info: &Arc<MessageInfo>,
     client: Arc<Client>,
 ) -> Result<()> {
     // Your message processing logic

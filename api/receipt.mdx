@@ -91,11 +91,11 @@ This is an internal method called automatically by the library when messages are
 ```rust
 pub(crate) async fn send_delivery_receipt(
     &self,
-    info: &MessageInfo
+    info: &Arc<MessageInfo>
 )
 ```
 
-<ParamField path="info" type="&MessageInfo" required>
+<ParamField path="info" type="&Arc<MessageInfo>" required>
   Message metadata containing:
   - `id` - Message ID
   - `source.chat` - Chat JID

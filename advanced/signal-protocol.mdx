@@ -448,7 +448,7 @@ This mechanism ensures that group messages from newly-paired companion devices a
 
 ```rust
 // src/message.rs — simplified flow
-async fn handle_unknown_device_sync(&self, info: &MessageInfo) {
+async fn handle_unknown_device_sync(&self, info: &Arc<MessageInfo>) {
     let user_jid = info.source.sender.to_non_ad();
     if !self.pending_device_sync.add(user_jid.clone()).await {
         return; // already queued, dedup

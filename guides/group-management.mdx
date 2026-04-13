@@ -66,7 +66,7 @@ let options = GroupCreateOptions {
     membership_approval_mode: Some(MembershipApprovalMode::On),
     
     // Control who can share invite links
-    member_link_mode: Some(MemberLinkMode::AdminOnly),
+    member_link_mode: Some(MemberLinkMode::AdminLink),
     
     // Make it an announcement group (only admins can send messages)
     announce: Some(true),
@@ -120,7 +120,14 @@ println!("Participants: {}", metadata.participants.len());
 println!("Addressing mode: {:?}", metadata.addressing_mode);
 
 for participant in &metadata.participants {
-    println!("- {} (admin: {})", participant.jid, participant.is_admin);
+    println!("- {} ({:?}, admin: {})",
+        participant.jid,
+        participant.participant_type,
+        participant.is_admin(),
+    );
+    if participant.is_super_admin() {
+        println!("  ^ Group creator");
+    }
     if let Some(phone) = &participant.phone_number {
         println!("  Phone: {}", phone);
     }
@@ -437,6 +444,93 @@ See [Groups API reference](/api/groups#approve_membership_requests) for details.
 You must be a group admin to view, approve, or reject membership requests.
 </Note>
 
+### Cancel membership requests
+
+Users can cancel their own pending membership requests:
+
+```rust
+let my_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+let results = client.groups()
+    .cancel_membership_requests(&group_jid, &[my_jid])
+    .await?;
+```
+
+See [Groups API reference](/api/groups#cancel_membership_requests) for details.
+
+### Revoke invitation codes
+
+Admins can revoke invitation codes from specific participants:
+
+```rust
+let to_revoke = vec!["15551234567@s.whatsapp.net".parse()?];
+let results = client.groups()
+    .revoke_request_code(&group_jid, &to_revoke)
+    .await?;
+```
+
+See [Groups API reference](/api/groups#revoke_request_code) for details.
+
+## Batch Operations
+
+### Batch query group info
+
+Query metadata for multiple groups in a single request (up to 10,000 groups):
+
+```rust
+use whatsapp_rust::features::groups::BatchGroupResult;
+
+let group_jids: Vec<Jid> = vec![
+    "120363012345678@g.us".parse()?,
+    "120363087654321@g.us".parse()?,
+];
+
+let results = client.groups().batch_get_info(group_jids).await?;
+
+for result in results {
+    match result {
+        BatchGroupResult::Full(metadata) => {
+            println!("Group: {} - {}", metadata.id, metadata.subject);
+        }
+        BatchGroupResult::Truncated { id, size } => {
+            println!("Truncated info: {} (size: {:?})", id, size);
+        }
+        BatchGroupResult::Forbidden(id) => {
+            println!("Access denied: {}", id);
+        }
+        BatchGroupResult::NotFound(id) => {
+            println!("Not found: {}", id);
+        }
+    }
+}
+```
+
+See [Groups API reference](/api/groups#batch_get_info) for details.
+
+### Batch fetch profile pictures
+
+Fetch profile pictures for multiple groups at once (up to 1,000 groups):
+
+```rust
+use whatsapp_rust::features::groups::{PictureType, GroupProfilePicture};
+
+let group_jids: Vec<Jid> = vec![
+    "120363012345678@g.us".parse()?,
+    "120363087654321@g.us".parse()?,
+];
+
+let pictures = client.groups()
+    .get_profile_pictures(group_jids, PictureType::Preview)
+    .await?;
+
+for pic in pictures {
+    if let Some(url) = &pic.url {
+        println!("Group {}: {}", pic.group_jid, url);
+    }
+}
+```
+
+See [Groups API reference](/api/groups#get_profile_pictures) for details.
+
 ## Group Settings
 
 ### Member Add Mode
@@ -491,6 +585,100 @@ let options = GroupCreateOptions {
     ..Default::default()
 };
 ```
+
+### Frequently-forwarded messages
+
+Restrict or allow frequently-forwarded messages in the group:
+
+```rust
+// Restrict frequently-forwarded messages
+client.groups().set_no_frequently_forwarded(&group_jid, true).await?;
+
+// Allow frequently-forwarded messages
+client.groups().set_no_frequently_forwarded(&group_jid, false).await?;
+```
+
+See [Groups API reference](/api/groups#set_no_frequently_forwarded) for details.
+
+### Admin reports
+
+Enable or disable admin reports in the group:
+
+```rust
+// Enable admin reports
+client.groups().set_allow_admin_reports(&group_jid, true).await?;
+
+// Disable admin reports
+client.groups().set_allow_admin_reports(&group_jid, false).await?;
+```
+
+See [Groups API reference](/api/groups#set_allow_admin_reports) for details.
+
+### Group history sharing
+
+Enable or disable sharing group history with new members:
+
+```rust
+// Enable group history
+client.groups().set_group_history(&group_jid, true).await?;
+
+// Disable group history
+client.groups().set_group_history(&group_jid, false).await?;
+```
+
+See [Groups API reference](/api/groups#set_group_history) for details.
+
+### Member link mode
+
+Control who can share invite links. This setting is updated via the MEX protocol:
+
+```rust
+use whatsapp_rust::features::groups::MemberLinkMode;
+
+// Only admins can share invite links
+client.groups().set_member_link_mode(&group_jid, MemberLinkMode::AdminLink).await?;
+
+// All members can share invite links
+client.groups().set_member_link_mode(&group_jid, MemberLinkMode::AllMemberLink).await?;
+```
+
+See [Groups API reference](/api/groups#set_member_link_mode) for details.
+
+### Message history sharing mode
+
+Control who can share message history with new members. This setting is updated via the MEX protocol:
+
+```rust
+use whatsapp_rust::features::groups::MemberShareHistoryMode;
+
+// Only admins can share history
+client.groups().set_member_share_history_mode(
+    &group_jid,
+    MemberShareHistoryMode::AdminShare,
+).await?;
+
+// All members can share history
+client.groups().set_member_share_history_mode(
+    &group_jid,
+    MemberShareHistoryMode::AllMemberShare,
+).await?;
+```
+
+See [Groups API reference](/api/groups#set_member_share_history_mode) for details.
+
+### Limit sharing
+
+Enable or disable limit sharing in the group. This setting is updated via the MEX protocol:
+
+```rust
+// Enable limit sharing
+client.groups().set_limit_sharing(&group_jid, true).await?;
+
+// Disable limit sharing
+client.groups().set_limit_sharing(&group_jid, false).await?;
+```
+
+See [Groups API reference](/api/groups#set_limit_sharing) for details.
 
 ## Privacy tokens on group operations
 

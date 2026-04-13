@@ -226,6 +226,7 @@ pub trait SignalStore: Send + Sync {
     async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()>;
     async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()>; // has default impl looping over store_prekey
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>>; // has default impl looping over load_prekey
     async fn remove_prekey(&self, id: u32) -> Result<()>;
     async fn get_max_prekey_id(&self) -> Result<u32>;
 

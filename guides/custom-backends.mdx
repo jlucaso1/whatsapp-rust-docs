@@ -135,6 +135,14 @@ impl SignalStore for MyCustomStore {
         ).await?;
         Ok(row.map(|r| r.get(0)))
     }
+
+    // Override load_prekeys_batch for better performance (default loops over load_prekey)
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!("SELECT id, record FROM prekeys WHERE id IN ({})", placeholders);
+        let rows = self.connection.query_all(&query, ids).await?;
+        Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+    }
     
     async fn remove_prekey(&self, id: u32) -> Result<()> {
         self.connection.execute(

@@ -354,25 +354,19 @@ pub struct Client {
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
     /// are processed concurrently across different chats.
-    /// Keys are protocol address strings from write_protocol_address_to()
-    /// (e.g., "5511999887766@c.us.0", "123456789:33@lid.0").
+    /// Keys are Signal protocol address strings (e.g., "user@s.whatsapp.net:0")
     pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
-    /// Per-chat message queues for sequential message processing.
-    /// Prevents race conditions where a later message is processed before
-    /// the PreKey message that establishes the Signal session.
-    pub(crate) message_queues: Cache<String, mpsc::Sender<Arc<Node>>>,
-
-    /// Per-chat mutex for serializing message enqueue operations.
-    /// Ensures messages are enqueued in the order they arrive.
-    pub(crate) message_enqueue_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
+    /// Per-chat lane combining enqueue lock + message queue into a single cached entry.
+    /// One cache lookup instead of two per incoming message.
+    pub(crate) chat_lanes: Cache<Jid, ChatLane>,
     // ...
 }
 ```
 
-All three use [moka](https://github.com/moka-rs/moka) `Cache` with TTL-based eviction (configurable via `CacheConfig`), so stale entries are automatically cleaned up.
+Both use [moka](https://github.com/moka-rs/moka) `Cache` with capacity-based eviction (configurable via `CacheConfig`), so stale entries are automatically cleaned up.
 
-On disconnect, `message_queues` is explicitly invalidated via `invalidate_all()` to drop per-chat queue senders. This causes worker tasks from the old connection to exit via channel close, preventing them from surviving reconnects with outdated Signal session state that would cause decryption failures. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources reset on disconnect.
+On disconnect, `chat_lanes` is explicitly invalidated via `invalidate_all()` to drop per-chat queue senders. This causes worker tasks from the old connection to exit via channel close, preventing them from surviving reconnects with outdated Signal session state that would cause decryption failures. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources reset on disconnect.
 
 Location: `src/client.rs`
 
@@ -504,7 +498,7 @@ persistence_manager.process_command(
 
 ```rust
 // Per-chat locks serialize operations on the same chat
-// The Client uses session_locks and message_queues internally
+// The Client uses session_locks and chat_lanes internally
 // to prevent race conditions during message processing.
 ```
 

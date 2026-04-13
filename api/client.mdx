@@ -1643,8 +1643,7 @@ Returns a snapshot of all internal collection sizes for memory leak detection. M
 | `pdo_pending_requests` | `u64` | PDO pending request cache |
 | `sender_key_device_cache` | `u64` | Per-group sender key device tracking cache |
 | `session_locks` | `u64` | Per-device session locks |
-| `message_queues` | `u64` | Per-chat message queues |
-| `message_enqueue_locks` | `u64` | Per-chat message enqueue locks |
+| `chat_lanes` | `u64` | Per-chat lanes (combined enqueue lock + message queue) |
 | `response_waiters` | `usize` | Active IQ response waiters |
 | `node_waiters` | `usize` | Active node waiters |
 | `pending_retries` | `usize` | Pending message retries |

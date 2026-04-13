@@ -1064,7 +1064,7 @@ pub struct CacheStores {
 Fields left as `None` keep the default moka behavior. Use `CacheStores::all(store)` to set the same backend for all pluggable caches at once.
 
 <Note>
-Coordination caches (`session_locks`, `message_queues`, `message_enqueue_locks`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects (mutexes, channel senders) that cannot be serialized to an external store.
+Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects (mutexes, channel senders) that cannot be serialized to an external store.
 </Note>
 
 ### Usage with Bot builder

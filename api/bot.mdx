@@ -753,9 +753,8 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `session_locks_capacity` | 2,000 | Per-device Signal session lock capacity |
-| `message_queues_capacity` | 2,000 | Per-chat message processing queue capacity |
-| `message_enqueue_locks_capacity` | 2,000 | Per-chat message enqueue lock capacity |
+| `session_locks_capacity` | 10,000 | Per-device Signal session lock capacity |
+| `chat_lanes_capacity` | 5,000 | Per-chat lane capacity (combined enqueue lock + message queue) |
 
 #### Sent message DB cleanup
 
@@ -799,7 +798,7 @@ let config = CacheConfig {
 Fields left as `None` keep the default in-process moka behavior. See [Custom backends — cache store](/guides/custom-backends#custom-cache-store) for a full implementation guide.
 
 <Note>
-Coordination caches (`session_locks`, `message_queues`, `message_enqueue_locks`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects that cannot be serialized to an external store.
+Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects that cannot be serialized to an external store.
 </Note>
 
 ### Custom Configuration Example

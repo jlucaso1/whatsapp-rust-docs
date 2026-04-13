@@ -180,7 +180,7 @@ Event::PairingQrCode { code, .. } => {
 Alternatively, link using a phone number and 8-digit code:
 
 ```rust
-use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+use whatsapp_rust::pair_code::PairCodeOptions;
 
 let mut bot = Bot::builder()
     .with_backend(backend)
@@ -189,10 +189,7 @@ let mut bot = Bot::builder()
     .with_runtime(TokioRuntime)
     .with_pair_code(PairCodeOptions {
         phone_number: "15551234567".to_string(),
-        show_push_notification: true,
-        custom_code: None,
-        platform_id: PlatformId::Chrome,
-        platform_display: "Chrome (Linux)".to_string(),
+        ..Default::default()
     })
     .on_event(|event, client| async move {
         match &*event {
@@ -204,6 +201,20 @@ let mut bot = Bot::builder()
     })
     .build()
     .await?;
+```
+
+`PairCodeOptions` defaults to `PlatformId::Chrome` with `"Chrome (Linux)"` as the display name. You can customize these if needed:
+
+```rust
+use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+
+PairCodeOptions {
+    phone_number: "15551234567".to_string(),
+    show_push_notification: true,
+    custom_code: Some("ABCD1234".to_string()), // or None for random
+    platform_id: PlatformId::Chrome,
+    platform_display: "Chrome (Linux)".to_string(),
+}
 ```
 
 <Note>
@@ -246,6 +257,20 @@ let mut bot = Bot::builder()
 </Step>
 
 </Steps>
+
+### Demo binary CLI flags
+
+The repository includes a demo bot binary (`src/main.rs`) that supports CLI arguments for authentication:
+
+```bash
+cargo run                                      # QR code pairing only
+cargo run -- --phone 15551234567               # Pair code + QR code (concurrent)
+cargo run -- -p 15551234567                    # Short form
+cargo run -- -p 15551234567 --code MYCODE12    # Custom 8-char pair code
+cargo run -- -p 15551234567 -c MYCODE12        # Short form
+```
+
+The demo bot responds to `🦀ping` with a quoted `🏓 Pong!` reply, edits the reply to append the send latency, and supports media ping/pong via CDN reuse.
 
 ## Using MessageContext
 

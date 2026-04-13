@@ -77,6 +77,15 @@ pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, 
 - `is_default_sub_group: bool` - Whether this is the default announcement subgroup of a community
 - `is_general_chat: bool` - Whether this is the general chat subgroup of a community
 - `allow_non_admin_sub_group_creation: bool` - Whether non-admin community members can create subgroups
+- `no_frequently_forwarded: bool` - Whether frequently-forwarded messages are restricted
+- `member_share_history_mode: Option<MemberShareHistoryMode>` - Who can share message history with new members
+- `growth_locked: Option<GrowthLockInfo>` - Growth lock status (invite links temporarily disabled by the system)
+- `is_suspended: bool` - Whether the group is suspended
+- `allow_admin_reports: bool` - Whether admin reports are allowed
+- `is_hidden_group: bool` - Whether the group is hidden
+- `is_incognito: bool` - Whether incognito mode is enabled
+- `has_group_history: bool` - Whether group history is enabled
+- `is_limit_sharing_enabled: bool` - Whether limit sharing is enabled
 
 See [Community API](/api/community) for community-specific operations.
 
@@ -85,7 +94,7 @@ See [Community API](/api/community) for community-specific operations.
 **GroupParticipant fields:**
 - `jid: Jid` - Participant JID
 - `phone_number: Option<Jid>` - Phone number JID (for LID groups)
-- `is_admin: bool` - Whether participant is an admin
+- `participant_type: ParticipantType` - Participant role (member, admin, or super admin)
 
 **Example:**
 ```rust
@@ -96,7 +105,7 @@ for (jid_str, metadata) in groups {
     println!("  Participants: {}", metadata.participants.len());
     
     for participant in &metadata.participants {
-        println!("    {} (admin: {})", participant.jid, participant.is_admin);
+        println!("    {} ({:?})", participant.jid, participant.participant_type);
     }
 }
 ```
@@ -693,6 +702,328 @@ client.groups().set_member_add_mode(&group_jid, MemberAddMode::AdminAdd).await?;
 client.groups().set_member_add_mode(&group_jid, MemberAddMode::AllMemberAdd).await?;
 ```
 
+### set_no_frequently_forwarded
+
+Restrict or allow frequently-forwarded messages in the group.
+
+```rust
+pub async fn set_no_frequently_forwarded(
+    &self,
+    jid: &Jid,
+    restrict: bool,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `restrict` - `true` to restrict frequently-forwarded messages, `false` to allow them
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Restrict frequently-forwarded messages
+client.groups().set_no_frequently_forwarded(&group_jid, true).await?;
+
+// Allow frequently-forwarded messages
+client.groups().set_no_frequently_forwarded(&group_jid, false).await?;
+```
+
+### set_allow_admin_reports
+
+Enable or disable admin reports in the group.
+
+```rust
+pub async fn set_allow_admin_reports(
+    &self,
+    jid: &Jid,
+    allow: bool,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `allow` - `true` to enable admin reports, `false` to disable
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Enable admin reports
+client.groups().set_allow_admin_reports(&group_jid, true).await?;
+
+// Disable admin reports
+client.groups().set_allow_admin_reports(&group_jid, false).await?;
+```
+
+### set_group_history
+
+Enable or disable group history sharing.
+
+```rust
+pub async fn set_group_history(&self, jid: &Jid, enabled: bool) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `enabled` - `true` to enable group history, `false` to disable
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Enable group history
+client.groups().set_group_history(&group_jid, true).await?;
+
+// Disable group history
+client.groups().set_group_history(&group_jid, false).await?;
+```
+
+### set_member_link_mode
+
+Set who can share invite links. This uses the MEX (Mutation Exchange) protocol.
+
+```rust
+pub async fn set_member_link_mode(
+    &self,
+    jid: &Jid,
+    mode: MemberLinkMode,
+) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `mode` - `MemberLinkMode::AdminLink` to restrict to admins, `MemberLinkMode::AllMemberLink` to allow all members
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::MemberLinkMode;
+
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Only admins can share invite links
+client.groups().set_member_link_mode(&group_jid, MemberLinkMode::AdminLink).await?;
+
+// All members can share invite links
+client.groups().set_member_link_mode(&group_jid, MemberLinkMode::AllMemberLink).await?;
+```
+
+<Note>
+This method uses the MEX protocol and returns `MexError` instead of `anyhow::Error`. See the [MEX API](/api/mex) for details on MEX errors.
+</Note>
+
+### set_member_share_history_mode
+
+Set who can share message history with new members. This uses the MEX protocol.
+
+```rust
+pub async fn set_member_share_history_mode(
+    &self,
+    jid: &Jid,
+    mode: MemberShareHistoryMode,
+) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `mode` - `MemberShareHistoryMode::AdminShare` to restrict to admins, `MemberShareHistoryMode::AllMemberShare` to allow all members
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::MemberShareHistoryMode;
+
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Only admins can share history with new members
+client.groups().set_member_share_history_mode(
+    &group_jid,
+    MemberShareHistoryMode::AdminShare,
+).await?;
+
+// All members can share history
+client.groups().set_member_share_history_mode(
+    &group_jid,
+    MemberShareHistoryMode::AllMemberShare,
+).await?;
+```
+
+### set_limit_sharing
+
+Enable or disable limit sharing in the group. This uses the MEX protocol.
+
+```rust
+pub async fn set_limit_sharing(&self, jid: &Jid, enabled: bool) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `enabled` - `true` to enable limit sharing, `false` to disable
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Enable limit sharing
+client.groups().set_limit_sharing(&group_jid, true).await?;
+
+// Disable limit sharing
+client.groups().set_limit_sharing(&group_jid, false).await?;
+```
+
+### cancel_membership_requests
+
+Cancel pending membership requests from the requesting user's side.
+
+```rust
+pub async fn cancel_membership_requests(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of JIDs whose pending requests to cancel
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_cancel = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.groups().cancel_membership_requests(&group_jid, &to_cancel).await?;
+```
+
+### revoke_request_code
+
+Revoke invitation codes from specific participants. This is an admin operation.
+
+```rust
+pub async fn revoke_request_code(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - Array of participant JIDs whose invitation codes to revoke
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_revoke = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.groups().revoke_request_code(&group_jid, &to_revoke).await?;
+```
+
+### acknowledge
+
+Acknowledge a group notification.
+
+```rust
+pub async fn acknowledge(&self, jid: &Jid) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+client.groups().acknowledge(&group_jid).await?;
+```
+
+### batch_get_info
+
+Batch query group info for multiple groups at once.
+
+```rust
+pub async fn batch_get_info(
+    &self,
+    jids: Vec<Jid>,
+) -> Result<Vec<BatchGroupResult>, anyhow::Error>
+```
+
+**Parameters:**
+- `jids` - List of group JIDs to query (max 10,000)
+
+**Returns:**
+- `Vec<BatchGroupResult>` - Result for each group
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::BatchGroupResult;
+
+let group_jids: Vec<Jid> = vec![
+    "120363012345678@g.us".parse()?,
+    "120363087654321@g.us".parse()?,
+];
+
+let results = client.groups().batch_get_info(group_jids).await?;
+
+for result in results {
+    match result {
+        BatchGroupResult::Full(metadata) => {
+            println!("Group: {} - {}", metadata.id, metadata.subject);
+        }
+        BatchGroupResult::Truncated { id, size } => {
+            println!("Truncated: {} (size: {:?})", id, size);
+        }
+        BatchGroupResult::Forbidden(id) => {
+            println!("Forbidden: {}", id);
+        }
+        BatchGroupResult::NotFound(id) => {
+            println!("Not found: {}", id);
+        }
+    }
+}
+```
+
+### get_profile_pictures
+
+Batch fetch group profile pictures.
+
+```rust
+pub async fn get_profile_pictures(
+    &self,
+    group_jids: Vec<Jid>,
+    picture_type: PictureType,
+) -> Result<Vec<GroupProfilePicture>, anyhow::Error>
+```
+
+**Parameters:**
+- `group_jids` - List of group JIDs (max 1,000)
+- `picture_type` - `PictureType::Preview` for thumbnails or `PictureType::Image` for full-size
+
+**Returns:**
+- `Vec<GroupProfilePicture>` - Profile picture data for each group
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::{PictureType, GroupProfilePicture};
+
+let group_jids: Vec<Jid> = vec![
+    "120363012345678@g.us".parse()?,
+    "120363087654321@g.us".parse()?,
+];
+
+let pictures = client.groups().get_profile_pictures(group_jids, PictureType::Preview).await?;
+
+for pic in pictures {
+    if let Some(url) = &pic.url {
+        println!("Group {}: {}", pic.group_jid, url);
+    }
+}
+```
+
 ## Types
 
 ### GroupInfo
@@ -764,6 +1095,21 @@ pub enum MemberAddMode {
 }
 ```
 
+### ParticipantType
+
+Participant role within a group.
+
+```rust
+pub enum ParticipantType {
+    Member,     // Regular member
+    Admin,      // Group admin
+    SuperAdmin, // Group creator / super admin
+}
+```
+
+**Methods:**
+- `is_admin(&self) -> bool` - Returns `true` if admin or super admin
+
 ### MemberLinkMode
 
 Controls who can use invite links to join the group.
@@ -772,6 +1118,17 @@ Controls who can use invite links to join the group.
 pub enum MemberLinkMode {
     AdminLink,      // Only admins can share invite links
     AllMemberLink,  // All members can share invite links
+}
+```
+
+### MemberShareHistoryMode
+
+Controls who can share message history with new members.
+
+```rust
+pub enum MemberShareHistoryMode {
+    AdminShare,      // Only admins can share history
+    AllMemberShare,  // All members can share history
 }
 ```
 
@@ -859,6 +1216,54 @@ pub struct ParticipantChangeResponse {
 pub enum AddressingMode {
     Pn,   // Phone number addressing
     Lid,  // LID (privacy) addressing
+}
+```
+
+### BatchGroupResult
+
+Result for a single group in a batch query.
+
+```rust
+pub enum BatchGroupResult {
+    Full(Box<GroupMetadata>),           // Full group metadata
+    Truncated { id: Jid, size: Option<u32> },  // Only ID and size returned
+    Forbidden(Jid),                     // Access denied
+    NotFound(Jid),                      // Group does not exist
+}
+```
+
+### GrowthLockInfo
+
+Growth lock information (system-managed, read-only). When present, invite links are temporarily disabled by the system.
+
+```rust
+pub struct GrowthLockInfo {
+    pub lock_type: String,
+    pub expiration: u64,
+}
+```
+
+### PictureType
+
+Profile picture query type for batch fetching.
+
+```rust
+pub enum PictureType {
+    Preview,  // Thumbnail / preview size
+    Image,    // Full-size image
+}
+```
+
+### GroupProfilePicture
+
+A single group profile picture result from a batch query.
+
+```rust
+pub struct GroupProfilePicture {
+    pub group_jid: Jid,
+    pub url: Option<String>,
+    pub direct_path: Option<String>,
+    pub photo_id: Option<String>,
 }
 ```
 

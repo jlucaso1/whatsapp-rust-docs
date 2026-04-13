@@ -77,6 +77,15 @@ pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, 
 - `is_default_sub_group: bool` - Whether this is the default announcement subgroup of a community
 - `is_general_chat: bool` - Whether this is the general chat subgroup of a community
 - `allow_non_admin_sub_group_creation: bool` - Whether non-admin community members can create subgroups
+- `no_frequently_forwarded: bool` - Whether frequently-forwarded messages are restricted
+- `member_share_history_mode: Option<MemberShareHistoryMode>` - Who can share message history with new members
+- `growth_locked: Option<GrowthLockInfo>` - Growth lock status (invite links temporarily disabled)
+- `is_suspended: bool` - Whether the group is suspended
+- `allow_admin_reports: bool` - Whether admin reports are allowed
+- `is_hidden_group: bool` - Whether the group is hidden
+- `is_incognito: bool` - Whether incognito mode is enabled
+- `has_group_history: bool` - Whether group history sharing is enabled
+- `is_limit_sharing_enabled: bool` - Whether limit sharing is enabled
 
 See [Community API](/api/community) for community-specific operations.
 
@@ -85,7 +94,11 @@ See [Community API](/api/community) for community-specific operations.
 **GroupParticipant fields:**
 - `jid: Jid` - Participant JID
 - `phone_number: Option<Jid>` - Phone number JID (for LID groups)
-- `is_admin: bool` - Whether participant is an admin
+- `participant_type: ParticipantType` - Participant role (`Regular`, `Admin`, or `SuperAdmin`)
+
+**GroupParticipant methods:**
+- `is_admin() -> bool` - Returns `true` if the participant is an admin or super admin
+- `is_super_admin() -> bool` - Returns `true` if the participant is the group creator (super admin)
 
 **Example:**
 ```rust
@@ -96,7 +109,7 @@ for (jid_str, metadata) in groups {
     println!("  Participants: {}", metadata.participants.len());
     
     for participant in &metadata.participants {
-        println!("    {} (admin: {})", participant.jid, participant.is_admin);
+        println!("    {} (admin: {})", participant.jid, participant.is_admin());
     }
 }
 ```
@@ -693,6 +706,260 @@ client.groups().set_member_add_mode(&group_jid, MemberAddMode::AdminAdd).await?;
 client.groups().set_member_add_mode(&group_jid, MemberAddMode::AllMemberAdd).await?;
 ```
 
+### set_no_frequently_forwarded
+
+Restrict or allow frequently-forwarded messages in the group.
+
+```rust
+pub async fn set_no_frequently_forwarded(
+    &self,
+    jid: &Jid,
+    restrict: bool,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `restrict` - `true` to restrict frequently-forwarded messages, `false` to allow
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Restrict frequently-forwarded messages
+client.groups().set_no_frequently_forwarded(&group_jid, true).await?;
+```
+
+### set_allow_admin_reports
+
+Enable or disable admin reports in the group.
+
+```rust
+pub async fn set_allow_admin_reports(
+    &self,
+    jid: &Jid,
+    allow: bool,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `allow` - `true` to enable admin reports, `false` to disable
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+client.groups().set_allow_admin_reports(&group_jid, true).await?;
+```
+
+### set_group_history
+
+Enable or disable group history sharing for new members.
+
+```rust
+pub async fn set_group_history(&self, jid: &Jid, enabled: bool) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `enabled` - `true` to enable history sharing, `false` to disable
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+client.groups().set_group_history(&group_jid, true).await?;
+```
+
+### set_member_link_mode
+
+Set who can share invite links. This uses the MEX (Meta Experience) API.
+
+```rust
+pub async fn set_member_link_mode(
+    &self,
+    jid: &Jid,
+    mode: MemberLinkMode,
+) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `mode` - `MemberLinkMode::AdminLink` to restrict to admins, `MemberLinkMode::AllMemberLink` to allow all members
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::MemberLinkMode;
+
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+// Only admins can share invite links
+client.groups().set_member_link_mode(&group_jid, MemberLinkMode::AdminLink).await?;
+```
+
+### set_member_share_history_mode
+
+Set who can share message history with new members. This uses the MEX (Meta Experience) API.
+
+```rust
+pub async fn set_member_share_history_mode(
+    &self,
+    jid: &Jid,
+    mode: MemberShareHistoryMode,
+) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `mode` - `MemberShareHistoryMode::AdminShare` to restrict to admins, `MemberShareHistoryMode::AllMemberShare` to allow all members
+
+**Example:**
+```rust
+use whatsapp_rust::MemberShareHistoryMode;
+
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+client.groups().set_member_share_history_mode(&group_jid, MemberShareHistoryMode::AllMemberShare).await?;
+```
+
+### set_limit_sharing
+
+Enable or disable limit sharing in the group. This uses the MEX (Meta Experience) API.
+
+```rust
+pub async fn set_limit_sharing(&self, jid: &Jid, enabled: bool) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `enabled` - `true` to enable limit sharing, `false` to disable
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+
+client.groups().set_limit_sharing(&group_jid, true).await?;
+```
+
+### cancel_membership_requests
+
+Cancel pending membership requests from the requesting user's side.
+
+```rust
+pub async fn cancel_membership_requests(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - JIDs of the users whose requests to cancel
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_cancel = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.groups().cancel_membership_requests(&group_jid, &to_cancel).await?;
+```
+
+### revoke_request_code
+
+Revoke invitation codes from specific participants (admin operation).
+
+```rust
+pub async fn revoke_request_code(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `participants` - JIDs of the participants whose invitation codes to revoke
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_revoke = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.groups().revoke_request_code(&group_jid, &to_revoke).await?;
+```
+
+### batch_get_info
+
+Query group info for multiple groups at once (max 10,000 groups per request).
+
+```rust
+pub async fn batch_get_info(
+    &self,
+    jids: Vec<Jid>,
+) -> Result<Vec<BatchGroupResult>, anyhow::Error>
+```
+
+**Parameters:**
+- `jids` - List of group JIDs to query (max 10,000)
+
+**Returns:**
+- `Vec<BatchGroupResult>` - One result per group, which can be `Full(GroupMetadata)`, `Truncated { id, size }`, `Forbidden(Jid)`, or `NotFound(Jid)`
+
+**Example:**
+```rust
+let jids: Vec<Jid> = vec![
+    "123456789@g.us".parse()?,
+    "987654321@g.us".parse()?,
+];
+
+let results = client.groups().batch_get_info(jids).await?;
+for result in results {
+    match result {
+        BatchGroupResult::Full(metadata) => {
+            println!("Group: {} ({})", metadata.subject, metadata.id);
+        }
+        BatchGroupResult::Truncated { id, size } => {
+            println!("Truncated: {} (size: {:?})", id, size);
+        }
+        BatchGroupResult::Forbidden(id) => println!("Forbidden: {}", id),
+        BatchGroupResult::NotFound(id) => println!("Not found: {}", id),
+    }
+}
+```
+
+### get_profile_pictures
+
+Batch fetch group profile pictures (max 1,000 groups per request).
+
+```rust
+pub async fn get_profile_pictures(
+    &self,
+    group_jids: Vec<Jid>,
+    picture_type: PictureType,
+) -> Result<Vec<GroupProfilePicture>, anyhow::Error>
+```
+
+**Parameters:**
+- `group_jids` - List of group JIDs (max 1,000)
+- `picture_type` - `PictureType::Preview` for thumbnail or `PictureType::Image` for full-size
+
+**Returns:**
+- `Vec<GroupProfilePicture>` - Profile pictures for each group that has one
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::PictureType;
+
+let jids: Vec<Jid> = vec!["123456789@g.us".parse()?];
+let pictures = client.groups().get_profile_pictures(jids, PictureType::Preview).await?;
+
+for pic in pictures {
+    println!("Group {}: {}", pic.jid, pic.url);
+}
+```
+
 ## Types
 
 ### GroupInfo
@@ -853,6 +1120,80 @@ pub struct ParticipantChangeResponse {
 }
 ```
 
+### MemberShareHistoryMode
+
+Controls who can share message history with new members.
+
+```rust
+pub enum MemberShareHistoryMode {
+    AdminShare,      // Only admins can share history
+    AllMemberShare,  // All members can share history
+}
+```
+
+### ParticipantType
+
+Participant role in a group.
+
+```rust
+pub enum ParticipantType {
+    Regular,     // Regular member
+    Admin,       // Group admin
+    SuperAdmin,  // Group creator
+}
+```
+
+**Methods:**
+- `is_admin() -> bool` - Returns `true` for both `Admin` and `SuperAdmin`
+
+### GrowthLockInfo
+
+Growth lock status information. When a group is growth-locked, invite links are temporarily unavailable.
+
+```rust
+pub struct GrowthLockInfo {
+    pub expiration: Option<u64>,
+    pub lock_type: Option<u32>,
+}
+```
+
+### BatchGroupResult
+
+Result for a single group in a batch query.
+
+```rust
+pub enum BatchGroupResult {
+    Full(Box<GroupMetadata>),
+    Truncated { id: Jid, size: Option<u32> },
+    Forbidden(Jid),
+    NotFound(Jid),
+}
+```
+
+### GroupProfilePicture
+
+Profile picture result from a batch profile picture query.
+
+```rust
+pub struct GroupProfilePicture {
+    pub jid: Jid,
+    pub url: String,
+    pub id: String,
+    pub picture_type: PictureType,
+}
+```
+
+### PictureType
+
+Type of profile picture to fetch.
+
+```rust
+pub enum PictureType {
+    Preview,  // Thumbnail
+    Image,    // Full-size image
+}
+```
+
 ### AddressingMode
 
 ```rust
@@ -862,9 +1203,9 @@ pub enum AddressingMode {
 }
 ```
 
-## Error Handling
+## Error handling
 
-All methods return `Result<T, anyhow::Error>`. Common errors:
+Most methods return `Result<T, anyhow::Error>`. Methods that use the MEX API (`set_member_link_mode`, `set_member_share_history_mode`, `set_limit_sharing`) return `Result<T, MexError>` instead. Common errors:
 
 - Invalid JID format
 - Network errors
@@ -872,6 +1213,7 @@ All methods return `Result<T, anyhow::Error>`. Common errors:
 - Group not found
 - Subject/description too long
 - Participant not found
+- Batch limit exceeded (10,000 for `batch_get_info`, 1,000 for `get_profile_pictures`)
 
 ```rust
 match client.groups().set_subject(&group_jid, subject).await {

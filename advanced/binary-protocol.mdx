@@ -642,6 +642,43 @@ Location: `wacore/binary/src/node.rs:594-693`
 - **`NodeRef<'a>`** (borrowed) — used for reading received stanzas. Borrows from the network buffer.
 - **`OwnedNodeRef`** — wraps a `NodeRef` with its backing buffer via `yoke`, enabling safe zero-copy sharing across handler tasks as `Arc<OwnedNodeRef>`.
 
+#### Zero-copy serialization
+
+The entire `NodeRef` type family implements `serde::Serialize` (gated behind the `serde` feature), producing output identical to their owned counterparts. This means you can serialize a `NodeRef`, `OwnedNodeRef`, `ValueRef`, `JidRef`, or `NodeContentRef` directly — without converting to an owned `Node` first — avoiding all intermediate allocations.
+
+```rust
+use serde_json;
+
+// Serialize an OwnedNodeRef directly — zero-copy from the network buffer
+let owned_ref: OwnedNodeRef = OwnedNodeRef::new(buffer)?;
+let json = serde_json::to_string(&owned_ref)?;
+
+// Equivalent but allocates: convert to Node first
+let json_owned = serde_json::to_string(&owned_ref.to_owned_node())?;
+
+// Both produce identical JSON output
+assert_eq!(json, json_owned);
+```
+
+The following types implement `Serialize`:
+
+| Type | Serializes as | Notes |
+|------|--------------|-------|
+| `NodeRef<'a>` | `Node` struct | Fields: `tag` (as `&str`), `attrs` (newtype wrapper), `content` |
+| `NodeStr<'a>` | `&str` | Borrows the inner string directly |
+| `ValueRef<'a>` | `NodeValue` enum | Variant names match: `String`, `Jid` |
+| `JidRef<'a>` | `Jid` struct | Fields: `user`, `server`, `agent`, `device`, `integrator` |
+| `NodeContentRef<'a>` | `NodeContent` enum | Variant names match: `Bytes`, `String`, `Nodes` |
+| `OwnedNodeRef` | `Node` struct | Delegates to inner `NodeRef::serialize` |
+
+<Note>
+  The `Serialize` implementations use an `AttrsRefWrapper` to match the newtype-struct framing that serde's derive produces for `Attrs(Vec<...>)`. This ensures compatibility with binary formats like bincode and postcard, which distinguish between a bare sequence and a newtype struct wrapper.
+</Note>
+
+This is useful for logging, debugging, protocol inspection, and forwarding stanzas to external systems without paying the cost of `to_owned_node()`.
+
+Location: `wacore/binary/src/node.rs:67-71`, `397-407`, `473-488`, `612-632`, `875-880`; `wacore/binary/src/jid.rs:603-615`
+
 The borrowed counterpart to `NodeValue` is `ValueRef<'a>`, used in the decoder path and in `NodeRef` attributes:
 
 ```rust

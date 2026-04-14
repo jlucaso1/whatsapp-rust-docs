@@ -373,7 +373,7 @@ let decoded = unmarshal_ref(&bytes)?;
 **Key exports:**
 - `CompactString` - Re-export of `compact_str::CompactString`, used by `Jid.user`, `NodeValue::String`, and `NodeContent::String`
 - `jid::{Jid, JidRef, Server, JidExt}` - WhatsApp JID types. `Server` is an enum (`#[repr(u8)]`) with variants for all known WhatsApp server domains (`Pn`, `Lid`, `Group`, `Broadcast`, `Newsletter`, `Hosted`, `HostedLid`, `Messenger`, `Interop`, `Bot`, `Legacy`). `JidExt` provides helper methods (`is_group()`, `is_newsletter()`, etc.) for both owned and borrowed JID types
-- `node::{Node, NodeRef, NodeStr, NodeValue, ValueRef, OwnedNodeRef}` - Protocol node types. `Node` (owned) for building outgoing stanzas, `NodeRef` (borrowed) for reading received stanzas, `NodeStr` for borrowed-or-inline decoded strings, `OwnedNodeRef` for yoke-based zero-copy self-referential nodes shared as `Arc<OwnedNodeRef>`
+- `node::{Node, NodeRef, NodeStr, NodeValue, ValueRef, OwnedNodeRef}` - Protocol node types. `Node` (owned) for building outgoing stanzas, `NodeRef` (borrowed) for reading received stanzas, `NodeStr` for borrowed-or-inline decoded strings, `OwnedNodeRef` for yoke-based zero-copy self-referential nodes shared as `Arc<OwnedNodeRef>`. The entire `NodeRef` type family (`NodeRef`, `NodeStr`, `ValueRef`, `JidRef`, `NodeContentRef`, `OwnedNodeRef`) implements `serde::Serialize`, producing output identical to their owned counterparts — enabling zero-copy serialization without converting to `Node` first
 - `builder::NodeBuilder` - Fluent node builder with `new(&'static str)` / `new_dynamic(String)`, `attr()`, `jid_attr()`, `children()`, `bytes()`, `string_content()`, and `apply_content()` chaining methods
 - `marshal::*` - Binary marshaling functions
 - `attrs::{AttrParser, AttrParserRef}` - Attribute parsing utilities for owned `Node` and borrowed `NodeRef` respectively
@@ -531,6 +531,7 @@ Strong typing throughout:
 - `NodeStr<'a>` for borrowed `NodeRef.tag`, `AttrsRef` keys, `ValueRef::String`, and `JidRef.user` — a borrowed-or-inline string type where the `Owned` variant uses `CompactString` (inline up to 24 bytes) instead of heap-allocated `String`, reducing allocation pressure during decoding
 - `Server` enum (`#[repr(u8)]`) for `Jid.server` — a `Copy` type that requires zero allocation, replacing the previous `Cow<'static, str>` string-based server field
 - `OwnedNodeRef` — yoke-based self-referential node that owns the decompressed network buffer while `NodeRef` borrows string/byte payloads directly from it. Received stanzas flow through the system as `Arc<OwnedNodeRef>` for cheap shared zero-copy access
+- **Zero-copy `Serialize`** — the entire `NodeRef` type family (`NodeRef`, `NodeStr`, `ValueRef`, `JidRef`, `NodeContentRef`, `OwnedNodeRef`) implements `serde::Serialize`, producing output identical to their owned counterparts. This allows serializing received stanzas directly from the network buffer without converting to owned `Node` types first. See [Binary Protocol — Zero-copy serialization](/advanced/binary-protocol#zero-copy-serialization) for details
 - `NodeRef` for borrowed node parsing
 - `AttrParserRef` for attribute iteration
 - `marshal_ref` for encoding without cloning

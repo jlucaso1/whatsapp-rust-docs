@@ -402,7 +402,7 @@ Strings containing only digits, dash, and dot are packed into 4 bits per charact
 // '1' → 1, '2' → 2, '3' → 3, '-' → 10, '4' → 4, ...
 // Packed: 0x12, 0x3A, 0x45, 0x67, 0x89
 
-pub const PACKED_MAX: u8 = 127;  // Max length for packed strings
+pub const PACKED_MAX: u8 = 127;  // Max length for packed/token strings
 
 fn pack_nibble(value: u8) -> u8 {
     match value {
@@ -792,7 +792,7 @@ Location: `wacore/binary/src/marshal.rs:67-76`
 
 ### String Hint Cache
 
-Repeated strings (like JIDs) are analyzed once and cached:
+Repeated strings (like JIDs) are analyzed once and cached. Strings longer than `PACKED_MAX` (127 bytes) are immediately classified as `RawBytes` without running the full classification logic, since they can never be protocol tokens (max 48 bytes), packed nibble/hex, or JIDs:
 
 ```rust
 pub struct StringHintCache {
@@ -801,6 +801,11 @@ pub struct StringHintCache {
 
 impl StringHintCache {
     fn hint_or_insert(&mut self, s: &str) -> StringHint {
+        // Strings longer than PACKED_MAX can't be tokens,
+        // packed nibble/hex, or JIDs — skip classification entirely
+        if s.len() > token::PACKED_MAX as usize {
+            return StringHint::RawBytes;
+        }
         if let Some(existing) = self.hints.iter().find(...) {
             return existing;
         }
@@ -811,7 +816,9 @@ impl StringHintCache {
 }
 ```
 
-Location: `wacore/binary/src/encoder.rs:240-282`
+The same length check is applied in the uncached write path (`write_string_uncached`), where strings exceeding `PACKED_MAX` are emitted directly as raw bytes without classification. This avoids unnecessary work for long strings like message bodies, media URLs, and base64-encoded payloads.
+
+Location: `wacore/binary/src/encoder.rs:240-287`
 
 ### Capacity estimation
 

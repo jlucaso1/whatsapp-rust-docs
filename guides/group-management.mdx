@@ -7,7 +7,7 @@ description: Learn how to create groups, manage participants, and update group m
 
 This guide covers group operations including creation, participant management, and metadata updates using the whatsapp-rust library.
 
-## Accessing the Groups API
+## Accessing the groups API
 
 All group operations are accessed through the `groups()` method:
 
@@ -19,19 +19,19 @@ let groups = client.groups();
 
 See [Groups API reference](/api/groups) for the full API.
 
-## Creating Groups
+## Creating groups
 
-### Basic Group Creation
+### Basic group creation
 
 ```rust
-use whatsapp_rust::features::groups::{GroupCreateOptions, GroupSubject, GroupParticipantOptions};
+use whatsapp_rust::features::groups::{GroupCreateOptions, GroupParticipantOptions};
 use wacore_binary::jid::Jid;
 
 let participant1: Jid = "1234567890@s.whatsapp.net".parse()?;
 let participant2: Jid = "9876543210@s.whatsapp.net".parse()?;
 
 let options = GroupCreateOptions {
-    subject: GroupSubject::new("My New Group")?,
+    subject: "My New Group".to_string(),
     participants: vec![
         GroupParticipantOptions::new(participant1),
         GroupParticipantOptions::new(participant2),
@@ -45,7 +45,7 @@ println!("Group created with JID: {}", result.gid);
 
 See [Groups API reference](/api/groups#create_group) for full details.
 
-### Group Creation Options
+### Group creation options
 
 ```rust
 use whatsapp_rust::features::groups::{
@@ -55,46 +55,60 @@ use whatsapp_rust::features::groups::{
 };
 
 let options = GroupCreateOptions {
-    subject: GroupSubject::new("Advanced Group")?,
+    subject: "Advanced Group".to_string(),
     participants: vec![
         GroupParticipantOptions::new(participant1),
     ],
     // Control who can add members
     member_add_mode: Some(MemberAddMode::AdminAdd),
-    
+
     // Control membership approval requirement
     membership_approval_mode: Some(MembershipApprovalMode::On),
-    
+
     // Control who can share invite links
     member_link_mode: Some(MemberLinkMode::AdminLink),
-    
-    // Make it an announcement group (only admins can send messages)
-    announce: Some(true),
-    
-    // Lock the group (prevent non-admins from changing group settings)
-    locked: Some(true),
-    
-    // Make it a parent group (can have linked subgroups)
-    parent: Some(false),
-    
+
+    // Create as a community parent group
+    is_parent: false,
+
+    // Whether the community requires approval to join (only used with is_parent)
+    closed: false,
+
+    // Allow non-admin members to create subgroups (only used with is_parent)
+    allow_non_admin_sub_group_creation: false,
+
+    // Create a general chat subgroup (only used with is_parent)
+    create_general_chat: false,
+
     ..Default::default()
 };
 
 let result = client.groups().create_group(options).await?;
 ```
 
+You can also use the builder pattern:
+
+```rust
+let options = GroupCreateOptions::builder()
+    .subject("Advanced Group")
+    .member_add_mode(MemberAddMode::AdminAdd)
+    .membership_approval_mode(MembershipApprovalMode::On)
+    .member_link_mode(MemberLinkMode::AdminLink)
+    .build();
+```
+
 See [Groups API reference](/api/groups#create_group) for all options.
 
-### Group Constraints
+### Group constraints
 
 ```rust
 use whatsapp_rust::features::groups::*;
 
-// Subject: Max 100 characters
+// GroupSubject: Max 100 characters (used for set_subject)
 let subject = GroupSubject::new("A".repeat(101));
 assert!(subject.is_err());  // Fails validation
 
-// Description: Max 2048 characters
+// GroupDescription: Max 2048 characters (used for set_description)
 let description = GroupDescription::new("B".repeat(2049));
 assert!(description.is_err());  // Fails validation
 
@@ -103,12 +117,12 @@ assert!(description.is_err());  // Fails validation
 ```
 
 <Note>
-These limits are based on WhatsApp Web's A/B test properties and may change. The library validates against current known limits.
+`GroupCreateOptions.subject` is a plain `String`. Validated types `GroupSubject` and `GroupDescription` are used by `set_subject` and `set_description` respectively.
 </Note>
 
-## Querying Group Information
+## Querying group information
 
-### Get Group Metadata
+### Get group metadata
 
 ```rust
 let group_jid: Jid = "120363012345678@g.us".parse()?;
@@ -136,7 +150,7 @@ for participant in &metadata.participants {
 
 See [Groups API reference](/api/groups#get_metadata) for metadata fields.
 
-### List All Groups
+### List all groups
 
 ```rust
 use std::collections::HashMap;
@@ -157,7 +171,7 @@ for (jid, metadata) in groups {
 
 See [Groups API reference](/api/groups#get_participating) for details.
 
-### Query Group Info (Internal)
+### Query group info (internal)
 
 For lower-level access with caching:
 
@@ -180,9 +194,9 @@ println!("Addressing mode: {:?}", info.addressing_mode);
 
 See [Groups API reference](/api/groups#query_info) for details.
 
-## Updating Group Metadata
+## Updating group metadata
 
-### Change Group Subject
+### Change group subject
 
 ```rust
 let new_subject = GroupSubject::new("Updated Group Name")?;
@@ -192,7 +206,7 @@ client.groups().set_subject(&group_jid, new_subject).await?;
 
 See [Groups API reference](/api/groups#set_subject) for details.
 
-### Set or Delete Group Description
+### Set or delete group description
 
 ```rust
 use whatsapp_rust::features::groups::GroupDescription;
@@ -219,9 +233,9 @@ See [Groups API reference](/api/groups#set_description) for details.
 The `prev` parameter can be used for conflict detection. If provided and the current description ID doesn't match, the operation may fail. Pass `None` if you don't need this check.
 </Note>
 
-## Managing Participants
+## Managing participants
 
-### Add Participants
+### Add participants
 
 ```rust
 let new_members = vec![
@@ -247,7 +261,7 @@ for response in responses {
 
 See [Groups API reference](/api/groups#add_participants) for response codes.
 
-### Remove Participants
+### Remove participants
 
 ```rust
 let members_to_remove = vec![
@@ -270,7 +284,7 @@ for response in responses {
 
 See [Groups API reference](/api/groups#remove_participants) for details.
 
-### Promote to Admin
+### Promote to admin
 
 ```rust
 let participants = vec!["1234567890@s.whatsapp.net".parse()?];
@@ -285,7 +299,7 @@ println!("Promoted to admin");
 
 See [Groups API reference](/api/groups#promote_participants) for details.
 
-### Demote Admin
+### Demote admin
 
 ```rust
 let participants = vec!["1234567890@s.whatsapp.net".parse()?];
@@ -300,7 +314,7 @@ println!("Demoted from admin");
 
 See [Groups API reference](/api/groups#demote_participants) for details.
 
-### Leave Group
+### Leave group
 
 ```rust
 client.groups().leave(&group_jid).await?;
@@ -309,9 +323,9 @@ println!("Left the group");
 
 See [Groups API reference](/api/groups#leave) for details.
 
-## Group Invite Links
+## Group invite links
 
-### Get Invite Link
+### Get invite link
 
 ```rust
 // Get existing invite link
@@ -402,7 +416,7 @@ println!("Requires approval: {}", metadata.membership_approval);
 
 See [Groups API reference](/api/groups#get_invite_info) for details.
 
-## Membership Requests
+## Membership requests
 
 When a group has membership approval enabled, new members must be approved by an admin. You can view, approve, and reject pending requests.
 
@@ -470,7 +484,7 @@ let results = client.groups()
 
 See [Groups API reference](/api/groups#revoke_request_code) for details.
 
-## Batch Operations
+## Batch operations
 
 ### Batch query group info
 
@@ -531,9 +545,9 @@ for pic in pictures {
 
 See [Groups API reference](/api/groups#get_profile_pictures) for details.
 
-## Group Settings
+## Group settings
 
-### Member Add Mode
+### Member add mode
 
 Control who can add new members:
 
@@ -546,10 +560,10 @@ pub enum MemberAddMode {
 }
 
 // Set during creation
-let options = GroupCreateOptions {
-    member_add_mode: Some(MemberAddMode::AdminAdd),
-    ..Default::default()
-};
+let options = GroupCreateOptions::builder()
+    .subject("My Group")
+    .member_add_mode(MemberAddMode::AdminAdd)
+    .build();
 
 // Or update an existing group
 client.groups().set_member_add_mode(&group_jid, MemberAddMode::AdminAdd).await?;
@@ -557,7 +571,7 @@ client.groups().set_member_add_mode(&group_jid, MemberAddMode::AdminAdd).await?;
 
 See [Groups API reference](/api/groups#set_member_add_mode) for details.
 
-### Membership Approval Mode
+### Membership approval mode
 
 Require admin approval for new members:
 
@@ -569,22 +583,31 @@ pub enum MembershipApprovalMode {
     Off,  // Auto-accept
 }
 
-let options = GroupCreateOptions {
-    membership_approval_mode: Some(MembershipApprovalMode::On),
-    ..Default::default()
-};
+// Set during creation
+let options = GroupCreateOptions::builder()
+    .subject("My Group")
+    .membership_approval_mode(MembershipApprovalMode::On)
+    .build();
+
+// Or update an existing group
+client.groups().set_membership_approval(&group_jid, MembershipApprovalMode::On).await?;
 ```
 
-### Announcement Mode
+See [Groups API reference](/api/groups#set_membership_approval) for details.
 
-Make it an announcement group (only admins can send messages):
+### Announcement mode
+
+Toggle announcement mode on an existing group (only admins can send messages):
 
 ```rust
-let options = GroupCreateOptions {
-    announce: Some(true),
-    ..Default::default()
-};
+// Enable announcement mode
+client.groups().set_announce(&group_jid, true).await?;
+
+// Disable announcement mode
+client.groups().set_announce(&group_jid, false).await?;
 ```
+
+See [Groups API reference](/api/groups#set_announce) for details.
 
 ### Frequently-forwarded messages
 
@@ -700,7 +723,7 @@ Privacy token attachment is fully automatic. You don't need to call any extra me
 
 See [Client API - AB props cache](/api/client#ab-props-cache) for more details on experiment flags, and [TC Token API](/api/tctoken) for token management.
 
-## Addressing Modes
+## Addressing modes
 
 Groups can use different addressing modes:
 
@@ -724,7 +747,7 @@ match info.addressing_mode {
 LID (Long ID) mode provides better privacy by hiding phone numbers. The library automatically handles LID-to-phone-number mapping when needed.
 </Note>
 
-## Participant Response Codes
+## Participant response codes
 
 When adding or removing participants, check the response codes:
 
@@ -748,7 +771,7 @@ for response in responses {
 }
 ```
 
-## Error Handling
+## Error handling
 
 ```rust
 use anyhow::Result;
@@ -781,9 +804,9 @@ async fn create_group_safely(
 }
 ```
 
-## Advanced Usage
+## Advanced usage
 
-### Handling LID Groups
+### Handling LID groups
 
 For LID-based groups, you may need phone number mappings:
 
@@ -799,7 +822,7 @@ if info.addressing_mode == AddressingMode::Lid {
 }
 ```
 
-### Participant Options
+### Participant options
 
 For advanced participant configurations:
 
@@ -818,11 +841,11 @@ let participant = GroupParticipantOptions::new(lid_jid)
 
 See [Groups API reference](/api/groups) for addressing mode details.
 
-## Best Practices
+## Best practices
 
 <Steps>
 
-### Validate Input Before Creating Groups
+### Validate input before creating groups
 
 ```rust
 // ✅ Good: Validate before creation
@@ -838,7 +861,7 @@ let subject = match GroupSubject::new(user_input) {
 let subject = GroupSubject::new(user_input)?;  // May panic on invalid input
 ```
 
-### Check Response Codes
+### Check response codes
 
 Always check participant operation responses:
 
@@ -862,7 +885,7 @@ if !failed.is_empty() {
 }
 ```
 
-### Handle Addressing Modes
+### Handle addressing modes
 
 Be aware of LID vs PN addressing:
 
@@ -877,7 +900,7 @@ if info.addressing_mode == AddressingMode::Lid {
 }
 ```
 
-### Cache Group Information
+### Cache group information
 
 The library automatically caches group info:
 

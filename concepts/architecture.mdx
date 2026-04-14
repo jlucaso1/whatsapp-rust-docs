@@ -467,7 +467,7 @@ graph LR
     B --> C[Decompress<br/>zlib]
     C --> D[Manual protobuf<br/>field walking]
     D --> E[Bounded channel<br/>cap=4]
-    E --> F[LazyConversation<br/>zero-copy]
+    E --> F[LazyHistorySync<br/>lazy blob]
     F --> G[Event dispatch]
 ```
 
@@ -478,7 +478,7 @@ graph LR
 3. **Hand-rolled protobuf parser** — instead of decoding the entire `HistorySync` message tree (which allocates every nested message), the core walks varint tags manually and only extracts field 2 (conversations) and field 7 (pushnames)
 4. **`Bytes` zero-copy slicing** — decompressed data is wrapped in a reference-counted `Bytes` buffer; each conversation is extracted as `buf.slice(pos..end)`, which is an Arc refcount increment with no per-conversation heap allocation
 5. **Bounded channel streaming** — an `async_channel::bounded::<Bytes>(4)` streams conversation bytes from the blocking parser thread to the async event dispatcher, providing backpressure with only ~4 conversations in-flight
-6. **`LazyConversation` wrapper** — raw `Bytes` are wrapped without parsing; protobuf decoding only happens if the event handler calls `.get()` or `.conversation()`. Each clone parses independently (plain `OnceLock`, not `Arc`-wrapped) since the common case is a single handler. On first parse, embedded messages are immediately cleared and shrunk to reclaim memory. Consumers that need message history can use `.raw_bytes()` to access the raw protobuf bytes for custom decoding, or `.get_with_messages()` for a convenience method that returns a fresh (uncached) decode with the full `WebMessageInfo` array intact
+6. **`LazyHistorySync` wrapper** — the decompressed blob is wrapped in a `LazyHistorySync` with cheap metadata (sync type, chunk order, progress) available without decoding. Full protobuf decoding only happens if the event handler calls `.get()`. Each clone parses independently (plain `OnceLock`, not `Arc`-wrapped) since the common case is a single handler. Consumers can use `.raw_bytes()` to access the raw protobuf bytes for custom partial decoding
 7. **Compile-time callback elimination** — when no event handlers are registered, the callback is `None`, causing the parser to skip conversation extraction entirely at the protobuf level
 
 ### Skip mode

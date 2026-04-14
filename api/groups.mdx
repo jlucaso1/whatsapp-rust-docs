@@ -152,9 +152,13 @@ pub async fn create_group(
   - `member_add_mode: Option<MemberAddMode>` - Who can add members (default: `AllMemberAdd`)
   - `membership_approval_mode: Option<MembershipApprovalMode>` - Require admin approval (default: `Off`)
   - `ephemeral_expiration: Option<u32>` - Disappearing messages timer in seconds (default: `0`)
+  - `is_parent: bool` - Create as a community parent group (default: `false`)
+  - `closed: bool` - Whether the community requires approval to join. Only used when `is_parent` is `true` (default: `false`)
+  - `allow_non_admin_sub_group_creation: bool` - Allow non-admin members to create subgroups. Only used when `is_parent` is `true` (default: `false`)
+  - `create_general_chat: bool` - Create a general chat subgroup alongside the community. Only used when `is_parent` is `true` (default: `false`)
 
 **Returns:**
-- `CreateGroupResult` with `gid: Jid` field. Implements `PartialEq` and `Eq`.
+- `CreateGroupResult` with `gid: Jid` field.
 
 When the `PRIVACY_TOKEN_ON_GROUP_CREATE` AB prop is enabled, the library automatically resolves and attaches privacy tokens (`tc_token`) to each participant during group creation. This is handled internally — you don't need to manage tokens yourself.
 
@@ -1267,7 +1271,63 @@ pub struct GroupProfilePicture {
 }
 ```
 
-## Error Handling
+### CreateGroupResult
+
+Result of creating a group.
+
+```rust
+pub struct CreateGroupResult {
+    pub gid: Jid,
+}
+```
+
+### GroupJoinError
+
+Error codes returned when joining a group via invite fails.
+
+```rust
+pub enum GroupJoinError {
+    AlreadyMember,       // 304 - Already a member of the group
+    BadRequest,          // 400 - Invalid request
+    Forbidden,           // 403 - Not allowed to join
+    NotFound,            // 404 - Group not found
+    NotAllowed,          // 405 - Join method not allowed
+    Conflict,            // 409 - Conflicting state
+    Gone,                // 410 - Group no longer exists
+    CommunityFull,       // 412 - Community has reached capacity
+    GroupFull,           // 419 - Group has reached capacity
+    Locked,              // 423 - Group is locked
+    Unknown(u16),        // Other error code
+}
+```
+
+**Methods:**
+- `from_code(code: u16) -> Self` - Create from a numeric status code
+- `code(&self) -> u16` - Get the numeric status code
+
+### InviteInfoError
+
+Error codes returned when fetching group info from an invite code.
+
+```rust
+pub enum InviteInfoError {
+    BadRequest,            // 400 - Invalid request
+    NotAuthorized,         // 401 - Not authorized
+    NotFound,              // 404 - Invite code not found
+    NotAcceptable,         // 406 - Not acceptable
+    Gone,                  // 410 - Invite code expired
+    ParentGroupSuspended,  // 416 - Parent community is suspended
+    Locked,                // 423 - Group is locked
+    GrowthLocked,          // 436 - Group growth is temporarily locked
+    Unknown(u16),          // Other error code
+}
+```
+
+**Methods:**
+- `from_code(code: u16) -> Self` - Create from a numeric status code
+- `code(&self) -> u16` - Get the numeric status code
+
+## Error handling
 
 All methods return `Result<T, anyhow::Error>`. Common errors:
 

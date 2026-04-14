@@ -208,14 +208,39 @@ if jump > MAX_FORWARD_JUMPS {
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:832-847`
 
-## DM device partitioning
+## DM device fanout
 
-When sending a direct message, the library must encrypt two different plaintexts for two categories of devices:
+When sending a direct message, the library resolves all known devices for both the recipient and your own account, then encrypts two different plaintexts for two categories of devices:
 
 - **Recipient devices** receive the actual message content
 - **Own other devices** (your other linked devices) receive a `DeviceSentMessage` wrapper containing the message plus the destination JID, so your other devices can display the sent message in the correct chat
 
-The `partition_dm_devices` function splits all resolved devices into these two groups, and excludes the exact sender device (the current device) entirely:
+### Device resolution
+
+The DM send path builds the full device list in a WA Web-compliant manner (matching `WAWebSendUserMsgJob` and `WAWebDBDeviceListFanout`):
+
+1. **Local registry first** — the client checks the local device registry via `get_devices_from_registry()` for both the recipient and own account. A network fetch (`get_user_devices`) is only triggered on a cache miss, avoiding unnecessary LID-migration side effects.
+2. **Hosted device filtering** — devices flagged as hosted (via `is_hosted()`) are filtered out, matching WA Web's `DBDeviceListFanout` exclusion.
+3. **Sender device exclusion** — the exact sender device is removed from the list so `ensure_e2e_sessions` never creates a self-session. This matches WA Web's `isMeDevice` check in `getFanOutList`.
+4. **Self-DM deduplication** — when sending to your own account, the recipient and own device lists overlap. A `HashSet`-based dedup pass (matching WA Web's `Map` keyed by `toString`) removes duplicates.
+
+```rust
+// Build device list — local registry first, network on miss
+let mut recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
+if recipient_cached.is_none() {
+    let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+    recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
+}
+
+// Filter hosted devices, exclude sender, dedup for self-DMs
+all_dm_jids.retain(|j| !j.is_hosted());
+all_dm_jids.retain(|j| !is_sender);
+// HashSet dedup for self-DM overlap
+```
+
+### Device partitioning
+
+The `partition_dm_devices` function splits all resolved devices into recipient and own groups, and excludes the exact sender device (the current device) entirely:
 
 ```rust
 fn partition_dm_devices(
@@ -254,7 +279,27 @@ This ensures that your own devices registered under your LID (common in multi-de
   Both PN-based and LID-based devices must be checked because WhatsApp's multi-device architecture uses both addressing schemes. A user's devices may appear under either their phone number JID (`@s.whatsapp.net`) or their Linked Identity JID (`@lid`), depending on the device type and registration path.
 </Note>
 
-Location: `wacore/src/send.rs:590-619`
+### PreparedDmStanza
+
+`prepare_dm_stanza` returns a `PreparedDmStanza` struct containing the stanza node and the locally computed phash for server ACK validation:
+
+```rust
+pub struct PreparedDmStanza {
+    pub node: Node,
+    /// Locally computed phash from the sent device set. Not sent on the
+    /// wire (WA Web only sends phash for groups). Used by the caller to
+    /// compare against the server's ACK phash for device-list drift detection.
+    pub phash: Option<String>,
+}
+```
+
+The phash is computed from the actual sent device set (after partitioning, with the sender excluded) using `MessageUtils::participant_list_hash()`. Unlike group messages, the DM phash is **not** sent on the wire — WA Web only includes `phash` in the `DeviceSentMessage` for groups. The DM phash is used purely for local validation against the server's ACK to detect device-list drift.
+
+<Note>
+  The `DeviceSentMessage.phash` field is set to `None` for DMs, matching WA Web's behavior where only group `DeviceSentMessage` wrappers include a phash. The DM phash is computed and tracked separately by the caller.
+</Note>
+
+Location: `wacore/src/send.rs:675-820`, `src/send.rs`
 
 ## PN→LID session migration
 
@@ -298,13 +343,15 @@ Identity keys are migrated independently of sessions — they can outlive delete
 
 ### On-the-fly migration during decryption
 
-If a message arrives from a LID address and decryption fails with `SessionNotFound`, the client attempts PN→LID migration as a fallback before requesting a retry:
+If a message arrives from a LID address and decryption fails with `SessionNotFound` or `InvalidPreKeyId`, the client attempts PN→LID migration as a fallback before requesting a retry:
 
 1. Look up the PN for the sender's LID
 2. Attempt to migrate PN sessions to LID via the signal cache (same cache-first logic as proactive migration)
 3. Retry decryption with the migrated session (already in the cache — no reload needed)
 4. If `DuplicatedMessage` occurs during post-migration retry, it is silently ignored
 5. Fall back to retry receipt only if migration does not resolve the issue
+
+The `InvalidPreKeyId` case occurs when a `PreKeyMessage` references a consumed one-time prekey, but the session actually exists under a PN address (legacy migration). Migrating the session lets Signal use the existing ratchet state instead of looking up the consumed prekey. This migration is attempted in both the identity-change retry path and the initial decryption path.
 
 This ensures existing databases are fixed without requiring re-pairing.
 
@@ -575,11 +622,11 @@ Location: `src/sender_key_device_cache.rs`, `src/send.rs`
 
 ### Phash validation for stale device list detection
 
-When sending group or status messages, the library validates the participant hash (`phash`) returned in the server's acknowledgment against the locally computed `phash` from the outgoing stanza. A mismatch indicates that the server's view of group participants differs from the client's — meaning the local device list is stale.
+When sending group, status, or DM messages, the library validates the participant hash (`phash`) returned in the server's acknowledgment against the locally computed `phash`. A mismatch indicates that the server's view of participant devices differs from the client's — meaning the local device list is stale.
 
 **How it works:**
 
-1. Before sending, the client reads the `phash` attribute from the prepared message stanza (if present)
+1. Before sending, the client obtains the locally computed `phash` — from the stanza `phash` attribute for group/status messages, or from `PreparedDmStanza.phash` for DMs
 2. A oneshot ack waiter is registered for the message ID via `register_ack_waiter`
 3. The message stanza is sent to the server
 4. A background task (`spawn_phash_validation`) awaits the server's ack (with a 10-second timeout)
@@ -587,21 +634,29 @@ When sending group or status messages, the library validates the participant has
 
 **On mismatch, the following caches are invalidated:**
 
-| Send path | Sender key device cache | Group info cache |
-|-----------|------------------------|-----------------|
-| Group messages | Invalidated | Invalidated |
-| Status messages | Invalidated | Not invalidated |
+| Send path | Sender key device cache | Group info cache | Device registry |
+|-----------|------------------------|-----------------|-----------------|
+| Group messages | Invalidated | Invalidated | — |
+| Status messages | Invalidated | Not invalidated | — |
+| DM messages | — | — | Recipient + own PN devices invalidated |
 
-This ensures the next send to the same group re-fetches the current participant device list and group metadata from the server, preventing repeated sends to stale device lists.
+For DM messages, the phash covers both recipient and own devices (matching WA Web's `syncDeviceListJob([recipient, me])`). On mismatch, the client invalidates the device registry cache for both the recipient's user JID and your own phone number (PN) JID, ensuring the next send re-fetches the current device list for both parties.
 
 ```rust
 // src/send.rs — simplified phash validation flow
+
+// Group/status path: phash from stanza attribute
 let our_phash = stanza.attrs().optional_string("phash").map(|s| s.into_owned());
 
-if let Some(phash) = &our_phash {
-    let ack_rx = self.register_ack_waiter(&request_id).await;
-    self.send_node(stanza).await?;
-    self.spawn_phash_validation(ack_rx, phash.clone(), to.clone(), invalidate_group_cache);
+// DM path: phash from PreparedDmStanza (not on the wire)
+let dm_phash = prepared.phash;
+
+// On DM phash mismatch:
+if !jid.is_group() && !jid.is_status_broadcast() {
+    client.invalidate_device_cache(&jid.user).await;
+    if let Some(own_pn) = &client.persistence_manager.get_device_snapshot().await.pn {
+        client.invalidate_device_cache(&own_pn.user).await;
+    }
 }
 ```
 
@@ -1063,11 +1118,15 @@ let session_mutexes = self.session_mutexes_for(&lock_jids).await;
 // Guards acquired in sorted order to prevent deadlocks
 ```
 
-**DM server-side fanout:**
+**DM multi-device fanout:**
 
-The DM send path uses **bare recipient JID** addressing (device 0) for the recipient, relying on WhatsApp's server-side fanout to route the encrypted message to the correct recipient device. This matches WhatsApp Web's `MsgCreateFanoutStanza.js` behavior — for CHAT fanout with a single primary device, the client encrypts directly for that bare device only, and the server routes the `<enc>` to the correct recipient device.
+The DM send path resolves all known recipient devices and own companion devices, encrypting per-device for each. This matches WA Web's `WAWebSendUserMsgJob` behavior where the local device table is read on the send path, and `WAWebDBDeviceListFanout` filters out hosted devices. The client checks the local device registry first (via `get_devices_from_registry()`); a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects from `get_user_devices`. The sender device is excluded (matching WA Web's `isMeDevice` in `getFanOutList`), and for self-DMs, overlapping device lists are deduplicated using a `HashSet` (matching WA Web's `Map` keyed by `toString`).
 
-Own companion devices (your other linked devices) still receive per-device encryption for multi-device self-sync via `DeviceSentMessage`.
+Own companion devices (your other linked devices) receive per-device encryption for multi-device self-sync via `DeviceSentMessage`.
+
+<Note>
+WA Web has a bare-`<enc>` fast path for single primary device (`WAWebSendMsgCreateFanoutStanza`). This is not implemented in whatsapp-rust because `encrypt_for_devices` always wraps in `<to jid=...>` nodes. The `<participants>` form is accepted by the server regardless.
+</Note>
 
 **DM per-device locking:**
 

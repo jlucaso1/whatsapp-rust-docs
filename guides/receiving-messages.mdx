@@ -576,7 +576,7 @@ For advanced cases (identity changes, session cleanup):
 // - Detects UntrustedIdentity errors during decryption
 // - Clears the old identity key (but preserves the session for in-flight messages)
 // - Retries decryption with the new identity
-// - Handles InvalidPreKeyId in the retry path by requesting a retry from the sender
+// - On InvalidPreKeyId, attempts PN→LID session migration before requesting a retry
 // - Re-issues TC tokens so the contact retains a valid privacy token
 ```
 

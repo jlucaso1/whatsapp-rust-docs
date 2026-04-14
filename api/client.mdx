@@ -1271,7 +1271,7 @@ This is intended for advanced users who need to build custom protocol interactio
 ### send_iq
 
 ```rust
-pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError>
+pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Arc<OwnedNodeRef>, IqError>
 ```
 
 Sends a custom IQ (Info/Query) stanza to the WhatsApp server.
@@ -1331,7 +1331,7 @@ let metadata = client.execute(GroupQueryIq::new(&group_jid)).await?;
 ### wait_for_node
 
 ```rust
-pub fn wait_for_node(&self, filter: NodeFilter) -> oneshot::Receiver<Arc<Node>>
+pub fn wait_for_node(&self, filter: NodeFilter) -> oneshot::Receiver<Arc<OwnedNodeRef>>
 ```
 
 Waits for a specific incoming protocol node matching the given filter. Returns a receiver that resolves when a matching node arrives.

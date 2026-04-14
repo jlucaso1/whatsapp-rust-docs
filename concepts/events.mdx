@@ -1516,7 +1516,7 @@ Event::IdentityChange(change) => {
 pub struct BusinessStatusUpdate {
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
-    pub timestamp: i64,
+    pub timestamp: DateTime<Utc>,
     pub target_jid: Option<Jid>,
     pub hash: Option<String>,
     pub verified_name: Option<String>,

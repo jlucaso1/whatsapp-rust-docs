@@ -912,6 +912,9 @@ The `action` field on `GroupUpdate` is a `GroupNotificationAction` enum with the
 | `NotAnnounce` | `<not_announcement>` | All members can send messages |
 | `Ephemeral { expiration, trigger }` | `<ephemeral>` | Disappearing messages setting changed |
 | `MembershipApprovalMode { enabled }` | `<membership_approval_mode>` | Join approval toggled |
+| `MembershipApprovalRequest { request_method, parent_group_jid }` | `<membership_approval_request>` | A user requested to join the group |
+| `CreatedMembershipRequests { request_method, parent_group_jid, requests }` | `<created_membership_requests>` | Admin-side: new join requests appeared |
+| `RevokedMembershipRequests { participants }` | `<revoked_membership_requests>` | Membership requests rejected or cancelled |
 | `MemberAddMode { mode }` | `<member_add_mode>` | Who can add members (`admin_add` or `all_member_add`) |
 | `NoFrequentlyForwarded` | `<no_frequently_forwarded>` | Forwarding restricted |
 | `FrequentlyForwardedOk` | `<frequently_forwarded_ok>` | Forwarding allowed |
@@ -934,6 +937,22 @@ pub struct GroupParticipantInfo {
 }
 ```
 
+Membership request variants include a `request_method` field of type `MembershipRequestMethod`:
+
+```rust
+pub enum MembershipRequestMethod {
+    InviteLink,        // User clicked an invite link
+    LinkedGroupJoin,   // User joined via a linked community subgroup
+    NonAdminAdd,       // A non-admin member tried to add the user
+}
+```
+
+- `MembershipApprovalRequest` — emitted when a user requests to join a group. The requester is identified by the parent `GroupUpdate::participant` field.
+- `CreatedMembershipRequests` — admin-side notification: new join requests appeared. The `requests` field contains the requesting users (as `Vec<GroupParticipantInfo>`).
+- `RevokedMembershipRequests` — emitted when membership requests are rejected by an admin or cancelled by the requester. The `participants` field contains the affected JIDs.
+
+Both `MembershipApprovalRequest` and `CreatedMembershipRequests` include an optional `parent_group_jid` field for community-linked joins.
+
 **Example: handling specific group actions:**
 ```rust
 use wacore::stanza::groups::GroupNotificationAction;
@@ -954,6 +973,20 @@ Event::GroupUpdate(update) => {
             } else {
                 println!("Disappearing messages set to {}s in {}", expiration, update.group_jid);
             }
+        }
+        GroupNotificationAction::MembershipApprovalRequest { request_method, parent_group_jid } => {
+            println!("Join request in {} via {:?}", update.group_jid, request_method);
+            if let Some(parent) = parent_group_jid {
+                println!("From community: {}", parent);
+            }
+        }
+        GroupNotificationAction::CreatedMembershipRequests { requests, request_method, .. } => {
+            println!("{} new join requests in {} via {:?}",
+                requests.len(), update.group_jid, request_method);
+        }
+        GroupNotificationAction::RevokedMembershipRequests { participants } => {
+            println!("{} membership requests revoked in {}",
+                participants.len(), update.group_jid);
         }
         _ => {}
     }

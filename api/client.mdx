@@ -1605,6 +1605,33 @@ Sets passive mode. When `false` (active), the server starts sending offline mess
 
 ## Prekeys
 
+### refresh_pre_keys
+
+```rust
+pub async fn refresh_pre_keys(&self) -> Result<(), anyhow::Error>
+```
+
+Force-refreshes the server's one-time pre-key pool with a fresh batch. This is intended for device migration scenarios where you restore a device from an external source (e.g., migrating a Baileys session into an `InMemoryBackend`) and the server may still hold pre-key IDs whose private key material you cannot reconstruct.
+
+Any `pkmsg` referencing those old IDs will fail permanently with `InvalidPreKeyId`. Calling `refresh_pre_keys()` uploads a fresh batch that the caller *does* have locally, and old unmatched IDs drain as peers consume them.
+
+**Behavior:**
+
+- Acquires the internal `prekey_upload_lock` so this force-upload cannot race with the count-based and digest-repair upload paths
+- Uploads a full batch of 812 pre-keys with Fibonacci retry backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s)
+- Retries until success or the connection is lost
+
+<Warning>
+Only call this after restoring a device from an external session store. Under normal operation, the client manages pre-key uploads automatically.
+</Warning>
+
+**Example:**
+
+```rust
+// After migrating a session from another library (e.g., Baileys)
+client.refresh_pre_keys().await?;
+```
+
 ### send_digest_key_bundle
 
 ```rust

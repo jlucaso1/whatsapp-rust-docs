@@ -781,6 +781,21 @@ let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64)
 
 Location: `src/prekeys.rs`
 
+### Force-refreshing pre-keys for device migration
+
+When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.
+
+The public `refresh_pre_keys()` method force-uploads a fresh batch of 812 pre-keys, giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
+
+```rust
+// After restoring a session from another library
+client.refresh_pre_keys().await?;
+```
+
+Internally, this acquires `prekey_upload_lock` to prevent races with the count-based and digest-repair upload paths, then calls `upload_pre_keys_with_retry(force: true)` which uses Fibonacci backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s).
+
+Location: `src/prekeys.rs:263-266`
+
 ### Digest key validation
 
 After connection, the client validates that the server's copy of the key bundle matches local keys. This matches WhatsApp Web's `WAWebDigestKeyJob.digestKey()` flow.

@@ -163,6 +163,35 @@ pub trait Runtime: Send + Sync + 'static {
 | `yield_now` | Cooperatively yield; return `None` if unnecessary (e.g., multi-threaded runtimes) |
 | `yield_frequency` | How many items to process before yielding in tight loops (default: `10`) |
 
+#### Helper functions
+
+The `runtime` module also provides two runtime-agnostic helper functions that work with any `Runtime` implementation:
+
+**`timeout`** — Race a future against a deadline using the runtime's `sleep` implementation:
+
+```rust
+pub async fn timeout<F, T>(
+    rt: &dyn Runtime,
+    duration: Duration,
+    future: F,
+) -> Result<T, Elapsed>
+where
+    F: Future<Output = T>,
+```
+
+Returns `Ok(value)` if the future completes before the duration, or `Err(Elapsed)` if it times out. This is the runtime-agnostic replacement for `tokio::time::timeout` — the library uses it internally for phash validation, media retry timeouts, session establishment, and IQ response waiting.
+
+**`blocking`** — Offload a blocking closure and return its result:
+
+```rust
+pub async fn blocking<T: Send + 'static>(
+    rt: &dyn Runtime,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T
+```
+
+Wraps `Runtime::spawn_blocking` with a oneshot channel to ferry the closure's return value back to the caller. On WASM, the closure runs inline since there is only one thread.
+
 The `net` module defines the networking abstractions:
 
 - **`Transport`** — active connection for sending/receiving raw bytes

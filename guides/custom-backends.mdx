@@ -635,6 +635,124 @@ To target WASM, disable all default features and implement `Runtime` without `Se
 If you are implementing a single-threaded runtime, override `yield_frequency()` to return `1` and have `yield_now()` return `Some(future)`. This ensures the event loop is not starved during tight processing loops (e.g., decoding incoming frames).
 </Note>
 
+## Proxy and custom TLS
+
+whatsapp-rust has two separate network layers, each with its own extension point for proxy and TLS customization:
+
+| Layer | Purpose | Extension point |
+|-------|---------|----------------|
+| **WebSocket transport** | WhatsApp protocol connection | `TransportFactory` trait / `with_connector` |
+| **HTTP client** | Media upload/download, version fetching | `HttpClient` trait / `UreqHttpClient::with_agent` |
+
+To route all traffic through a proxy, you need to configure **both** layers.
+
+### Custom TLS for the WebSocket transport
+
+Use `TokioWebSocketTransportFactory::with_connector` to supply a custom TLS `Connector` — for example, adding custom CA certificates or client certificates:
+
+```rust
+use whatsapp_rust_tokio_transport::{TokioWebSocketTransportFactory, Connector};
+use tokio_rustls::TlsConnector;
+use rustls::RootCertStore;
+use std::sync::Arc;
+
+let mut root_store = RootCertStore::empty();
+root_store.add_parsable_certificates(my_ca_certs);
+
+let tls_config = rustls::ClientConfig::builder()
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
+
+let connector = Connector::Rustls(TlsConnector::from(Arc::new(tls_config)));
+
+let factory = TokioWebSocketTransportFactory::new()
+    .with_connector(connector);
+```
+
+Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point.
+
+### Full proxy support for the WebSocket transport
+
+For full proxy support (SOCKS5, HTTP CONNECT, etc.), implement the `TransportFactory` trait directly. Establish the WebSocket connection through your proxy, then wrap it with `from_websocket`:
+
+```rust
+use whatsapp_rust_tokio_transport::from_websocket;
+use wacore::net::{Transport, TransportEvent, TransportFactory};
+use async_trait::async_trait;
+use std::sync::Arc;
+
+struct ProxyTransportFactory {
+    proxy_addr: String,
+    target_url: String,
+}
+
+#[async_trait]
+impl TransportFactory for ProxyTransportFactory {
+    async fn create_transport(
+        &self,
+    ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
+        // 1. Connect to proxy (example: SOCKS5)
+        let proxy_stream = tokio_socks::tcp::Socks5Stream::connect(
+            &self.proxy_addr,
+            "web.whatsapp.com:443",
+        ).await?;
+
+        // 2. Upgrade to TLS + WebSocket through the proxy
+        let (ws, _) = tokio_websockets::ClientBuilder::from_uri(
+            self.target_url.parse()?,
+        )
+        .connect_on(proxy_stream)
+        .await?;
+
+        // 3. Wrap the WebSocket into a Transport + event channel
+        Ok(from_websocket(ws))
+    }
+}
+```
+
+### Proxy support for the HTTP client
+
+Use `UreqHttpClient::with_agent` to supply a pre-configured `ureq::Agent` with proxy settings:
+
+```rust
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use ureq::config::Config;
+
+let agent: ureq::Agent = Config::builder()
+    .proxy(ureq::Proxy::new("socks5://127.0.0.1:1080")?)
+    .build()
+    .into();
+
+let http_client = UreqHttpClient::with_agent(agent);
+```
+
+Alternatively, implement the `HttpClient` trait directly for full control over HTTP behavior.
+
+### Combining both layers
+
+To route all traffic through a proxy, configure both the transport factory and the HTTP client:
+
+```rust
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(ProxyTransportFactory {
+        proxy_addr: "127.0.0.1:1080".to_string(),
+        target_url: "wss://web.whatsapp.com/ws/chat".to_string(),
+    })
+    .with_http_client(UreqHttpClient::with_agent(proxy_agent))
+    .with_runtime(TokioRuntime)
+    .on_event(|event, client| async move { /* ... */ })
+    .build()
+    .await?;
+```
+
+<Note>
+The WebSocket transport handles the persistent WhatsApp protocol connection, while the HTTP client handles media operations (upload/download) and version fetching. Both must be configured separately for full proxy coverage.
+</Note>
+
 ## Custom Transport Backend
 
 ### Transport Trait

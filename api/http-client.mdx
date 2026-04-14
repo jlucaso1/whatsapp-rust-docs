@@ -220,7 +220,43 @@ let client = UreqHttpClient::new();
 
 // Or use default
 let client = UreqHttpClient::default();
+
+// With a pre-configured agent (proxy, custom TLS, timeouts, etc.)
+let agent = ureq::Agent::new_with_config(
+    ureq::config::Config::builder()
+        // your custom settings here
+        .build()
+);
+let client = UreqHttpClient::with_agent(agent);
 ```
+
+#### with_agent
+
+```rust
+pub fn with_agent(agent: ureq::Agent) -> Self
+```
+
+Creates a client with a pre-configured `ureq::Agent`. This lets you configure proxy support, custom TLS, timeouts, or any other agent-level settings externally.
+
+This is the primary extension point for customizing HTTP behavior — for example, routing media uploads and downloads through a proxy, or using custom CA certificates.
+
+**Parameters:**
+- `agent` - A pre-configured `ureq::Agent`
+
+**Example — proxy support:**
+
+```rust
+use ureq::config::Config;
+
+let agent: ureq::Agent = Config::builder()
+    .proxy(ureq::Proxy::new("socks5://127.0.0.1:1080")?)
+    .build()
+    .into();
+
+let client = UreqHttpClient::with_agent(agent);
+```
+
+See [custom backends — proxy and custom TLS](/guides/custom-backends#proxy-and-custom-tls) for a complete guide.
 
 ### Usage Examples
 

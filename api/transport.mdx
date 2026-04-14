@@ -184,7 +184,60 @@ let factory = TokioWebSocketTransportFactory::new();
 // Custom URL
 let factory = TokioWebSocketTransportFactory::new()
     .with_url("wss://custom-endpoint.example.com/ws");
+
+// Custom TLS connector (e.g. custom CA certificates, client certs)
+let factory = TokioWebSocketTransportFactory::new()
+    .with_connector(my_custom_connector);
 ```
+
+#### with_connector
+
+```rust
+pub fn with_connector(self, connector: Connector) -> Self
+```
+
+Uses a custom TLS `Connector` instead of the built-in default. This is the primary extension point for custom TLS configuration — for example, adding custom CA certificates or client certificates.
+
+For full proxy support, implement `TransportFactory` directly and use [`from_websocket`](#from_websocket) instead.
+
+**Parameters:**
+- `connector` - A `tokio_websockets::Connector` (re-exported as `whatsapp_rust::transport::Connector`)
+
+**Example — custom CA certificate:**
+
+```rust
+use whatsapp_rust_tokio_transport::{TokioWebSocketTransportFactory, Connector, default_tls_connector};
+use tokio_rustls::TlsConnector;
+use rustls::RootCertStore;
+use std::sync::Arc;
+
+// Build a custom TLS config with your own CA
+let mut root_store = RootCertStore::empty();
+root_store.add_parsable_certificates(my_ca_certs);
+
+let config = rustls::ClientConfig::builder()
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
+
+let connector = Connector::Rustls(TlsConnector::from(Arc::new(config)));
+
+let factory = TokioWebSocketTransportFactory::new()
+    .with_connector(connector);
+```
+
+<Note>
+Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point before customizing.
+</Note>
+
+### default_tls_connector
+
+```rust
+pub fn default_tls_connector() -> Connector
+```
+
+Returns the default TLS connector used by `TokioWebSocketTransportFactory`. Uses rustls with `webpki_roots` for certificate validation and `ring` as the crypto provider.
+
+This is useful as a starting point when you need to inspect or replicate the default TLS configuration before customizing it via `with_connector`.
 
 ### Usage with Bot builder
 
@@ -278,6 +331,50 @@ impl TransportFactory for MyTransportFactory {
 <Note>
 `TokioWebSocketTransportFactory` itself delegates to `from_websocket` internally. Use the factory when the default DNS/TCP/TLS behavior is sufficient, and `from_websocket` when you need full control over the connection.
 </Note>
+
+### Proxy support
+
+The transport layer provides two approaches for proxy support, depending on your needs:
+
+**Option 1: Implement `TransportFactory` directly** — for full control over the connection (SOCKS5, HTTP CONNECT, etc.). Establish a WebSocket through the proxy yourself, then wrap it with `from_websocket`:
+
+```rust
+use whatsapp_rust_tokio_transport::from_websocket;
+use wacore::net::{Transport, TransportEvent, TransportFactory};
+
+struct ProxyTransportFactory {
+    proxy_url: String,
+}
+
+#[async_trait]
+impl TransportFactory for ProxyTransportFactory {
+    async fn create_transport(
+        &self,
+    ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
+        // 1. Connect to proxy
+        let proxy_stream = connect_to_proxy(&self.proxy_url).await?;
+
+        // 2. Upgrade to WebSocket through the proxy
+        let (ws, _) = tokio_websockets::ClientBuilder::from_uri(
+            "wss://web.whatsapp.com/ws/chat".parse()?
+        )
+        .connect_on(proxy_stream)
+        .await?;
+
+        // 3. Wrap into Transport
+        Ok(from_websocket(ws))
+    }
+}
+```
+
+**Option 2: Use `with_connector`** — for custom TLS only (no proxy routing). The factory still handles DNS and TCP, but you control the TLS layer:
+
+```rust
+let factory = TokioWebSocketTransportFactory::new()
+    .with_connector(my_custom_tls_connector);
+```
+
+See [custom backends — proxy and custom TLS](/guides/custom-backends#proxy-and-custom-tls) for a complete guide with examples.
 
 ### TLS configuration
 

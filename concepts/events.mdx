@@ -239,7 +239,7 @@ if reason.should_reconnect() {
 #[derive(Debug, Clone, Serialize)]
 pub struct TemporaryBan {
     pub code: TempBanReason,
-    pub expire: Duration,
+    pub expire: chrono::Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1563,14 +1563,15 @@ You must call `client.newsletter().subscribe_live_updates(&jid)` to receive thes
 pub struct DisappearingModeChanged {
     pub from: Jid,
     pub duration: u32,
-    pub setting_timestamp: u64,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub setting_timestamp: DateTime<Utc>,
 }
 ```
 
 **Fields:**
 - `from` - The contact whose disappearing messages setting changed
 - `duration` - New duration in seconds (`0` = disabled, `86400` = 24 hours, `604800` = 7 days, etc.)
-- `setting_timestamp` - Unix timestamp (seconds) when the setting was changed
+- `setting_timestamp` - `DateTime<Utc>` indicating when the setting was changed (serialized as Unix timestamp in seconds)
 
 <Note>
 You should only apply this update if `setting_timestamp` is newer than your previously stored value for this contact. This prevents out-of-order updates from overwriting newer settings.

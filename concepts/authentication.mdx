@@ -136,7 +136,7 @@ for code in codes_clone {
         Duration::from_secs(20)
     };
 
-    client.core.event_bus.dispatch(&Event::PairingQrCode { code, timeout });
+    client.core.event_bus.dispatch(Event::PairingQrCode { code, timeout });
 
     let sleep = client_clone.runtime.sleep(timeout);
     let stop = stop_rx.recv();
@@ -274,7 +274,7 @@ Event::PairingCode {
 **Generated in:** `src/pair_code.rs:215-219`
 
 ```rust
-self.core.event_bus.dispatch(&Event::PairingCode {
+self.core.event_bus.dispatch(Event::PairingCode {
     code: code.clone(),
     timeout: PairCodeUtils::code_validity(),
 });

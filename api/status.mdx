@@ -1,9 +1,9 @@
 ---
 title: Status
-description: Post and manage WhatsApp status/story updates
+description: Post, react to, and manage WhatsApp status/story updates
 ---
 
-The `Status` feature provides APIs for posting text, image, and video status updates, as well as revoking previously sent statuses.
+The `Status` feature provides APIs for posting text, image, and video status updates, reacting to statuses (e.g. the "like" heart), and revoking previously sent statuses.
 
 ## Access
 
@@ -210,6 +210,49 @@ client.status()
     .revoke(&result.message_id, &recipients, Default::default())
     .await?;
 ```
+
+### send_reaction
+
+React to someone's status update (e.g. the "like" heart on WhatsApp). Pass an empty string to remove a previous reaction.
+
+```rust
+pub async fn send_reaction(
+    &self,
+    status_owner: &Jid,
+    server_id: u64,
+    reaction: &str,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `status_owner` - JID of the person whose status you are reacting to
+- `server_id` - Server-assigned ID of the status message
+- `reaction` - Emoji to send (e.g. `"💚"`). Pass `""` to remove the reaction
+
+**Example:**
+```rust
+// React to a status with a heart emoji
+client.status()
+    .send_reaction(
+        &Jid::pn("15551234567"),
+        1234567890,
+        "💚",
+    )
+    .await?;
+
+// Remove a previous reaction
+client.status()
+    .send_reaction(
+        &Jid::pn("15551234567"),
+        1234567890,
+        "",
+    )
+    .await?;
+```
+
+<Note>
+The `server_id` is the server-assigned numeric ID of the status message, not the client-generated message ID. You can obtain it from the status message event payload.
+</Note>
 
 ## Types
 

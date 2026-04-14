@@ -514,6 +514,17 @@ Access group management operations.
 - `approve_membership_requests(jid: &Jid, participants: &[Jid])` - Approve pending requests
 - `reject_membership_requests(jid: &Jid, participants: &[Jid])` - Reject pending requests
 - `set_member_add_mode(jid: &Jid, mode: MemberAddMode)` - Set who can add members
+- `set_no_frequently_forwarded(jid: &Jid, restrict: bool)` - Restrict forwarding of frequently forwarded messages
+- `set_allow_admin_reports(jid: &Jid, allow: bool)` - Allow or disallow admin reports
+- `set_group_history(jid: &Jid, enabled: bool)` - Enable or disable group history for new members
+- `set_member_link_mode(jid: &Jid, mode: MemberLinkMode)` - Set member link mode
+- `set_member_share_history_mode(jid: &Jid, mode: MemberShareHistoryMode)` - Set history sharing mode for new members
+- `set_limit_sharing(jid: &Jid, enabled: bool)` - Limit sharing within the group
+- `cancel_membership_requests(jid: &Jid, participants: &[Jid])` - Cancel pending membership requests
+- `revoke_request_code(jid: &Jid, participants: &[Jid])` - Revoke request codes for participants
+- `acknowledge(jid: &Jid)` - Acknowledge a group
+- `batch_get_info(jids: Vec<Jid>)` - Batch fetch group metadata for multiple groups
+- `get_profile_pictures(group_jids: Vec<Jid>, picture_type: PictureType)` - Batch fetch group profile pictures
 
 **Example:**
 ```rust

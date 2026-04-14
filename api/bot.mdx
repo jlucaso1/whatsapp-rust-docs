@@ -447,11 +447,11 @@ When your bot receives history sync data, the pipeline:
 
 1. **Stream-decrypts** external blobs in 8KB chunks (or moves inline payloads without copying)
 2. **Decompresses** zlib data on a blocking thread with pre-allocated buffers capped at 8 MiB
-3. **Walks protobuf fields manually** instead of decoding the entire message tree — only conversations and pushnames are extracted
-4. **Streams conversations** through a bounded channel (capacity 4) as zero-copy `Bytes` slices
-5. **Wraps each conversation** in a [`LazyConversation`](/concepts/events#lazyconversation) — protobuf parsing is deferred until you call `.get()`, and embedded messages are cleared on first parse to reclaim memory. Use `.raw_bytes()` or `.get_with_messages()` if you need access to the full message history
+3. **Walks protobuf fields manually** instead of decoding the entire message tree — only internal data (pushname, NCT salt, TC tokens) is extracted at this stage
+4. **Wraps the decompressed blob** in a [`LazyHistorySync`](/concepts/events#lazyhistorysync) with cheap metadata (sync type, chunk order, progress) available without decoding
+5. **Dispatches** `Event::HistorySync(Box<LazyHistorySync>)` — full protobuf decoding is deferred until you call `.get()`. Use `.raw_bytes()` for custom partial decoding if you only need specific fields
 
-If no event handlers are registered, conversation extraction is skipped entirely at the protobuf level.
+If no event handlers are registered, the blob is not retained in memory.
 
 ### skip_history_sync
 

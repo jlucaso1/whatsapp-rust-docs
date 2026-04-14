@@ -112,7 +112,6 @@ pub enum Event {
     SelfPushNameUpdated(SelfPushNameUpdated),
 
     // Group Updates
-    JoinedGroup(LazyConversation),
     GroupUpdate(GroupUpdate),
 
     // Contact Updates
@@ -131,7 +130,7 @@ pub enum Event {
     DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
 
     // History Sync
-    HistorySync(HistorySync),
+    HistorySync(Box<LazyHistorySync>),
     OfflineSyncPreview(OfflineSyncPreview),
     OfflineSyncCompleted(OfflineSyncCompleted),
 
@@ -863,24 +862,6 @@ pub struct SelfPushNameUpdated {
 
 ## Group Events
 
-### JoinedGroup
-
-**Emitted:** When added to a group, and for each conversation received during history sync
-
-```rust
-Event::JoinedGroup(LazyConversation)
-```
-
-**LazyConversation:** Lazily-parsed conversation data. This event is used both for real-time group join notifications and as the per-conversation delivery mechanism for history sync. During history sync, the pipeline streams each conversation through a bounded channel and dispatches it as `Event::JoinedGroup(LazyConversation)`.
-
-```rust
-Event::JoinedGroup(lazy_conv) => {
-    if let Some(conv) = lazy_conv.get() {
-        println!("Conversation: {}", conv.id);
-    }
-}
-```
-
 ### GroupUpdate
 
 **Emitted:** For each action in a group notification (subject changes, participant changes, settings updates, etc.). A single notification may produce multiple `GroupUpdate` events.
@@ -1278,13 +1259,78 @@ Event::DeleteMessageForMeUpdate(update) => {
 **Emitted:** For chat history synchronization
 
 ```rust
-Event::HistorySync(HistorySync)
+Event::HistorySync(Box<LazyHistorySync>)
 ```
 
-**HistorySync:** Protobuf message containing chat history
+**LazyHistorySync** wraps the decompressed protobuf bytes of a history sync blob and only decodes the full `wa::HistorySync` proto on demand. Cheap metadata (`sync_type`, `chunk_order`, `progress`) is available without decoding, so you can filter or route events without paying the decode cost.
+
+```rust
+pub struct LazyHistorySync {
+    raw_bytes: Bytes,
+    sync_type: i32,
+    chunk_order: Option<u32>,
+    progress: Option<u32>,
+    parsed: OnceLock<Option<Box<wa::HistorySync>>>,
+}
+
+impl LazyHistorySync {
+    /// History sync type (e.g. InitialBootstrap, Recent, PushName).
+    /// Available without decoding the proto.
+    pub fn sync_type(&self) -> i32;
+
+    /// Chunk ordering for multi-chunk transfers.
+    pub fn chunk_order(&self) -> Option<u32>;
+
+    /// Sync progress (0-100).
+    pub fn progress(&self) -> Option<u32>;
+
+    /// Full decode of the history sync proto, cached via OnceLock.
+    /// Returns `None` if decoding fails.
+    pub fn get(&self) -> Option<&wa::HistorySync>;
+
+    /// Access the raw decompressed protobuf bytes for custom/partial decoding.
+    pub fn raw_bytes(&self) -> &[u8];
+}
+```
+
+**Key characteristics:**
+
+- **Metadata without decoding** — `sync_type()`, `chunk_order()`, and `progress()` are extracted during the streaming phase and available immediately
+- **Parse-once semantics** — `get()` decodes the full proto on first call and caches the result via `OnceLock`. With `Arc<Event>` dispatch, all handlers share the same `LazyHistorySync` instance
+- **Raw bytes access** — `raw_bytes()` provides the decompressed protobuf bytes for custom or partial decoding without triggering the full decode
+- **Cheap clone** — Cloning shares the underlying `Bytes` buffer (reference-counted) but creates a fresh `OnceLock`, so each clone decodes independently
+- **Serialization** — Only metadata (sync_type, chunk_order, progress) is serialized, not the blob
+
+<Warning>
+Full decode via `get()` materializes the proto in memory alongside the raw bytes (~2x decompressed size). For large `InitialBootstrap` blobs, prefer `raw_bytes()` with partial decoding if you only need specific fields.
+</Warning>
+
+**Example:**
+```rust
+Event::HistorySync(lazy_sync) => {
+    println!("History sync type: {}, progress: {:?}", 
+        lazy_sync.sync_type(), lazy_sync.progress());
+
+    // Full decode (cached after first call)
+    if let Some(history) = lazy_sync.get() {
+        for conv in &history.conversations {
+            println!("Conversation: {:?}", conv.id);
+        }
+    }
+}
+```
+
+**Partial decoding with raw bytes:**
+```rust
+Event::HistorySync(lazy_sync) => {
+    // Decode only what you need from raw protobuf bytes
+    let history = wa::HistorySync::decode(lazy_sync.raw_bytes()).unwrap();
+    println!("Conversations: {}", history.conversations.len());
+}
+```
 
 <Note>
-History sync data is processed through a RAM-optimized pipeline. The raw protobuf is parsed with a hand-rolled field walker (not a full decode) and conversations are streamed through a bounded channel (capacity 4) as zero-copy `Bytes` slices. If no event handlers are registered, conversation extraction is skipped entirely at the protobuf level.
+The blob is only retained in memory if event handlers are registered. If no handlers are listening, the history sync pipeline extracts internal data (pushname, NCT salt, TC tokens) and discards the blob without allocating it for event dispatch.
 </Note>
 
 ### OfflineSyncPreview
@@ -1693,84 +1739,46 @@ Since events are dispatched as `Arc<Event>`, you can forward them to channels wi
 
 ## Performance Optimization
 
-### LazyConversation
+### LazyHistorySync
 
-**Purpose:** Avoid parsing large protobuf messages unless needed. This is a key part of the history sync RAM optimization — raw conversation bytes flow through the pipeline as zero-copy `Bytes` slices, and protobuf decoding only happens if your code actually accesses the data.
+**Purpose:** Avoid parsing large protobuf blobs unless needed. The raw decompressed bytes flow through the pipeline as reference-counted `Bytes`, and full protobuf decoding only happens if your code calls `get()`.
 
 ```rust
-pub struct LazyConversation {
-    raw_bytes: Bytes,                        // Zero-copy reference-counted bytes
-    parsed: OnceLock<wa::Conversation>,      // Parsed on first access
-}
-
-impl LazyConversation {
-    /// Creates from owned bytes (converts to Bytes internally)
-    pub fn new(raw_bytes: Vec<u8>) -> Self;
-
-    /// True zero-copy from existing Bytes (used by history sync pipeline)
-    pub fn from_bytes(raw_bytes: Bytes) -> Self;
-
-    /// Access the raw protobuf bytes for custom decoding (including messages)
-    pub fn raw_bytes(&self) -> &[u8];
-
-    /// Decode the full conversation including messages (fresh decode each call, not cached)
-    pub fn get_with_messages(&self) -> Option<wa::Conversation>;
-
-    /// Parse on first access, returns None if conversation ID is empty.
-    /// Messages are stripped on first parse to save memory.
-    pub fn get(&self) -> Option<&wa::Conversation>;
-
-    /// Parse on first access, panics on failure.
-    /// Messages are stripped on first parse to save memory.
-    pub fn conversation(&self) -> &wa::Conversation;
+pub struct LazyHistorySync {
+    raw_bytes: Bytes,                                  // Reference-counted decompressed bytes
+    sync_type: i32,                                    // Cheap metadata
+    chunk_order: Option<u32>,
+    progress: Option<u32>,
+    parsed: OnceLock<Option<Box<wa::HistorySync>>>,    // Decoded on first access
 }
 ```
 
-**Memory optimization:** On first parse via `get()` or `conversation()`, the `messages` field is immediately cleared and shrunk (`messages.clear()` + `messages.shrink_to_fit()`) because history sync conversations embed full `WebMessageInfo` arrays that can be very large. This prevents parsed conversations from retaining message data in memory. If you need message history, use `raw_bytes()` or `get_with_messages()` instead.
-
-**Accessing messages:** The `get()` and `conversation()` methods strip messages to save memory. To access the full conversation including messages:
-
-- **`raw_bytes()`** returns `&[u8]` for consumers who want to decode themselves via `wa::Conversation::decode(lazy_conv.raw_bytes())`
-- **`get_with_messages()`** is a convenience method that decodes a fresh `Conversation` with the full `WebMessageInfo` array intact. The result is **not cached** — call this only when you actually need the messages, and prefer `get()` for metadata-only access
-
-**Cloning:** `Bytes` is reference-counted so cloning the raw data is O(1). However, `parsed` uses a plain `OnceLock` (not `Arc<OnceLock>`), so each clone gets its own parse cache and parses independently. This is acceptable because parsing is idempotent and the common case is a single handler. If multi-handler parsing cost becomes an issue, wrapping `parsed` in `Arc<OnceLock<T>>` is a straightforward upgrade.
+**Cloning:** `Bytes` is reference-counted so cloning the raw data is O(1). However, `parsed` uses a plain `OnceLock` (not `Arc<OnceLock>`), so each clone gets its own parse cache and parses independently. This is acceptable because parsing is idempotent and the common case is a single handler.
 
 **Usage:**
 ```rust
-Event::JoinedGroup(lazy_conv) => {
-    // No parsing cost unless you access it
-    if interested_in_group() {
-        if let Some(conv) = lazy_conv.get() {
-            // Parse happens here (only once, then cached)
-            // Note: messages are stripped to save memory
-            process_group(conv);
-        }
-    }
-    // If you never call .get(), the raw bytes are never decoded
-}
-```
+Event::HistorySync(lazy_sync) => {
+    // Metadata is always available without decoding
+    let sync_type = lazy_sync.sync_type();
+    let progress = lazy_sync.progress();
 
-**Accessing message history:**
-```rust
-Event::JoinedGroup(lazy_conv) => {
-    // Option 1: Use the convenience method
-    if let Some(conv) = lazy_conv.get_with_messages() {
-        for msg in &conv.messages {
-            process_message(msg);
+    // Full decode happens only on first call to get()
+    if let Some(history) = lazy_sync.get() {
+        for conv in &history.conversations {
+            process_conversation(conv);
         }
     }
 
-    // Option 2: Decode from raw bytes yourself
-    let conv = wa::Conversation::decode(lazy_conv.raw_bytes()).unwrap();
-    println!("Messages: {}", conv.messages.len());
+    // Or use raw bytes for custom partial decoding
+    let raw = lazy_sync.raw_bytes();
 }
 ```
 
 ### Arc\<Event\> dispatch
 
-With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `HistorySync` conversations and `Message(Box<wa::Message>, Arc<MessageInfo>)`. The `MessageInfo` inside `Event::Message` and `UndecryptableMessage` is also wrapped in `Arc`, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
+With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Message(Box<wa::Message>, Arc<MessageInfo>)`. The `MessageInfo` inside `Event::Message` and `UndecryptableMessage` is also wrapped in `Arc`, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
 
-Combined with `LazyConversation`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_conv.get()` triggers the parse, and subsequent handlers reuse the cached result.
+Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_sync.get()` triggers the decode, and subsequent handlers reuse the cached result.
 
 ## Best Practices
 

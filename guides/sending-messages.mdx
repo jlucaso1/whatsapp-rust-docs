@@ -175,12 +175,7 @@ let reaction = wa::Message {
             participant: Some(sender_jid.to_string()),
         }),
         text: Some("👍".to_string()),
-        sender_timestamp_ms: Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64
-        ),
+        sender_timestamp_ms: Some(wacore::time::now_millis()),
         ..Default::default()
     })),
     ..Default::default()
@@ -203,12 +198,7 @@ let remove_reaction = wa::Message {
             participant: Some(sender_jid.to_string()),
         }),
         text: Some("".to_string()),  // Empty to remove
-        sender_timestamp_ms: Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64
-        ),
+        sender_timestamp_ms: Some(wacore::time::now_millis()),
         ..Default::default()
     })),
     ..Default::default()
@@ -237,12 +227,7 @@ let edited = wa::Message {
                     conversation: Some("This is the edited text".to_string()),
                     ..Default::default()
                 })),
-                timestamp_ms: Some(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as i64
-                ),
+                timestamp_ms: Some(wacore::time::now_millis()),
                 ..Default::default()
             })),
             ..Default::default()

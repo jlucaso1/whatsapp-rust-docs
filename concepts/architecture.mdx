@@ -57,6 +57,7 @@ wacore/
 ├── net.rs            // Transport, HttpClient trait definitions
 ├── runtime.rs        // Runtime trait + AbortHandle
 ├── protocol/         // ProtocolNode trait, keepalive, retry
+├── time.rs           // Pluggable time provider + portable Instant
 ├── types/
 │   ├── events.rs     // Event definitions
 │   └── message.rs    // Message types
@@ -399,7 +400,7 @@ pub(crate) struct OfflineSyncMetrics {
     pub active: AtomicBool,
     pub total_messages: AtomicUsize,
     pub processed_messages: AtomicUsize,
-    pub start_time: Mutex<Option<Instant>>,
+    pub start_time: Mutex<Option<wacore::time::Instant>>,
 }
 ```
 

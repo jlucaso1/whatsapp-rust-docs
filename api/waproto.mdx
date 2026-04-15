@@ -64,7 +64,7 @@ pub struct Message {
     pub list_message: Option<Box<ListMessage>>,
     
     // Group messages
-    pub sender_key_distribution_message: Option<Box<SenderKeyDistributionMessage>>,
+    pub sender_key_distribution_message: Option<SenderKeyDistributionMessage>,
     
     // System messages
     pub protocol_message: Option<Box<ProtocolMessage>>,
@@ -73,20 +73,16 @@ pub struct Message {
     pub view_once_message_v2: Option<Box<ViewOnceMessageV2>>,
     
     // Reactions and interactions
-    pub reaction_message: Option<Box<ReactionMessage>>,
-    pub edit_message: Option<Box<EditMessage>>,
-    pub keep_in_chat_message: Option<Box<KeepInChatMessage>>,
+    pub reaction_message: Option<ReactionMessage>,
+    pub edited_message: Option<Box<FutureProofMessage>>,
+    pub keep_in_chat_message: Option<KeepInChatMessage>,
     
     // Album (grouped media)
     pub album_message: Option<Box<AlbumMessage>>,
     pub associated_child_message: Option<Box<FutureProofMessage>>,
     
-    // AI/Bot messages
-    pub ai_rich_response_message: Option<Box<AiRichResponseMessage>>,
-    pub bot_feedback_message: Option<Box<BotFeedbackMessage>>,
-    
     // Metadata
-    pub message_context_info: Option<Box<MessageContextInfo>>,
+    pub message_context_info: Option<MessageContextInfo>,
     // ... and many more
 }
 ```

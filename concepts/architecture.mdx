@@ -73,9 +73,11 @@ wacore/
 **Purpose:** Houses WhatsApp's Protocol Buffers definitions compiled to Rust structs.
 
 **Build Process:**
-```rust
-// build.rs uses prost to compile .proto files
-prost_build::compile_protos(&["src/whatsapp.proto"], &["src/"])?;
+
+The generated code (`whatsapp.rs`) is checked into version control. The `prost-build` dependency is gated behind an optional `generate` feature, so `build.rs` is a no-op during normal builds. To regenerate after modifying the `.proto` file:
+
+```bash
+cargo build -p waproto --features generate
 ```
 
 **Generated Types:**

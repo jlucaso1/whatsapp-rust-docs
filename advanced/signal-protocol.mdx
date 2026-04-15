@@ -781,6 +781,14 @@ let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64)
 
 Location: `src/prekeys.rs`
 
+### Direct prekey encoding
+
+Pre-key upload is a hot path during initial pairing (812 keys per batch). The `UploadPreKeysSpec` implements `encode_iq_direct` to encode the IQ stanza directly into a byte buffer, bypassing the `Node` intermediate representation and the `marshal` step. This avoids allocating ~800 `Node` objects and their associated attribute maps, reducing memory pressure and encoding time.
+
+The direct encoder writes the binary protocol format inline: format byte, list header, tag tokens, attribute pairs, and raw key bytes — all into a single pre-sized `Vec<u8>`. A test suite (`assert_direct_encode_matches_marshal`) verifies byte-for-byte equivalence with the `build_iq()` + marshal path.
+
+Location: `wacore/src/iq/prekeys.rs`
+
 ### Force-refreshing pre-keys for device migration
 
 When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.

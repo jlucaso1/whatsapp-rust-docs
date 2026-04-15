@@ -230,6 +230,19 @@ graph TB
 
 **Example: IQ Protocol**
 ```rust
+// wacore/src/iq/spec.rs
+pub trait IqSpec {
+    type Response;
+    fn build_iq(&self) -> InfoQuery<'static>;
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response>;
+
+    /// Optionally encode the IQ stanza directly into a pre-sized buffer,
+    /// bypassing the Node intermediate representation. Returns true if
+    /// the fast path was used; false falls back to build_iq() + marshal.
+    fn encode_iq_direct(&self, _request_id: &str, _out: &mut Vec<u8>)
+        -> Result<bool> { Ok(false) }
+}
+
 // wacore/src/iq/groups.rs
 pub struct GroupQueryIq {
     group_jid: Jid,
@@ -241,6 +254,8 @@ impl IqSpec for GroupQueryIq {
     fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response> { /* ... */ }
 }
 ```
+
+The `encode_iq_direct` method is a performance optimization that allows hot-path IQ specs (like prekey upload) to encode directly into a byte buffer, bypassing the `Node` intermediate representation and marshal step. Most specs use the default implementation (returns `false`), which falls back to `build_iq()` + marshal.
 
 ### whatsapp-rust Layer (Runtime)
 

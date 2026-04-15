@@ -622,6 +622,18 @@ pub enum NodeContentRef<'a> {
 
 Location: `wacore/binary/src/node.rs:10-106`, `465-469`, `437-441`
 
+#### AttrsRef covariance
+
+`AttrsRef<'a>` is an enum with two variants — `Empty` (no attributes) and `Slice(Box<[(NodeStr<'a>, ValueRef<'a>)]>)` (boxed slice of key-value pairs). It is **covariant** in `'a`, which is required for the `Yokeable` implementation used by `OwnedNodeRef`. A compile-time assertion enforces this:
+
+```rust
+fn _assert_attrs_ref_covariant<'short, 'long: 'short>(x: AttrsRef<'long>) -> AttrsRef<'short> {
+    x
+}
+```
+
+If `AttrsRef` ever becomes invariant (e.g., by adding a `Cell` or `&mut`), this function will fail to compile, catching the regression before it breaks `OwnedNodeRef`.
+
 ### OwnedNodeRef (yoke zero-copy)
 
 `OwnedNodeRef` is a self-referential type that owns the decompressed network buffer while the inner `NodeRef` borrows string and byte payloads directly from it. This avoids copying payloads out of the buffer during decoding — only container allocations (attribute `Vec`, child `Vec`) occur.

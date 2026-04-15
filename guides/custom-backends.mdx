@@ -64,6 +64,8 @@ impl MyCustomStore {
 Handle Signal protocol cryptographic operations:
 
 ```rust
+use bytes::Bytes;
+
 #[async_trait]
 impl SignalStore for MyCustomStore {
     // --- Identity Operations ---
@@ -76,12 +78,17 @@ impl SignalStore for MyCustomStore {
         Ok(())
     }
     
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>> {
         let row = self.connection.query_optional(
             "SELECT key FROM identities WHERE address = ?",
             &[address],
         ).await?;
-        Ok(row.map(|r| r.get(0)))
+        Ok(row.map(|r| {
+            let bytes: Vec<u8> = r.get(0);
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            arr
+        }))
     }
     
     async fn delete_identity(&self, address: &str) -> Result<()> {
@@ -94,12 +101,12 @@ impl SignalStore for MyCustomStore {
     
     // --- Session Operations ---
     
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    async fn get_session(&self, address: &str) -> Result<Option<Bytes>> {
         let row = self.connection.query_optional(
             "SELECT record FROM sessions WHERE address = ?",
             &[address],
         ).await?;
-        Ok(row.map(|r| r.get(0)))
+        Ok(row.map(|r| Bytes::from(r.get::<Vec<u8>>(0))))
     }
     
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
@@ -128,20 +135,20 @@ impl SignalStore for MyCustomStore {
         Ok(())
     }
     
-    async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn load_prekey(&self, id: u32) -> Result<Option<Bytes>> {
         let row = self.connection.query_optional(
             "SELECT record FROM prekeys WHERE id = ?",
             &[&id],
         ).await?;
-        Ok(row.map(|r| r.get(0)))
+        Ok(row.map(|r| Bytes::from(r.get::<Vec<u8>>(0))))
     }
 
     // Override load_prekeys_batch for better performance (default loops over load_prekey)
-    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>> {
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!("SELECT id, record FROM prekeys WHERE id IN ({})", placeholders);
         let rows = self.connection.query_all(&query, ids).await?;
-        Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+        Ok(rows.iter().map(|r| (r.get(0), Bytes::from(r.get::<Vec<u8>>(1)))).collect())
     }
     
     async fn remove_prekey(&self, id: u32) -> Result<()> {
@@ -858,7 +865,8 @@ async fn read_pump(
 Implement the `HttpClient` trait for custom HTTP operations:
 
 ```rust
-use whatsapp_rust::http::{HttpClient, HttpRequest, HttpResponse, StreamingHttpResponse};
+use whatsapp_rust::http::{HttpClient, HttpRequest, HttpResponse};
+use wacore::net::StreamingHttpResponse;
 use async_trait::async_trait;
 
 pub struct MyCustomHttpClient {

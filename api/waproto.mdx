@@ -18,9 +18,9 @@ waproto = "0.5"
 waproto/
 ├── src/
 │   ├── lib.rs         # Module definition
-│   └── whatsapp.rs    # Generated protobuf code (15,020 lines)
-├── build.rs           # prost-build script
-└── whatsapp.proto     # Source protobuf definitions
+│   ├── whatsapp.rs    # Generated protobuf code (checked into git)
+│   └── whatsapp.proto # Source protobuf definitions
+└── build.rs           # prost-build script (no-op unless `generate` feature is enabled)
 ```
 
 ## Usage
@@ -608,16 +608,17 @@ pub mod video_message {
 }
 ```
 
-## Serde support
-
-All generated types derive `serde::Serialize` by default. Deserialization and snake_case renaming are behind optional feature flags.
-
-### Feature flags
+## Feature flags
 
 | Feature | Description | Implies |
 |---|---|---|
+| `generate` | Enables `prost-build` as a build dependency and runs code generation from `whatsapp.proto`. Only needed when modifying the `.proto` file — normal builds use the checked-in `whatsapp.rs`. | — |
 | `serde-deserialize` | Adds `#[derive(serde::Deserialize)]` and `#[serde(default)]` to all types. Use when you need to parse protobuf types from JSON. | — |
 | `serde-snake-case` | Adds `#[serde(rename_all(deserialize = "snake_case"))]` to all types. Allows snake_case enum variant names during deserialization (prost generates PascalCase). Serialize output is unchanged. | `serde-deserialize` |
+
+## Serde support
+
+All generated types derive `serde::Serialize` by default. Deserialization and snake_case renaming are behind optional feature flags (`serde-deserialize` and `serde-snake-case` above).
 
 Enable them in your `Cargo.toml`:
 
@@ -674,17 +675,21 @@ let json = r#"{"account_type": "enterprise"}"#;
   The `serde-snake-case` feature is primarily useful for WASM bridge scenarios where JavaScript sends snake_case JSON to the Rust backend. For most Rust-only use cases, you only need the default `Serialize` support.
 </Note>
 
-## Code Generation
+## Code generation
 
-The protobuf code is auto-generated but checked into version control.
+The protobuf code is auto-generated but checked into version control. The `prost-build` dependency is gated behind the `generate` feature, so normal builds skip code generation entirely — `build.rs` is a no-op without this feature. This eliminates the heavy `prost-build` transitive dependency tree (protoc, tempfile, etc.) from regular compilations, improving build times.
 
-**To regenerate:**
+**To regenerate after modifying `whatsapp.proto`:**
 
 ```bash
-GENERATE_PROTO=1 cargo build -p waproto
+cargo build -p waproto --features generate
 ```
 
 This runs `build.rs` which uses `prost-build` to compile `whatsapp.proto` into `whatsapp.rs`.
+
+<Note>
+  You only need the `generate` feature when you've changed the `.proto` file. The generated `whatsapp.rs` is committed to the repository, so all other builds use it directly.
+</Note>
 
 ## Usage Examples
 

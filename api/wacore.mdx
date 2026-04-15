@@ -538,17 +538,21 @@ Strong typing throughout:
 
 ## Benchmarks
 
+The project includes two categories of benchmarks: **protocol-level** (iai-callgrind, deterministic instruction counts) and **integration-level** (real client operations with allocation tracking).
+
+### Protocol benchmarks (iai-callgrind)
+
 wacore includes a suite of [iai-callgrind](https://github.com/iai-callgrind/iai-callgrind) benchmarks that measure instruction counts for core protocol operations. These benchmarks run under Valgrind's Callgrind tool, producing deterministic, low-noise measurements that are suitable for CI regression tracking.
 
-### Prerequisites
+#### Prerequisites
 
-Running the benchmarks requires:
+Running the protocol benchmarks requires:
 
 - **Nightly Rust** (the project pins `nightly-2026-04-05`)
 - **Valgrind** installed on your system
 - **iai-callgrind-runner** (`cargo install iai-callgrind-runner --version 0.16.1`)
 
-### Available benchmark suites
+#### Available suites
 
 | Suite | Location | What it measures |
 |-------|----------|-----------------|
@@ -557,7 +561,7 @@ Running the benchmarks requires:
 | `binary_benchmark` | `wacore/binary/benches/binary_benchmark.rs` | Binary protocol encoding/decoding — marshal and unmarshal operations for various node sizes and structures |
 | `libsignal_benchmark` | `wacore/libsignal/benches/libsignal_benchmark.rs` | Signal Protocol operations — session establishment, message encrypt/decrypt, sender key distribution, and group cipher operations |
 
-### Running benchmarks
+#### Running protocol benchmarks
 
 ```bash
 # Run all benchmarks across the workspace
@@ -572,14 +576,69 @@ cargo bench -p wacore-libsignal --bench libsignal_benchmark
 
 Each benchmark produces instruction counts and optionally generates flamegraph SVGs for profiling hotspots.
 
+### Integration benchmarks
+
+The `bench-integration` test suite (`tests/bench-integration/`) measures real-world client operations end-to-end, including wall-clock time and heap allocation counts. It uses a custom `CountingAlloc` global allocator that tracks every allocation and byte count, then produces `customSmallerIsBetter` JSON output for CI trend tracking.
+
+#### Scenarios
+
+| Scenario | What it measures |
+|----------|-----------------|
+| `connect_to_ready` | Client creation through `Connected` event — includes transport connect, Noise handshake, and initial sync |
+| `send_message` | Single DM send (sender side) — protobuf encoding, Signal encrypt, node marshal, and WebSocket write. Also measures amortized cost over 20 consecutive sends |
+| `send_and_receive_message` | Full round-trip — send a DM and wait for delivery on the receiver. Also measures amortized cost over 20 round-trips |
+| `reconnect` | Disconnect and reconnect cycle — measures the time and allocations to re-establish a session |
+
+Each scenario reports three metrics: `alloc_count` (number of heap allocations), `alloc_bytes` (total bytes allocated), and `wall_ms` (elapsed wall-clock time). Amortized scenarios divide totals by the number of iterations for per-operation costs.
+
+#### Running integration benchmarks
+
+Integration benchmarks require a mock WhatsApp server (e.g., [Bartender](https://github.com/whiskeysockets-devtools/bartender)):
+
+```bash
+# Start the mock server (Docker)
+docker run -d -p 8080:8080 ghcr.io/whiskeysockets-devtools/bartender:latest
+
+# Run the benchmarks
+MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" \
+  cargo run -p bench-integration --release
+```
+
+The output is a JSON array of `customSmallerIsBetter` entries printed to stdout, suitable for consumption by [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
+
+<Note>
+Integration benchmarks require the `danger-skip-tls-verify` and `debug-diagnostics` features, which are enabled automatically via the `bench-integration` crate's `Cargo.toml`. You can also enable DHAT heap profiling with `--features dhat-heap` for detailed allocation flamegraphs.
+</Note>
+
+### Allocation optimizations
+
+The library includes several allocation-reduction strategies that the integration benchmarks track:
+
+- **Thread-local zlib pool** — The binary protocol decompressor (`decompress_zlib_pooled`) reuses a thread-local `flate2::Decompress` instance (~48 KB internal state) and output buffer across calls, avoiding per-frame heap allocations
+- **`CompactString` for JIDs** — JID user fields use `compact_str::CompactString` which stores strings up to 24 bytes inline (no heap allocation), covering the vast majority of phone numbers and LID identifiers
+- **`Server` enum** — JID server fields use a `#[repr(u8)]` enum instead of heap-allocated strings, making JID construction and comparison zero-allocation
+- **Zero-copy node decoding** — Received stanzas are decoded as `NodeRef` borrowing directly from the network buffer via `OwnedNodeRef` (yoke-based self-referential type), avoiding cloning string/byte payloads during decode
+- **Pre-allocated buffers** — History sync decompression uses a `compressed_size_hint` with a 4x multiplier for buffer pre-allocation, reducing `Vec` reallocation during decompression
+
 ### CI integration
 
-The repository includes a GitHub Actions workflow (`.github/workflows/benchmark.yml`) that runs benchmarks on every push to `main` and on pull requests. It uses [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark) to store baselines and generate trend charts on GitHub Pages. A custom parser script (`.github/scripts/iai-to-benchmark-json.py`) converts iai-callgrind instruction counts into the `customSmallerIsBetter` JSON format.
+The repository includes GitHub Actions workflows for both benchmark types:
 
-- **Pushes to `main`** store the baseline and update the gh-pages trend charts
-- **Pull requests** compare against the baseline and post a custom collapsed PR comment (via `.github/scripts/bench-comment.py`) that groups benchmarks into **regressions** (>5% slower), **improvements** (>5% faster), and **unchanged** (collapsed by default) — making it easy to spot both wins and regressions at a glance
+**Protocol benchmarks** (`.github/workflows/benchmark.yml`):
+- Runs on every push to `main` and on pull requests
+- Uses [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark) to store baselines and generate trend charts on GitHub Pages
+- A custom parser script (`.github/scripts/iai-to-benchmark-json.py`) converts iai-callgrind instruction counts into the `customSmallerIsBetter` JSON format
+- Pull requests receive a collapsed PR comment (via `.github/scripts/bench-comment.py`) grouping benchmarks into **regressions** (>5% slower), **improvements** (>5% faster), and **unchanged**
 - The PR comment is idempotent — subsequent benchmark runs update the existing comment instead of creating duplicates
-- Raw benchmark output is uploaded as artifacts (retained for 30 days) for debugging
+
+**Integration benchmarks** (`.github/workflows/bench-integration.yml`):
+- Runs on every push to `main` and on pull requests
+- Spins up a Bartender mock server as a Docker service container
+- Measures allocation counts, allocation bytes, and wall-clock time for each scenario
+- Pushes to `main` store the baseline for trend tracking
+- Pull requests compare against the baseline
+
+Raw benchmark output for both suites is uploaded as artifacts (retained for 30 days) for debugging.
 
 ## Next steps
 

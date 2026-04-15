@@ -167,7 +167,7 @@ Reactions are sent using `ReactionMessage`:
 use waproto::whatsapp::message::ReactionMessage;
 
 let reaction = wa::Message {
-    reaction_message: Some(Box::new(ReactionMessage {
+    reaction_message: Some(ReactionMessage {
         key: Some(wa::MessageKey {
             remote_jid: Some(chat_jid.to_string()),
             from_me: Some(false),
@@ -177,7 +177,7 @@ let reaction = wa::Message {
         text: Some("👍".to_string()),
         sender_timestamp_ms: Some(wacore::time::now_millis()),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -190,7 +190,7 @@ Send an empty reaction text to remove:
 
 ```rust
 let remove_reaction = wa::Message {
-    reaction_message: Some(Box::new(ReactionMessage {
+    reaction_message: Some(ReactionMessage {
         key: Some(wa::MessageKey {
             remote_jid: Some(chat_jid.to_string()),
             from_me: Some(false),
@@ -200,7 +200,7 @@ let remove_reaction = wa::Message {
         text: Some("".to_string()),  // Empty to remove
         sender_timestamp_ms: Some(wacore::time::now_millis()),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 ```

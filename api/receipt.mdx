@@ -369,6 +369,68 @@ You can listen for incoming played receipts via the `Event::Receipt` event with 
 
 ---
 
+## Offline receipt handling
+
+Receipts are queued when the target client is offline and delivered when they reconnect. This ensures reliable delivery and read tracking even in intermittent connectivity scenarios.
+
+### Delivery receipts
+
+When the recipient is offline:
+1. The message is stored on the server
+2. When the recipient reconnects, they receive the message
+3. Their client automatically sends a delivery receipt
+4. You receive the delivery receipt
+
+```rust
+// Delivery receipts work automatically, even if recipient was offline
+let msg_id = client.send_message(
+    recipient_jid,
+    wa::Message {
+        conversation: Some("Hello!".to_string()),
+        ..Default::default()
+    },
+).await?;
+
+// You'll receive Event::Receipt with ReceiptType::Delivered
+// when the recipient's device processes the message
+```
+
+### Read receipts
+
+When the sender goes offline after sending:
+1. The recipient reads the message and sends a read receipt
+2. The read receipt is queued on the server
+3. When the sender reconnects, they receive the queued read receipt
+
+```rust
+// Read receipts are also queued for offline senders
+client.mark_as_read(&sender_jid, None, vec![msg_id.clone()]).await?;
+
+// The sender will receive this receipt when they come back online
+```
+
+### Group receipts
+
+Group delivery receipts include participant information:
+
+```rust
+// For group messages, receipts come from individual participants
+if let Event::Receipt(receipt) = event {
+    if receipt.source.is_group {
+        println!("Receipt from {} in group {}", 
+            receipt.message_sender, 
+            receipt.source.chat
+        );
+    }
+}
+```
+
+<Note>
+  If a recipient never reconnects, you will not receive a delivery receipt for messages sent to them.
+</Note>
+
+---
+
 ## Best Practices
 
 ### Read Receipt Privacy

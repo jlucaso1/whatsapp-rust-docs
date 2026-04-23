@@ -998,6 +998,83 @@ The `Jid` variant is emitted by `AttrParser::optional_jid` when a string attribu
 
 Location: `wacore/binary/src/error.rs`
 
+## Derive Macros
+
+The `wacore_derive` crate provides macros for type-safe protocol node handling.
+
+### ProtocolNode
+
+Generates `ProtocolNode` trait implementation for structs:
+
+```rust
+use wacore::{ProtocolNode, StringEnum};
+
+#[derive(ProtocolNode)]
+#[protocol(tag = "message")]
+pub struct MessageStanza {
+    #[attr(name = "from", jid)]
+    pub from: Jid,
+    
+    #[attr(name = "to", jid)]
+    pub to: Jid,
+    
+    #[attr(name = "id")]
+    pub id: String,
+    
+    #[attr(name = "type", string_enum)]
+    pub message_type: MessageType,
+    
+    #[attr(name = "t", u64)]
+    pub timestamp: u64,
+    
+    #[attr(name = "count", u32)]
+    pub count: Option<u32>,
+    
+    #[attr(name = "sender_lid", jid, optional)]
+    pub sender_lid: Option<Jid>,
+}
+```
+
+**Supported attribute types:**
+- `String` - Basic string attribute
+- `Jid` - WhatsApp JID with `jid` marker
+- `StringEnum` - Enum types with `string_enum` marker
+- `u64` / `u32` - Numeric attributes with respective markers
+- All types support `Option<T>` for optional attributes
+
+### StringEnum
+
+Generates string conversion for enums:
+
+```rust
+#[derive(StringEnum)]
+pub enum MessageType {
+    #[str = "text"]
+    Text,
+    #[str = "media"]
+    Media,
+    #[string_default]
+    #[str = "chat"]
+    Chat,
+}
+
+// With fallback for unknown values
+#[derive(StringEnum)]
+pub enum PrivacyCategory {
+    #[str = "last"]
+    Last,
+    #[str = "online"]
+    Online,
+    #[string_fallback]
+    Other(String),  // Captures unknown strings
+}
+```
+
+**Attributes:**
+- `#[str = "value"]` - Required string representation
+- `#[string_default]` - Marks the default variant
+- `#[string_fallback]` - Catch-all variant for unknown strings (generates `From<&str>` instead of `TryFrom<&str>`)
+
 ## Related Components
 
 - [Signal Protocol](/advanced/signal-protocol) - How messages are encrypted before marshaling

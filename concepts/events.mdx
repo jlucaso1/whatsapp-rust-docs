@@ -1413,6 +1413,97 @@ Offline sync happens automatically when the client reconnects after being discon
 If the server does not complete offline sync within 60 seconds, the client forces completion via a timeout fallback — `OfflineSyncCompleted` is still emitted with the count of items processed so far. This prevents startup from blocking indefinitely.
 </Note>
 
+## Offline event behavior
+
+When a client disconnects, the WhatsApp server queues events until the client reconnects. Understanding this behavior is important for building reliable applications.
+
+### Message delivery
+
+Messages sent to offline recipients are queued by the server:
+
+- **Queued messages**: When recipient reconnects, they receive all queued messages
+- **Message ordering**: Messages arrive in the order they were sent
+- **Multiple messages**: The server accepts and queues multiple messages to offline recipients
+
+```rust
+// Sender gets server acknowledgment (single checkmark) immediately
+// Delivery receipt (double checkmark) only arrives when recipient gets the message
+Event::Receipt(receipt) => {
+    match receipt.r#type {
+        ReceiptType::Sender => {
+            // Server accepted the message (✓)
+        }
+        ReceiptType::Delivered => {
+            // Recipient received the message (✓✓)
+            // This is deferred if recipient was offline
+        }
+        _ => {}
+    }
+}
+```
+
+### Deferred delivery receipts
+
+When you send a message to an offline recipient:
+
+1. You receive a `Sender` receipt immediately (server accepted)
+2. The `Delivered` receipt is deferred until the recipient reconnects and receives the message
+3. If you also go offline before the receipt arrives, it's queued for you too
+
+### Group notifications
+
+Group notifications (member added/removed, subject changed, etc.) follow the same queuing behavior:
+
+- Members who are offline when a group change occurs receive the notification on reconnect
+- Notifications arrive in chronological order with other queued events
+
+### Presence coalescing
+
+Unlike messages and notifications, presence updates are coalesced:
+
+- If a contact changes presence multiple times while you're offline, you only receive the **latest** state
+- This prevents flooding with redundant presence history
+
+```rust
+Event::Presence(update) => {
+    // After reconnecting, you receive only the current presence state,
+    // not all intermediate changes that occurred while offline
+    if update.unavailable {
+        println!("{} is currently offline", update.from);
+    } else {
+        println!("{} is currently online", update.from);
+    }
+}
+```
+
+### Mixed event ordering
+
+When multiple event types are queued (messages, notifications, receipts), they arrive in chronological order:
+
+```rust
+// Example sequence after reconnecting:
+// 1. Group message from 10:00 AM
+// 2. Group notification (member added) from 10:05 AM  
+// 3. Another group message from 10:10 AM
+```
+
+### Reconnection handling
+
+The client handles reconnection automatically:
+
+```rust
+// Trigger reconnection manually if needed
+client.reconnect().await;
+
+// Events arrive automatically after reconnect
+Event::OfflineSyncPreview(preview) => {
+    println!("Syncing {} queued items...", preview.total);
+}
+
+Event::OfflineSyncCompleted(sync) => {
+    println!("Sync complete: {} items", sync.count);
+}
+
 ## Device Events
 
 ### DeviceListUpdate

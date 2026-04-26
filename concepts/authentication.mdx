@@ -364,6 +364,51 @@ pub struct NoiseHandshake {
 2. Responder → Initiator: ephemeral pub, static pub, encrypted payload
 3. Initiator → Responder: static pub, encrypted payload
 
+### ClientProfile
+
+**Location:** `wacore/src/client_profile.rs`
+
+`ClientProfile` is the identity that gets baked into `ClientPayload.UserAgent` during the Noise handshake. It controls the `platform`, `device`, `os_version`, `os_build_number`, `manufacturer` fields, and whether `web_info` is attached to the payload.
+
+It is independent of `DeviceProps` — `device_props` describes the companion entry on the phone, while `ClientProfile` describes the client identity to WhatsApp's server during the handshake itself. The two can be set independently.
+
+```rust
+// wacore/src/client_profile.rs
+pub struct ClientProfile {
+    pub user_agent_platform: wa::client_payload::user_agent::Platform,
+    pub device: String,
+    pub os_version: String,
+    pub manufacturer: String,
+    pub include_web_info: bool,
+}
+```
+
+#### Built-in profiles
+
+| Constructor | Platform | Device | Manufacturer | `web_info` |
+|-------------|----------|--------|--------------|------------|
+| `ClientProfile::web()` (default) | `Web` | `Desktop` | `""` | included |
+| `ClientProfile::android(os_version)` | `Android` | `Smartphone` | `""` | omitted |
+| `ClientProfile::smb_android(os_version)` | `SmbAndroid` | `Smartphone` | `""` | omitted |
+| `ClientProfile::ios(os_version)` | `Ios` | `iPhone` | `Apple` | omitted |
+| `ClientProfile::macos(os_version)` | `Macos` | `Desktop` | `Apple` | omitted |
+| `ClientProfile::windows(os_version)` | `Windows` | `Desktop` | `""` | omitted |
+
+The `web()` profile reproduces the legacy desktop-web payload (`os_version` and `os_build_number` are both `"0.1.0"`). Native profiles propagate the supplied `os_version` to both fields and drop `web_info`.
+
+#### Setting a profile
+
+`Device.client_profile` is `#[serde(skip)]`, so it is never persisted. Set it on every fresh process before calling [`connect()`](/api/client#connect):
+
+```rust
+use whatsapp_rust::ClientProfile;
+
+client.set_client_profile(ClientProfile::android("13")).await;
+client.connect().await?;
+```
+
+Internally this dispatches `DeviceCommand::SetClientProfile(profile)` through the persistence manager (see [State Management](/advanced/state-management#deviceCommand-pattern)).
+
 ### Key Derivation
 
 **For QR Code:**

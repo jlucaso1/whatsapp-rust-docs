@@ -868,6 +868,39 @@ The number of Fibonacci steps added to the backoff counter when `reconnect()` is
 
 ---
 
+## Client Profile
+
+The noise-handshake `ClientPayload.UserAgent` identity that this client presents to WhatsApp servers. The default is [`ClientProfile::web()`](/concepts/authentication#clientprofile), which matches the legacy desktop-web payload (platform `Web`, device `Desktop`, OS version `0.1.0`, and an attached `web_info` field).
+
+This is independent of `DeviceProps` — `device_props` controls what is reported during companion registration (e.g., the entry shown under **Linked Devices** on the phone), while `ClientProfile` controls the user agent fields used during the Noise handshake on every connect.
+
+### set_client_profile
+
+```rust
+pub async fn set_client_profile(&self, profile: wacore::client_profile::ClientProfile)
+```
+
+Sets the noise-handshake `ClientPayload` profile. The profile is held in-memory only (`#[serde(skip)]` on `Device.client_profile`), so you must call this before each `connect()` on a fresh process.
+
+<ParamField path="profile" type="ClientProfile" required>
+  The profile to apply. Use the constructors on [`ClientProfile`](/concepts/authentication#clientprofile) — `web()`, `android(os_version)`, `smb_android(os_version)`, `ios(os_version)`, `macos(os_version)`, `windows(os_version)`.
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::ClientProfile;
+
+// Present as Android 13 on the next connect
+client.set_client_profile(ClientProfile::android("13")).await;
+client.connect().await?;
+```
+
+<Note>
+Native profiles (`android`, `smb_android`, `ios`, `macos`, `windows`) automatically omit `web_info` from the `ClientPayload`. Only `web()` includes it.
+</Note>
+
+---
+
 ## Device State
 
 ### get_push_name

@@ -376,7 +376,8 @@ Configures pair code authentication to run automatically after connecting.
 
 **Example:**
 ```rust
-use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+use whatsapp_rust::pair_code::PairCodeOptions;
+use wacore::companion_reg::CompanionWebClientType;
 use wacore::types::events::Event;
 
 Bot::builder()
@@ -384,8 +385,9 @@ Bot::builder()
         phone_number: "15551234567".to_string(),
         show_push_notification: true,
         custom_code: None,
-        platform_id: PlatformId::Chrome,
-        platform_display: "Chrome (Linux)".to_string(),
+        // `None` derives the wire id from the device's `PlatformType`.
+        // Override only when you need a specific `<companion_platform_id>`.
+        platform_id: Some(CompanionWebClientType::Chrome),
     })
     .on_event(|event, _client| async move {
         match &*event {
@@ -400,8 +402,12 @@ Bot::builder()
 ```
 
 <Note>
-Pair code runs concurrently with QR code pairing - whichever completes first wins.
+Pair code runs concurrently with QR code pairing — whichever completes first wins.
 </Note>
+
+<Tip>
+The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and the device's `os` string: web variants emit `<Browser> (<OS>)`; Android variants emit `Android (<OS>)`. There is no separate `platform_display` field on `PairCodeOptions`.
+</Tip>
 
 ---
 

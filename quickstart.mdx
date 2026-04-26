@@ -203,19 +203,24 @@ let mut bot = Bot::builder()
     .await?;
 ```
 
-`PairCodeOptions` defaults to `PlatformId::Chrome` with `"Chrome (Linux)"` as the display name. You can customize these if needed:
+`PairCodeOptions` derives `companion_platform_id` and `companion_platform_display` from the device's `PlatformType` by default (Chrome with `Chrome (Linux)` for the stock web profile). You can override the wire id when needed:
 
 ```rust
-use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+use whatsapp_rust::pair_code::PairCodeOptions;
+use wacore::companion_reg::CompanionWebClientType;
 
 PairCodeOptions {
     phone_number: "15551234567".to_string(),
     show_push_notification: true,
     custom_code: Some("ABCD1234".to_string()), // or None for random
-    platform_id: PlatformId::Chrome,
-    platform_display: "Chrome (Linux)".to_string(),
+    // `None` auto-derives from `Device.device_props.platform_type`.
+    platform_id: Some(CompanionWebClientType::Chrome),
 }
 ```
+
+<Note>
+`platform_id` accepts the [`CompanionWebClientType`](/concepts/authentication#companionwebclienttype) wire enum (single-byte ASCII ids). The display string is always derived — there is no separate `platform_display` field.
+</Note>
 
 <Note>
   Pair code and QR code authentication run concurrently. Whichever method completes first will be used.

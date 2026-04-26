@@ -232,7 +232,7 @@ Waits for full connection and authentication to complete, including offline sync
 pub async fn pair_with_code(
     self: &Arc<Self>,
     options: PairCodeOptions,
-) -> Result<String, PairCodeError>
+) -> Result<String, PairError>
 ```
 
 Initiates pair code authentication as an alternative to QR code pairing. The returned 8-character code should be displayed to the user, who enters it on their phone under **WhatsApp > Linked Devices > Link a Device > Link with phone number instead**.
@@ -251,16 +251,22 @@ This can run concurrently with QR code pairing — whichever completes first win
   The 8-character pairing code to display to the user
 </ResponseField>
 
-**Errors (`PairCodeError`):**
+**Errors (`PairError`):**
+
+`PairError::PairCode(PairCodeError)` covers validation and crypto failures; `PairError::RequestFailed(IqError)` covers the IQ transport.
 
 | Variant | Cause |
 |---------|-------|
-| `PhoneNumberRequired` | Empty phone number |
-| `PhoneNumberTooShort` | Fewer than 7 digits |
-| `PhoneNumberNotInternational` | Starts with `0` (not international format) |
-| `InvalidCustomCode` | Custom code is not 8 valid Crockford Base32 characters |
-| `MissingPairingRef` | Server response missing pairing ref |
-| `RequestFailed` | Server request failed |
+| `PairCode(PhoneNumberRequired)` | Empty phone number |
+| `PairCode(PhoneNumberTooShort)` | Fewer than 7 digits |
+| `PairCode(PhoneNumberNotInternational)` | Starts with `0` (not international format) |
+| `PairCode(InvalidCustomCode)` | Custom code is not 8 valid Crockford Base32 characters |
+| `PairCode(InvalidPrimaryEphemeralKey)` / `InvalidPrimaryIdentityKey` | Peer key parsing failed (typed `CurveError` source) |
+| `PairCode(EphemeralKeyAgreement)` / `IdentityKeyAgreement` | Diffie–Hellman failed (typed `CurveError` source) |
+| `PairCode(AdvSecretKeyDerivation)` / `BundleKeyDerivation` | HKDF expand failed |
+| `PairCode(BundleAead)` | AES-GCM encryption of the key bundle failed (typed `CryptoProviderError` source) |
+| `PairCode(MissingPairingRef)` | Server response missing pairing ref |
+| `RequestFailed` | Server IQ request failed (typed `IqError` source) |
 
 **Example:**
 ```rust

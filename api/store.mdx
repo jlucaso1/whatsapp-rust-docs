@@ -515,9 +515,9 @@ pub struct RedisStore {
 impl RedisStore {
     pub async fn new(redis_url: &str) -> Result<Self> {
         let client = redis::Client::open(redis_url)
-            .map_err(|e| StoreError::Connection(e.to_string()))?;
+            .map_err(|e| StoreError::Connection(Box::new(e)))?;
         let conn = client.get_connection_manager().await
-            .map_err(|e| StoreError::Connection(e.to_string()))?;
+            .map_err(|e| StoreError::Connection(Box::new(e)))?;
         
         Ok(Self {
             client: conn,
@@ -536,7 +536,7 @@ impl SignalStore for RedisStore {
             .arg(&key[..])
             .query_async(&mut conn)
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
         Ok(())
     }
     
@@ -547,7 +547,7 @@ impl SignalStore for RedisStore {
             .arg(key_name)
             .query_async(&mut conn)
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
         Ok(result)
     }
     
@@ -636,19 +636,27 @@ The `raw_id` field stores the ADV (Account Device Verification) key index list `
 
 ## Error Handling
 
-All storage operations return `Result<T>` from `wacore::store::error`:
+All storage operations return `Result<T>` from `wacore::store::error`. Each variant preserves the underlying typed error as its `source()` so callers can downcast to the original backend error when needed:
 
 ```rust
 pub enum StoreError {
-    Connection(String),    // Connection failures
-    Database(String),      // Database operation errors
-    Migration(String),     // Migration errors
-    Serialization(String), // Serialization/deserialization errors
-    NotFound,             // Resource not found
+    Io(#[from] std::io::Error),
+    Serialization(#[source] Box<dyn std::error::Error + Send + Sync>),
+    Validation(String),
+    Connection(#[source] Box<dyn std::error::Error + Send + Sync>),
+    Database(#[source] Box<dyn std::error::Error + Send + Sync>),
+    RetriesExhausted { op: String },
+    Migration(#[source] Box<dyn std::error::Error + Send + Sync>),
+    InvalidConfig(String),
+    DeviceNotFound(i32),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 ```
+
+<Note>
+`StoreError` exposes a helper `is_database_busy_or_locked()` that walks the source chain looking for SQLite `BUSY`/`LOCKED` markers. Retry layers use it to decide whether a database error is transient without depending on a specific backend crate.
+</Note>
 
 ## See Also
 

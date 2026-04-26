@@ -627,10 +627,10 @@ use anyhow::Result;
 
 #[derive(Debug, Error)]
 pub enum SocketError {
-    #[error("connection closed")]
-    Closed,
-    #[error("encryption failed: {0}")]
-    Encryption(String),
+    #[error("socket is closed")]
+    SocketClosed,
+    #[error("noise cipher operation failed")]
+    Cipher(#[from] NoiseError),
 }
 
 // Use anyhow::Result for functions with multiple error types
@@ -641,6 +641,8 @@ pub async fn complex_operation() -> Result<()> {
     Ok(())
 }
 ```
+
+Error variants across the workspace preserve typed sources (via `#[from]` or `#[source]`) instead of stringifying inner errors. Callers can walk `std::error::Error::source()` to downcast to the original cause.
 
 ## Related Sections
 

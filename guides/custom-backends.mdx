@@ -476,7 +476,7 @@ impl DeviceStore for MyCustomStore {
     async fn save(&self, device: &Device) -> Result<()> {
         // Serialize device data (use your preferred format)
         let serialized = bincode::serialize(device)
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            .map_err(|e| StoreError::Serialization(Box::new(e)))?;
         
         self.connection.execute(
             "UPDATE devices SET data = ? WHERE id = 1",
@@ -495,7 +495,7 @@ impl DeviceStore for MyCustomStore {
             Some(r) => {
                 let data: Vec<u8> = r.get(0);
                 let device = bincode::deserialize(&data)
-                    .map_err(|e| StoreError::Deserialization(e.to_string()))?;
+                    .map_err(|e| StoreError::Serialization(Box::new(e)))?;
                 Ok(Some(device))
             }
             None => Ok(None),
@@ -1141,7 +1141,7 @@ async fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
     match self.connection.query("SELECT ...", &[address]).await {
         Ok(row) => Ok(Some(row.get(0))),
         Err(e) if is_not_found(&e) => Ok(None),
-        Err(e) => Err(StoreError::Database(e.to_string())),
+        Err(e) => Err(StoreError::Database(Box::new(e))),
     }
 }
 ```

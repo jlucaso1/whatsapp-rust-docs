@@ -544,40 +544,64 @@ client.disconnect().await;
 
 ### Pair Code Errors
 
+`pair_with_code` returns `whatsapp_rust::pair_code::PairError`, which wraps the wacore-side validation/crypto errors (`PairCodeError`) and the IQ transport layer (`IqError`):
+
 ```rust
+use whatsapp_rust::pair_code::PairError;
 use wacore::pair_code::PairCodeError;
 
 match client.pair_with_code(options).await {
     Ok(code) => println!("Code: {}", code),
-    Err(PairCodeError::PhoneNumberRequired) => {
+    Err(PairError::PairCode(PairCodeError::PhoneNumberRequired)) => {
         eprintln!("Phone number is required");
     }
-    Err(PairCodeError::PhoneNumberTooShort) => {
+    Err(PairError::PairCode(PairCodeError::PhoneNumberTooShort)) => {
         eprintln!("Phone number must be at least 7 digits");
     }
-    Err(PairCodeError::PhoneNumberNotInternational) => {
+    Err(PairError::PairCode(PairCodeError::PhoneNumberNotInternational)) => {
         eprintln!("Phone number must not start with 0 (use international format)");
     }
-    Err(PairCodeError::InvalidCustomCode) => {
+    Err(PairError::PairCode(PairCodeError::InvalidCustomCode)) => {
         eprintln!("Custom code must be 8 valid Crockford Base32 characters");
     }
-    Err(PairCodeError::MissingPairingRef) => {
+    Err(PairError::PairCode(PairCodeError::MissingPairingRef)) => {
         eprintln!("Server did not return a pairing reference");
     }
-    Err(PairCodeError::NotWaiting) => {
+    Err(PairError::PairCode(PairCodeError::NotWaiting)) => {
         eprintln!("No pending pair code request");
     }
-    Err(PairCodeError::InvalidWrappedData { expected, got }) => {
+    Err(PairError::PairCode(PairCodeError::InvalidWrappedData { expected, got })) => {
         eprintln!("Invalid wrapped data: expected {} bytes, got {}", expected, got);
     }
-    Err(PairCodeError::CryptoError(msg)) => {
-        eprintln!("Crypto error during pairing: {}", msg);
+    // Typed crypto failures preserve their `CurveError`/`CryptoProviderError` source
+    Err(PairError::PairCode(PairCodeError::InvalidPrimaryEphemeralKey(e))) => {
+        eprintln!("Primary device sent an invalid ephemeral key: {e}");
     }
-    Err(PairCodeError::RequestFailed(msg)) => {
-        eprintln!("Pairing request failed: {}", msg);
+    Err(PairError::PairCode(PairCodeError::InvalidPrimaryIdentityKey(e))) => {
+        eprintln!("Primary device sent an invalid identity key: {e}");
+    }
+    Err(PairError::PairCode(PairCodeError::EphemeralKeyAgreement(e))) => {
+        eprintln!("Ephemeral DH failed: {e}");
+    }
+    Err(PairError::PairCode(PairCodeError::IdentityKeyAgreement(e))) => {
+        eprintln!("Identity DH failed: {e}");
+    }
+    Err(PairError::PairCode(PairCodeError::AdvSecretKeyDerivation)) => {
+        eprintln!("HKDF expand for adv_secret failed");
+    }
+    Err(PairError::PairCode(PairCodeError::BundleKeyDerivation)) => {
+        eprintln!("HKDF expand for bundle encryption key failed");
+    }
+    Err(PairError::PairCode(PairCodeError::BundleAead(e))) => {
+        eprintln!("AES-GCM encryption of key bundle failed: {e}");
+    }
+    Err(PairError::RequestFailed(iq)) => {
+        eprintln!("Pair-code IQ request failed: {iq}");
     }
 }
 ```
+
+The previous catch-all `CryptoError(String)` and `RequestFailed(String)` variants have been split into typed variants that preserve their underlying source. Match on `std::error::Error::source()` (or downcast it) to inspect the inner `CurveError`, `CryptoProviderError`, or `IqError`.
 
 ## Session Persistence
 

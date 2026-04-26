@@ -372,7 +372,7 @@ pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
     let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
     self.read_key
         .decrypt_with_counter(counter, ciphertext)
-        .map_err(|e| SocketError::Crypto(e.to_string()))
+        .map_err(SocketError::Cipher)
 }
 ```
 
@@ -721,9 +721,9 @@ This is critical for the keepalive loop and stanza acknowledgment, both of which
 ```rust
 pub enum SocketError {
     SocketClosed,
-    NoiseHandshake(String),
-    Io(String),
-    Crypto(String),
+    Io(#[from] std::io::Error),
+    Cipher(#[from] NoiseError),
+    Marshal(#[source] BinaryError),
 }
 
 pub enum EncryptSendError {
@@ -734,6 +734,8 @@ pub enum EncryptSendError {
     ChannelClosed { ... },
 }
 ```
+
+Each variant preserves the underlying typed error as a `source()`. `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source. Walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings.
 
 All variants return buffers for reuse:
 

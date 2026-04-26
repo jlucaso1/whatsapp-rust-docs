@@ -221,43 +221,65 @@ assert_eq!(code, "MYCODE12");
 ```rust
 // wacore/src/pair_code.rs
 pub struct PairCodeOptions {
-    /// Phone number in international format (e.g., "15551234567")
-    /// Non-digit characters are automatically stripped
+    /// Phone number in international format (e.g., "15551234567").
+    /// Non-digit characters are automatically stripped.
     pub phone_number: String,
 
-    /// Whether to show a push notification on the phone
+    /// Whether to show a push notification on the phone (default: `true`).
     pub show_push_notification: bool,
 
-    /// Custom 8-character code (must be valid Crockford Base32)
-    /// If None, a random code is generated
+    /// Custom 8-character code (must be valid Crockford Base32).
+    /// If `None`, a random code is generated.
     pub custom_code: Option<String>,
 
-    /// Platform identifier (default: Chrome)
-    pub platform_id: PlatformId,
-
-    /// Platform display name (default: "Chrome (Linux)")
-    pub platform_display: String,
+    /// Override for `companion_platform_id`. When `None`, the value is
+    /// derived from `Device.device_props.platform_type`. The accompanying
+    /// `companion_platform_display` string is always derived (it cannot
+    /// be overridden separately).
+    pub platform_id: Option<CompanionWebClientType>,
 }
 ```
 
-### PlatformId
+### CompanionWebClientType
 
-Platform identifiers for companion devices, matching the `DeviceProps.PlatformType` protobuf enum:
+`CompanionWebClientType` is the wire-level enum emitted in the `<companion_platform_id>` child of the pair-code IQ. Each variant has a fixed single-byte ASCII identifier returned by [`wire_byte`](https://github.com/oxidezap/whatsapp-rust/blob/main/wacore/src/companion_reg.rs):
 
 ```rust
-pub enum PlatformId {
-    Unknown = 0,
-    Chrome = 1,        // default
-    Firefox = 2,
-    InternetExplorer = 3,
-    Opera = 4,
-    Safari = 5,
-    Edge = 6,
-    Electron = 7,
-    Uwp = 8,
-    OtherWebClient = 9,
+// wacore/src/companion_reg.rs
+pub enum CompanionWebClientType {
+    // Web (digit codes from WAWebCompanionRegClientUtils.DEVICE_PLATFORM)
+    Unknown,           // b'0'
+    Chrome,            // b'1' — default
+    Edge,              // b'2'
+    Firefox,           // b'3'
+    Ie,                // b'4'
+    Opera,             // b'5'
+    Safari,            // b'6'
+    Electron,          // b'7'
+    Uwp,               // b'8'
+    OtherWebClient,    // b'9'
+    // Mobile (letter codes from the official WhatsApp Android client)
+    AndroidTablet,     // b'd'
+    AndroidPhone,      // b'e'
+    AndroidAmbiguous,  // b'f'
 }
 ```
+
+The server accepts 23 single-byte ids (`0..9` and `a..m`); only the 13 with a confirmed platform meaning are exposed. Variants without a confirmed letter fall back to `OtherWebClient` (`'9'`).
+
+#### Mapping from `PlatformType`
+
+`companion_web_client_type_for_platform` maps each `wa::device_props::PlatformType` to a wire variant. Web platforms map to their browser variant (Chrome, Firefox, Edge, etc.). Android platforms map to the dedicated Android letters. Other mobile and embedded platforms collapse to `OtherWebClient`.
+
+#### `companion_platform_display`
+
+The display string sent in `<companion_platform_display>` is built from the wire variant and the OS reported in `DeviceProps`:
+
+- Web variants emit `<Browser> (<OS>)`, e.g. `Chrome (Linux)`, `Firefox (Windows)`.
+- Android variants emit `Android (<OS>)`, e.g. `Android (Android)`.
+- Empty OS substitutes `Linux`.
+
+The server only validates that the display string is 1..=100 bytes — there is no browser whitelist.
 
 ### Pair Code Events
 

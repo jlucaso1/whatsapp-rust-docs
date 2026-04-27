@@ -17,14 +17,17 @@ let blocking = client.blocking();
 
 ### block
 
-Block a contact.
+Block a contact. Accepts either a LID or a PN JID; the client resolves the LID↔PN pair from its mapping cache and emits a stanza carrying both (`jid=LID`, `pn_jid=PN`). Modern WhatsApp servers reject PN-only block requests.
 
 ```rust
 pub async fn block(&self, jid: &Jid) -> Result<(), IqError>
 ```
 
 **Parameters:**
-- `jid` - Contact JID to block
+- `jid` - Contact JID to block (LID or PN)
+
+**Requirements:**
+- A LID↔PN mapping for the target must exist in the client's mapping store. If no mapping is available, the call returns `IqError::EncodeError`.
 
 **Effects:**
 - Contact will not be able to message you
@@ -40,14 +43,14 @@ println!("Blocked {}", contact);
 
 ### unblock
 
-Unblock a previously blocked contact.
+Unblock a previously blocked contact. Accepts either a LID or a PN JID; PN input is internally resolved to the LID required on the wire.
 
 ```rust
 pub async fn unblock(&self, jid: &Jid) -> Result<(), IqError>
 ```
 
 **Parameters:**
-- `jid` - Contact JID to unblock
+- `jid` - Contact JID to unblock (LID or PN)
 
 **Example:**
 ```rust
@@ -153,17 +156,21 @@ Returned by `get_blocklist()` and `is_blocked()` for general errors.
 
 ### Block Request
 
+The block stanza carries both the LID (in `jid`) and the PN (in `pn_jid`). Modern WhatsApp servers reject blocks that omit `pn_jid`.
+
 ```xml
 <iq xmlns="blocklist" type="set" to="s.whatsapp.net" id="...">
-  <item action="block" jid="15551234567@s.whatsapp.net"/>
+  <item action="block" jid="12345678901234@lid" pn_jid="15551234567@s.whatsapp.net"/>
 </iq>
 ```
 
 ### Unblock Request
 
+The unblock stanza only requires the LID; `pn_jid` is omitted.
+
 ```xml
 <iq xmlns="blocklist" type="set" to="s.whatsapp.net" id="...">
-  <item action="unblock" jid="15551234567@s.whatsapp.net"/>
+  <item action="unblock" jid="12345678901234@lid"/>
 </iq>
 ```
 

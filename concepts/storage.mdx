@@ -583,8 +583,28 @@ pub struct Device {
     pub nct_salt: Option<Vec<u8>>,           // NCT salt for cstoken computation
     #[serde(skip)]
     pub nct_salt_sync_seen: bool,            // Runtime flag: authoritative sync seen
+    #[serde(default)]
+    pub server_cert_chain: Option<CachedServerCertChain>, // Cached for Noise IK resume
+}
+
+/// Cached form of the server's two-cert chain. `leaf.key` is the server
+/// static public key consumed by Noise IK; the intermediate is kept solely
+/// to mirror WA Web's expiry checks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedServerCertChain {
+    pub intermediate: CachedNoiseCert,
+    pub leaf: CachedNoiseCert,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedNoiseCert {
+    pub key: [u8; 32],     // 32-byte X25519 public key
+    pub not_before: i64,   // Validity window (Unix epoch seconds)
+    pub not_after: i64,
 }
 ```
+
+The `server_cert_chain` field is populated after a successful XX (or XXfallback) handshake and consumed on the next connect to attempt **Noise IK**. It is cleared via `DeviceCommand::ClearServerCertChain` if a resumed IK handshake fails crypto-fatally. See [Authentication — Noise Protocol Handshake](/concepts/authentication#noise-protocol-handshake).
 
 <Note>
   The `account` field uses a custom `account_serde` module to bridge prost-generated protobuf types (which lack `serde::Deserialize`) into serde. It encodes `AdvSignedDeviceIdentity` to protobuf bytes on serialization and decodes them back on deserialization. The `#[serde(default)]` attribute ensures backward compatibility — old data missing this field deserializes as `None`.
@@ -625,7 +645,8 @@ CREATE TABLE device (
     props_hash TEXT,
     next_pre_key_id INTEGER NOT NULL DEFAULT 0,
     server_has_prekeys BOOLEAN NOT NULL DEFAULT 0,
-    nct_salt BLOB
+    nct_salt BLOB,
+    server_cert_chain BLOB  -- Cached two-cert chain for Noise IK resume
 );
 
 -- Signal protocol tables

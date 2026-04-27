@@ -60,10 +60,14 @@ pub struct Device {
     pub props_hash: Option<String>,
     #[serde(default)]
     pub next_pre_key_id: u32,
+    #[serde(default)]
+    pub server_cert_chain: Option<CachedServerCertChain>,
 }
 ```
 
 Location: `wacore/src/store/device.rs`
+
+`server_cert_chain` caches the verified server cert chain returned by a successful XX (or XXfallback) handshake. `Device` exposes the leaf key on the next connect so `do_handshake` can attempt Noise IK and skip a server round trip. See [WebSocket & Noise Protocol — Noise Protocol Handshake](/advanced/websocket-handling#noise-protocol-handshake).
 
 ### Serialization details
 
@@ -76,7 +80,7 @@ The `Device` struct uses several custom serde strategies:
 | `account` | `account_serde` | Bridges prost protobuf types to serde (see below) |
 | `device_props` | `#[serde(skip)]` | Transient, not persisted |
 | `client_profile` | `#[serde(skip)]` | Transient noise-handshake identity, not persisted |
-| `edge_routing_info`, `props_hash`, `next_pre_key_id` | `#[serde(default)]` | Backward-compatible optional fields |
+| `edge_routing_info`, `props_hash`, `next_pre_key_id`, `server_cert_chain` | `#[serde(default)]` | Backward-compatible optional fields |
 
 The `account` field holds an `AdvSignedDeviceIdentity` (a prost-generated protobuf type that lacks `serde::Deserialize`). The `account_serde` module bridges this gap by encoding the protobuf struct to bytes on serialization and decoding on deserialization:
 

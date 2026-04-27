@@ -24,49 +24,89 @@ src/
 
 ## Noise Protocol Handshake
 
-The handshake establishes an encrypted channel using the Noise XX pattern. A 20-second timeout (`NOISE_HANDSHAKE_RESPONSE_TIMEOUT`) is applied when waiting for the server's handshake response, ensuring the client does not hang indefinitely if the server is unresponsive.
+The handshake establishes an encrypted channel using the Noise Protocol. whatsapp-rust supports two interactive patterns to match WhatsApp Web's behavior:
 
-### Handshake State
+- **Noise XX** — three-message mutual authentication used on cold start, after pairing, and as a fallback when IK fails. The server's static public key is unknown ahead of time and is delivered (and verified against a cert chain) inside the `ServerHello`.
+- **Noise IK** — a single round-trip resumed handshake used when a previously verified server static key is cached. This saves a server round trip on reconnect by pre-encrypting the client static and the 0-RTT `ClientPayload` against the cached server static.
+- **Noise XXfallback** — a recovery pattern the server transparently triggers when the cached server static used by an IK attempt no longer matches its current key. The transcript pivots from IK to XX without restarting the connection.
+
+A 20-second timeout (`NOISE_HANDSHAKE_RESPONSE_TIMEOUT`) is applied when waiting for the server's handshake response, ensuring the client does not hang indefinitely if the server is unresponsive.
+
+### Pattern selection
+
+`do_handshake` picks the pattern based on cached state:
 
 ```rust
-pub struct HandshakeState {
-    noise_key: KeyPair,           // Client's static Curve25519 keypair
-    client_payload: Vec<u8>,      // Client identification data
-    pattern: &'static str,        // "Noise_XX_25519_AESGCM_SHA256"
-    prologue: &'static [u8],      // "WA" header
+// src/handshake.rs
+enum HandshakePattern {
+    /// Cold start / pairing / forced fallback after an earlier IK failure.
+    Xx,
+    /// Cached server static + valid cert chain available; attempt IK.
+    Ik([u8; 32]),
 }
 ```
 
-Location: `wacore/src/handshake/state.rs`
+A handshake uses **IK** only when **all** of the following are true:
 
-### Handshake Process
+- The device is registered (paired).
+- A cached `server_cert_chain` is present in `Device`.
+- Both the leaf and intermediate certificates are inside their `not_before`/`not_after` validity window for the current wall-clock time.
+- The process has not already observed an IK failure this session — the client allows at most `IK_FAILURE_THRESHOLD = 1` IK failure per process before forcing XX on subsequent connects.
+
+Otherwise, the client falls back to **XX**. A successful XX (or XXfallback) handshake refreshes the cached `server_cert_chain` so that the next reconnect can attempt IK again.
+
+### Handshake state types
+
+The `wacore_noise` crate exposes one state machine per pattern:
+
+| Type | Pattern | Used by |
+|------|---------|---------|
+| `XxHandshakeState` | XX | `run_xx_handshake` |
+| `IkHandshakeState` | IK | `run_ik_handshake` |
+| `XxFallbackHandshakeState` | XXfallback | Reentry from `IkServerHelloOutcome::Fallback` |
 
 ```rust
-// From src/handshake.rs:29-104
+// wacore/noise/src/handshake.rs
+pub struct XxHandshakeState { /* ... */ }
+pub struct IkHandshakeState { /* ... */ }
+pub struct XxFallbackHandshakeState { /* ... */ }
+
+pub enum IkServerHelloOutcome {
+    /// Server accepted the cached static — IK can complete in one round trip.
+    Continue(Box<IkHandshakeOutcome>),
+    /// Server rejected the cached static; pivot the transcript into XXfallback.
+    Fallback(Box<IkFallbackInputs>),
+}
+```
+
+The `pattern` strings are `"Noise_XX_25519_AESGCM_SHA256\0\0\0\0"` for XX and XXfallback (the longer `"Noise_XXfallback_25519_AESGCM_SHA256"` name is hashed to derive `h0` because it exceeds `HASHLEN`).
+
+### XX handshake (cold start / fallback)
+
+```rust
+// src/handshake.rs
 pub async fn do_handshake(
-    device: &Device,
+    runtime: Arc<dyn Runtime>,
+    persistence_manager: &PersistenceManager,
+    ik_handshake_failures: &AtomicU32,
     transport: Arc<dyn Transport>,
     transport_events: &mut async_channel::Receiver<TransportEvent>,
 ) -> Result<Arc<NoiseSocket>>
 ```
 
-**Step-by-step process:**
+**Step-by-step process for XX:**
 
 1. **Prepare client payload:**
    ```rust
-   let client_payload = device.core.get_client_payload().encode_to_vec();
+   let client_payload = device.get_client_payload().encode_to_vec();
    ```
-   The payload contains:
-   - Client version
-   - Platform information
-   - Device details
+   The payload contains client version, platform, and device details.
 
-2. **Initialize Noise state:**
+2. **Initialize XX state:**
    ```rust
-   let mut handshake_state = HandshakeState::new(
-       device.core.noise_key.clone(),
+   let mut handshake_state = XxHandshakeState::new(
+       device.noise_key.clone(),
        client_payload,
-       NOISE_START_PATTERN,  // "Noise_XX_25519_AESGCM_SHA256"
        &WA_CONN_HEADER,      // [0x57, 0x41] ("WA")
    )?;
    ```
@@ -74,13 +114,13 @@ pub async fn do_handshake(
 3. **Send ClientHello:**
    ```rust
    let client_hello_bytes = handshake_state.build_client_hello()?;
-   
+
    // Optionally include edge routing for faster reconnection
-   let (header, used_edge_routing) = 
-       build_handshake_header(device.core.edge_routing_info.as_deref());
-   
+   let (header, used_edge_routing) =
+       build_handshake_header(device.edge_routing_info.as_deref());
+
    let framed = wacore::framing::encode_frame(
-       &client_hello_bytes, 
+       &client_hello_bytes,
        Some(&header)
    )?;
    transport.send(framed).await?;
@@ -107,20 +147,110 @@ pub async fn do_handshake(
    ```rust
    let client_finish_bytes = handshake_state
        .read_server_hello_and_build_client_finish(&resp_frame)?;
-   
+
    let framed = wacore::framing::encode_frame(&client_finish_bytes, None)?;
    transport.send(framed).await?;
    ```
 
-6. **Complete handshake:**
+6. **Complete handshake and persist the cert chain:**
    ```rust
-   let (write_key, read_key) = handshake_state.finish()?;
-   info!("Handshake complete, switching to encrypted communication");
-   
-   Ok(Arc::new(NoiseSocket::new(transport, write_key, read_key)))
+   let outcome = handshake_state.finish()?;
+   info!("Handshake complete (XX), switching to encrypted communication");
+
+   // The verified server cert chain is persisted so the next
+   // connect can attempt Noise IK.
+   persistence_manager
+       .process_command(DeviceCommand::SetServerCertChain(
+           outcome.server_cert_chain.into(),
+       ))
+       .await;
+
+   Ok(Arc::new(NoiseSocket::new(
+       runtime, transport, outcome.write_cipher, outcome.read_cipher,
+   )))
    ```
 
-Location: `src/handshake.rs:29-104`
+### IK handshake (resumed)
+
+When `select_pattern` returns `HandshakePattern::Ik(server_static_pub)`, the client uses the cached server static and skips the second round trip:
+
+```rust
+// src/handshake.rs:run_ik_handshake
+let mut ik = IkHandshakeState::new(
+    device.noise_key.clone(),
+    server_static_pub,
+    client_payload,
+    &WA_CONN_HEADER,
+)?;
+
+// IK ClientHello carries: ephemeral, encrypted client static, encrypted 0-RTT payload.
+let client_hello_bytes = ik.build_client_hello()?;
+send_first_handshake_message(&transport, device, &client_hello_bytes).await?;
+
+let resp_frame = recv_frame(runtime, transport_events, &mut frame_decoder).await?;
+
+match ik.read_server_hello(&resp_frame)? {
+    IkServerHelloOutcome::Continue(out) => {
+        // Single round trip — handshake is already complete.
+        info!("Handshake complete (IK), switching to encrypted communication");
+        // No client cert chain refresh — the cached entry stays authoritative.
+    }
+    IkServerHelloOutcome::Fallback(inputs) => {
+        // Server rejected the cached static. Pivot to XXfallback below.
+    }
+}
+```
+
+On `Continue`, no `SetServerCertChain` command is issued — the on-disk cache remains authoritative.
+
+### XXfallback (server-driven recovery)
+
+If `read_server_hello` returns `IkServerHelloOutcome::Fallback(inputs)`, the server has signalled that the cached static is stale. The client constructs an `XxFallbackHandshakeState` from the IK transcript and finishes the handshake as if it had been XX from the start, **without reconnecting**:
+
+```rust
+// src/handshake.rs
+let mut fb = XxFallbackHandshakeState::from_ik_failure(*inputs, &WA_CONN_HEADER)?;
+let client_finish_bytes = fb.build_client_finish()?;
+
+let framed = wacore::framing::encode_frame(&client_finish_bytes, None)?;
+transport.send(bytes::Bytes::from(framed)).await?;
+
+let outcome = fb.finish()?;
+info!("Handshake complete (XXfallback), switching to encrypted communication");
+
+// XXfallback re-derives the server cert chain, so persist the fresh value.
+persistence_manager
+    .process_command(DeviceCommand::SetServerCertChain(
+        outcome.server_cert_chain.into(),
+    ))
+    .await;
+```
+
+A `fallback_taken` flag is flipped before any operation that could fail. Failures **after** this pivot are not treated as crypto-fatal for IK cache invalidation purposes — by that point the server has already accepted the IK ClientHello and the cache is no longer the implicated party.
+
+### IK failure handling
+
+Errors are partitioned into two buckets in `HandshakeError`:
+
+```rust
+impl HandshakeError {
+    /// Transient — never invalidate the cache.
+    pub fn is_transient(&self) -> bool { /* Transport, Timeout, Disconnected, StreamClosed */ }
+
+    /// Crypto-fatal — the cached server static or cert chain is no longer trustworthy.
+    pub fn is_crypto_fatal(&self) -> bool { /* AEAD/cert/parse failures */ }
+}
+```
+
+If `do_handshake` selected IK, the pivot to XXfallback was not taken, and the error returns `is_crypto_fatal() == true`, the client:
+
+1. Increments a process-local `ik_handshake_failures: AtomicU32`.
+2. Issues `DeviceCommand::ClearServerCertChain` to drop the cached chain.
+3. Forces XX on the next connect via `select_pattern`.
+
+Programmer-side variants (`Proto`, generic `Crypto(String)`, `HkdfExpandFailed`, `CounterExhausted`) are explicitly **not** crypto-fatal — they indicate a code defect, and clearing the cache would mask it.
+
+Location: `src/handshake.rs`
 
 ### Edge Routing Pre-Intro
 
@@ -143,7 +273,9 @@ pub fn build_handshake_header(
 }
 ```
 
-Location: `wacore/src/handshake/edge_routing.rs`
+Location: `wacore/noise/src/edge_routing.rs`
+
+Both XX and IK send their first handshake message through `send_first_handshake_message`, so the prologue (and any edge-routing pre-intro) is identical for the two patterns. This is required for the wire-side server to re-derive `h0` for transcript MAC checks regardless of which pattern is in use.
 
 ### Handshake Errors
 
@@ -152,11 +284,15 @@ pub enum HandshakeError {
     Transport(#[from] anyhow::Error),
     Core(#[from] CoreHandshakeError),
     Timeout,
+    /// Producer side of `transport_events` was dropped — distinct from a
+    /// timeout because nothing more will ever arrive on the channel.
+    StreamClosed,
+    Disconnected,
     UnexpectedEvent(String),
 }
 ```
 
-Location: `src/handshake.rs:15-25`
+Location: `src/handshake.rs`
 
 ## NoiseSocket
 

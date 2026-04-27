@@ -405,22 +405,34 @@ See [Signal Protocol](/advanced/signal-protocol) for encryption details.
 
 **Location:** `wacore/noise`
 
-Noise Protocol XX implementation for handshake encryption.
+Noise Protocol implementation for handshake encryption. Supports the XX, IK, and XXfallback patterns to match WhatsApp Web's behavior on cold start, resumed reconnects, and server-driven recovery.
 
 ```rust
 use wacore::noise::{
     NoiseHandshake,
     HandshakeUtils,
+    XxHandshakeState,
+    IkHandshakeState,
+    XxFallbackHandshakeState,
+    IkServerHelloOutcome,
+    VerifiedServerCertChain,
     build_handshake_header,
 };
 ```
 
 **Key exports:**
-- `NoiseState` - Generic Noise XX state machine
+- `NoiseState` - Generic Noise state machine
 - `NoiseHandshake` - WhatsApp-specific handshake wrapper
+- `XxHandshakeState` - Three-message XX handshake (cold start / fallback)
+- `IkHandshakeState` - Resumed IK handshake using a cached server static
+- `XxFallbackHandshakeState` - Server-driven recovery from a stale IK static, continuing the existing transcript
+- `IkServerHelloOutcome` - Either `Continue` (IK succeeds) or `Fallback` (pivot into XXfallback)
+- `VerifiedServerCertChain` - Output of XX/XXfallback; persisted by the client to enable IK on the next connect
 - `HandshakeUtils` - Protocol message building/parsing
 - `framing` - WebSocket frame encoding
 - `build_edge_routing_preintro` - Edge routing helper
+
+See [WebSocket & Noise Protocol — Noise Protocol Handshake](/advanced/websocket-handling#noise-protocol-handshake) for the full pattern selection and failure-handling logic.
 
 ### wacore-appstate
 

@@ -348,21 +348,40 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
 
 ### Noise Protocol Handshake
 
-**Pattern:** Noise XX (mutual authentication)
+whatsapp-rust supports three Noise patterns to mirror WhatsApp Web:
+
+| Pattern | When it runs | Round trips |
+|---------|--------------|-------------|
+| **Noise XX** | Cold start, after pairing, or any reconnect with no cached server cert chain | 1.5 (3 messages) |
+| **Noise IK** | Reconnect with a valid cached `server_cert_chain` | 0.5 (2 messages) |
+| **Noise XXfallback** | Server-driven recovery when an IK attempt's cached server static is stale | 0.5 (continues from IK ClientHello) |
 
 ```rust
-// wacore/noise/
-pub struct NoiseHandshake {
-    initiator_static: KeyPair,
-    ephemeral: KeyPair,
-    // ... Noise state machine
+// wacore/noise/src/handshake.rs
+pub struct XxHandshakeState         { /* ... */ }  // Noise_XX_25519_AESGCM_SHA256
+pub struct IkHandshakeState         { /* ... */ }  // Noise_IK_25519_AESGCM_SHA256
+pub struct XxFallbackHandshakeState { /* ... */ }  // Resumes the IK transcript as XX
+
+pub enum IkServerHelloOutcome {
+    Continue(Box<IkHandshakeOutcome>),  // Cached static accepted
+    Fallback(Box<IkFallbackInputs>),    // Pivot into XXfallback
 }
 ```
 
-**Flow:**
+**XX flow (cold start):**
 1. Initiator → Responder: ephemeral pub
-2. Responder → Initiator: ephemeral pub, static pub, encrypted payload
-3. Initiator → Responder: static pub, encrypted payload
+2. Responder → Initiator: ephemeral pub, static pub, encrypted payload (cert chain)
+3. Initiator → Responder: encrypted static pub, encrypted payload
+
+The verified `server_cert_chain` is persisted at the end of XX so the next connect can use IK.
+
+**IK flow (resumed):**
+1. Initiator → Responder: ephemeral pub, encrypted static, encrypted 0-RTT payload (built against the cached server static)
+2. Responder → Initiator: ephemeral pub, encrypted payload — handshake is complete after this single round trip.
+
+If the server's static no longer matches the cached value, step 2 returns an `IkServerHelloOutcome::Fallback(...)` and the client pivots to **XXfallback** in-place — without dropping the connection — finishing as if it had been XX from the start.
+
+After a single crypto-fatal IK failure the client clears the cached cert chain (`DeviceCommand::ClearServerCertChain`), increments a process-local failure counter, and forces XX on the next connect. See [WebSocket & Noise Protocol — Noise Protocol Handshake](/advanced/websocket-handling#noise-protocol-handshake) for the full state machine.
 
 ### ClientProfile
 

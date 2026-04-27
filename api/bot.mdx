@@ -406,7 +406,7 @@ Pair code runs concurrently with QR code pairing — whichever completes first w
 </Note>
 
 <Tip>
-The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and the device's `os` string: web variants emit `<Browser> (<OS>)`; Android variants emit `Android (<OS>)`. There is no separate `platform_display` field on `PairCodeOptions`.
+The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and the device's `os` string: web variants emit `<Browser> (<OS>)` (Android `PlatformType`s map to `Chrome`, so they show as `Chrome (Android)` by default); explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`. There is no separate `platform_display` field on `PairCodeOptions`.
 </Tip>
 
 ---

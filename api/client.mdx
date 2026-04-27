@@ -244,7 +244,7 @@ This can run concurrently with QR code pairing — whichever completes first win
   - `phone_number` — Phone number in international format (e.g., `"15551234567"`)
   - `show_push_notification` — Whether to show a push notification on the phone (default: `true`)
   - `custom_code` — Optional custom 8-character code using Crockford Base32 alphabet
-  - `platform_id` — `Option<CompanionWebClientType>` override for `<companion_platform_id>`. `None` derives the wire id from `Device.device_props.platform_type` (typically `Chrome`). The matching `<companion_platform_display>` is always derived; web variants emit `<Browser> (<OS>)` and Android variants emit `Android (<OS>)`.
+  - `platform_id` — `Option<CompanionWebClientType>` override for `<companion_platform_id>`. `None` derives the wire id from `Device.device_props.platform_type` (typically `Chrome`; Android `PlatformType`s also map to `Chrome` because the server requires attestation for the Android letter codes). The matching `<companion_platform_display>` is always derived; web variants emit `<Browser> (<OS>)`, and explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`.
 </ParamField>
 
 <ResponseField name="code" type="String">

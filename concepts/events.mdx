@@ -142,6 +142,9 @@ pub enum Event {
     // Newsletter
     NewsletterLiveUpdate(NewsletterLiveUpdate),
 
+    // Calls
+    IncomingCall(IncomingCall),
+
     // Notification Updates
     DisappearingModeChanged(DisappearingModeChanged),
 
@@ -1583,6 +1586,100 @@ Event::NewsletterLiveUpdate(update) => {
 
 <Note>
 You must call `client.newsletter().subscribe_live_updates(&jid)` to receive these events. The subscription has a limited duration (typically 300 seconds) and must be renewed periodically.
+</Note>
+
+## Call Events
+
+### IncomingCall
+
+**Emitted:** When the server delivers a `<call>` stanza — voice or video, 1-on-1 or group. Mirrors WhatsApp Web's inbound call signaling.
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct IncomingCall {
+    pub from: Jid,
+    /// Stanza id; distinct from `CallAction::call_id`.
+    pub stanza_id: String,
+    pub notify: Option<String>,
+    pub platform: Option<String>,
+    pub version: Option<String>,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<Utc>,
+    pub offline: bool,
+    pub action: CallAction,
+}
+```
+
+The `action` field is a tagged enum that mirrors the inner stanza child (`<offer>`, `<offer_notice>`, `<preaccept>`, `<accept>`, `<reject>`, `<terminate>`):
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CallAction {
+    Offer {
+        call_id: String,
+        call_creator: Jid,
+        caller_pn: Option<Jid>,
+        caller_country_code: Option<String>,
+        device_class: Option<String>,
+        joinable: bool,
+        is_video: bool,
+        audio: Vec<CallAudioCodec>,
+        /// Set on group calls. Primary group signal per `WAWebVoipGatingUtils`.
+        group_jid: Option<Jid>,
+    },
+    /// Group-call notification fan-out to members. The router acks it via the
+    /// generic call ack — no offer-receipt is expected.
+    OfferNotice {
+        call_id: String,
+        call_creator: Jid,
+        is_video: bool,
+        is_group: bool,
+    },
+    PreAccept { call_id: String, call_creator: Jid },
+    Accept    { call_id: String, call_creator: Jid },
+    Reject    { call_id: String, call_creator: Jid },
+    Terminate {
+        call_id: String,
+        call_creator: Jid,
+        duration: Option<u32>,
+        audio_duration: Option<u32>,
+    },
+}
+```
+
+**Behavior:**
+- The router automatically acks every `<call>` stanza. For `Offer` it additionally sends an `<receipt><offer/></receipt>` so the caller's UI advances past "ringing".
+- `OfferNotice` is the server's fan-out to other group members when a group call starts. No offer-receipt is sent — only the generic ack.
+- Use `action.call_id()` and `action.call_creator()` to access the common identifiers without matching every variant.
+
+**Detecting group calls:**
+
+```rust
+Event::IncomingCall(call) => match &call.action {
+    CallAction::Offer { is_video, group_jid: Some(group), .. } => {
+        // 1-to-many group call offer addressed directly to you.
+        let kind = if *is_video { "video" } else { "voice" };
+        println!("Incoming group {kind} call in {group} from {}", call.from);
+    }
+    CallAction::Offer { is_video, group_jid: None, .. } => {
+        let kind = if *is_video { "video" } else { "voice" };
+        println!("Incoming 1-on-1 {kind} call from {}", call.from);
+    }
+    CallAction::OfferNotice { is_group: true, is_video, call_creator, .. } => {
+        // Group-call fan-out: another member started a call in a group you belong to.
+        let kind = if *is_video { "video" } else { "voice" };
+        println!("Group {kind} call started by {call_creator}");
+    }
+    CallAction::Terminate { call_id, duration, .. } => {
+        println!("Call {call_id} ended after {:?}s", duration);
+    }
+    _ => {}
+},
+```
+
+<Note>
+`group_jid` on `CallAction::Offer` is the primary signal for distinguishing a group call from a 1-on-1 call (matches WhatsApp Web's `WAWebVoipGatingUtils`). `OfferNotice` is the secondary signal for members who were not directly offered the call — for example, when you are a passive group member receiving the announcement that a call started.
 </Note>
 
 ## Notification Events

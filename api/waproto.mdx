@@ -71,6 +71,7 @@ pub struct Message {
     pub ephemeral_message: Option<Box<EphemeralMessage>>,
     pub view_once_message: Option<Box<ViewOnceMessage>>,
     pub view_once_message_v2: Option<Box<ViewOnceMessageV2>>,
+    pub view_once_message_v2_extension: Option<Box<FutureProofMessage>>,
     
     // Reactions and interactions
     pub reaction_message: Option<ReactionMessage>,

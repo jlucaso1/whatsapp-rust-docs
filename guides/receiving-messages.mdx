@@ -131,6 +131,12 @@ if message.is_ephemeral() {
 if message.is_view_once() {
     println!("This is a view-once message");
 }
+// `is_view_once()` returns `true` for any of the following:
+// - Legacy wrappers: `view_once_message`, `view_once_message_v2`,
+//   `view_once_message_v2_extension` (in any nesting order under
+//   `device_sent_message` or `ephemeral_message`)
+// - Modern inline `view_once` flag on `image_message`, `video_message`,
+//   `audio_message`, or `extended_text_message`
 
 // Get the ephemeral timer from the message itself
 if let Some(exp) = message.get_ephemeral_expiration() {

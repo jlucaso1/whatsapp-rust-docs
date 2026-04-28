@@ -632,7 +632,7 @@ pub struct DeviceInfo {
 }
 ```
 
-The `raw_id` field stores the ADV (Account Device Verification) key index list `raw_id` from device notifications. When this value changes for a user, it indicates an identity change (e.g., the user reinstalled WhatsApp). The client uses this to detect identity changes and clear all Signal sessions and sender key device tracking for that user, forcing SKDM redistribution on the next group message.
+The `raw_id` field stores the ADV (Account Device Verification) key index list `raw_id` from device notifications. When this value changes for a user, it indicates an identity change (e.g., the user reinstalled WhatsApp). The client uses this to detect identity changes and clear Signal sessions for that user's non-primary devices. Per-device sender key tracking is **not** wiped globally on identity change — that would empty the tracker too aggressively and feed the no-distribution path on the next group send. SKDM redistribution is instead driven per-group/per-device by retry receipts (matching WhatsApp Web's `WAWebUpdateLocalSignalSession`/`markForgetSenderKey` behavior).
 
 ## Error Handling
 

@@ -395,7 +395,9 @@ pub trait ProtocolStore: Send + Sync {
     async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
     // Clear all sender key device tracking across ALL groups.
-    // Called on identity change (raw_id mismatch) to force SKDM redistribution.
+    // Provided for completeness; not invoked on identity change — WhatsApp Web's
+    // `WAWebUpdateLocalSignalSession` only calls `markForgetSenderKey` per-group/per-device
+    // on retry receipts, so a global wipe here would empty the tracker too aggressively.
     async fn clear_all_sender_key_devices(&self) -> Result<()>;
 
     // LID-PN Mapping (Long-term ID to Phone Number)

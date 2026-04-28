@@ -1480,7 +1480,7 @@ pub struct IdentityChange {
 
 This event corresponds to WhatsApp Web's `WAWebHandleIdentityChange` flow. When the server sends an `<identity/>` notification inside a `type="encrypt"` stanza, the client:
 
-1. Clears the device record for the user (deletes Signal sessions for all non-primary devices and all sender key device tracking)
+1. Clears the device record for the user (deletes Signal sessions for all non-primary devices). Per-device sender key tracking is **not** wiped here — matching WhatsApp Web's `WAWebUpdateLocalSignalSession`, SKDM redistribution is driven per-group/per-device by retry receipts (`markForgetSenderKey`), so a global wipe would empty the tracker too aggressively.
 2. Deletes the primary device session and identity key so a fresh session can be established (matching WhatsApp Web's `deleteRemoteInfo`)
 3. Deletes the `status@broadcast` sender key for forward secrecy on the next status send (matching WhatsApp Web's `markStatusSenderKeyRotate`)
 4. Invalidates the device registry cache so the next send triggers a fresh device list sync

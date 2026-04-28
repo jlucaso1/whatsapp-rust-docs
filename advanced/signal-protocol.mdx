@@ -560,6 +560,10 @@ Rather than distributing the sender key to all group devices on every message, t
 3. Computes the diff — only devices with `has_key=false` or not yet tracked receive the SKDM
 4. Passes the targeted device list to `prepare_group_stanza` via the `skdm_target_devices` parameter
 
+<Note>
+On the **first** group send (or any send where the cached map is empty), the filter still runs unconditionally — every resolved participant device is treated as `has_key=false` and receives the SKDM. This matches WhatsApp Web, which iterates an empty `senderKey` Map as `false` per participant. There is no early-exit for an empty cache; otherwise the very first message after a fresh start would skip distribution entirely.
+</Note>
+
 Location: `src/send.rs`, `src/client/sender_keys.rs`, `wacore/src/send.rs`
 
 ### In-memory sender key device cache
@@ -614,7 +618,7 @@ pub(crate) struct SenderKeyDeviceMap {
 | Server rejects group stanza | Invalidate group entry |
 | New device added (`patch_device_add`) | Invalidate all entries |
 | Device removed (`patch_device_remove`) | Invalidate all entries |
-| Identity change (`clear_device_record`) | Invalidate all entries + delete `status@broadcast` sender key |
+| Identity change (`clear_device_record`) | No global tracker wipe — per-device SKDM redistribution is driven by retry receipts (`markForgetSenderKey`), matching WhatsApp Web's `WAWebUpdateLocalSignalSession`. The `status@broadcast` sender key is still deleted for forward secrecy. |
 
 You can tune the cache capacity and TTI via the `sender_key_devices_cache` field in [`CacheConfig`](/api/bot#cache-configuration-reference).
 

@@ -1458,7 +1458,10 @@ pub struct DeviceNotificationInfo {
 | `key_index` | ADV key index info for device identity verification (add operations only) |
 | `contact_hash` | Server-side contact hash for update operations |
 
-This event is dispatched after the client has already patched its internal device registry cache. You can use it to track when contacts pair or unpair companion devices. The client also uses device list changes internally to manage [unknown device detection](/advanced/signal-protocol#unknown-device-detection), Signal session cleanup, and sender key cache invalidation — when a device is added or removed, the sender key device cache is invalidated so SKDM is redistributed on the next group message.
+This event is dispatched after the client has already patched its internal device registry cache. You can use it to track when contacts pair or unpair companion devices. The client also uses device list changes internally to manage [unknown device detection](/advanced/signal-protocol#unknown-device-detection) and Signal session cleanup. SKDM redistribution is driven per-group/per-device by the resolver:
+
+- **Device added** — no cache wipe is performed. `device_has_key()` returns `None` for the unseen device id, so it falls into `needs_skdm` automatically on the next group send.
+- **Device removed** — the matching `sender_key_devices` rows for the device JID are deleted (mirroring WhatsApp Web's `senderKey.delete(deviceJid)`), and any cached map indexing that `(user, device_id)` pair is evicted so a future re-add of the same device id cannot hit a stale `has_key=true` entry. Unrelated group caches stay warm.
 
 ### IdentityChange
 

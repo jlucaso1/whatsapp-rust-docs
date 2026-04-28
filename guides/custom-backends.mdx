@@ -366,7 +366,25 @@ impl ProtocolStore for MyCustomStore {
         ).await?;
         Ok(())
     }
-    
+
+    async fn delete_sender_key_device_rows(&self, device_jids: &[&str]) -> Result<()> {
+        if device_jids.is_empty() {
+            return Ok(());
+        }
+        // Chunk to keep parameter counts under SQLite's bind variable limit.
+        for chunk in device_jids.chunks(190) {
+            let placeholders = std::iter::repeat("?")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "DELETE FROM sender_key_devices WHERE device_jid IN ({placeholders})"
+            );
+            self.connection.execute(&sql, chunk).await?;
+        }
+        Ok(())
+    }
+
     // --- LID-PN Mapping ---
     
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {

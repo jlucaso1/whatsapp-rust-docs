@@ -394,6 +394,11 @@ pub trait ProtocolStore: Send + Sync {
     async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()>;
     async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
+    // Delete specific sender_key_devices rows by device JID across all groups.
+    // Mirrors WhatsApp Web's per-group `senderKey.delete(deviceJid)` cleanup
+    // when a device is removed from a user's registry.
+    async fn delete_sender_key_device_rows(&self, device_jids: &[&str]) -> Result<()>;
+
     // Clear all sender key device tracking across ALL groups.
     // Provided for completeness; not invoked on identity change — WhatsApp Web's
     // `WAWebUpdateLocalSignalSession` only calls `markForgetSenderKey` per-group/per-device

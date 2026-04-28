@@ -178,6 +178,12 @@ async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)])
 
 /// Clear all sender key device tracking for a group (on sender key rotation).
 async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
+
+/// Delete specific `sender_key_devices` rows by device JID across all groups.
+/// Mirrors WhatsApp Web's per-group `senderKey.delete(deviceJid)` cleanup.
+/// Called when a device is removed from a user's registry so a future re-add
+/// of the same device id cannot hit a stale `has_key=true` entry and skip SKDM.
+async fn delete_sender_key_device_rows(&self, device_jids: &[&str]) -> Result<()>;
 ```
 
 ### LID-PN Mapping

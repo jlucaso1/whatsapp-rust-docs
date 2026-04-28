@@ -586,8 +586,8 @@ client.unpin_message(chat_jid, key).await?;
 
 When sending group, status, or DM messages, the library automatically validates the participant hash (`phash`) from the server's acknowledgment against the locally computed value. If the hashes differ, the appropriate caches are invalidated so the next send re-fetches current participant devices from the server:
 
-- **Group messages**: sender key device cache and group info cache are invalidated
-- **Status messages**: sender key device cache is invalidated
+- **Group messages**: persisted `sender_key_devices` rows for the chat are cleared, the in-memory sender key device cache and group info cache are invalidated. If the persisted clear fails, the client falls back to deleting the bot's own sender key for the chat so the next send hits `!key_exists` and force-redistributes
+- **Status messages**: persisted `sender_key_devices` rows for `status@broadcast` are cleared and the in-memory sender key device cache is invalidated (same fallback applies)
 - **DM messages**: the device registry cache is invalidated for both the recipient and your own phone number (PN), matching WA Web's `syncDeviceListJob([recipient, me])` behavior
 
 For DMs, the phash is computed locally from the sent device set but is **not** sent on the wire (WA Web only sends phash for groups). The phash is returned via the `PreparedDmStanza.phash` field and compared against the server's ACK phash.

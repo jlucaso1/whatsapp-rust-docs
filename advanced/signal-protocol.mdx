@@ -616,13 +616,43 @@ pub(crate) struct SenderKeyDeviceMap {
 | `NoSenderKeyState` error during send | Invalidate group entry |
 | Retry failure for a group message | Invalidate group entry |
 | Server rejects group stanza | Invalidate group entry |
-| New device added (`patch_device_add`) | Invalidate all entries |
-| Device removed (`patch_device_remove`) | Invalidate all entries |
+| Phash mismatch on group/status ACK | Clear persisted `sender_key_devices` rows for the chat **and** invalidate the in-memory group entry. If the DB clear fails, fall back to deleting the bot's own sender key for the chat so the next send hits `!key_exists` and force-distributes without relying on the tracker. |
+| Periodic rotation (chain iteration ≥ 1000) | Delete the bot's own sender key, clear `sender_key_devices` for the chat, and invalidate the group entry. Mirrors WhatsApp Web's `SenderKeyExpired(PERIODIC_ROTATION)`. |
+| Participant removed from group | If any removed participant had `has_key=true`, delete the bot's own sender key for the group, clear `sender_key_devices`, and invalidate the group entry. See [Forward-secrecy rotation on participant removal](#forward-secrecy-rotation-on-participant-removal). |
+| New device added (`patch_device_add`) | No invalidation — `device_has_key()` returns `None` for unseen device ids, dropping them into `needs_skdm` on the next send. |
+| Device removed (`patch_device_remove`) | Delete `sender_key_devices` rows for the removed JID across all groups (mirrors WA Web's `senderKey.delete(deviceJid)`), then evict only those cache entries indexing `(user, device_id)`. Unrelated group caches stay warm. The DB delete must succeed before the registry update is persisted, otherwise the registry would say "gone" while the tracker still vouched `has_key=true`. |
 | Identity change (`clear_device_record`) | No global tracker wipe — per-device SKDM redistribution is driven by retry receipts (`markForgetSenderKey`), matching WhatsApp Web's `WAWebUpdateLocalSignalSession`. The `status@broadcast` sender key is still deleted for forward secrecy. |
 
 You can tune the cache capacity and TTI via the `sender_key_devices_cache` field in [`CacheConfig`](/api/bot#cache-configuration-reference).
 
 Location: `src/sender_key_device_cache.rs`, `src/send.rs`
+
+### Forward-secrecy rotation on participant removal
+
+When participants are removed from a group — either via the local `update_group_participants` API or via an inbound group remove notification — the client mirrors WhatsApp Web's `removeParticipantInfo` (`GroupParticipantHelpers.js`) by calling `rotate_sender_key_on_participant_remove`:
+
+1. Reads the group's `sender_key_devices` rows.
+2. Checks whether **any** removed user had `has_key=true` for any of their devices.
+3. If yes, deletes the bot's own sender key for the group (across both LID and PN own-JIDs), clears `sender_key_devices` for the group, and invalidates the in-memory cache entry.
+4. The next group send sees `!key_exists` and takes the `force_skdm=true` path, redistributing a fresh sender key to all remaining participants — so the removed user can no longer decrypt forward traffic with the old key.
+
+When none of the removed users had `has_key=true`, no rotation occurs — they never received an SKDM, so there is nothing for them to decrypt forward and the redistribute cost is skipped.
+
+If the `sender_key_devices` read fails, the client rotates conservatively (treats the unaudited state as "removed user may have had a key") rather than leaving the old key in place.
+
+Location: `src/client/sender_keys.rs`, `src/features/groups.rs`, `src/handlers/notification.rs`
+
+### Periodic sender key rotation
+
+Long-lived sender keys advance their chain every group send. To match WhatsApp Web's `SenderKeyExpired(PERIODIC_ROTATION)` posted after a chain crosses a threshold, the client rotates when the sender chain iteration reaches **1000**:
+
+1. The existence check loads the current `SenderKeyRecord` and inspects the sender chain key iteration.
+2. When `iteration >= 1000`, the bot's own sender key is deleted, `sender_key_devices` is cleared for the chat, and the in-memory cache entry is invalidated.
+3. The send proceeds with `force_skdm=true`, redistributing a fresh sender key to all participants.
+
+The threshold value (1000) is not exposed by WA Web's captured-js sources; it mirrors common Signal hygiene defaults. Periodic rotation runs inline on the send path so latency is paid by the rotating message, not by every subsequent message.
+
+Location: `src/send.rs`
 
 ### Phash validation for stale device list detection
 
@@ -638,11 +668,13 @@ When sending group, status, or DM messages, the library validates the participan
 
 **On mismatch, the following caches are invalidated:**
 
-| Send path | Sender key device cache | Group info cache | Device registry |
-|-----------|------------------------|-----------------|-----------------|
-| Group messages | Invalidated | Invalidated | — |
-| Status messages | Invalidated | Not invalidated | — |
-| DM messages | — | — | Recipient + own PN devices invalidated |
+| Send path | Persisted `sender_key_devices` | In-memory sender key device cache | Group info cache | Device registry |
+|-----------|-------------------------------|-----------------------------------|------------------|-----------------|
+| Group messages | Cleared for the chat | Invalidated | Invalidated | — |
+| Status messages | Cleared for `status@broadcast` | Invalidated | Not invalidated | — |
+| DM messages | — | — | — | Recipient + own PN devices invalidated |
+
+For group and status sends, cache-only invalidation would re-read the same stale rows from the database on the next send, so the client also clears the persisted `sender_key_devices` state for the chat. If that DB clear fails, the client falls back to deleting the bot's own sender key for the chat — the next send then sees `!key_exists`, takes the `force_skdm=true` path, and redistributes without depending on the tracker.
 
 For DM messages, the phash covers both recipient and own devices (matching WA Web's `syncDeviceListJob([recipient, me])`). On mismatch, the client invalidates the device registry cache for both the recipient's user JID and your own phone number (PN) JID, ensuring the next send re-fetches the current device list for both parties.
 

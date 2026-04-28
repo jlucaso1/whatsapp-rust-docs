@@ -305,6 +305,18 @@ Location: `wacore/src/send.rs:675-820`, `src/send.rs`
 
 WhatsApp's multi-device architecture uses two addressing schemes: phone number JIDs (PN, `@s.whatsapp.net`) and Linked Identity JIDs (LID, `@lid`). WhatsApp Web always resolves PN→LID before any session operation via `createSignalAddress()`. whatsapp-rust mirrors this behavior — when a LID mapping is discovered for a phone number, any Signal sessions stored under the PN address are automatically migrated to the corresponding LID address.
 
+### Signal address resolution
+
+`Client::resolve_encryption_jid()` mirrors WA Web's `SignalAddress.toString()` (`WAWeb/Signal/Address.js`). It upgrades the JID's `server` to its LID counterpart when a mapping is known, and otherwise returns the input unchanged:
+
+| Input `Server` | Resolved `Server` (mapping known) | No mapping |
+|----------------|------------------------------------|------------|
+| `Pn` | `Lid` | `Pn` (preserved) |
+| `Hosted` | `HostedLid` | `Hosted` (preserved) |
+| Any other | unchanged | unchanged |
+
+The `device`, `agent`, and `integrator` fields always round-trip — only the `user` (replaced with the LID user) and `server` change. This keeps Cloud API / Meta Business hosted devices on a hosted-flavored LID address rather than collapsing them into the standard `@lid` server, matching WA Web's per-device session keying.
+
 ### Why migration is needed
 
 After pairing, the primary phone may initially establish sessions under a PN address. Once the LID mapping becomes known (from usync, incoming messages, or device notifications), the phone begins sending from the LID address. Without migration, the client holds a session under the PN address but receives messages addressed to the LID — causing `SessionNotFound` decryption failures.

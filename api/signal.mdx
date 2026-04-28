@@ -32,7 +32,7 @@ pub async fn encrypt_message(
 ```
 
 **Parameters:**
-- `jid` - Recipient JID. PN JIDs are resolved to LID when a LID session exists, matching the internal send path.
+- `jid` - Recipient JID. PN JIDs are resolved to LID and `Hosted` JIDs to `HostedLid` when a mapping exists, matching WA Web's `SignalAddress.toString()` and the internal send path. See [Signal address resolution](/advanced/signal-protocol#signal-address-resolution).
 - `plaintext` - Raw bytes to encrypt. The caller is responsible for padding if needed.
 
 **Returns:**
@@ -70,7 +70,7 @@ pub async fn decrypt_message(
 ```
 
 **Parameters:**
-- `jid` - Sender JID. PN JIDs are resolved to LID when a LID session exists.
+- `jid` - Sender JID. PN JIDs are resolved to LID and `Hosted` JIDs to `HostedLid` when a mapping exists.
 - `enc_type` - The encryption type (`EncType::PreKeyMessage` or `EncType::Message`)
 - `ciphertext` - Encrypted bytes to decrypt
 
@@ -169,7 +169,7 @@ pub async fn validate_session(&self, jid: &Jid) -> Result<bool>
 ```
 
 **Parameters:**
-- `jid` - JID to check. PN JIDs are resolved to LID when a LID mapping exists.
+- `jid` - JID to check. PN JIDs are resolved to LID and `Hosted` JIDs to `HostedLid` when a mapping exists.
 
 **Returns:**
 - `bool` - `true` if a session exists, `false` otherwise
@@ -192,7 +192,7 @@ pub async fn delete_sessions(&self, jids: &[Jid]) -> Result<()>
 ```
 
 **Parameters:**
-- `jids` - JIDs whose sessions and identity keys should be deleted. PN JIDs are resolved to LID when a LID mapping exists.
+- `jids` - JIDs whose sessions and identity keys should be deleted. PN JIDs are resolved to LID and `Hosted` JIDs to `HostedLid` when a mapping exists.
 
 This matches WhatsApp Web's `deleteRemoteSession` behavior, which removes both the session and identity key as a paired operation. Changes are flushed to the persistent backend before returning.
 

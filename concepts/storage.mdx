@@ -448,7 +448,7 @@ pub struct LidPnMappingEntry {
 
 **Location:** `src/lid_pn_cache.rs`
 
-The `LidPnCache` provides a bounded in-memory cache for LID to phone number mappings, used for Signal address resolution. WhatsApp Web uses LID-based addresses for Signal sessions when available.
+The `LidPnCache` provides an in-memory cache for LID to phone number mappings, used for Signal address resolution. WhatsApp Web uses LID-based addresses for Signal sessions when available.
 
 ```rust
 pub struct LidPnCache {
@@ -457,9 +457,11 @@ pub struct LidPnCache {
 }
 ```
 
-**Bounds (prevents unbounded memory growth):**
-- **Max capacity**: 10,000 entries per map
-- **Time-to-idle TTL**: 1 hour
+**Defaults match `WAWebLidPnCache`:**
+- **Time-based expiry**: none — entries do not idle out
+- **Capacity**: effectively unbounded (`u64::MAX`; moka has no `unbounded()` builder)
+
+A custom `CacheEntryConfig` can impose a capacity bound if memory pressure requires it. Be aware that capacity-LRU eviction silently downgrades Signal addresses from `@lid` (or `@hosted.lid`) back to `@c.us`, which can cause `SessionNotFound` decryption failures. Notably, this keeps `status@broadcast` participants resolving to `@lid` for the entire session, matching WA Web behavior.
 
 **Bidirectional lookups:**
 

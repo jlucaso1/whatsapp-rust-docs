@@ -492,6 +492,8 @@ pub struct MessageSource {
 }
 ```
 
+`sender_alt` carries the LID/PN counterpart of `sender` whenever the stanza exposes one — including `status@broadcast` messages, which always include `participant_lid` (or `participant_pn` for LID-addressed status). The library reads it unconditionally so the [LID-PN cache](/concepts/storage#lidpncache) can re-warm from the message itself, matching WA Web's `WAWebMsgParser`.
+
 **MessageCategory:**
 ```rust
 pub enum MessageCategory {

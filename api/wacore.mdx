@@ -241,9 +241,16 @@ On WASM targets (`target_arch = "wasm32"`), all `Send` bounds are automatically 
 pub mod time;
 ```
 
-The `time` module centralizes all timestamp handling. By default it uses `chrono::Utc::now()`, but you can override the provider globally via `set_time_provider` for environments where `std::time::SystemTime` is unavailable (e.g., WASM) or for deterministic testing.
+The `time` module centralizes all timestamp handling. It exposes two independent clocks that should not be confused:
 
-#### Functions
+- **Wall clock** (`TimeProvider`, `now_millis`, `now_utc`) — answers "what time is it?". May jump backwards across NTP syncs, manual adjustments, or leap-second smearing. Backed by `chrono::Utc::now()` by default.
+- **Monotonic clock** (`MonotonicProvider`, `Instant`) — answers "how much time passed?". Never moves backwards and is immune to NTP adjustments. Backed by `std::time::Instant` on native targets.
+
+Use the wall clock for stanza timestamps, app-state mutations, and log lines. Use the monotonic clock for timeouts, retry backoff, and latency measurements. Conflating the two silently corrupts elapsed-time logic whenever the system clock is adjusted mid-measurement.
+
+Each clock can be overridden globally — useful in environments where the standard implementations are unavailable (e.g., WASM) or for deterministic testing.
+
+#### Wall-clock functions
 
 | Function | Return type | Description |
 |----------|-------------|-------------|
@@ -255,7 +262,7 @@ The `time` module centralizes all timestamp handling. By default it uses `chrono
 | `from_millis(ts)` | `Option<DateTime<Utc>>` | Convert Unix timestamp (milliseconds) to `DateTime<Utc>` |
 | `from_millis_or_now(ts)` | `DateTime<Utc>` | Like `from_millis`, falling back to `now_utc()` for out-of-range values |
 
-#### Custom time provider
+#### Custom wall-clock provider
 
 Implement the `TimeProvider` trait and call `set_time_provider` before any time functions are used:
 
@@ -280,7 +287,7 @@ set_time_provider(FixedTime).expect("provider already set");
 
 #### Instant
 
-The module also provides a portable `Instant` type that replaces `std::time::Instant`, which is unavailable on `wasm32-unknown-unknown`. It uses `now_millis()` internally — not truly monotonic, but sufficient for elapsed-time measurement and timeout tracking.
+`Instant` is a portable monotonic instant that replaces `std::time::Instant`, which is unavailable on `wasm32-unknown-unknown`. On native targets it wraps `std::time::Instant` via the default `MonotonicProvider` and exposes nanosecond resolution. The `Instant` type is `Copy` and supports `Add<Duration>` and `Sub<Instant>` (returning `Duration`), with saturating arithmetic to prevent overflow.
 
 ```rust
 use wacore::time::Instant;
@@ -290,7 +297,30 @@ let start = Instant::now();
 let elapsed = start.elapsed(); // std::time::Duration
 ```
 
-`Instant` supports `Add<Duration>` and `Sub<Instant>` (returning `Duration`), with saturating arithmetic to prevent overflow.
+#### Custom monotonic provider
+
+Implement the `MonotonicProvider` trait and call `set_monotonic_provider` before any `Instant` is captured. The provider must return nanoseconds since an arbitrary fixed reference and never return a smaller value than a previous call.
+
+```rust
+use wacore::time::{MonotonicProvider, set_monotonic_provider};
+
+struct PerfNowProvider;
+
+impl MonotonicProvider for PerfNowProvider {
+    fn now_nanos(&self) -> u64 {
+        // e.g., wrap performance.now() in browsers, or hrtime in Node
+        (js_sys::performance().now() * 1_000_000.0) as u64
+    }
+}
+
+set_monotonic_provider(PerfNowProvider).expect("provider already set");
+```
+
+On `wasm32` targets without a registered provider, the fallback derives nanos from the wall clock (clamped to non-decreasing) and quantizes to milliseconds. Embedders targeting browsers, Node, or WASI should register a sub-millisecond provider for accurate latency measurements.
+
+<Note>
+`set_monotonic_provider` returns `Err` if a provider has already been set. Like the wall-clock provider, it uses `OnceLock` internally and can only be configured once per process.
+</Note>
 
 ### Utilities
 
@@ -301,7 +331,7 @@ let elapsed = start.elapsed(); // std::time::Duration
 - **`request`** - Request building utilities
 - **`stanza`** - Common stanza builders
 - **`sticker_pack`** - Sticker pack creation helpers (see [sticker packs](/guides/sending-messages#sticker-packs))
-- **`time`** - Pluggable time provider with portable `Instant` (see [time](#time) above)
+- **`time`** - Pluggable wall-clock and monotonic-clock providers, plus portable `Instant` (see [time](#time) above)
 - **`types`** - Common type definitions (JID, events, messages). Includes `types::jid` utilities for zero-allocation JID comparison (`cmp_for_lock_order`), buffer-reusing address formatting (`write_protocol_address_to`), and in-place sorted deduplication (`sort_dedup_by_user`, `sort_dedup_by_device`)
 - **`version`** - WhatsApp version constants
 - **`webp`** - WebP format utilities (animated sticker detection)

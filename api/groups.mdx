@@ -158,7 +158,7 @@ pub async fn create_group(
   - `create_general_chat: bool` - Create a general chat subgroup alongside the community. Only used when `is_parent` is `true` (default: `false`)
 
 **Returns:**
-- `CreateGroupResult` with `gid: Jid` field.
+- `CreateGroupResult` with a `metadata: GroupMetadata` field carrying the full server response (JID, subject, addressing mode, participants with display names, parent/community linkage, etc.).
 
 When the `PRIVACY_TOKEN_ON_GROUP_CREATE` AB prop is enabled, the library automatically resolves and attaches privacy tokens (`tc_token`) to each participant during group creation. This is handled internally — you don't need to manage tokens yourself.
 
@@ -178,8 +178,19 @@ let options = GroupCreateOptions::builder()
     .build();
 
 let result = client.groups().create_group(options).await?;
-println!("Created group: {}", result.gid);
+println!("Created group: {} ({})", result.metadata.subject, result.metadata.jid);
+for participant in &result.metadata.participants {
+    println!(
+        "- {} ({})",
+        participant.display_name.as_deref().unwrap_or("(no label)"),
+        participant.jid,
+    );
+}
 ```
+
+<Note>
+Since v0.6, `create_group` returns the full `GroupMetadata` (matching `get_metadata`) instead of just the JID. Inspect `result.metadata` for participants, addressing mode, ephemeral timer, and parent linkage in a single round-trip.
+</Note>
 
 ### set_subject
 
@@ -1277,9 +1288,15 @@ Result of creating a group.
 
 ```rust
 pub struct CreateGroupResult {
-    pub gid: Jid,
+    pub metadata: GroupMetadata,
 }
 ```
+
+The `metadata` field carries the full group state returned by the server (same shape as [`get_metadata`](#get_metadata)), including participant `display_name` labels captured from `<participant>` children.
+
+<Note>
+Prior to v0.6 this struct only exposed a `gid: Jid`. Replace `result.gid` with `result.metadata.jid` when upgrading. The same migration applies to `CreateCommunityResult`.
+</Note>
 
 ### GroupJoinError
 

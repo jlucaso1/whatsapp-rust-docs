@@ -30,7 +30,7 @@ pub async fn create(
 - `options` — Community creation options (see [CreateCommunityOptions](#createcommunityoptions))
 
 **Returns:**
-- `CreateCommunityResult` — Contains the `gid` (JID) of the created community
+- `CreateCommunityResult` — Contains the full `metadata: GroupMetadata` for the created community parent group
 
 **Example:**
 ```rust
@@ -41,11 +41,14 @@ options.description = Some("A great community".to_string());
 options.closed = true;
 
 let result = client.community().create(options).await?;
-println!("Created community: {}", result.gid);
+println!("Created community: {} ({})", result.metadata.subject, result.metadata.jid);
+if let Some(desc) = &result.metadata.description {
+    println!("Description: {}", desc.body);
+}
 ```
 
 <Note>
-If a description is provided, it is set via a follow-up IQ after creation — the group create stanza does not support inline descriptions for communities.
+Since v0.6, `community().create()` returns the full `GroupMetadata` instead of just the JID. The library inlines the community description directly into the create stanza (matching WA Web), so the returned metadata already contains it — no separate `set_description` round-trip is needed. If you previously read `result.gid`, switch to `result.metadata.jid`.
 </Note>
 
 ### deactivate
@@ -302,14 +305,20 @@ let options = CreateCommunityOptions::new("My Community");
 
 ### CreateCommunityResult
 
-Result of creating a community. Implements `PartialEq` and `Eq`.
+Result of creating a community.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CreateCommunityResult {
-    pub gid: Jid,
+    pub metadata: GroupMetadata,
 }
 ```
+
+The `metadata` field carries the full community parent metadata from the server, with the inline description already populated. See [`GroupMetadata`](/api/groups#groupmetadata) for the full field list.
+
+<Note>
+Prior to v0.6 this struct exposed only `gid: Jid` and derived `PartialEq, Eq`. The `Eq` derives were dropped because `GroupMetadata` does not implement them.
+</Note>
 
 ### CommunitySubgroup
 

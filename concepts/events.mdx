@@ -909,6 +909,7 @@ The `action` field on `GroupUpdate` is a `GroupNotificationAction` enum with the
 | `Promote { participants }` | `<promote>` | Members promoted to admin |
 | `Demote { participants }` | `<demote>` | Members demoted from admin |
 | `Modify { participants }` | `<modify>` | Member changed phone number |
+| `ChangeNumber { new_owner, sub_group_suggestions }` | `<change_number>` | A participant changed their phone number. `new_owner` is read from the `jid` attribute of `<change_number>` and `sub_group_suggestions` is collected from any `<sub_group_suggestion>` children. The previous JID is carried by `GroupUpdate::participant`. |
 | `Subject { subject, subject_owner, subject_time }` | `<subject>` | Group name changed |
 | `Description { id, description }` | `<description>` | Group description changed or deleted |
 | `Locked { threshold }` | `<locked>` | Only admins can edit group info |
@@ -939,8 +940,11 @@ Participant-related variants include a `participants` field of type `Vec<GroupPa
 pub struct GroupParticipantInfo {
     pub jid: Jid,
     pub phone_number: Option<Jid>,
+    pub display_name: Option<String>,
 }
 ```
+
+`display_name` carries the server-provided label for a participant — for non-contacts this is typically the masked phone number (`"+55•••••••••79"`). It is populated only when the participant appears as a `<participant>` child of a group notification; entries that arrive via `<requested_user>` (membership requests) leave it `None`.
 
 Membership request variants include a `request_method` field of type `MembershipRequestMethod`:
 

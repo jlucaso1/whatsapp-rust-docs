@@ -82,26 +82,33 @@ You can only vote on polls where you have the `message_secret`. This secret is g
 When you receive poll update events, the vote payload is encrypted. Use `decrypt_vote` to retrieve the selected option hashes:
 
 ```rust
-use whatsapp_rust::features::Polls;
+use whatsapp_rust::features::PollOptionResult;
 
-let selected_hashes = Polls::decrypt_vote(
-    &enc_payload,
-    &enc_iv,
-    &message_secret,
-    &poll_msg_id,
-    &poll_creator_jid,
-    &voter_jid,
-)?;
+let selected_hashes = client
+    .polls()
+    .decrypt_vote(
+        &enc_payload,
+        &enc_iv,
+        &message_secret,
+        &poll_msg_id,
+        &poll_creator_jid,
+        &voter_jid,
+    )
+    .await?;
 ```
 
 Each returned hash is a 32-byte SHA-256 hash of the option name. To map hashes back to option names, compare them against the known options using `wacore::poll::compute_option_hash`.
 
+<Note>
+`decrypt_vote` and `aggregate_votes` became instance methods on `client.polls()` (instead of static `Polls::…` helpers) in v0.6 so they can consult the LID↔PN cache. If the poll creator and voter were originally addressed in one namespace and the vote is delivered in the other (which happens during LID migration), the client retries decryption with the swapped namespace before giving up.
+</Note>
+
 ## Aggregating results
 
-For tallying votes across multiple voters, use `aggregate_votes`. This handles vote replacement (last-vote-wins) and maps hashes back to option names:
+For tallying votes across multiple voters, use `aggregate_votes`. This handles vote replacement (last-vote-wins) and maps hashes back to option names. Voters are deduped by canonical identity, so a voter who re-votes under the opposite namespace counts once:
 
 ```rust
-use whatsapp_rust::features::{Polls, PollOptionResult};
+use whatsapp_rust::features::PollOptionResult;
 
 let poll_options = vec![
     "Option A".to_string(),
@@ -111,13 +118,16 @@ let poll_options = vec![
 
 // votes: Vec<(&Jid, &[u8], &[u8])> — (voter_jid, enc_payload, enc_iv)
 // Should be ordered oldest-first
-let results: Vec<PollOptionResult> = Polls::aggregate_votes(
-    &poll_options,
-    &votes,
-    &message_secret,
-    &poll_msg_id,
-    &poll_creator_jid,
-)?;
+let results: Vec<PollOptionResult> = client
+    .polls()
+    .aggregate_votes(
+        &poll_options,
+        &votes,
+        &message_secret,
+        &poll_msg_id,
+        &poll_creator_jid,
+    )
+    .await?;
 
 for result in &results {
     println!("{}: {} votes", result.name, result.voters.len());

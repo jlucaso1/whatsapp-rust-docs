@@ -156,6 +156,8 @@ pub async fn create_group(
   - `closed: bool` - Whether the community requires approval to join. Only used when `is_parent` is `true` (default: `false`)
   - `allow_non_admin_sub_group_creation: bool` - Allow non-admin members to create subgroups. Only used when `is_parent` is `true` (default: `false`)
   - `create_general_chat: bool` - Create a general chat subgroup alongside the community. Only used when `is_parent` is `true` (default: `false`)
+  - `linked_parent: Option<Jid>` - Atomically link this group as a subgroup of an existing community on create. Mutually exclusive with `is_parent` — when set, the new group is always classified as a subgroup even if `is_parent: true` is also passed. (added in v0.6)
+  - `description: Option<String>` - Inline group description, emitted as a `<description>` child of the `<create>` stanza so it lands in one round-trip. Matches the existing community-create behavior. (added in v0.6)
 
 **Returns:**
 - `CreateGroupResult` with a `metadata: GroupMetadata` field carrying the full server response (JID, subject, addressing mode, participants with display names, parent/community linkage, etc.).
@@ -1222,6 +1224,16 @@ pub struct ParticipantChangeResponse {
     pub jid: Jid,
     pub status: Option<String>,
     pub error: Option<String>,
+    pub add_request: Option<AddRequestInfo>,
+}
+```
+
+`add_request` is populated when the server responds with HTTP 403 carrying an `<add_request>` child — that happens when a participant has privacy blocked direct adds and the inviter must send them a v4 invite link out-of-band. Since v0.6 the value is preserved instead of being dropped, so consumers can drive the v4 invite flow without parsing the raw IQ.
+
+```rust
+pub struct AddRequestInfo {
+    pub code: String,        // v4 invite token
+    pub expiration: i64,     // unix seconds; 0 means the server omitted it
 }
 ```
 

@@ -160,6 +160,14 @@ pub async fn disconnect(self: &Arc<Self>)
 
 Disconnects gracefully and disables auto-reconnect. Internally calls `cleanup_connection_state()`, which resets all connection-scoped state — including invalidating per-chat message queues so stale workers exit, clearing the signal cache, draining pending IQ waiters, and resetting offline sync state. The cleanup runs exactly once in `run()` after the message loop exits, avoiding duplicate cleanup calls. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources cleaned up.
 
+### signal_shutdown_sync
+
+```rust
+pub fn signal_shutdown_sync(&self)
+```
+
+Synchronous, flag-only variant of `disconnect()` for places where you can't `await`. It flips `expected_disconnect`, clears `is_running`, fires the terminal `shutdown_notifier`, and notifies the per-connection shutdown so spawned tasks exit on their next poll. It does **not** flush, close the transport, or touch persistence — prefer `disconnect()` whenever you can await. Intended for `Drop` impls on FFI wrappers (e.g. the WASM client) that need to release the runtime without blocking.
+
 ### reconnect
 
 ```rust

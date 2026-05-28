@@ -103,6 +103,10 @@ pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse>
 client.profile().remove_profile_picture().await?;
 ```
 
+<Note>
+Since v0.6 the remove IQ omits the `<picture/>` child entirely, matching WA Web's `SendProfilePictureJob`. Sending an empty `<picture>` child was rejected by some hosts.
+</Note>
+
 ## Types
 
 ### SetProfilePictureResponse

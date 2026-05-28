@@ -930,6 +930,8 @@ Server sends <stream:error code="..."/>
 
 The client automatically sends `<ack/>` nodes in response to incoming stanzas (messages, receipts, notifications, calls). The ack construction follows WhatsApp Web and whatsmeow behavior:
 
+**Class gating for newsletter and status:** Newsletter and status@broadcast inbound messages produce a `<ack class="message"/>` instead of a `<receipt>`, matching WA Web's `WAWebSendMsgAckOrReceiptJob`. Regular DMs and groups continue to skip the message-class ack because they ride on the regular receipt path.
+
 **Ack attributes:**
 
 | Attribute | Value |

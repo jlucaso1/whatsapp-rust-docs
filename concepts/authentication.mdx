@@ -400,8 +400,14 @@ pub struct ClientProfile {
     pub os_version: String,
     pub manufacturer: String,
     pub include_web_info: bool,
+    pub locale: String,        // e.g. "en-US"; emitted as ClientPayload.lc
+    pub phone_id: Option<String>, // anti-abuse phone ID; auto-generated as UUID if None
 }
 ```
+
+<Note>
+Since v0.6 the locale and `phone_id` come from the active `ClientProfile` instead of being hard-coded to `"en"` / `None`. If `phone_id` is `None`, the client generates a UUID on first use and persists it on `Device`, matching WA Web's `WAWebClientPayload.phoneId` initialization. Set both fields explicitly via your own constructor when impersonating a specific locale/install.
+</Note>
 
 #### Built-in profiles
 
@@ -479,6 +485,10 @@ match result {
     }
 }
 ```
+
+### Login counter (`ClientPayload.lc`)
+
+Since v0.6 the client persists a `login_counter` on `Device`. Every successful connect increments it and the new value is sent as `ClientPayload.lc` during the Noise handshake. This mirrors WA Web's anti-abuse signal — the server uses the counter to spot replayed or cloned `ClientPayload`s. The counter resets when you call `logout()` or wipe device state.
 
 ## Concurrent Pairing
 

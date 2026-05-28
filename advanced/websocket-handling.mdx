@@ -907,7 +907,12 @@ Each stream error sets `is_logged_in = false` and fires the `shutdown_notifier` 
 | **503** | Normal handling | None | Yes — standard backoff |
 | **515** | Marks as expected disconnect | None | Yes — immediate, no backoff |
 | **516** | Disables auto-reconnect | `LoggedOut` | No — device removed |
-| Unknown | Disables auto-reconnect | `StreamError` | No |
+| **500** | Logs and stays connected (since v0.6) | None | Yes — session preserved |
+| Unknown / missing | Logs as warning, stays connected (since v0.6) | None | Yes — session preserved |
+
+<Note>
+Before v0.6 the client treated every unknown stream-error code as fatal: it set `is_logged_in = false`, fired `shutdown_notifier`, and ended up in a "zombie" state where the connection survived but background tasks (keepalive, prekey upload) refused to run. v0.6 narrows the fatal set to the codes listed above and downgrades the rest to a warning so transient routing errors (typically code `500` or a code-less stanza emitted during failover) no longer block prekey uploads or other recovery flows.
+</Note>
 
 **Processing pipeline:**
 ```
@@ -933,6 +938,7 @@ The client automatically sends `<ack/>` nodes in response to incoming stanzas (m
 | `id` | Copied from the incoming stanza |
 | `to` | Flipped from the incoming `from` attribute |
 | `participant` | Copied from the incoming stanza (when present) |
+| `recipient` | Echoed from the incoming stanza (when present) — required for LID-routed and hosted-companion messages so the server can route the ack back correctly. Stripping it caused `<stream:error>` disconnects for peer-routed traffic. |
 | `from` | Own device phone number JID — only included for message acks |
 
 **`type` attribute rules:**

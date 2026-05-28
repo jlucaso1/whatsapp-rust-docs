@@ -1064,6 +1064,16 @@ pub fn skip_history_sync_enabled(&self) -> bool
 
 Returns `true` if history sync is currently being skipped.
 
+### set_force_active_delivery_receipts
+
+```rust
+pub fn set_force_active_delivery_receipts(&self, active: bool)
+```
+
+Force the client to send active delivery receipts (matching the recipient pattern WA Web uses for foreground chats) regardless of the local `delivery_receipt_active` setting. v0.6 added this knob so consumers can opt every incoming message into active receipts during a known foreground session.
+
+When `active` is `true`, the client emits `<receipt>` stanzas without the silent flag for every successful decrypt. When `false` (default), behavior follows the existing per-chat heuristic. The setting is mirrored across offline-resume so the post-resume ack pattern matches the live one.
+
 ### send_history_sync_server_error_receipt
 
 ```rust

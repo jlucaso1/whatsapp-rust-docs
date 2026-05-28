@@ -469,6 +469,7 @@ pub struct MessageInfo {
     pub r#type: String,
     pub push_name: String,
     pub timestamp: DateTime<Utc>,
+    pub server_timestamp_us: Option<i64>,
     pub category: MessageCategory,
     pub multicast: bool,
     pub media_type: String,
@@ -476,9 +477,12 @@ pub struct MessageInfo {
     pub bot_info: Option<MsgBotInfo>,
     pub meta_info: MsgMetaInfo,
     pub verified_name: Option<wa::VerifiedNameCertificate>,
+    pub verified_level: Option<String>,
+    pub verified_name_serial: Option<String>,
     pub device_sent_meta: Option<DeviceSentMeta>,
     pub ephemeral_expiration: Option<u32>,
     pub is_offline: bool,
+    pub peer_recipient_pn: Option<Jid>,
     pub unavailable_request_id: Option<String>,
 }
 
@@ -543,7 +547,7 @@ pub enum BotEditType {
 
 **MsgMetaInfo:**
 
-Additional metadata for message threading and targeting.
+Additional metadata for message threading, targeting, and abuse reporting.
 
 ```rust
 pub struct MsgMetaInfo {
@@ -552,6 +556,11 @@ pub struct MsgMetaInfo {
     pub deprecated_lid_session: Option<bool>,
     pub thread_message_id: Option<MessageId>,
     pub thread_message_sender_jid: Option<Jid>,
+    pub content_type: Option<String>,
+    pub appdata: Option<String>,
+    pub reporting_tag: Option<String>,
+    pub reporting_token: Option<Bytes>,
+    pub reporting_token_version: Option<i32>,
 }
 ```
 
@@ -562,6 +571,15 @@ pub struct MsgMetaInfo {
 | `deprecated_lid_session` | Legacy LID session flag |
 | `thread_message_id` | ID of the thread parent message |
 | `thread_message_sender_jid` | Sender of the thread parent message |
+| `content_type` | High-level content classification carried by the server (e.g. `"image"`, `"document"`) so consumers can filter without decoding the message body |
+| `appdata` | Opaque per-message app data used by the abuse-report flow |
+| `reporting_tag` | Tag the server attaches so the recipient can submit an abuse report tied to this message |
+| `reporting_token` | Raw bytes of the abuse-report token paired with `reporting_tag` |
+| `reporting_token_version` | Version of the reporting-token scheme used by the server |
+
+<Note>
+`server_timestamp_us`, `verified_level`, `verified_name_serial`, `peer_recipient_pn`, plus all five `MsgMetaInfo` additions above were added in v0.6 as part of aligning inbound parsing with WA Web. They are populated only when the server includes the corresponding stanza attribute, so existing consumers that ignore them keep working.
+</Note>
 
 **DeviceSentMeta:**
 

@@ -590,7 +590,7 @@ pub struct Device {
     #[serde(default)]
     pub server_cert_chain: Option<CachedServerCertChain>, // Cached for Noise IK resume
     #[serde(default)]
-    pub login_counter: u32,                  // Per-connect counter sent as ClientPayload.lc
+    pub login_counter: i32,                  // Per-connect counter sent as ClientPayload.lc
 }
 
 /// Cached form of the server's two-cert chain. `leaf.key` is the server

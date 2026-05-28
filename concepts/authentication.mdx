@@ -400,13 +400,17 @@ pub struct ClientProfile {
     pub os_version: String,
     pub manufacturer: String,
     pub include_web_info: bool,
-    pub locale: String,        // e.g. "en-US"; emitted as ClientPayload.lc
-    pub phone_id: Option<String>, // anti-abuse phone ID; auto-generated as UUID if None
+    pub passive_login: bool,       // ClientPayload.passive
+    pub phone_id: Option<String>,  // UserAgent.phone_id (anti-abuse UUID)
+    pub locale_language: String,   // UserAgent.locale_language_iso6391, e.g. "pt"
+    pub locale_country: String,    // UserAgent.locale_country_iso31661_alpha2, e.g. "BR"
 }
 ```
 
 <Note>
-Since v0.6 the locale and `phone_id` come from the active `ClientProfile` instead of being hard-coded to `"en"` / `None`. If `phone_id` is `None`, the client generates a UUID on first use and persists it on `Device`, matching WA Web's `WAWebClientPayload.phoneId` initialization. Set both fields explicitly via your own constructor when impersonating a specific locale/install.
+Since v0.6 the locale and `phone_id` come from the active `ClientProfile` instead of being hard-coded. The locale is split into two ISO fields — `locale_language` (ISO-639-1, e.g. `"en"`) and `locale_country` (ISO-3166-1 alpha-2, e.g. `"US"`) — both written to the matching `UserAgent` proto attributes. When `phone_id` is `None` the client builds a **fresh UUID-v4 on every `ClientPayload` build**; it is not persisted on `Device`, so if you need a stable WA Web–style `WAWebClientPayload.phoneId` you must supply it yourself (e.g. generate once at install time and pass it in via your own `ClientProfile` constructor). Login counter (`ClientPayload.lc`) lives on `Device`, not here — see the [Login counter](#login-counter-clientpayloadlc) section below.
+
+`passive_login` mirrors WA Web's `ClientPayload.passive`: `false` (the default) tells the server to deliver queued offline messages on connect, `true` keeps the connection passive until you pull explicitly (whatsmeow's convention).
 </Note>
 
 #### Built-in profiles

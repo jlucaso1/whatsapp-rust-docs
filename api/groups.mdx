@@ -180,18 +180,14 @@ let options = GroupCreateOptions::builder()
     .build();
 
 let result = client.groups().create_group(options).await?;
-println!("Created group: {} ({})", result.metadata.subject, result.metadata.jid);
+println!("Created group: {} ({})", result.metadata.subject, result.metadata.id);
 for participant in &result.metadata.participants {
-    println!(
-        "- {} ({})",
-        participant.display_name.as_deref().unwrap_or("(no label)"),
-        participant.jid,
-    );
+    println!("- {} ({:?})", participant.jid, participant.participant_type);
 }
 ```
 
 <Note>
-Since v0.6, `create_group` returns the full `GroupMetadata` (matching `get_metadata`) instead of just the JID. Inspect `result.metadata` for participants, addressing mode, ephemeral timer, and parent linkage in a single round-trip.
+Since v0.6, `create_group` returns the full `GroupMetadata` (matching `get_metadata`) instead of just the JID. Inspect `result.metadata` for participants, addressing mode, ephemeral timer, and parent linkage in a single round-trip. `GroupMetadata.participants` is a `Vec<GroupParticipant>` (the IQ-response shape), not the `GroupParticipantInfo` used by group notification events — so masked-number `display_name` labels are only available on the event-side `GroupParticipantInfo`, not here.
 </Note>
 
 ### set_subject
@@ -1304,10 +1300,10 @@ pub struct CreateGroupResult {
 }
 ```
 
-The `metadata` field carries the full group state returned by the server (same shape as [`get_metadata`](#get_metadata)), including participant `display_name` labels captured from `<participant>` children.
+The `metadata` field carries the full group state returned by the server (same shape as [`get_metadata`](#get_metadata)). `metadata.participants` is `Vec<GroupParticipant>` — note that masked-number `display_name` labels live on `GroupParticipantInfo` (which carries `<participant>` children of *notification* events), not on `GroupParticipant` here.
 
 <Note>
-Prior to v0.6 this struct only exposed a `gid: Jid`. Replace `result.gid` with `result.metadata.jid` when upgrading. The same migration applies to `CreateCommunityResult`.
+Prior to v0.6 this struct only exposed a `gid: Jid`. Replace `result.gid` with `result.metadata.id` when upgrading (`GroupMetadata.id`, not `jid`). The same migration applies to `CreateCommunityResult`.
 </Note>
 
 ### GroupJoinError

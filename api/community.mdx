@@ -41,14 +41,14 @@ options.description = Some("A great community".to_string());
 options.closed = true;
 
 let result = client.community().create(options).await?;
-println!("Created community: {} ({})", result.metadata.subject, result.metadata.jid);
+println!("Created community: {} ({})", result.metadata.subject, result.metadata.id);
 if let Some(desc) = &result.metadata.description {
-    println!("Description: {}", desc.body);
+    println!("Description: {}", desc);
 }
 ```
 
 <Note>
-Since v0.6, `community().create()` returns the full `GroupMetadata` instead of just the JID. The library inlines the community description directly into the create stanza (matching WA Web), so the returned metadata already contains it — no separate `set_description` round-trip is needed. If you previously read `result.gid`, switch to `result.metadata.jid`.
+Since v0.6, `community().create()` returns the full `GroupMetadata` instead of just the JID. The library inlines the community description directly into the create stanza (matching WA Web), so the returned metadata already contains it — no separate `set_description` round-trip is needed. If you previously read `result.gid`, switch to `result.metadata.id` (`GroupMetadata` uses `id: Jid`).
 </Note>
 
 ### deactivate
@@ -293,7 +293,7 @@ pub struct CreateCommunityOptions {
 
 **Fields:**
 - `name` — Community name
-- `description` — Optional description (set via follow-up IQ)
+- `description` — Optional description. Since v0.6 it's inlined as a `<description>` child of the create stanza, so the community is created with the description in a single round-trip (no follow-up `set_description` IQ needed).
 - `closed` — Whether the community requires approval to join (default: `false`)
 - `allow_non_admin_sub_group_creation` — Whether non-admin members can create subgroups (default: `false`)
 - `create_general_chat` — Whether to create a general chat subgroup (default: `true`)
@@ -314,7 +314,7 @@ pub struct CreateCommunityResult {
 }
 ```
 
-The `metadata` field carries the full community parent metadata from the server, with the inline description already populated. See [`GroupMetadata`](/api/groups#groupmetadata) for the full field list.
+The `metadata` field carries the full community parent metadata from the server, with the inline `description: Option<String>` already populated. See [`GroupMetadata`](/api/groups#groupmetadata) for the full field list.
 
 <Note>
 Prior to v0.6 this struct exposed only `gid: Jid` and derived `PartialEq, Eq`. The `Eq` derives were dropped because `GroupMetadata` does not implement them.

@@ -578,6 +578,12 @@ On the **first** group send (or any send where the cached map is empty), the fil
 
 Location: `src/send.rs`, `src/client/sender_keys.rs`, `wacore/src/send.rs`
 
+### Parallelized group encrypt fan-out
+
+The group send path no longer serializes encryption behind a client-level lock. `prepare_group_stanza` and `encrypt_for_devices` now take an explicit `&runtime` handle (`&*self.runtime`) so per-device encryption can run on `runtime::blocking()` tasks concurrently. Combined with the move to `update_device_lists` (batched device-registry writes) and a no-lock `IdentityAdapter::is_trusted_identity` stub, group fan-out scales with the runtime's worker count rather than with a single critical section.
+
+This is an internal performance change — no public method on `Client::send_message` was renamed, and the order of `<to>` children in the resulting stanza is unchanged. If you implemented a custom `SignalStore`, note that `update_device_lists(records: Vec<DeviceListRecord>)` is now part of the trait so the fan-out can batch its writes.
+
 ### In-memory sender key device cache
 
 The `SenderKeyDeviceCache` provides an in-memory caching layer over the per-device sender key tracking data stored in the database. Without this cache, every group send would require a database round-trip to load the sender key device map — the cache eliminates that overhead after the first load for each group.
@@ -864,6 +870,14 @@ After connection, the client validates that the server's copy of the key bundle 
 
 Location: `src/prekeys.rs:218-344`, `wacore/src/iq/prekeys.rs:170-302`
 
+### Re-pair pre-key healing (v0.6)
+
+If the user re-pairs the device (for example by re-scanning the QR code), the server discards its copy of our pre-key bundle even though `Device::server_has_prekeys` may still read `true` from the previous pairing. v0.6 resets `server_has_prekeys = false` immediately after a successful re-pair so the next connect uploads a fresh batch instead of trusting the stale flag.
+
+The lock-acquisition for the digest-key validator also moved into `validate_digest_key` itself. Previously the caller held `prekey_upload_lock` before calling the validator, which would deadlock when validation hit a 404 and tried to acquire the same lock to perform the re-upload. The lock now wraps only the re-upload path, so the 404→re-upload transition completes without contention.
+
+Location: `src/handlers/notification.rs`, `src/pair.rs`, `src/prekeys.rs`
+
 ## Storage Integration
 
 whatsapp-rust integrates Signal Protocol storage through a layered architecture:
@@ -924,6 +938,19 @@ if !identity_store
 ```
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:160-172`
+
+### Self-only protocol message gating
+
+`app_state_sync_key_share` and `history_sync_notification` are protocol messages WhatsApp Web treats as "self-only": they only carry meaning when delivered from your own account to another of your linked devices. v0.6 hardens `handle_decrypted_plaintext` so that incoming copies of these two messages are dropped unless `MessageInfo.source.is_from_me` is `true`, matching WA Web's `WAWebKeyManagementHandleKeyShareApi` and whatsmeow's gating.
+
+The consequences if the gate is missing:
+
+- A spoofed `app_state_sync_key_share` from a peer would let an attacker inject an app-state encryption key, leading to attacker-controlled mutations of your contacts, blocklist, archive state, etc.
+- A spoofed `history_sync_notification` would point the client at attacker-supplied media for ingestion as your own history.
+
+If you implement a custom message dispatcher, replicate this `is_from_me` check before honoring either protocol message. Other protocol-message types (`REVOKE`, `EPHEMERAL_SETTING`, `MESSAGE_EDIT`, …) keep their existing semantics.
+
+Location: `src/message.rs` (`handle_decrypted_plaintext`)
 
 ### Duplicate Message Detection
 
@@ -993,6 +1020,23 @@ The implementation enforces several hard limits to prevent resource exhaustion a
 | Chain key index | u32::MAX | Overflow returns `InvalidState` error (not silent wrap) |
 
 Location: `wacore/libsignal/src/protocol/consts.rs`
+
+### Self-DM / sibling decryption recovery
+
+When a message from your own primary phone or another linked companion fails to decrypt, the v0.6 client distinguishes the failure mode and applies the matching recovery strategy:
+
+| Internal `RetryReason` | Trigger | Recovery |
+|---|---|---|
+| `NoSession` | `SessionNotFound` (no Signal session yet for the device) | Request a fresh prekey bundle via retry receipt; install the new session before retrying decryption. |
+| `BadMac` | Ratchet desync (`InvalidMessage` / mac failure) on an existing session | Mark the session for re-creation, throttled per peer via the new `session_recreate_history` map so repeated BadMacs don't loop, and re-send via a peer-addressed `pkmsg` carrying our identity. |
+
+The throttle keeps a short history of recent recreate attempts per peer/device. If a peer is already in cooldown, the client skips re-creation and falls back to a normal retry receipt rather than thrashing the session. Peer-addressed `pkmsg` carries the protocol identity so the receiver can verify ownership before installing the new session, blocking spoofed sibling recoveries.
+
+This closed a deadlock where self-DM fan-out to a sibling device produced repeated BadMac decrypt failures: the recipient would request a retry, the sender would re-encrypt against the same broken session, and the cycle would continue until the user manually relogged. With the throttled re-creation plus identity-validated pkmsg, the second receipt installs a fresh session and decryption resumes.
+
+Self-DM fan-out also gained WA Web parity for the BadMac case: when our own primary phone reports BadMac, the client now treats it as a session-level recovery rather than dropping the message, matching `WAWebDecryptOrThrow`'s branch on session divergence.
+
+Location: `src/client.rs`, `src/retry.rs`, `wacore/libsignal/src/protocol/session_cipher.rs`, `wacore/src/send.rs`
 
 ## Performance optimizations
 
@@ -1152,6 +1196,8 @@ let session_mutexes = self.session_mutexes_for(&lock_jids).await;
 **DM multi-device fanout:**
 
 The DM send path resolves all known recipient devices and own companion devices, encrypting per-device for each. This matches WA Web's `WAWebSendUserMsgJob` behavior where the local device table is read on the send path, and `WAWebDBDeviceListFanout` filters out hosted devices. The client checks the local device registry first (via `get_devices_from_registry()`); a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects from `get_user_devices`. The sender device is excluded (matching WA Web's `isMeDevice` in `getFanOutList`), and for self-DMs, overlapping device lists are deduplicated using a `HashSet` (matching WA Web's `Map` keyed by `toString`).
+
+**Own-device namespace alignment (v0.6):** When the recipient is addressed in the LID namespace (`@lid`), the client converts its own companion devices from the PN namespace to LID before fanning out. Without this alignment, a `<to>` mix of `@lid` and `@s.whatsapp.net` participants caused the server to reject the stanza for LID-addressed DMs. Outgoing messages to PN-addressed recipients are unaffected.
 
 Own companion devices (your other linked devices) receive per-device encryption for multi-device self-sync via `DeviceSentMessage`.
 

@@ -128,10 +128,11 @@ println!("Vote sent with ID: {}", vote_result.message_id);
 
 ### decrypt_vote
 
-Decrypt an encrypted poll vote. This is a static method — no client instance needed.
+Decrypt an encrypted poll vote.
 
 ```rust
-pub fn decrypt_vote(
+pub async fn decrypt_vote(
+    &self,
     enc_payload: &[u8],
     enc_iv: &[u8],
     message_secret: &[u8],
@@ -140,6 +141,10 @@ pub fn decrypt_vote(
     voter_jid: &Jid,
 ) -> Result<Vec<Vec<u8>>>
 ```
+
+<Note>
+Since v0.6 this is an `async` instance method (`&self`) rather than a static helper. The client uses its LID↔PN cache to resolve the voter against the poll creator's namespace and falls back to the opposite namespace if the first attempt fails — both encrypt and decrypt now address the vote with the same JID family as the poll itself, so votes authored across LID/PN migrations still decrypt. Update old call sites: `Polls::decrypt_vote(...)` → `client.polls().decrypt_vote(...).await?`.
+</Note>
 
 <ParamField path="enc_payload" type="&[u8]" required>
   Encrypted vote payload (from the `PollUpdateMessage`).
@@ -174,22 +179,26 @@ pub fn decrypt_vote(
 ```rust
 use whatsapp_rust::features::Polls;
 
-let selected_hashes = Polls::decrypt_vote(
-    &enc_payload,
-    &enc_iv,
-    &message_secret,
-    "3EB0ABC123",
-    &poll_creator_jid,
-    &voter_jid,
-)?;
+let selected_hashes = client
+    .polls()
+    .decrypt_vote(
+        &enc_payload,
+        &enc_iv,
+        &message_secret,
+        "3EB0ABC123",
+        &poll_creator_jid,
+        &voter_jid,
+    )
+    .await?;
 ```
 
 ### aggregate_votes
 
-Decrypt multiple votes and tally results per option. This is a static method. Later votes from the same voter replace earlier ones (last-vote-wins).
+Decrypt multiple votes and tally results per option. Later votes from the same voter replace earlier ones (last-vote-wins). Voters are deduped by their canonical (LID-preferred) identity, so a voter who re-votes under the opposite namespace counts once instead of producing a duplicate row.
 
 ```rust
-pub fn aggregate_votes(
+pub async fn aggregate_votes(
+    &self,
     poll_options: &[String],
     votes: &[(&Jid, &[u8], &[u8])],
     message_secret: &[u8],
@@ -197,6 +206,10 @@ pub fn aggregate_votes(
     poll_creator_jid: &Jid,
 ) -> Result<Vec<PollOptionResult>>
 ```
+
+<Note>
+Also async + `&self` since v0.6 for the same LID↔PN reasons. Migrate `Polls::aggregate_votes(...)` → `client.polls().aggregate_votes(...).await?`.
+</Note>
 
 <ParamField path="poll_options" type="&[String]" required>
   The original poll option names (in order).
@@ -229,13 +242,16 @@ use whatsapp_rust::features::{Polls, PollOptionResult};
 
 let options = vec!["Yes".to_string(), "No".to_string()];
 
-let results = Polls::aggregate_votes(
-    &options,
-    &votes,
-    &message_secret,
-    &poll_msg_id,
-    &poll_creator_jid,
-)?;
+let results = client
+    .polls()
+    .aggregate_votes(
+        &options,
+        &votes,
+        &message_secret,
+        &poll_msg_id,
+        &poll_creator_jid,
+    )
+    .await?;
 
 for result in &results {
     println!("{}: {} votes", result.name, result.voters.len());
@@ -274,6 +290,56 @@ The `wacore::poll` module exposes the cryptographic primitives used internally:
 | `derive_vote_encryption_key(secret, stanza_id, creator, voter) -> [u8; 32]` | HKDF-SHA256 key derivation |
 | `encrypt_poll_vote(hashes, key, stanza_id, voter) -> (Vec<u8>, [u8; 12])` | AES-256-GCM encryption |
 | `decrypt_poll_vote(payload, iv, key, stanza_id, voter) -> Vec<Vec<u8>>` | AES-256-GCM decryption |
+| `decrypt_poll_vote_with_secret(payload, iv, secret, stanza_id, creator, voter) -> Vec<Vec<u8>>` | Single-namespace convenience: derives the vote key from the poll secret and decrypts |
+| `decrypt_poll_vote_with_fallback(payload, iv, secret, stanza_id, creator, voter, alt_creator, alt_voter) -> Vec<Vec<u8>>` | Tries the canonical (creator, voter) namespace first and falls back to `(alt_creator, alt_voter)` so LID/PN-mixed votes still decrypt |
+
+## Decrypting secret-encrypted envelopes
+
+WhatsApp wraps message edits, poll edits, poll add-option, and event edits in a single `secret_encrypted_message` envelope keyed by a per-use-case secret derived from the parent message's `message_secret`. v0.6 added support for decrypting all four kinds.
+
+```rust
+use whatsapp_rust::features::message_edit::{
+    self, SecretEncKind, SecretEncrypted,
+};
+
+if let Some(envelope) = message_edit::extract_secret_encrypted(&message)? {
+    let SecretEncrypted { kind, target_message_id, sender, .. } = &envelope;
+    let parent_secret: [u8; 32] = load_message_secret(target_message_id)?;
+    let plaintext: wa::Message = message_edit::decrypt_secret_encrypted_with_fallback(
+        &envelope,
+        &parent_secret,
+        envelope.original_sender_jid().as_ref(),
+    )?;
+
+    match kind {
+        SecretEncKind::MessageEdit   => handle_message_edit(plaintext),
+        SecretEncKind::PollEdit      => handle_poll_edit(plaintext),
+        SecretEncKind::PollAddOption => handle_poll_add_option(plaintext),
+        SecretEncKind::EventEdit     => handle_event_edit(plaintext),
+    }
+}
+```
+
+| Function | Description |
+|----------|-------------|
+| `extract_secret_encrypted(msg) -> Option<SecretEncrypted<'_>>` | Pulls envelope metadata (`kind`, target id, sender, ciphertext, IV) out of any `secret_encrypted_message` wrapper. Replaces the v0.5 `extract_envelope` helper (which now delegates to this). |
+| `decrypt_secret_encrypted(envelope, parent_secret) -> wa::Message` | Empty-AAD AES-GCM decrypt against the canonical addressing of the envelope. |
+| `decrypt_secret_encrypted_with_fallback(envelope, parent_secret, alt_sender) -> wa::Message` | Same as above but retries with `alt_sender` (typically the LID↔PN twin) so edits authored across the migration still decrypt. |
+| `SecretEncrypted::original_sender_jid() -> Option<Jid>` | Returns the JID the parent message was addressed to — pass it as the fallback to recover edits whose sender migrated namespace between the original message and the edit. |
+| `rewrap_as_legacy_edit(plaintext)` | Re-emits a decrypted `MessageEdit` envelope as the legacy `protocol_message { MESSAGE_EDIT }` shape for consumers that already handled the old form. |
+
+```rust
+pub enum SecretEncKind {
+    MessageEdit,    // edited text of a previously sent message
+    PollEdit,       // poll question / metadata change
+    PollAddOption,  // new option appended to a multi-select poll
+    EventEdit,      // event title / time change
+}
+```
+
+<Note>
+The `EncryptedEdit` type from v0.5 still exists as a `MessageEdit`-specific façade for callers that only care about text edits; `extract_envelope` now returns `SecretEncrypted` and the older shape is reachable via the same struct.
+</Note>
 
 ## Error handling
 

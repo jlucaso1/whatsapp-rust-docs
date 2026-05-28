@@ -222,6 +222,11 @@ async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()>;
 /// Update the device list for a user (called after usync responses)
 async fn update_device_list(&self, record: DeviceListRecord) -> Result<()>;
 
+/// Batched variant — update the device list for many users in one call,
+/// used by the parallelized group encrypt fan-out so the device-registry
+/// write doesn't serialize per-recipient.
+async fn update_device_lists(&self, records: Vec<DeviceListRecord>) -> Result<()>;
+
 /// Get all known devices for a user
 async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
 ```
@@ -313,7 +318,7 @@ The `whatsapp-rust-sqlite-storage` crate enables the `bundled-sqlite` feature by
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-sqlite-storage = { version = "0.5", default-features = false }
+whatsapp-rust-sqlite-storage = { version = "0.6", default-features = false }
 ```
 
 ### Creating a store

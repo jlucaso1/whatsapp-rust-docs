@@ -457,6 +457,10 @@ client.revoke_message(
   Admin revoke is only valid for group chats. Attempting to use it in a direct message will return an error.
 </Note>
 
+<Note>
+Since v0.6 admin revoke fan-outs are propagated correctly to every recipient device on retry: the original stanza carries `edit="8"` (`EditAttribute::AdminRevoke`), and `prepare_dm_retry_stanza` now accepts that attribute and re-emits it on each retry stanza. Previously the retry path stripped the edit attribute, so a single dropped device fan-out left the message un-deleted on that device. The library infers the right attribute from the protocol-message type via `EditAttribute::infer_from_message(...)`, so applications calling `revoke_message` need no code changes.
+</Note>
+
 ---
 
 ## pin_message
@@ -661,6 +665,16 @@ The resulting stanza child looks like:
 | `call_permission_request` | `call_permission_request` |
 
 Unrecognized button names pass through as-is.
+
+### Payment vs nested-form vs fallback shapes
+
+The `<biz>` node is emitted in one of three shapes depending on the button content, matching WA Web's reproducer for native-flow stanzas:
+
+1. **Payment buttons** (`review_and_pay`, `payment_info`, `payment_status`, …) — emitted as a flat `<native_flow name="…">` with a `privacy_mode_ts` attribute. `privacy_mode_ts` is the current Unix timestamp from the new `wacore::time::now_secs_u64()` helper, which safely handles clocks set before 1970 by returning `0` instead of panicking.
+2. **Nested-form buttons** (`cta_*`, `quick_reply`, `galaxy_message`, …) — emitted with the `<interactive type="native_flow" v="1">` wrapper shown above.
+3. **Mixed / unrecognized** — falls back to the wrapper form for forward compatibility.
+
+`bot_invoke_message` continues to emit a `<bot>` stanza child instead of `<biz>` and is unaffected by the above shapes.
 
 <Note>
   The `<biz>` node is merged with any other auto-inferred metadata (like `<meta>` nodes for polls or events) and any `extra_stanza_nodes` you provide in `SendOptions`. The library also checks inside `document_with_caption_message` wrappers for interactive messages.

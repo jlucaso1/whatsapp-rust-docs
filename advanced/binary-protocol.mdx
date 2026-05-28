@@ -917,6 +917,30 @@ NodeBuilder::new("receipt")
     .build()
 ```
 
+### Nack reasons
+
+When a stanza fails terminally (unparseable proto, missing message secret, exceeded retry budget, …) the client emits a `<nack reason="…">` so the server stops retransmitting. v0.6 introduced the `wacore::protocol::nack::NackReason` enum which mirrors WA Web's full set:
+
+```rust
+pub enum NackReason {
+    ParsingError,
+    InvalidProtobuf,
+    InvalidStanza,
+    MissingMessageSecret,
+    SessionNotFound,
+    InvalidPreKey,
+    UnknownEncType,
+    DecryptionError,
+    BadMac,
+    DuplicateMessage,
+    MaxRetryReached,
+    UnsupportedFeature,
+    // …21 variants total
+}
+```
+
+Each variant maps to the integer reason code WA Web sends on the wire. The client picks the variant from the decrypt failure path — `ParsingError` for malformed binary, `InvalidProtobuf` for wa::Message decode failures, `MaxRetryReached` after the PDO recovery state machine gives up, and so on. Consumers building custom transports can reuse the enum to produce wire-compatible nacks.
+
 ## Wire Format Examples
 
 ### Simple Message

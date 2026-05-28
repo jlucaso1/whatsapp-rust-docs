@@ -160,6 +160,14 @@ pub async fn disconnect(self: &Arc<Self>)
 
 Disconnects gracefully and disables auto-reconnect. Internally calls `cleanup_connection_state()`, which resets all connection-scoped state — including invalidating per-chat message queues so stale workers exit, clearing the signal cache, draining pending IQ waiters, and resetting offline sync state. The cleanup runs exactly once in `run()` after the message loop exits, avoiding duplicate cleanup calls. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources cleaned up.
 
+### signal_shutdown_sync
+
+```rust
+pub fn signal_shutdown_sync(&self)
+```
+
+Synchronous, flag-only variant of `disconnect()` for places where you can't `await`. It flips `expected_disconnect`, clears `is_running`, fires the terminal `shutdown_notifier`, and notifies the per-connection shutdown so spawned tasks exit on their next poll. It does **not** flush, close the transport, or touch persistence — prefer `disconnect()` whenever you can await. Intended for `Drop` impls on FFI wrappers (e.g. the WASM client) that need to release the runtime without blocking.
+
 ### reconnect
 
 ```rust
@@ -1063,6 +1071,43 @@ pub fn skip_history_sync_enabled(&self) -> bool
 ```
 
 Returns `true` if history sync is currently being skipped.
+
+### set_force_active_delivery_receipts
+
+```rust
+pub fn set_force_active_delivery_receipts(&self, active: bool)
+```
+
+Force the client to send active delivery receipts (matching the recipient pattern WA Web uses for foreground chats) regardless of the local `delivery_receipt_active` setting. v0.6 added this knob so consumers can opt every incoming message into active receipts during a known foreground session.
+
+When `active` is `true`, the client emits `<receipt>` stanzas without the silent flag for every successful decrypt. When `false` (default), behavior follows the existing per-chat heuristic. The setting is mirrored across offline-resume so the post-resume ack pattern matches the live one.
+
+### send_history_sync_server_error_receipt
+
+```rust
+pub async fn send_history_sync_server_error_receipt(
+    &self,
+    message_id: &str,
+    media_key: &[u8],
+) -> Result<()>
+```
+
+Ask the phone to re-upload a history-sync blob whose download failed (corrupt body, mismatched HMAC, missing CDN file, etc.). The client emits a `<receipt type="server-error" category="peer">` to the companion device carrying an encrypted retry payload, mirroring WA Web's `WAWebSendHistSyncServerErrorReceiptJob`.
+
+**Parameters:**
+- `message_id` — the `MessageInfo::id` of the failed history-sync notification
+- `media_key` — the 32-byte key carried by the original `<historysync mediaKey="…">` element
+
+**When to call:** Typically inside your `Event::HistorySync` (or upstream download) error path, once you've determined the blob can't be recovered locally. The phone will then retry the upload, producing a fresh `HistorySync` notification.
+
+```rust
+if let Err(err) = download_history_blob(&lazy_sync).await {
+    tracing::warn!(?err, "history sync download failed; asking phone to retry");
+    client
+        .send_history_sync_server_error_receipt(&info.id, &media_key)
+        .await?;
+}
+```
 
 ---
 

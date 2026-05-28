@@ -156,9 +156,11 @@ pub async fn create_group(
   - `closed: bool` - Whether the community requires approval to join. Only used when `is_parent` is `true` (default: `false`)
   - `allow_non_admin_sub_group_creation: bool` - Allow non-admin members to create subgroups. Only used when `is_parent` is `true` (default: `false`)
   - `create_general_chat: bool` - Create a general chat subgroup alongside the community. Only used when `is_parent` is `true` (default: `false`)
+  - `linked_parent: Option<Jid>` - Atomically link this group as a subgroup of an existing community on create. Mutually exclusive with `is_parent` — when set, the new group is always classified as a subgroup even if `is_parent: true` is also passed. (added in v0.6)
+  - `description: Option<String>` - Inline group description, emitted as a `<description>` child of the `<create>` stanza so it lands in one round-trip. Matches the existing community-create behavior. (added in v0.6)
 
 **Returns:**
-- `CreateGroupResult` with `gid: Jid` field.
+- `CreateGroupResult` with a `metadata: GroupMetadata` field carrying the full server response (JID, subject, addressing mode, participants with display names, parent/community linkage, etc.).
 
 When the `PRIVACY_TOKEN_ON_GROUP_CREATE` AB prop is enabled, the library automatically resolves and attaches privacy tokens (`tc_token`) to each participant during group creation. This is handled internally — you don't need to manage tokens yourself.
 
@@ -178,8 +180,15 @@ let options = GroupCreateOptions::builder()
     .build();
 
 let result = client.groups().create_group(options).await?;
-println!("Created group: {}", result.gid);
+println!("Created group: {} ({})", result.metadata.subject, result.metadata.id);
+for participant in &result.metadata.participants {
+    println!("- {} ({:?})", participant.jid, participant.participant_type);
+}
 ```
+
+<Note>
+Since v0.6, `create_group` returns the full `GroupMetadata` (matching `get_metadata`) instead of just the JID. Inspect `result.metadata` for participants, addressing mode, ephemeral timer, and parent linkage in a single round-trip. `GroupMetadata.participants` is a `Vec<GroupParticipant>` (the IQ-response shape), not the `GroupParticipantInfo` used by group notification events — so masked-number `display_name` labels are only available on the event-side `GroupParticipantInfo`, not here.
+</Note>
 
 ### set_subject
 
@@ -1211,6 +1220,16 @@ pub struct ParticipantChangeResponse {
     pub jid: Jid,
     pub status: Option<String>,
     pub error: Option<String>,
+    pub add_request: Option<AddRequestInfo>,
+}
+```
+
+`add_request` is populated when the server responds with HTTP 403 carrying an `<add_request>` child — that happens when a participant has privacy blocked direct adds and the inviter must send them a v4 invite link out-of-band. Since v0.6 the value is preserved instead of being dropped, so consumers can drive the v4 invite flow without parsing the raw IQ.
+
+```rust
+pub struct AddRequestInfo {
+    pub code: String,        // v4 invite token
+    pub expiration: i64,     // unix seconds; 0 means the server omitted it
 }
 ```
 
@@ -1277,9 +1296,15 @@ Result of creating a group.
 
 ```rust
 pub struct CreateGroupResult {
-    pub gid: Jid,
+    pub metadata: GroupMetadata,
 }
 ```
+
+The `metadata` field carries the full group state returned by the server (same shape as [`get_metadata`](#get_metadata)). `metadata.participants` is `Vec<GroupParticipant>` — note that masked-number `display_name` labels live on `GroupParticipantInfo` (which carries `<participant>` children of *notification* events), not on `GroupParticipant` here.
+
+<Note>
+Prior to v0.6 this struct only exposed a `gid: Jid`. Replace `result.gid` with `result.metadata.id` when upgrading (`GroupMetadata.id`, not `jid`). The same migration applies to `CreateCommunityResult`.
+</Note>
 
 ### GroupJoinError
 

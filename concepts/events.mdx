@@ -96,7 +96,7 @@ pub enum Event {
     LoggedOut(LoggedOut),
 
     // Messages
-    Message(Box<wa::Message>, Arc<MessageInfo>),
+    Message(Arc<wa::Message>, Arc<MessageInfo>),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
     Notification(Arc<OwnedNodeRef>),
@@ -452,8 +452,12 @@ Event::ClientOutdated(_) => {
 **Emitted:** For all incoming messages (text, media, etc.)
 
 ```rust
-Event::Message(Box<wa::Message>, Arc<MessageInfo>)
+Event::Message(Arc<wa::Message>, Arc<MessageInfo>)
 ```
+
+<Note>
+Both the message body and `MessageInfo` are `Arc`-wrapped. The bus dispatches the same `Arc<wa::Message>` to every handler — no deep clone on fan-out — and `Event::as_message()` returns `Option<(&Arc<wa::Message>, &MessageInfo)>` so you can cheaply share the payload with spawned tasks or downstream channels. Before v0.6 the body was `Box<wa::Message>`; the public guarantee changed from "owned, freely mutable" to "shared, immutable read access" — call `Arc::make_mut` (or clone the inner `wa::Message`) only if you genuinely need to mutate.
+</Note>
 
 **MessageInfo structure:**
 ```rust
@@ -465,6 +469,7 @@ pub struct MessageInfo {
     pub r#type: String,
     pub push_name: String,
     pub timestamp: DateTime<Utc>,
+    pub server_timestamp_us: Option<i64>,
     pub category: MessageCategory,
     pub multicast: bool,
     pub media_type: String,
@@ -472,9 +477,12 @@ pub struct MessageInfo {
     pub bot_info: Option<MsgBotInfo>,
     pub meta_info: MsgMetaInfo,
     pub verified_name: Option<wa::VerifiedNameCertificate>,
+    pub verified_level: Option<String>,
+    pub verified_name_serial: Option<String>,
     pub device_sent_meta: Option<DeviceSentMeta>,
     pub ephemeral_expiration: Option<u32>,
     pub is_offline: bool,
+    pub peer_recipient_pn: Option<Jid>,
     pub unavailable_request_id: Option<String>,
 }
 
@@ -539,7 +547,7 @@ pub enum BotEditType {
 
 **MsgMetaInfo:**
 
-Additional metadata for message threading and targeting.
+Additional metadata for message threading, targeting, and abuse reporting.
 
 ```rust
 pub struct MsgMetaInfo {
@@ -548,6 +556,11 @@ pub struct MsgMetaInfo {
     pub deprecated_lid_session: Option<bool>,
     pub thread_message_id: Option<MessageId>,
     pub thread_message_sender_jid: Option<Jid>,
+    pub content_type: Option<String>,
+    pub appdata: Option<String>,
+    pub reporting_tag: Option<String>,
+    pub reporting_token: Option<Bytes>,
+    pub reporting_token_version: Option<i32>,
 }
 ```
 
@@ -558,6 +571,15 @@ pub struct MsgMetaInfo {
 | `deprecated_lid_session` | Legacy LID session flag |
 | `thread_message_id` | ID of the thread parent message |
 | `thread_message_sender_jid` | Sender of the thread parent message |
+| `content_type` | High-level content classification carried by the server (e.g. `"image"`, `"document"`) so consumers can filter without decoding the message body |
+| `appdata` | Opaque per-message app data used by the abuse-report flow |
+| `reporting_tag` | Tag the server attaches so the recipient can submit an abuse report tied to this message |
+| `reporting_token` | Raw bytes of the abuse-report token paired with `reporting_tag` |
+| `reporting_token_version` | Version of the reporting-token scheme used by the server |
+
+<Note>
+`server_timestamp_us`, `verified_level`, `verified_name_serial`, `peer_recipient_pn`, plus all five `MsgMetaInfo` additions above were added in v0.6 as part of aligning inbound parsing with WA Web. They are populated only when the server includes the corresponding stanza attribute, so existing consumers that ignore them keep working.
+</Note>
 
 **DeviceSentMeta:**
 
@@ -909,6 +931,7 @@ The `action` field on `GroupUpdate` is a `GroupNotificationAction` enum with the
 | `Promote { participants }` | `<promote>` | Members promoted to admin |
 | `Demote { participants }` | `<demote>` | Members demoted from admin |
 | `Modify { participants }` | `<modify>` | Member changed phone number |
+| `ChangeNumber { new_owner, sub_group_suggestions }` | `<change_number>` | A participant changed their phone number. `new_owner` is read from the `jid` attribute of `<change_number>` and `sub_group_suggestions` is collected from any `<sub_group_suggestion>` children. The previous JID is carried by `GroupUpdate::participant`. |
 | `Subject { subject, subject_owner, subject_time }` | `<subject>` | Group name changed |
 | `Description { id, description }` | `<description>` | Group description changed or deleted |
 | `Locked { threshold }` | `<locked>` | Only admins can edit group info |
@@ -939,8 +962,11 @@ Participant-related variants include a `participants` field of type `Vec<GroupPa
 pub struct GroupParticipantInfo {
     pub jid: Jid,
     pub phone_number: Option<Jid>,
+    pub display_name: Option<String>,
 }
 ```
+
+`display_name` carries the server-provided label for a participant — for non-contacts this is typically the masked phone number (`"+55•••••••••79"`). It is populated only when the participant appears as a `<participant>` child of a group notification; entries that arrive via `<requested_user>` (membership requests) leave it `None`.
 
 Membership request variants include a `request_method` field of type `MembershipRequestMethod`:
 
@@ -1308,6 +1334,7 @@ pub struct LazyHistorySync {
     sync_type: i32,
     chunk_order: Option<u32>,
     progress: Option<u32>,
+    peer_data_request_session_id: Option<String>,
     parsed: OnceLock<Option<Box<wa::HistorySync>>>,
 }
 
@@ -1322,6 +1349,12 @@ impl LazyHistorySync {
     /// Sync progress (0-100).
     pub fn progress(&self) -> Option<u32>;
 
+    /// Session ID set only on ON_DEMAND syncs. Use it to correlate the
+    /// blob with the original `fetchMessageHistory` /
+    /// `requestPlaceholderResend` request. Server-pushed syncs return
+    /// `None`.
+    pub fn peer_data_request_session_id(&self) -> Option<&str>;
+
     /// Full decode of the history sync proto, cached via OnceLock.
     /// Returns `None` if decoding fails.
     pub fn get(&self) -> Option<&wa::HistorySync>;
@@ -1333,11 +1366,12 @@ impl LazyHistorySync {
 
 **Key characteristics:**
 
-- **Metadata without decoding** — `sync_type()`, `chunk_order()`, and `progress()` are extracted during the streaming phase and available immediately
+- **Metadata without decoding** — `sync_type()`, `chunk_order()`, `progress()`, and `peer_data_request_session_id()` are extracted during the streaming phase and available immediately
 - **Parse-once semantics** — `get()` decodes the full proto on first call and caches the result via `OnceLock`. With `Arc<Event>` dispatch, all handlers share the same `LazyHistorySync` instance
 - **Raw bytes access** — `raw_bytes()` provides the decompressed protobuf bytes for custom or partial decoding without triggering the full decode
 - **Cheap clone** — Cloning shares the underlying `Bytes` buffer (reference-counted) but creates a fresh `OnceLock`, so each clone decodes independently
-- **Serialization** — Only metadata (sync_type, chunk_order, progress) is serialized, not the blob
+- **Serialization** — Only metadata (sync_type, chunk_order, progress, peer_data_request_session_id) is serialized, not the blob
+- **On-demand correlation** — `peer_data_request_session_id()` is set only on syncs the server pushes in response to `fetchMessageHistory` / `requestPlaceholderResend`. Server-initiated syncs (initial bootstrap, recent, push-name) return `None`. Use it to route the blob back to the request that triggered it.
 
 <Warning>
 Full decode via `get()` materializes the proto in memory alongside the raw bytes (~2x decompressed size). For large `InitialBootstrap` blobs, prefer `raw_bytes()` with partial decoding if you only need specific fields.
@@ -1882,6 +1916,7 @@ pub struct LazyHistorySync {
     sync_type: i32,                                    // Cheap metadata
     chunk_order: Option<u32>,
     progress: Option<u32>,
+    peer_data_request_session_id: Option<String>,      // Set only on ON_DEMAND syncs
     parsed: OnceLock<Option<Box<wa::HistorySync>>>,    // Decoded on first access
 }
 ```
@@ -1909,7 +1944,7 @@ Event::HistorySync(lazy_sync) => {
 
 ### Arc\<Event\> dispatch
 
-With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Message(Box<wa::Message>, Arc<MessageInfo>)`. The `MessageInfo` inside `Event::Message` and `UndecryptableMessage` is also wrapped in `Arc`, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
+With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Message(Arc<wa::Message>, Arc<MessageInfo>)`. Both the `wa::Message` body and the `MessageInfo` are `Arc`-wrapped, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
 
 Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_sync.get()` triggers the decode, and subsequent handlers reuse the cached result.
 

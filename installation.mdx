@@ -22,18 +22,18 @@ Add whatsapp-rust and its required dependencies to your `Cargo.toml`:
 
 ```toml Nightly (default)
 [dependencies]
-whatsapp-rust = "0.5"
-whatsapp-rust-sqlite-storage = "0.5"
-whatsapp-rust-tokio-transport = "0.5"
-whatsapp-rust-ureq-http-client = "0.5"
-wacore = "0.5"
-waproto = "0.5"
+whatsapp-rust = "0.6"
+whatsapp-rust-sqlite-storage = "0.6"
+whatsapp-rust-tokio-transport = "0.6"
+whatsapp-rust-ureq-http-client = "0.6"
+wacore = "0.6"
+waproto = "0.6"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```toml Stable Rust
 [dependencies]
-whatsapp-rust = { version = "0.5", default-features = false, features = [
+whatsapp-rust = { version = "0.6", default-features = false, features = [
     "sqlite-storage",
     "tokio-transport",
     "tokio-runtime",
@@ -42,11 +42,11 @@ whatsapp-rust = { version = "0.5", default-features = false, features = [
     "signal",
     "moka-cache",
 ] }
-whatsapp-rust-sqlite-storage = "0.5"
-whatsapp-rust-tokio-transport = "0.5"
-whatsapp-rust-ureq-http-client = "0.5"
-wacore = { version = "0.5", default-features = false }
-waproto = "0.5"
+whatsapp-rust-sqlite-storage = "0.6"
+whatsapp-rust-tokio-transport = "0.6"
+whatsapp-rust-ureq-http-client = "0.6"
+wacore = { version = "0.6", default-features = false }
+waproto = "0.6"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -84,7 +84,7 @@ To use whatsapp-rust in a WASM browser environment, enable the `js` feature on `
 
 ```toml Cargo.toml
 [dependencies]
-wacore = { version = "0.5", default-features = false, features = ["js"] }
+wacore = { version = "0.6", default-features = false, features = ["js"] }
 ```
 
 The `waproto` crate has its own feature flags:
@@ -99,7 +99,7 @@ The generated protobuf code (`whatsapp.rs`) is checked into version control, so 
 
 ```toml Cargo.toml
 [dependencies]
-waproto = { version = "0.5", features = ["serde-snake-case"] }
+waproto = { version = "0.6", features = ["serde-snake-case"] }
 ```
 
 The `whatsapp-rust-sqlite-storage` crate has its own feature flags:
@@ -112,7 +112,7 @@ To use a system-installed SQLite instead of the bundled version:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-sqlite-storage = { version = "0.5", default-features = false }
+whatsapp-rust-sqlite-storage = { version = "0.6", default-features = false }
 ```
 
 <Note>
@@ -128,7 +128,7 @@ To compile on **stable Rust**, disable the `simd` feature by setting `default-fe
 ```toml Cargo.toml
 [dependencies]
 # Disable defaults (removes `simd`), then re-enable everything else
-whatsapp-rust = { version = "0.5", default-features = false, features = [
+whatsapp-rust = { version = "0.6", default-features = false, features = [
     "sqlite-storage",
     "tokio-transport",
     "tokio-runtime",
@@ -139,13 +139,13 @@ whatsapp-rust = { version = "0.5", default-features = false, features = [
 ] }
 # wacore also needs default-features = false to prevent feature unification
 # from re-enabling simd
-wacore = { version = "0.5", default-features = false }
+wacore = { version = "0.6", default-features = false }
 
 # These crates have no SIMD dependency — no changes needed
-whatsapp-rust-sqlite-storage = "0.5"
-whatsapp-rust-tokio-transport = "0.5"
-whatsapp-rust-ureq-http-client = "0.5"
-waproto = "0.5"
+whatsapp-rust-sqlite-storage = "0.6"
+whatsapp-rust-tokio-transport = "0.6"
+whatsapp-rust-ureq-http-client = "0.6"
+waproto = "0.6"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -171,7 +171,7 @@ If you want to use only specific features:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust = { version = "0.5", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
+whatsapp-rust = { version = "0.6", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
 ```
 
 ## Verify installation

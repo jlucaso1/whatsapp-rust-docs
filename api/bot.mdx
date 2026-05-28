@@ -569,11 +569,15 @@ A convenience helper for message handling. You can construct it from the `Event:
 
 ```rust
 pub struct MessageContext {
-    pub message: Box<wa::Message>,
+    pub message: Arc<wa::Message>,
     pub info: MessageInfo,
     pub client: Arc<Client>,
 }
 ```
+
+<Note>
+Since v0.6 `message` is `Arc<wa::Message>` (was `Box<wa::Message>`). This matches the `Event::Message` payload and lets `from_event` / `from_arc` reuse the bus-dispatched `Arc` with zero deep clones.
+</Note>
 
 ### from_parts
 
@@ -581,7 +585,15 @@ pub struct MessageContext {
 pub fn from_parts(message: &wa::Message, info: &MessageInfo, client: Arc<Client>) -> Self
 ```
 
-Constructs a `MessageContext` from individual message components.
+Constructs a `MessageContext` from individual message components. Internally clones the `wa::Message` into a new `Arc`.
+
+### from_arc
+
+```rust
+pub fn from_arc(message: Arc<wa::Message>, info: &MessageInfo, client: Arc<Client>) -> Self
+```
+
+Constructs a `MessageContext` from an existing `Arc<wa::Message>` without copying the body — pair this with the `Arc` you receive from `Event::Message` to keep dispatch zero-clone.
 
 ### from_event
 
@@ -589,7 +601,7 @@ Constructs a `MessageContext` from individual message components.
 pub fn from_event(event: &Event, client: Arc<Client>) -> Option<Self>
 ```
 
-Extracts a `MessageContext` from an `Event`. Returns `None` if the event is not an `Event::Message`.
+Extracts a `MessageContext` from an `Event`. Returns `None` if the event is not an `Event::Message`. Reuses the existing `Arc<wa::Message>` rather than cloning the body.
 
 ### send_message
 

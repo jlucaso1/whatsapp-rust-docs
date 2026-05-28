@@ -124,9 +124,19 @@ For group messages, the receipt includes a `participant` attribute identifying t
 Internally, delivery receipts pass JID references directly to the `.attr()` method, avoiding allocations on the hot path:
 
 ```rust
+let is_status = info.source.chat.is_status_broadcast();
+// For 1:1 DMs the `to` echoes the sender JID verbatim so the multi-device
+// LID device byte (e.g. `…:7@lid`) survives. Group / status receipts stay
+// addressed at the chat JID since those never carry a device.
+let to = if info.source.is_group || is_status {
+    &info.source.chat
+} else {
+    &info.source.sender
+};
+
 let mut builder = NodeBuilder::new("receipt")
     .attr("id", &info.id)
-    .attr("to", &info.source.chat);
+    .attr("to", to);
 
 if info.category == MessageCategory::Peer {
     builder = builder.attr("type", "peer_msg");
@@ -138,6 +148,10 @@ if info.source.is_group {
 
 let receipt_node = builder.build();
 ```
+
+<Note>
+v0.6 split the `to` attribute by addressing case. Earlier versions always used `info.source.chat`, which strips the device byte (`to_non_ad`). For multi-device LID senders that arrived with `from="USER:DEV@lid"`, the device-less receipt was rejected by the LID server: it replayed the stanza from the offline queue and eventually closed the stream with `<stream:error><ack class="message"/></stream:error>`. Matching whatsmeow's `buildBaseReceipt` (which echoes `node.Attrs["from"]` verbatim) and WA Web's `sendDeliveryReceiptsAfterDecryption` resolves the issue.
+</Note>
 
 Read receipts (`mark_as_read`) batch multiple message IDs using a `<list>` child node with `<item>` elements:
 

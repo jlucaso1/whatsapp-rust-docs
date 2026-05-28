@@ -44,7 +44,7 @@ See [Bot API reference](/api/bot#event-handling) for full details.
 ```rust
 pub enum Event {
     /// Successfully decrypted message
-    Message(Box<wa::Message>, Arc<MessageInfo>),
+    Message(Arc<wa::Message>, Arc<MessageInfo>),
     
     /// Message that couldn't be decrypted
     UndecryptableMessage(UndecryptableMessage),

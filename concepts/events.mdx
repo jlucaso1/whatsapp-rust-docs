@@ -96,7 +96,7 @@ pub enum Event {
     LoggedOut(LoggedOut),
 
     // Messages
-    Message(Box<wa::Message>, Arc<MessageInfo>),
+    Message(Arc<wa::Message>, Arc<MessageInfo>),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
     Notification(Arc<OwnedNodeRef>),
@@ -452,8 +452,12 @@ Event::ClientOutdated(_) => {
 **Emitted:** For all incoming messages (text, media, etc.)
 
 ```rust
-Event::Message(Box<wa::Message>, Arc<MessageInfo>)
+Event::Message(Arc<wa::Message>, Arc<MessageInfo>)
 ```
+
+<Note>
+Both the message body and `MessageInfo` are `Arc`-wrapped. The bus dispatches the same `Arc<wa::Message>` to every handler — no deep clone on fan-out — and `Event::as_message()` returns `Option<(&Arc<wa::Message>, &MessageInfo)>` so you can cheaply share the payload with spawned tasks or downstream channels. Before v0.6 the body was `Box<wa::Message>`; the public guarantee changed from "owned, freely mutable" to "shared, immutable read access" — call `Arc::make_mut` (or clone the inner `wa::Message`) only if you genuinely need to mutate.
+</Note>
 
 **MessageInfo structure:**
 ```rust
@@ -1922,7 +1926,7 @@ Event::HistorySync(lazy_sync) => {
 
 ### Arc\<Event\> dispatch
 
-With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Message(Box<wa::Message>, Arc<MessageInfo>)`. The `MessageInfo` inside `Event::Message` and `UndecryptableMessage` is also wrapped in `Arc`, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
+With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Message(Arc<wa::Message>, Arc<MessageInfo>)`. Both the `wa::Message` body and the `MessageInfo` are `Arc`-wrapped, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
 
 Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_sync.get()` triggers the decode, and subsequent handlers reuse the cached result.
 

@@ -1004,6 +1004,7 @@ When the `moka-cache` feature is disabled, whatsapp-rust automatically switches 
 - **Time-to-live (TTL)** — entries expire a fixed duration after insertion
 - **Time-to-idle (TTI)** — entries expire after a fixed duration of no access
 - **Single-flight `get_with`** — concurrent initializations for the same key coalesce into a single call, which is critical for caches storing coordination primitives (mutexes, channels)
+- **Eager `iter()` snapshot** — `PortableCache::iter()` mirrors `moka::Cache::iter()` and yields `(Arc<K>, V)` pairs. Unlike moka's lazy iterator, the snapshot is captured up front (so it survives concurrent mutations) and may include entries that are expired but not yet evicted, matching moka's semantics.
 
 All time checks use `wacore::time::now_millis` instead of `std::time::Instant`, making it compatible with environments where monotonic clocks are unavailable.
 

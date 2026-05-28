@@ -578,6 +578,12 @@ On the **first** group send (or any send where the cached map is empty), the fil
 
 Location: `src/send.rs`, `src/client/sender_keys.rs`, `wacore/src/send.rs`
 
+### Parallelized group encrypt fan-out
+
+The group send path no longer serializes encryption behind a client-level lock. `prepare_group_stanza` and `encrypt_for_devices` now take an explicit `&runtime` handle (`&*self.runtime`) so per-device encryption can run on `runtime::blocking()` tasks concurrently. Combined with the move to `update_device_lists` (batched device-registry writes) and a no-lock `IdentityAdapter::is_trusted_identity` stub, group fan-out scales with the runtime's worker count rather than with a single critical section.
+
+This is an internal performance change — no public method on `Client::send_message` was renamed, and the order of `<to>` children in the resulting stanza is unchanged. If you implemented a custom `SignalStore`, note that `update_device_lists(records: Vec<DeviceListRecord>)` is now part of the trait so the fan-out can batch its writes.
+
 ### In-memory sender key device cache
 
 The `SenderKeyDeviceCache` provides an in-memory caching layer over the per-device sender key tracking data stored in the database. Without this cache, every group send would require a database round-trip to load the sender key device map — the cache eliminates that overhead after the first load for each group.

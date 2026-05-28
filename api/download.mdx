@@ -262,6 +262,78 @@ pub async fn download_from_params_to_writer<W: Write + Seek + Send + 'static>(
 
 ---
 
+## fetch_sticker_pack
+
+Fetch first-party sticker pack metadata (and the per-sticker download handles) from the WhatsApp CDN.
+
+```rust
+pub async fn fetch_sticker_pack(
+    &self,
+    pack_id: &str,
+    locale: &str,
+) -> Result<wacore::sticker_pack::StickerPack>
+```
+
+<ParamField path="pack_id" type="&str" required>
+  The first-party sticker pack ID (typically extracted from a received `sticker_pack_message`).
+</ParamField>
+
+<ParamField path="locale" type="&str" required>
+  BCP-47 locale tag for localized name / publisher strings. Pass `"en"` to match whatsmeow's default.
+</ParamField>
+
+<ResponseField name="pack" type="StickerPack">
+  Pack metadata plus a `Vec<StickerPackItem>` of individual stickers. Each `StickerPackItem` implements [`Downloadable`](#downloadable-trait), so you can pass it straight to `client.download(...)`.
+</ResponseField>
+
+Under the hood the client GETs `https://static.whatsapp.net/sticker?lottie=1&cat=sticker_pack_data&id={pack_id}&lg={locale}`, parses the JSON envelope, and constructs the `StickerPack`. The endpoint is unauthenticated — the call works whether or not you are paired.
+
+```rust
+use whatsapp_rust::Client;
+
+let pack = client.fetch_sticker_pack("3F9Z2…", "en").await?;
+println!("Pack '{}' by {}", pack.name, pack.publisher);
+for sticker in &pack.stickers {
+    let bytes = client.download(sticker).await?;
+    std::fs::write(format!("{}.webp", sticker.file_name), bytes)?;
+}
+```
+
+### StickerPack
+
+```rust
+pub struct StickerPack {
+    pub sticker_pack_id: String,
+    pub name: String,
+    pub publisher: String,
+    pub description: Option<String>,
+    pub tray_image_file_name: Option<String>,
+    pub stickers: Vec<StickerPackItem>,
+    // additional CDN metadata: animated, tray-icon colors, …
+}
+```
+
+### StickerPackItem
+
+```rust
+pub struct StickerPackItem {
+    pub file_name: String,
+    pub emojis: Vec<String>,
+    pub accessibility_text: Option<String>,
+    pub is_animated: bool,
+    // plus all Downloadable fields:
+    //   direct_path, media_key, file_enc_sha256, file_sha256, file_length
+}
+
+impl Downloadable for StickerPackItem { /* … */ }
+```
+
+<Note>
+The CDN response is a JSON envelope, not a protobuf message — `StickerPack` / `StickerPackItem` live in `wacore::sticker_pack` and are independent of `waproto::whatsapp::StickerPackMessage` (which represents the inline pack-bubble in a chat). The struct mirrors whatsmeow's `FirstPartyStickerPack`.
+</Note>
+
+---
+
 ## Downloadable Trait
 
 The `Downloadable` trait provides a generic interface for downloading media from any message type.

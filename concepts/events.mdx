@@ -1312,6 +1312,7 @@ pub struct LazyHistorySync {
     sync_type: i32,
     chunk_order: Option<u32>,
     progress: Option<u32>,
+    peer_data_request_session_id: Option<String>,
     parsed: OnceLock<Option<Box<wa::HistorySync>>>,
 }
 
@@ -1326,6 +1327,12 @@ impl LazyHistorySync {
     /// Sync progress (0-100).
     pub fn progress(&self) -> Option<u32>;
 
+    /// Session ID set only on ON_DEMAND syncs. Use it to correlate the
+    /// blob with the original `fetchMessageHistory` /
+    /// `requestPlaceholderResend` request. Server-pushed syncs return
+    /// `None`.
+    pub fn peer_data_request_session_id(&self) -> Option<&str>;
+
     /// Full decode of the history sync proto, cached via OnceLock.
     /// Returns `None` if decoding fails.
     pub fn get(&self) -> Option<&wa::HistorySync>;
@@ -1337,11 +1344,12 @@ impl LazyHistorySync {
 
 **Key characteristics:**
 
-- **Metadata without decoding** — `sync_type()`, `chunk_order()`, and `progress()` are extracted during the streaming phase and available immediately
+- **Metadata without decoding** — `sync_type()`, `chunk_order()`, `progress()`, and `peer_data_request_session_id()` are extracted during the streaming phase and available immediately
 - **Parse-once semantics** — `get()` decodes the full proto on first call and caches the result via `OnceLock`. With `Arc<Event>` dispatch, all handlers share the same `LazyHistorySync` instance
 - **Raw bytes access** — `raw_bytes()` provides the decompressed protobuf bytes for custom or partial decoding without triggering the full decode
 - **Cheap clone** — Cloning shares the underlying `Bytes` buffer (reference-counted) but creates a fresh `OnceLock`, so each clone decodes independently
-- **Serialization** — Only metadata (sync_type, chunk_order, progress) is serialized, not the blob
+- **Serialization** — Only metadata (sync_type, chunk_order, progress, peer_data_request_session_id) is serialized, not the blob
+- **On-demand correlation** — `peer_data_request_session_id()` is set only on syncs the server pushes in response to `fetchMessageHistory` / `requestPlaceholderResend`. Server-initiated syncs (initial bootstrap, recent, push-name) return `None`. Use it to route the blob back to the request that triggered it.
 
 <Warning>
 Full decode via `get()` materializes the proto in memory alongside the raw bytes (~2x decompressed size). For large `InitialBootstrap` blobs, prefer `raw_bytes()` with partial decoding if you only need specific fields.
@@ -1886,6 +1894,7 @@ pub struct LazyHistorySync {
     sync_type: i32,                                    // Cheap metadata
     chunk_order: Option<u32>,
     progress: Option<u32>,
+    peer_data_request_session_id: Option<String>,      // Set only on ON_DEMAND syncs
     parsed: OnceLock<Option<Box<wa::HistorySync>>>,    // Decoded on first access
 }
 ```

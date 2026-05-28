@@ -1064,6 +1064,33 @@ pub fn skip_history_sync_enabled(&self) -> bool
 
 Returns `true` if history sync is currently being skipped.
 
+### send_history_sync_server_error_receipt
+
+```rust
+pub async fn send_history_sync_server_error_receipt(
+    &self,
+    message_id: &str,
+    media_key: &[u8],
+) -> Result<()>
+```
+
+Ask the phone to re-upload a history-sync blob whose download failed (corrupt body, mismatched HMAC, missing CDN file, etc.). The client emits a `<receipt type="server-error" category="peer">` to the companion device carrying an encrypted retry payload, mirroring WA Web's `WAWebSendHistSyncServerErrorReceiptJob`.
+
+**Parameters:**
+- `message_id` — the `MessageInfo::id` of the failed history-sync notification
+- `media_key` — the 32-byte key carried by the original `<historysync mediaKey="…">` element
+
+**When to call:** Typically inside your `Event::HistorySync` (or upstream download) error path, once you've determined the blob can't be recovered locally. The phone will then retry the upload, producing a fresh `HistorySync` notification.
+
+```rust
+if let Err(err) = download_history_blob(&lazy_sync).await {
+    tracing::warn!(?err, "history sync download failed; asking phone to retry");
+    client
+        .send_history_sync_server_error_receipt(&info.id, &media_key)
+        .await?;
+}
+```
+
 ---
 
 ## Offline sync

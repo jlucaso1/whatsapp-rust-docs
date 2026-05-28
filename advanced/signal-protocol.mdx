@@ -1000,6 +1000,23 @@ The implementation enforces several hard limits to prevent resource exhaustion a
 
 Location: `wacore/libsignal/src/protocol/consts.rs`
 
+### Self-DM / sibling decryption recovery
+
+When a message from your own primary phone or another linked companion fails to decrypt, the v0.6 client distinguishes the failure mode and applies the matching recovery strategy:
+
+| Internal `RetryReason` | Trigger | Recovery |
+|---|---|---|
+| `NoSession` | `SessionNotFound` (no Signal session yet for the device) | Request a fresh prekey bundle via retry receipt; install the new session before retrying decryption. |
+| `BadMac` | Ratchet desync (`InvalidMessage` / mac failure) on an existing session | Mark the session for re-creation, throttled per peer via the new `session_recreate_history` map so repeated BadMacs don't loop, and re-send via a peer-addressed `pkmsg` carrying our identity. |
+
+The throttle keeps a short history of recent recreate attempts per peer/device. If a peer is already in cooldown, the client skips re-creation and falls back to a normal retry receipt rather than thrashing the session. Peer-addressed `pkmsg` carries the protocol identity so the receiver can verify ownership before installing the new session, blocking spoofed sibling recoveries.
+
+This closed a deadlock where self-DM fan-out to a sibling device produced repeated BadMac decrypt failures: the recipient would request a retry, the sender would re-encrypt against the same broken session, and the cycle would continue until the user manually relogged. With the throttled re-creation plus identity-validated pkmsg, the second receipt installs a fresh session and decryption resumes.
+
+Self-DM fan-out also gained WA Web parity for the BadMac case: when our own primary phone reports BadMac, the client now treats it as a session-level recovery rather than dropping the message, matching `WAWebDecryptOrThrow`'s branch on session divergence.
+
+Location: `src/client.rs`, `src/retry.rs`, `wacore/libsignal/src/protocol/session_cipher.rs`, `wacore/src/send.rs`
+
 ## Performance optimizations
 
 ### Session object cache
@@ -1158,6 +1175,8 @@ let session_mutexes = self.session_mutexes_for(&lock_jids).await;
 **DM multi-device fanout:**
 
 The DM send path resolves all known recipient devices and own companion devices, encrypting per-device for each. This matches WA Web's `WAWebSendUserMsgJob` behavior where the local device table is read on the send path, and `WAWebDBDeviceListFanout` filters out hosted devices. The client checks the local device registry first (via `get_devices_from_registry()`); a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects from `get_user_devices`. The sender device is excluded (matching WA Web's `isMeDevice` in `getFanOutList`), and for self-DMs, overlapping device lists are deduplicated using a `HashSet` (matching WA Web's `Map` keyed by `toString`).
+
+**Own-device namespace alignment (v0.6):** When the recipient is addressed in the LID namespace (`@lid`), the client converts its own companion devices from the PN namespace to LID before fanning out. Without this alignment, a `<to>` mix of `@lid` and `@s.whatsapp.net` participants caused the server to reject the stanza for LID-addressed DMs. Outgoing messages to PN-addressed recipients are unaffected.
 
 Own companion devices (your other linked devices) receive per-device encryption for multi-device self-sync via `DeviceSentMessage`.
 

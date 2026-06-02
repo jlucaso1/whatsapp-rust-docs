@@ -53,6 +53,9 @@ pub async fn upload(
       pub file_sha256: [u8; 32],
       pub file_length: u64,
       pub media_key_timestamp: i64,
+      /// Per-64-KiB HMAC sidecar for progressive playback/seek (audio/video
+      /// only). Pass to `AudioMessage`/`VideoMessage.streaming_sidecar`.
+      pub streaming_sidecar: Option<Vec<u8>>,
   }
   ```
 
@@ -92,6 +95,10 @@ pub async fn upload(
   
   <ParamField path="media_key_timestamp" type="i64">
     Unix timestamp (seconds) when the media key was generated. Set automatically by `upload()` to the current time.
+  </ParamField>
+
+  <ParamField path="streaming_sidecar" type="Option<Vec<u8>>">
+    Per-64-KiB HMAC-SHA256 table over the ciphertext that lets recipients seek and stream audio/video progressively without downloading the whole file. Generated automatically for audio and video uploads (`None` otherwise). Assign it to `AudioMessage.streaming_sidecar` / `VideoMessage.streaming_sidecar` when building the message. Opt in/out explicitly with `UploadOptions::with_streaming_sidecar(bool)`.
   </ParamField>
 </ResponseField>
 
@@ -470,6 +477,88 @@ pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<Encrypte
 | `MediaEncryptor` | You have an async stream, network source, or need full control over chunk sizes |
 | `encrypt_media_streaming` | You have a sync `Read` source (file, cursor) |
 | `encrypt_media` | The entire plaintext fits in memory |
+
+---
+
+## upload_stream (constant-memory)
+
+`upload()` encrypts the whole plaintext into a `Vec<u8>` in memory before sending. For large files, `upload_stream` keeps memory constant by uploading **already-encrypted** ciphertext from any backing store (temp file, memory-mapped blob, …) without re-buffering it.
+
+```rust
+pub async fn upload_stream<S>(
+    &self,
+    source: S,
+    info: wacore::upload::EncryptedMediaInfo,
+    media_type: MediaType,
+) -> Result<UploadResponse>
+where
+    S: wacore::upload::UploadSource + 'static,
+```
+
+The flow is two steps you own:
+
+1. Encrypt the plaintext into storage of your choice with [`encrypt_media_streaming`](#streaming-encryption) (or `encrypt_media_streaming_with_key`). It returns an `EncryptedMediaInfo` carrying the crypto metadata and the optional `streaming_sidecar`.
+2. Pass that storage (as an `UploadSource`) plus the `EncryptedMediaInfo` to `upload_stream`. The method never touches disk itself.
+
+```rust
+use wacore::upload::{encrypt_media_streaming, encrypted_len};
+use wacore::download::MediaType;
+use std::fs::File;
+use std::io::BufWriter;
+
+// 1. Encrypt to a temp file (constant memory)
+let mut cipher_file = tempfile::tempfile()?;
+let info = encrypt_media_streaming(
+    File::open("big_video.mp4")?,
+    BufWriter::new(&mut cipher_file),
+    MediaType::Video,
+)?;
+
+// 2. Stream the ciphertext straight to the CDN — wrap the file in your own
+//    UploadSource, or read it into Bytes if it fits.
+let ciphertext = std::fs::read("…")?;                 // or a custom file-backed source
+let upload = client
+    .upload_stream(bytes::Bytes::from(ciphertext), info, MediaType::Video)
+    .await?;
+
+// upload.streaming_sidecar is propagated from the EncryptedMediaInfo.
+```
+
+### UploadSource trait
+
+`upload_stream` accepts anything implementing `UploadSource`:
+
+```rust
+pub trait UploadSource: Send + Sync {
+    /// Total length of the encrypted blob in bytes.
+    fn len(&self) -> u64;
+    fn is_empty(&self) -> bool { self.len() == 0 }
+    /// A reader positioned at `offset`. Called once per upload attempt
+    /// (re-invoked on retry / resume).
+    fn reader_from(&self, offset: u64) -> std::io::Result<Box<dyn Read + Send>>;
+}
+```
+
+Built-in implementations:
+
+| Type | Notes |
+|------|-------|
+| `std::sync::Arc<[u8]>` | In-memory shared buffer |
+| `bytes::Bytes` | **O(1) to construct** from an owned `Vec<u8>` (adopts the buffer instead of copying). Prefer this when the ciphertext was produced into a `Vec`. |
+
+Implement the trait yourself for a file-backed or network-backed source — `reader_from(offset)` is what makes resumable uploads work without re-encrypting.
+
+### encrypted_len
+
+```rust
+pub const fn encrypted_len(plaintext_len: usize) -> usize
+```
+
+Computes the exact ciphertext size for a given plaintext length (plaintext rounded up to the next 16-byte AES block, plus the 10-byte media MAC). Use it to pre-allocate an exact-fit `Vec` before streaming encryption, avoiding reallocation as the ciphertext grows.
+
+<Note>
+`upload()` is unchanged and still the right choice when the plaintext fits in memory — both paths share the same retry/resumable-upload machinery. Reach for `upload_stream` only when you want to bound memory for large media.
+</Note>
 
 ---
 

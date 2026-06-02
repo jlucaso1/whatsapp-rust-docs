@@ -154,9 +154,23 @@ async fn put_mutation_macs(
 /// Get a mutation MAC by index
 async fn get_mutation_mac(&self, name: &str, index_mac: &[u8]) -> Result<Option<Vec<u8>>>;
 
+/// Batch variant of get_mutation_mac: fetch many previous-MAC values in one
+/// call, returning index_mac -> value_mac. The default loops over
+/// get_mutation_mac; backends with set-membership queries (SQL `IN (...)`)
+/// should override to avoid an N+1 (one round-trip per mutation) during sync.
+async fn get_mutation_macs(
+    &self,
+    name: &str,
+    index_macs: &[Vec<u8>],
+) -> Result<HashMap<Vec<u8>, Vec<u8>>>;
+
 /// Delete mutation MACs by their index MACs
 async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
 ```
+
+<Note>
+`get_mutation_macs` was added in v0.6 to collapse the app-state sync's per-mutation previous-MAC lookups (which were N+1) into a single batched query. It has a default implementation, so existing custom backends keep working — override it with a `WHERE index_mac IN (…)` query for the performance win. The SQLite store chunks the `IN` list at 500 entries.
+</Note>
 
 ## ProtocolStore Trait
 

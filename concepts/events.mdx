@@ -47,6 +47,12 @@ impl CoreEventBus {
 ```rust
 pub trait EventHandler: Send + Sync {
     fn handle_event(&self, event: Arc<Event>);
+
+    /// Which event kinds this handler wants. Defaults to all kinds.
+    /// Override to let the bus skip materializing events you don't want.
+    fn interest(&self) -> EventInterest {
+        EventInterest::ALL
+    }
 }
 ```
 
@@ -69,6 +75,37 @@ impl EventHandler for MyHandler {
 
 client.register_handler(Arc::new(MyHandler));
 ```
+
+### Typed event interest (skip boxing unwanted events)
+
+By default a handler receives every event. If you only care about a few kinds, override `interest()` so the event bus skips building and dispatching the kinds nobody wants — for high-throughput events (presence, receipts) this avoids the per-event `Arc` allocation entirely.
+
+```rust
+use wacore::types::events::{EventInterest, EventKind};
+
+impl EventHandler for MyHandler {
+    fn handle_event(&self, event: Arc<Event>) { /* … */ }
+
+    fn interest(&self) -> EventInterest {
+        // Only Message and Connected events reach this handler.
+        EventInterest::of(&[EventKind::Message, EventKind::Connected])
+    }
+}
+```
+
+- **`EventKind`** is a `#[repr(u8)]` discriminant — one variant per `Event` variant (`Message`, `Connected`, `Receipt`, …), at most 64 kinds.
+- **`EventInterest`** is a 64-bit set of kinds. Build it with `EventInterest::of(&[…])`, `EventInterest::ALL` (the default), `EventInterest::none()`, or chain `.with(kind)`. Query it with `.wants(kind)`.
+- The bus exposes `has_handler_for(kind)` and only produces an event when at least one registered handler wants its kind.
+
+With the [`Bot`](/api/bot) builder, the same narrowing is available via `on_event_for`:
+
+```rust
+bot.on_event_for(&[EventKind::Message], |event, client| async move {
+    // only Message events
+});
+```
+
+`on_event` (without kinds) keeps subscribing to everything.
 
 ## Event Enum
 

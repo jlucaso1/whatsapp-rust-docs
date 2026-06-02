@@ -206,6 +206,31 @@ Bot::builder()
 
 See [Events Reference](/concepts/events) for all event types.
 
+### on_event_for
+
+```rust
+pub fn on_event_for<F, Fut>(self, kinds: &[EventKind], handler: F) -> Self
+where
+    F: Fn(Arc<Event>, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Like `on_event`, but registers the handler with a narrowed [`EventInterest`](/concepts/events#typed-event-interest-skip-boxing-unwanted-events) so the event bus skips materializing kinds you don't subscribe to. Useful when you only handle a couple of event types and want to avoid paying the `Arc` allocation for high-frequency events like presence or receipts.
+
+```rust
+use wacore::types::events::EventKind;
+
+Bot::builder()
+    .on_event_for(&[EventKind::Message, EventKind::Connected], |event, client| async move {
+        match &*event {
+            Event::Message(msg, info) => { /* … */ }
+            Event::Connected(_) => println!("online"),
+            _ => {}
+        }
+    })
+    // ...
+```
+
 ### Using ChannelEventHandler
 
 For scenarios where you need to process events outside of a closure (e.g., testing, custom event loops, or runtime-agnostic code), use `ChannelEventHandler` with `register_handler` instead of `on_event`:

@@ -480,7 +480,7 @@ let phone = cache.get_phone_number("100000012345678").await;
 ```
 
 <Note>
-Since v0.6 `get_current_lid` (and the `SendContextResolver::get_lid_for_phone` trait method) returns `Option<wacore_binary::CompactString>` rather than `Option<String>`, avoiding a heap allocation on the hot group-send path — LID identifiers fit inline in a `CompactString`. Call `.as_deref()` for `&str` comparisons. If you implemented `SendContextResolver` yourself, update the return type.
+Since v0.6 `get_current_lid` (and the `SendContextResolver::get_lid_for_phone` trait method) returns `Option<wacore_binary::CompactString>` instead of `Option<String>`. This avoids a heap allocation on the hot group-send path, since LID identifiers fit inline in a `CompactString`. Call `.as_deref()` for `&str` comparisons, and update any custom `SendContextResolver` implementation to the new return type.
 </Note>
 
 **Timestamp conflict resolution:**

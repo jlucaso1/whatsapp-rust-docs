@@ -228,6 +228,8 @@ Options for customizing upload behavior.
 pub struct UploadOptions {
     /// Reuse an existing media key instead of generating a fresh one.
     pub media_key: Option<[u8; 32]>,
+    /// Override streaming-sidecar generation; `None` selects by media type.
+    pub streaming_sidecar: Option<bool>,
 }
 ```
 
@@ -235,6 +237,10 @@ pub struct UploadOptions {
 
 <ParamField path="media_key" type="Option<[u8; 32]>" default="None">
   When set, reuses the provided 32-byte media key instead of generating a new one. This is required when uploading a sticker pack thumbnail, which must share the same `media_key` as the sticker pack ZIP.
+</ParamField>
+
+<ParamField path="streaming_sidecar" type="Option<bool>" default="None">
+  Override streaming-sidecar generation. `None` (default) generates the per-64-KiB HMAC-SHA256 `streaming_sidecar` only for audio and video; `Some(true)` forces it on; `Some(false)` forces it off. When produced, assign the resulting `UploadResponse.streaming_sidecar` to `AudioMessage.streaming_sidecar` / `VideoMessage.streaming_sidecar` so recipients can seek and stream progressively.
 </ParamField>
 
 ### Creating options
@@ -247,6 +253,9 @@ let options = UploadOptions::default();
 
 // Reuse an existing media key
 let options = UploadOptions::new().with_media_key(existing_key.clone());
+
+// Force the streaming sidecar on (e.g. for a media type it skips by default)
+let options = UploadOptions::new().with_streaming_sidecar(true);
 ```
 
 ### Example: Upload sticker pack thumbnail with shared key
@@ -453,6 +462,25 @@ println!("Original size: {} bytes", info.file_length);
   `encrypt_media_streaming` uses ~40KB of memory regardless of file size (8KB read buffer + crypto state). Internally it creates a `MediaEncryptor` and feeds 8KB chunks from the reader.
 </Note>
 
+### encrypt_media_streaming_with_key
+
+```rust
+pub fn encrypt_media_streaming_with_key<R: Read, W: Write>(
+    reader: R,
+    writer: W,
+    media_type: MediaType,
+    media_key: Option<&[u8; 32]>,
+    sidecar: Option<bool>,
+) -> Result<EncryptedMediaInfo>
+```
+
+Lower-level variant of `encrypt_media_streaming`. It returns the same `EncryptedMediaInfo` (including the optional `streaming_sidecar`) but lets you control two things the convenience wrapper decides for you:
+
+- **`media_key`** — pass `Some(&key)` to encrypt with a pre-existing 32-byte key (e.g. when re-encrypting for a shared-key sticker pack), or `None` to generate a fresh random key like `encrypt_media_streaming` does.
+- **`sidecar`** — pass `Some(true)`/`Some(false)` to force the streaming sidecar on or off, or `None` to use the per-media-type default (generated for audio/video).
+
+Reach for this when you need a deterministic key or want to override sidecar generation; otherwise use `encrypt_media_streaming`, which calls this with `None, None`.
+
 ### Relationship to `encrypt_media`
 
 The in-memory `encrypt_media` function is a convenience wrapper around `encrypt_media_streaming`:
@@ -505,13 +533,14 @@ use wacore::upload::{encrypt_media_streaming, UploadSource};
 use wacore::download::MediaType;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::sync::Arc;
+use tempfile::NamedTempFile;
 
-// A file-backed UploadSource: each attempt re-reads the ciphertext from
-// disk, so the full blob never lives in memory. `try_clone` gives an
-// independent cursor, so seeking one reader doesn't disturb another.
+// A file-backed UploadSource. It owns the temp file (so the data lives as
+// long as the source) and reopens it by path on every attempt, giving each
+// reader its own independent OS file offset — safe for retry / resume /
+// host-failover, which re-invoke reader_from.
 struct FileSource {
-    file: Arc<File>,
+    file: NamedTempFile,
     len: u64,
 }
 
@@ -520,29 +549,33 @@ impl UploadSource for FileSource {
         self.len
     }
     fn reader_from(&self, offset: u64) -> std::io::Result<Box<dyn Read + Send>> {
-        let mut f = self.file.try_clone()?;
+        let mut f = File::open(self.file.path())?; // fresh fd, independent cursor
         f.seek(SeekFrom::Start(offset))?;
         Ok(Box::new(f))
     }
 }
 
-// 1. Encrypt big_video.mp4 into a temp file (constant memory). `&File`
+// 1. Encrypt big_video.mp4 into a named temp file (constant memory). `&File`
 //    implements Write, so the ciphertext is written straight to disk.
-let cipher_file = tempfile::tempfile()?;
+let cipher_file = NamedTempFile::new()?;
 let info = encrypt_media_streaming(
     File::open("big_video.mp4")?,
-    &cipher_file,
+    cipher_file.as_file(),
     MediaType::Video,
 )?;
-let len = cipher_file.metadata()?.len(); // ciphertext size
+let len = cipher_file.as_file().metadata()?.len(); // ciphertext size
 
 // 2. Stream the ciphertext straight from the temp file to the CDN — the
 //    blob is never buffered in memory.
-let source = FileSource { file: Arc::new(cipher_file), len };
+let source = FileSource { file: cipher_file, len };
 let upload = client.upload_stream(source, info, MediaType::Video).await?;
 
 // upload.streaming_sidecar is propagated from the EncryptedMediaInfo.
 ```
+
+<Warning>
+Don't back a multi-attempt `UploadSource` with `File::try_clone()` — on Unix the cloned descriptor shares the original's file offset, so a retry or resume that calls `reader_from` again would move the cursor out from under any concurrent read. Reopen by path (as above) or use positional reads so each reader has an independent offset.
+</Warning>
 
 <Note>
 If the ciphertext already fits comfortably in memory, skip the custom source and pass it directly — `bytes::Bytes` implements `UploadSource`, so `client.upload_stream(bytes::Bytes::from(ciphertext_vec), info, media_type)` works for the small-file case. The file-backed source above is what keeps memory constant for large media.

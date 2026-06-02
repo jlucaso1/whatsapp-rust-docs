@@ -839,10 +839,13 @@ See [Transport API reference](/api/transport#transport-factory) for factory deta
 ### Transport Events
 
 ```rust
+use wacore::net::DisconnectReason;
+
+// TransportEvent (from wacore::net) — shown here for reference.
 pub enum TransportEvent {
     Connected,
     DataReceived(Bytes),
-    Disconnected,
+    Disconnected(DisconnectReason),
 }
 
 // Read pump example

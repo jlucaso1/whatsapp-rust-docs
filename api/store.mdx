@@ -5,27 +5,33 @@ description: Storage backend traits and SQLite implementation for persistent sta
 
 ## Overview
 
-whatsapp-rust uses a trait-based storage system to persist device state, cryptographic keys, and protocol metadata. The storage layer is split into four domain-specific traits:
+whatsapp-rust uses a trait-based storage system to persist device state, cryptographic keys, and protocol metadata. The storage layer is split into five domain-specific traits:
 
 - **SignalStore** - Signal protocol cryptographic operations (identity keys, sessions, pre-keys, sender keys)
 - **AppSyncStore** - WhatsApp app state synchronization (sync keys, versions, mutation MACs)
 - **ProtocolStore** - WhatsApp protocol alignment (SKDM tracking, LID-PN mapping, device registry)
+- **MsgSecretStore** - `messageSecret` persistence for poll/edit/bot-reply decryption (added in v0.6)
 - **DeviceStore** - Device persistence operations
 
-All four traits are combined into the `Backend` trait for convenience.
+All five traits are combined into the `Backend` trait for convenience.
 
 ## The Backend Trait
 
-Any type implementing all four domain traits automatically implements `Backend`:
+Any type implementing all five domain traits automatically implements `Backend`:
 
 ```rust
-pub trait Backend: SignalStore + AppSyncStore + ProtocolStore + DeviceStore + Send + Sync {}
+pub trait Backend:
+    SignalStore + AppSyncStore + ProtocolStore + MsgSecretStore + DeviceStore + Send + Sync {}
 
-impl<T> Backend for T 
-where 
-    T: SignalStore + AppSyncStore + ProtocolStore + DeviceStore + Send + Sync
+impl<T> Backend for T
+where
+    T: SignalStore + AppSyncStore + ProtocolStore + MsgSecretStore + DeviceStore + Send + Sync
 {}
 ```
+
+<Note>
+`MsgSecretStore` became a required member of `Backend` in v0.6, so a custom backend must implement it (the bundled `SqliteStore` already does). Its methods have defaults that keep the surface small — see [MsgSecretStore](#msgsecretstore) for which methods you actually need to write.
+</Note>
 
 ## SignalStore Trait
 
@@ -302,7 +308,7 @@ The `take_sent_message` method is an atomic read-and-delete operation. Once a me
 
 ### MsgSecretStore
 
-Persists the 32-byte `messageSecret` values needed to decrypt later add-ons keyed off an original message: poll votes, poll/event edits, message edits (`secret_encrypted_message`), and Meta AI / fbid bot replies (`<enc type="msmsg">`). Secrets are keyed by `(chat, sender, msg_id)` and carry an absolute expiry so they can be pruned by policy (see [messageSecret retention](/api/bot#messagesecret-retention)).
+The fifth required member of [`Backend`](#the-backend-trait). It persists the 32-byte `messageSecret` values needed to decrypt later add-ons keyed off an original message: poll votes, poll/event edits, message edits (`secret_encrypted_message`), and Meta AI / fbid bot replies (`<enc type="msmsg">`). Secrets are keyed by `(chat, sender, msg_id)` and carry an absolute expiry so they can be pruned by policy (see [messageSecret retention](/api/bot#messagesecret-retention)).
 
 ```rust
 /// Store a single secret with no expiry (expires_at = 0, kept forever).
@@ -359,7 +365,7 @@ CREATE INDEX idx_msg_secrets_expires ON msg_secrets (device_id, expires_at);
 ```
 
 <Note>
-Custom backends only need to implement `put_msg_secrets`, `get_msg_secret`, `get_msg_secret_with_ts`, and `delete_expired_msg_secrets`; `put_msg_secret` has a default that delegates to `put_msg_secrets` with `expires_at = 0`.
+A custom backend only needs to implement three methods: `put_msg_secrets`, `get_msg_secret`, and `delete_expired_msg_secrets`. The other two have defaults — `put_msg_secret` delegates to `put_msg_secrets` with `expires_at = 0`, and `get_msg_secret_with_ts` pairs `get_msg_secret` with a `0` timestamp. Override `get_msg_secret_with_ts` only if your store persists `message_ts` and you want the edit-window enforced.
 </Note>
 
 ## DeviceStore Trait

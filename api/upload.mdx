@@ -501,28 +501,52 @@ The flow is two steps you own:
 2. Pass that storage (as an `UploadSource`) plus the `EncryptedMediaInfo` to `upload_stream`. The method never touches disk itself.
 
 ```rust
-use wacore::upload::{encrypt_media_streaming, encrypted_len};
+use wacore::upload::{encrypt_media_streaming, UploadSource};
 use wacore::download::MediaType;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 
-// 1. Encrypt to a temp file (constant memory)
-let mut cipher_file = tempfile::tempfile()?;
+// A file-backed UploadSource: each attempt re-reads the ciphertext from
+// disk, so the full blob never lives in memory. `try_clone` gives an
+// independent cursor, so seeking one reader doesn't disturb another.
+struct FileSource {
+    file: Arc<File>,
+    len: u64,
+}
+
+impl UploadSource for FileSource {
+    fn len(&self) -> u64 {
+        self.len
+    }
+    fn reader_from(&self, offset: u64) -> std::io::Result<Box<dyn Read + Send>> {
+        let mut f = self.file.try_clone()?;
+        f.seek(SeekFrom::Start(offset))?;
+        Ok(Box::new(f))
+    }
+}
+
+// 1. Encrypt big_video.mp4 into a temp file (constant memory). `&File`
+//    implements Write, so the ciphertext is written straight to disk.
+let cipher_file = tempfile::tempfile()?;
 let info = encrypt_media_streaming(
     File::open("big_video.mp4")?,
-    BufWriter::new(&mut cipher_file),
+    &cipher_file,
     MediaType::Video,
 )?;
+let len = cipher_file.metadata()?.len(); // ciphertext size
 
-// 2. Stream the ciphertext straight to the CDN — wrap the file in your own
-//    UploadSource, or read it into Bytes if it fits.
-let ciphertext = std::fs::read("…")?;                 // or a custom file-backed source
-let upload = client
-    .upload_stream(bytes::Bytes::from(ciphertext), info, MediaType::Video)
-    .await?;
+// 2. Stream the ciphertext straight from the temp file to the CDN — the
+//    blob is never buffered in memory.
+let source = FileSource { file: Arc::new(cipher_file), len };
+let upload = client.upload_stream(source, info, MediaType::Video).await?;
 
 // upload.streaming_sidecar is propagated from the EncryptedMediaInfo.
 ```
+
+<Note>
+If the ciphertext already fits comfortably in memory, skip the custom source and pass it directly — `bytes::Bytes` implements `UploadSource`, so `client.upload_stream(bytes::Bytes::from(ciphertext_vec), info, media_type)` works for the small-file case. The file-backed source above is what keeps memory constant for large media.
+</Note>
 
 ### UploadSource trait
 

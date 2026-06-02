@@ -1,0 +1,240 @@
+---
+title: Instalação
+description: Adicione whatsapp-rust ao seu projeto Rust
+---
+
+## Pré-requisitos
+
+Antes de instalar whatsapp-rust, certifique-se de ter:
+
+- **Rust nightly** (padrão) — necessário para a edição Rust 2024 e o protocolo binário otimizado com SIMD. O projeto fixa `nightly-2026-04-05` via `rust-toolchain.toml`. Veja [Usando Rust stable](#usando-rust-stable) se você precisa de suporte ao toolchain stable.
+- Gerenciador de pacotes **Cargo**
+
+<Note>
+  O SQLite é empacotado por padrão com o crate `whatsapp-rust-sqlite-storage`, então você não precisa instalá-lo separadamente. Se preferir vincular ao SQLite instalado no sistema, desabilite a feature padrão `bundled-sqlite`.
+</Note>
+
+## Adicione ao seu projeto
+
+Adicione whatsapp-rust e suas dependências necessárias ao seu `Cargo.toml`:
+
+<CodeGroup>
+
+```toml Nightly (padrão)
+[dependencies]
+whatsapp-rust = "0.6"
+whatsapp-rust-sqlite-storage = "0.6"
+whatsapp-rust-tokio-transport = "0.6"
+whatsapp-rust-ureq-http-client = "0.6"
+wacore = "0.6"
+waproto = "0.6"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+```toml Rust Stable
+[dependencies]
+whatsapp-rust = { version = "0.6", default-features = false, features = [
+    "sqlite-storage",
+    "tokio-transport",
+    "tokio-runtime",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+    "moka-cache",
+] }
+whatsapp-rust-sqlite-storage = "0.6"
+whatsapp-rust-tokio-transport = "0.6"
+whatsapp-rust-ureq-http-client = "0.6"
+wacore = { version = "0.6", default-features = false }
+waproto = "0.6"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+</CodeGroup>
+
+## Feature flags
+
+whatsapp-rust suporta diversas features opcionais:
+
+| Feature | Descrição | Incluída por padrão |
+|---------|-----------|---------------------|
+| `tokio-runtime` | Habilita a implementação `TokioRuntime` do trait `Runtime`. Também necessária para `TypedCache::invalidate_all()` em backends de cache personalizados | ✅ Sim |
+| `tokio-native` | Runtime Tokio multi-thread (`tokio/rt-multi-thread`) | ✅ Sim |
+| `tokio-transport` | Transporte WebSocket Tokio | ✅ Sim |
+| `ureq-client` | Cliente HTTP Ureq | ✅ Sim |
+| `sqlite-storage` | Backend de armazenamento SQLite | ✅ Sim |
+| `moka-cache` | Cache em memória Moka | ✅ Sim |
+| `simd` | Codificação/decodificação do protocolo binário otimizada com SIMD (**requer Rust nightly**) | ✅ Sim |
+| `signal` | Manipulação de sinais Unix (desligamento gracioso em SIGTERM/Ctrl+C) | ✅ Sim |
+| `danger-skip-tls-verify` | Pula a verificação TLS (inseguro) | ❌ Não |
+| `debug-snapshots` | Snapshots de protocolo para debug | ❌ Não |
+| `debug-diagnostics` | API de diagnóstico de memória (`MemoryDiagnostics`) | ❌ Não |
+
+<Tip>
+  Todas as features padrão habilitam Tokio como o runtime assíncrono, mas todo componente é opcional. Para usar um runtime diferente (async-std, WASM, etc.), desabilite todos os padrões e forneça suas próprias implementações dos traits `Runtime`, `TransportFactory`, `HttpClient` e `Backend`. Veja [backends personalizados](/guides/custom-backends) para detalhes.
+</Tip>
+
+O crate `wacore` tem uma feature adicional para alvos de navegador WASM:
+
+| Feature | Descrição | Incluída por padrão |
+|---------|-----------|---------------------|
+| `js` | Habilita geração de números aleatórios compatível com navegador via `getrandom/wasm_js` para alvos `wasm32` | ❌ Não |
+
+Para usar whatsapp-rust em um ambiente de navegador WASM, habilite a feature `js` em `wacore`:
+
+```toml Cargo.toml
+[dependencies]
+wacore = { version = "0.6", default-features = false, features = ["js"] }
+```
+
+O crate `waproto` tem suas próprias feature flags:
+
+| Feature | Descrição | Incluída por padrão |
+|---------|-----------|---------------------|
+| `generate` | Habilita `prost-build` para regenerar código protobuf a partir de `whatsapp.proto`. Necessário apenas ao modificar o arquivo `.proto` | ❌ Não |
+| `serde-deserialize` | Adiciona o derive `Deserialize` e `#[serde(default)]` a todos os tipos protobuf | ❌ Não |
+| `serde-snake-case` | Aceita nomes de variantes de enum em snake_case durante a desserialização (implica `serde-deserialize`) | ❌ Não |
+
+O código protobuf gerado (`whatsapp.rs`) é versionado, então `prost-build` nunca é necessário para builds normais. Isso mantém a árvore de dependências menor e a compilação mais rápida. Todos os tipos protobuf derivam `Serialize` por padrão. Habilite `serde-deserialize` quando precisar analisar tipos protobuf a partir de JSON (por exemplo, em uma ponte WASM). Habilite `serde-snake-case` quando sua fonte JSON usa snake_case para variantes de enum (prost gera PascalCase por padrão).
+
+```toml Cargo.toml
+[dependencies]
+waproto = { version = "0.6", features = ["serde-snake-case"] }
+```
+
+O crate `whatsapp-rust-sqlite-storage` tem suas próprias feature flags:
+
+| Feature | Descrição | Incluída por padrão |
+|---------|-----------|---------------------|
+| `bundled-sqlite` | Empacota o SQLite (compila a partir do código-fonte, sem biblioteca de sistema necessária) | ✅ Sim |
+
+Para usar um SQLite instalado no sistema em vez da versão empacotada:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust-sqlite-storage = { version = "0.6", default-features = false }
+```
+
+<Note>
+  As features padrão fornecem tudo que é necessário para a maioria dos casos de uso. Personalize features somente se tiver requisitos específicos.
+</Note>
+
+## Usando Rust stable
+
+Por padrão, whatsapp-rust usa a **edição Rust 2024** e habilita a feature `simd`, que usa a API `portable_simd` do Rust para codificação/decodificação otimizada do protocolo binário. Ambos exigem um toolchain Rust **nightly**. O projeto fixa `nightly-2026-04-05` via `rust-toolchain.toml`.
+
+Para compilar com **Rust stable**, desabilite a feature `simd` definindo `default-features = false`. Você deve fazer isso em **ambos** `whatsapp-rust` e `wacore` — caso contrário, a [unificação de features](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) do Cargo irá reabilitar SIMD através da dependência `wacore`:
+
+```toml Cargo.toml
+[dependencies]
+# Desabilita os padrões (remove `simd`), depois reabilita o resto
+whatsapp-rust = { version = "0.6", default-features = false, features = [
+    "sqlite-storage",
+    "tokio-transport",
+    "tokio-runtime",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+    "moka-cache",
+] }
+# wacore também precisa de default-features = false para evitar que
+# a unificação de features reabilite simd
+wacore = { version = "0.6", default-features = false }
+
+# Estes crates não dependem de SIMD — nenhuma mudança necessária
+whatsapp-rust-sqlite-storage = "0.6"
+whatsapp-rust-tokio-transport = "0.6"
+whatsapp-rust-ureq-http-client = "0.6"
+waproto = "0.6"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+<Warning>
+  Definir `default-features = false` somente em `whatsapp-rust` **não é suficiente** se você também depende de `wacore` diretamente. A dependência direta de `wacore` habilita `simd` por padrão, e o Cargo mescla features entre todos os dependentes. Ambos precisam optar por sair.
+</Warning>
+
+O codificador/decodificador faz fallback automaticamente para caminhos escalares quando o SIMD está desabilitado. Não há diferença funcional — apenas uma pequena diferença de desempenho nas operações do protocolo binário.
+
+## Suporte a alvos de 32 bits
+
+whatsapp-rust usa [`portable-atomic`](https://crates.io/crates/portable-atomic) em vez de `std::sync::atomic` para operações atômicas de 64 bits. Isso significa que a biblioteca funciona em **alvos de 32 bits** (ARM32, MIPS, RISC-V 32, etc.) onde `AtomicU64` não está disponível nativamente — `portable-atomic` fornece um fallback em software automaticamente.
+
+Nenhuma configuração extra é necessária. A dependência `portable-atomic` é incluída com a feature `fallback` habilitada por padrão em todos os crates (`whatsapp-rust`, `wacore` e `whatsapp-rust-sqlite-storage`).
+
+<Tip>
+  Se você está compilando para um alvo embarcado de 32 bits ou fazendo compilação cruzada para `armv7-unknown-linux-gnueabihf`, whatsapp-rust irá compilar e rodar corretamente sem ajustes.
+</Tip>
+
+## Exemplo com features personalizadas
+
+Se você quiser usar apenas features específicas:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { version = "0.6", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
+```
+
+## Verifique a instalação
+
+Crie um arquivo de teste simples para verificar a instalação:
+
+```rust src/main.rs
+use whatsapp_rust::bot::Bot;
+
+fn main() {
+    println!("whatsapp-rust installed successfully!");
+}
+```
+
+Execute com:
+
+```bash
+cargo run
+```
+
+Se você vir "whatsapp-rust installed successfully!", está pronto para seguir para o guia [Início rápido](/pt-BR/quickstart).
+
+## Implantação com Docker
+
+whatsapp-rust inclui um Dockerfile para construir uma imagem de contêiner mínima e estaticamente vinculada. O build multi-estágio produz uma imagem baseada em `scratch` contendo apenas o binário compilado.
+
+### Construa a imagem
+
+```bash
+docker build -t whatsapp-rust .
+```
+
+O processo de build:
+
+1. Usa `rust:alpine` com [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) para cache eficiente de dependências
+2. Compila nativamente contra musl no Alpine para um binário totalmente estático
+3. Faz cache da compilação de dependências via `cargo chef cook` em uma camada separada para rebuilds rápidos
+4. Produz uma imagem final a partir de `scratch` contendo apenas o binário
+
+### Execute o contêiner
+
+```bash
+docker run -v ./data:/data whatsapp-rust
+```
+
+O contêiner usa `/data` como seu diretório de trabalho, então monte um volume lá para persistir seu banco SQLite e dados de sessão entre reinicializações. Para autenticação via pair code, passe a flag `--phone`:
+
+```bash
+docker run -v ./data:/data whatsapp-rust --phone 15551234567
+```
+
+### Desligamento gracioso
+
+O contêiner suporta desligamento gracioso sem configuração adicional. Quando a feature `signal` está habilitada (e está, por padrão), o bot escuta por `SIGTERM` e `Ctrl+C`, desconecta-se limpamente do WhatsApp e sai. O Docker envia `SIGTERM` em `docker stop`, então o bot encerra graciosamente sem perder o estado da sessão.
+
+Como a imagem é construída a partir de `scratch`, o PID 1 é o próprio binário. Ele lida com sinais diretamente — nenhum sistema init como `tini` é necessário.
+
+<Note>
+  O Dockerfile usa `rust:alpine`, que constrói para o alvo musl da arquitetura do host. Para compilação cruzada para outras arquiteturas, você precisa modificar a imagem base e a configuração de build no Dockerfile.
+</Note>
+
+## Próximos passos
+
+<Card title="Início rápido" icon="rocket" href="/pt-BR/quickstart">
+  Crie seu primeiro bot do WhatsApp em minutos
+</Card>

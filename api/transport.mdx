@@ -481,7 +481,7 @@ async fn read_pump<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             },
         }
     }
-    let _ = tx.send(TransportEvent::Disconnected).await;
+    let _ = tx.send(TransportEvent::Disconnected(DisconnectReason::StreamEnded)).await;
 }
 ```
 
@@ -605,7 +605,7 @@ impl TransportFactory for TcpTransportFactory {
                 }
             }
             
-            event_tx.send(TransportEvent::Disconnected).await.ok();
+            event_tx.send(TransportEvent::Disconnected(DisconnectReason::StreamEnded)).await.ok();
         });
         
         Ok((transport, event_rx))

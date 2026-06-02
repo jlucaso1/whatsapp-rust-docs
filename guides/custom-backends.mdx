@@ -860,7 +860,7 @@ async fn read_pump(
             Err(_) => break,
         }
     }
-    let _ = event_tx.send(TransportEvent::Disconnected).await;
+    let _ = event_tx.send(TransportEvent::Disconnected(DisconnectReason::StreamEnded)).await;
 }
 ```
 

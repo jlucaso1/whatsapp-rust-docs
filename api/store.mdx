@@ -302,7 +302,7 @@ The `take_sent_message` method is an atomic read-and-delete operation. Once a me
 
 ### MsgSecretStore
 
-Persists the 32-byte `messageSecret` values needed to decrypt later add-ons keyed off an original message: poll votes, poll/event edits, message edits (`secret_encrypted_message`), and Meta AI / fbid bot replies (`<enc type="msmsg">`). Secrets are keyed by `(chat, sender, msg_id)` and carry an absolute expiry so they can be pruned by policy (see [messageSecret retention](#messagesecret-retention)).
+Persists the 32-byte `messageSecret` values needed to decrypt later add-ons keyed off an original message: poll votes, poll/event edits, message edits (`secret_encrypted_message`), and Meta AI / fbid bot replies (`<enc type="msmsg">`). Secrets are keyed by `(chat, sender, msg_id)` and carry an absolute expiry so they can be pruned by policy (see [messageSecret retention](/api/bot#messagesecret-retention)).
 
 ```rust
 /// Store a single secret with no expiry (expires_at = 0, kept forever).

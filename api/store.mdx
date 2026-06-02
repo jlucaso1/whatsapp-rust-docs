@@ -286,6 +286,68 @@ async fn delete_expired_sent_messages(
 The `take_sent_message` method is an atomic read-and-delete operation. Once a message payload is taken for retry, it is removed from storage to prevent double-retry. For status broadcasts where multiple devices may retry, the client re-adds the message after taking it.
 </Note>
 
+### MsgSecretStore
+
+Persists the 32-byte `messageSecret` values needed to decrypt later add-ons keyed off an original message: poll votes, poll/event edits, message edits (`secret_encrypted_message`), and Meta AI / fbid bot replies (`<enc type="msmsg">`). Secrets are keyed by `(chat, sender, msg_id)` and carry an absolute expiry so they can be pruned by policy (see [messageSecret retention](#messagesecret-retention)).
+
+```rust
+/// Store a single secret with no expiry (expires_at = 0, kept forever).
+async fn put_msg_secret(
+    &self,
+    chat: &str,
+    sender: &str,
+    msg_id: &str,
+    secret: &[u8],
+) -> Result<()>;
+
+/// Batch upsert. Each MsgSecretEntry carries its own absolute expires_at
+/// deadline and parent message_ts. On conflict the later deadline wins
+/// (0 = never) and the later non-zero message_ts wins. Returns count stored.
+async fn put_msg_secrets(&self, entries: Vec<MsgSecretEntry>) -> Result<usize>;
+
+/// Look up a secret for decryption.
+async fn get_msg_secret(
+    &self,
+    chat: &str,
+    sender: &str,
+    msg_id: &str,
+) -> Result<Option<Vec<u8>>>;
+
+/// Look up a secret together with the parent message's event time, used to
+/// enforce the per-add-on edit window.
+async fn get_msg_secret_with_ts(
+    &self,
+    chat: &str,
+    sender: &str,
+    msg_id: &str,
+) -> Result<Option<(Vec<u8>, i64)>>;
+
+/// Delete secrets whose expires_at <= cutoff. Rows with expires_at = 0 are
+/// kept forever. Returns count removed.
+async fn delete_expired_msg_secrets(&self, cutoff_timestamp: i64) -> Result<u32>;
+```
+
+`MsgSecretEntry` is `{ chat, sender, msg_id, secret, expires_at, message_ts }`. The SQLite table is:
+
+```sql
+CREATE TABLE msg_secrets (
+    chat TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    msg_id TEXT NOT NULL,
+    secret BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    expires_at INTEGER NOT NULL DEFAULT 0,  -- absolute unix-seconds deadline (0 = never)
+    message_ts INTEGER NOT NULL DEFAULT 0,  -- parent message event time (edit-window check)
+    PRIMARY KEY (chat, sender, msg_id, device_id)
+);
+CREATE INDEX idx_msg_secrets_expires ON msg_secrets (device_id, expires_at);
+```
+
+<Note>
+Custom backends only need to implement `put_msg_secrets`, `get_msg_secret`, `get_msg_secret_with_ts`, and `delete_expired_msg_secrets`; `put_msg_secret` has a default that delegates to `put_msg_secrets` with `expires_at = 0`.
+</Note>
+
 ## DeviceStore Trait
 
 Handles device data persistence:

@@ -208,7 +208,7 @@ pub enum ConnectFailureReason {
     Generic,                // 400
     LoggedOut,              // 401
     TempBanned,             // 402
-    MainDeviceGone,         // 403
+    AccountLocked,          // 403 — WA Web REASON_LOCKED (account/device locked)
     UnknownLogout,          // 406
     ClientOutdated,         // 405
     BadUserAgent,           // 409
@@ -233,6 +233,10 @@ if reason.should_reconnect() {
     // Retry connection
 }
 ```
+
+<Note>
+The 403 variant was renamed `MainDeviceGone` → `AccountLocked` in v0.6 to match WA Web's `REASON_LOCKED` semantics (the account/device is locked server-side; a manual unlink arrives as a different reason). It still maps from wire code 403 and reports `is_logged_out() == true` with no auto-reconnect. Update any `match` arms referencing the old name.
+</Note>
 
 ### TemporaryBan
 

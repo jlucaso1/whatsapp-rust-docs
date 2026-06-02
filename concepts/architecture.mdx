@@ -342,7 +342,7 @@ When a connection is lost or `disconnect()` is called, `cleanup_connection_state
 | `is_connected` | Set to `false` (Release ordering) | After socket is `None` so no task sees connected with a cleared socket |
 | `chat_lanes` | Invalidated | Drop per-chat queue senders so workers exit via channel close — prevents stale workers from the old connection surviving reconnects with outdated signal/crypto state |
 | `pending_retries` | Cleared | Stale keys from detached scope guard cleanup would otherwise suppress the first retry after reconnect |
-| `signal_cache` | Cleared | Prevents stale signal state from leaking across connections |
+| `signal_cache` | **Flushed, then cleared** | Pending identity / sender-key writes are persisted to the backend *before* the cache is dropped. If the flush fails, the cache is kept (not cleared) so dirty state survives. |
 | `response_waiters` | Drained | Pending IQ waiters fail fast with `InternalChannelClosed` instead of hanging until the 75s timeout |
 | Offline sync state | Reset | Counters, timing, and semaphore replaced with fresh single-permit instance |
 | Dead-socket timestamps | Reset to 0 | Prevents stale values from triggering an immediate reconnect on the next connection |
@@ -350,6 +350,10 @@ When a connection is lost or `disconnect()` is called, `cleanup_connection_state
 
 <Note>
 Chat lane invalidation is critical for correctness. Without it, stale message processing workers from the previous connection survive reconnects, holding outdated Signal session state that causes decryption failures on the new connection.
+</Note>
+
+<Note>
+**Flush-before-clear (v0.6).** The signal cache is now flushed to the backend before being cleared on disconnect. Previously the cache was dropped immediately, so a just-advanced sender-key chain that hadn't been persisted yet was lost — on the next send the client would treat the chain as fresh and re-distribute the SKDM to every group device unnecessarily. Disconnect is therefore no longer a "forget all Signal state" operation; it's a "persist, then forget" one. This is a behavior change for anyone relying on the old drop-everything semantics.
 </Note>
 
 **Stream error behavior:**

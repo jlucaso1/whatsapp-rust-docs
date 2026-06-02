@@ -1,0 +1,136 @@
+---
+title: Introdução
+description: Uma biblioteca Rust assíncrona e de alto desempenho para a API do WhatsApp Web
+---
+
+# whatsapp-rust
+
+Uma biblioteca Rust assíncrona e de alto desempenho para a API do WhatsApp Web. Inspirada em [whatsmeow](https://github.com/tulir/whatsmeow) (Go) e [Baileys](https://github.com/WhiskeySockets/Baileys) (TypeScript).
+
+<Note>
+  Esta é uma reimplementação não oficial e de código aberto. Usar clientes personalizados do WhatsApp pode violar os Termos de Serviço da Meta e resultar em suspensão da conta. Use por sua conta e risco.
+</Note>
+
+## Principais recursos
+
+### Autenticação
+
+- **Pareamento por QR code** - Escaneie o QR code do seu celular para autenticar
+- **Vinculação por código de pareamento** - Vincule usando o número de telefone com um código de 8 dígitos
+- **Sessões persistentes** - Reconexão automática com gerenciamento de sessão
+
+### Mensageria
+
+- **Criptografia de ponta a ponta** - Implementação completa do Signal Protocol
+- **Conversas individuais e em grupo** - Envie e receba mensagens em qualquer tipo de chat
+- **Edição de mensagens e reações** - Edite mensagens enviadas e adicione reações
+- **Citação/resposta** - Responda a mensagens específicas com contexto
+- **Confirmações de entrega** - Acompanhe os status de entrega, leitura e reprodução
+
+### Manipulação de mídia
+
+- **Upload e download** - Suporte para imagens, vídeos, documentos, GIFs e áudio
+- **Mensagens em álbum** - Envie álbuns de mídia agrupados (várias imagens/vídeos em uma única bolha)
+- **Criptografia automática** - Criptografia/descriptografia transparente para todas as mídias
+
+### Grupos e comunidades
+
+- **Gerenciamento de grupos** - Crie, gerencie, convide, aprove participantes e vincule subgrupos
+- **Suporte a comunidades** - Crie comunidades, vincule/desvincule subgrupos, consulte participantes
+- **Links de convite** - Gere, redefina e entre via códigos de convite
+- **Controles de associação** - Modo de aprovação, modo de adição de membros, promoção/rebaixamento de administradores
+
+### Newsletters
+
+- **Criar e participar** - Crie newsletters e participe por JID ou código de convite
+- **Enviar mensagens** - Mensagens de texto e reações com emoji
+- **Atualizações em tempo real** - Inscreva-se para mudanças em tempo real nas contagens de reações
+- **Histórico de mensagens** - Busque mensagens da newsletter com paginação
+
+### Atualizações de status
+
+- **Texto, imagem e vídeo** - Publique atualizações de status com cores de fundo e fontes
+- **Controles de privacidade** - Envie para todos os contatos, listas de permissão ou listas de bloqueio
+- **Revogação** - Exclua atualizações de status publicadas
+
+### Contatos
+
+- **Consulta de número de telefone** - Verifique em lote se números estão no WhatsApp
+- **Fotos de perfil** - Busque fotos de perfil em prévia ou tamanho real
+- **Informações do usuário** - Obtenha LID, texto de status, status business e IDs de imagem
+
+### Presença e estado de chat
+
+- **Status online/offline** - Defina seu status de presença
+- **Indicadores de digitação** - Mostre os estados de digitando, gravando e pausado
+- **Bloqueio** - Bloqueie e desbloqueie contatos, consulte a lista de bloqueios
+
+### Ações de chat
+
+- **Arquivar/fixar/silenciar** - Organize chats com ações de arquivar, fixar e silenciar
+- **Favoritar mensagens** - Favorite e desfavorite mensagens individuais
+- **Sincronização de estado do app** - As ações são sincronizadas em todos os dispositivos vinculados
+
+### Perfil
+
+- **Nome de exibição** - Defina seu nome de exibição com sincronização do estado do app
+- **Texto de status** - Atualize seu texto de "recado"
+- **Foto de perfil** - Defina ou remova sua foto de perfil
+
+### Privacidade
+
+- **Configurações de privacidade** - Busque e defina visibilidade de visto por último, online, foto, status e adição em grupos
+- **Mensagens temporárias** - Defina a duração padrão das mensagens temporárias
+- **Confirmações de leitura** - Controle a visibilidade das confirmações de leitura
+
+### Arquitetura
+
+- **Independente de runtime** - Runtime assíncrono, transporte, cliente HTTP e armazenamento plugáveis via abstrações de traits
+- **Design modular** - Troque qualquer componente (Tokio, SQLite, ureq) sem alterar o código da aplicação
+- **Pronto para WASM** - A biblioteca core do protocolo (`wacore`) não tem dependências de runtime, permitindo alvos WebAssembly
+- **SQLite incluído** - Backend de armazenamento padrão com SQLite empacotado, facilmente substituível
+
+## Começando
+
+<CardGroup cols={2}>
+  <Card title="Instalação" icon="download" href="/pt-BR/installation">
+    Adicione whatsapp-rust ao seu projeto com cargo
+  </Card>
+  <Card title="Início rápido" icon="rocket" href="/pt-BR/quickstart">
+    Crie seu primeiro bot do WhatsApp em minutos
+  </Card>
+  <Card title="Arquitetura" icon="folder-tree" href="/concepts/architecture">
+    Entenda a arquitetura modular
+  </Card>
+  <Card title="Backends personalizados" icon="database" href="/guides/custom-backends">
+    Implemente sua própria camada de armazenamento ou transporte
+  </Card>
+</CardGroup>
+
+## Estrutura do projeto
+
+A biblioteca é organizada em múltiplos crates para máxima flexibilidade:
+
+```
+whatsapp-rust/
+├── src/                          # Biblioteca de cliente principal + binário
+├── wacore/                       # Core agnóstico de plataforma (zero deps de runtime)
+│   ├── binary/                   # Protocolo binário do WhatsApp
+│   ├── libsignal/                # Implementação do Signal Protocol
+│   ├── appstate/                 # Gerenciamento de estado do app
+│   ├── noise/                    # Handshake do Noise Protocol
+│   └── derive/                   # Macros derive
+├── waproto/                      # Definições de Protocol Buffers
+├── storages/sqlite-storage/      # Backend SQLite
+├── transports/tokio-transport/   # Transporte WebSocket Tokio
+├── http_clients/ureq-client/     # Cliente HTTP para mídia
+├── tests/e2e/                    # Suíte de testes end-to-end
+└── examples/                     # Exemplos de benchmark
+```
+
+## Agradecimentos
+
+Este projeto não seria possível sem o excelente trabalho de:
+
+- [whatsmeow](https://github.com/tulir/whatsmeow) - Implementação em Go
+- [Baileys](https://github.com/WhiskeySockets/Baileys) - Implementação em TypeScript

@@ -19,106 +19,129 @@
     }
   },
   "navigation": {
-    "tabs": [
+    "languages": [
       {
-        "tab": "Documentation",
-        "groups": [
+        "language": "en",
+        "tabs": [
           {
-            "group": "Getting Started",
-            "pages": [
-              "introduction",
-              "installation",
-              "quickstart"
+            "tab": "Documentation",
+            "groups": [
+              {
+                "group": "Getting Started",
+                "pages": [
+                  "introduction",
+                  "installation",
+                  "quickstart"
+                ]
+              },
+              {
+                "group": "Core Concepts",
+                "pages": [
+                  "concepts/architecture",
+                  "concepts/authentication",
+                  "concepts/events",
+                  "concepts/storage"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": [
+                  "guides/sending-messages",
+                  "guides/receiving-messages",
+                  "guides/media-handling",
+                  "guides/group-management",
+                  "guides/newsletters",
+                  "guides/communities",
+                  "guides/polls",
+                  "guides/custom-backends"
+                ]
+              },
+              {
+                "group": "Advanced",
+                "pages": [
+                  "advanced/signal-protocol",
+                  "advanced/binary-protocol",
+                  "advanced/state-management",
+                  "advanced/websocket-handling"
+                ]
+              }
             ]
           },
           {
-            "group": "Core Concepts",
-            "pages": [
-              "concepts/architecture",
-              "concepts/authentication",
-              "concepts/events",
-              "concepts/storage"
-            ]
-          },
-          {
-            "group": "Guides",
-            "pages": [
-              "guides/sending-messages",
-              "guides/receiving-messages",
-              "guides/media-handling",
-              "guides/group-management",
-              "guides/newsletters",
-              "guides/communities",
-              "guides/polls",
-              "guides/custom-backends"
-            ]
-          },
-          {
-            "group": "Advanced",
-            "pages": [
-              "advanced/signal-protocol",
-              "advanced/binary-protocol",
-              "advanced/state-management",
-              "advanced/websocket-handling"
+            "tab": "API Reference",
+            "groups": [
+              {
+                "group": "Core",
+                "pages": [
+                  "api/client",
+                  "api/bot"
+                ]
+              },
+              {
+                "group": "Messaging",
+                "pages": [
+                  "api/send",
+                  "api/download",
+                  "api/upload",
+                  "api/media-reupload",
+                  "api/receipt"
+                ]
+              },
+              {
+                "group": "Features",
+                "pages": [
+                  "api/groups",
+                  "api/contacts",
+                  "api/presence",
+                  "api/chatstate",
+                  "api/blocking",
+                  "api/status",
+                  "api/profile",
+                  "api/chat-actions",
+                  "api/privacy",
+                  "api/business",
+                  "api/mex",
+                  "api/newsletter",
+                  "api/community",
+                  "api/polls",
+                  "api/spam-report",
+                  "api/tctoken",
+                  "api/signal"
+                ]
+              },
+              {
+                "group": "Storage & Backends",
+                "pages": [
+                  "api/store",
+                  "api/transport",
+                  "api/http-client"
+                ]
+              },
+              {
+                "group": "Core Modules",
+                "pages": [
+                  "api/wacore",
+                  "api/waproto"
+                ]
+              }
             ]
           }
         ]
       },
       {
-        "tab": "API Reference",
-        "groups": [
+        "language": "pt-BR",
+        "tabs": [
           {
-            "group": "Core",
-            "pages": [
-              "api/client",
-              "api/bot"
-            ]
-          },
-          {
-            "group": "Messaging",
-            "pages": [
-              "api/send",
-              "api/download",
-              "api/upload",
-              "api/media-reupload",
-              "api/receipt"
-            ]
-          },
-          {
-            "group": "Features",
-            "pages": [
-              "api/groups",
-              "api/contacts",
-              "api/presence",
-              "api/chatstate",
-              "api/blocking",
-              "api/status",
-              "api/profile",
-              "api/chat-actions",
-              "api/privacy",
-              "api/business",
-              "api/mex",
-              "api/newsletter",
-              "api/community",
-              "api/polls",
-              "api/spam-report",
-              "api/tctoken",
-              "api/signal"
-            ]
-          },
-          {
-            "group": "Storage & Backends",
-            "pages": [
-              "api/store",
-              "api/transport",
-              "api/http-client"
-            ]
-          },
-          {
-            "group": "Core Modules",
-            "pages": [
-              "api/wacore",
-              "api/waproto"
+            "tab": "Documentação",
+            "groups": [
+              {
+                "group": "Primeiros Passos",
+                "pages": [
+                  "pt-BR/introduction",
+                  "pt-BR/installation",
+                  "pt-BR/quickstart"
+                ]
+              }
             ]
           }
         ]

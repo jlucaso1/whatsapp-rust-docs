@@ -103,6 +103,10 @@ pub async fn message_encrypt(
 - **SignalMessage**: Standard encrypted message
 - **PreKeySignalMessage**: Includes prekey bundle for session establishment
 
+<Note>
+**Plaintext padding.** Before encryption, the serialized `wa::Message` is padded with a uniform-random number of bytes in `1..=16` (the pad length is repeated as the byte value, matching WA Web's `rand % 16 + 1` and whatsmeow). v0.6 fixed a prior scheme that masked the length with `& 0x0F`, which skewed the distribution toward 15 and could never emit 16 — a subtle fingerprinting divergence from the official client. The receiver strips the padding by reading the final byte as the length.
+</Note>
+
 ### Message Decryption
 
 Decryption handles out-of-order delivery and tries multiple session states:
@@ -584,6 +588,10 @@ The group send path no longer serializes encryption behind a client-level lock. 
 
 This is an internal performance change — no public method on `Client::send_message` was renamed, and the order of `<to>` children in the resulting stanza is unchanged. If you implemented a custom `SignalStore`, note that `update_device_lists(records: Vec<DeviceListRecord>)` is now part of the trait so the fan-out can batch its writes.
 
+<Note>
+While *per-device* encryption runs concurrently, the sender-key chain itself is serialized **per `(group, sender)` pair** (v0.6). SKDM creation and `skmsg` encryption on the same chain can't race, so two concurrent sends to the same group ratchet the sender key deterministically instead of corrupting the chain. Different groups (or different senders) still encrypt fully in parallel.
+</Note>
+
 ### In-memory sender key device cache
 
 The `SenderKeyDeviceCache` provides an in-memory caching layer over the per-device sender key tracking data stored in the database. Without this cache, every group send would require a database round-trip to load the sender key device map — the cache eliminates that overhead after the first load for each group.
@@ -685,6 +693,15 @@ if !jid.is_group() && !jid.is_status_broadcast() {
 <Note>
 The phash validation runs asynchronously in the background and does not block the send path. If the server ack times out (after 10 seconds) or the oneshot channel is dropped, the validation is silently skipped. This matches WhatsApp Web's approach of using phash as a best-effort staleness detector rather than a hard requirement.
 </Note>
+
+#### WA Web phash parity (v0.6)
+
+Two corrections aligned the group phash with WA Web's `phashV2`:
+
+- **Full device set, every send.** The group phash is now computed over the *complete* resolved participant device set plus the sending device on every send — not just the devices that received an SKDM in that stanza. Warm sends (which distribute no new SKDM) now pass the full resolved set via the `all_devices_for_phash` parameter to `prepare_group_stanza`, so the phash matches the server's view even when the SKDM target set is empty. Status broadcasts keep their prior phash behavior.
+- **Standard base64 alphabet.** The phash now encodes with the standard base64 alphabet (`+` / `/`) instead of URL-safe (`-` / `_`), matching WA Web and whatsmeow.
+
+The client also now **persists group metadata** locally after a query and sends the stored participant phash on the next group query, letting the server answer `not-modified` (304) when membership is unchanged — saving a full metadata round-trip.
 
 Location: `src/send.rs`, `src/client.rs`
 
@@ -1028,9 +1045,9 @@ When a message from your own primary phone or another linked companion fails to 
 | Internal `RetryReason` | Trigger | Recovery |
 |---|---|---|
 | `NoSession` | `SessionNotFound` (no Signal session yet for the device) | Request a fresh prekey bundle via retry receipt; install the new session before retrying decryption. |
-| `BadMac` | Ratchet desync (`InvalidMessage` / mac failure) on an existing session | Mark the session for re-creation, throttled per peer via the new `session_recreate_history` map so repeated BadMacs don't loop, and re-send via a peer-addressed `pkmsg` carrying our identity. |
+| `BadMac` | Ratchet desync (`InvalidMessage` / mac failure) on an existing session | Mark the session for re-creation, throttled per peer via the `session_recreate_history` cache so repeated BadMacs don't loop, and re-send via a peer-addressed `pkmsg` carrying our identity. |
 
-The throttle keeps a short history of recent recreate attempts per peer/device. If a peer is already in cooldown, the client skips re-creation and falls back to a normal retry receipt rather than thrashing the session. Peer-addressed `pkmsg` carries the protocol identity so the receiver can verify ownership before installing the new session, blocking spoofed sibling recoveries.
+The throttle is a per-peer cooldown (1-hour TTL after the last recreate). In v0.6 the implementation moved from a `Mutex<HashMap<Jid, Instant>>` to a bounded TTL cache (moka, ~256 entries): the per-peer check-and-stamp is now atomic (serialized by the existing per-peer session lock) and lock-free at the map level, so concurrent retry-receipt spawns from the same peer can't trigger duplicate recreates. The behavior is unchanged — if a peer is already in cooldown, the client skips re-creation and falls back to a normal retry receipt rather than thrashing the session. Under more than ~256 distinct peers retrying within the window, the cache may evict a recent entry, costing at most one extra recreate (bounded and self-healing). Peer-addressed `pkmsg` carries the protocol identity so the receiver can verify ownership before installing the new session, blocking spoofed sibling recoveries.
 
 This closed a deadlock where self-DM fan-out to a sibling device produced repeated BadMac decrypt failures: the recipient would request a retry, the sender would re-encrypt against the same broken session, and the cycle would continue until the user manually relogged. With the throttled re-creation plus identity-validated pkmsg, the second receipt installs a fresh session and decryption resumes.
 
@@ -1203,6 +1220,10 @@ Own companion devices (your other linked devices) receive per-device encryption 
 
 <Note>
 WA Web has a bare-`<enc>` fast path for single primary device (`WAWebSendMsgCreateFanoutStanza`). This is not implemented in whatsapp-rust because `encrypt_for_devices` always wraps in `<to jid=...>` nodes. The `<participants>` form is accepted by the server regardless.
+</Note>
+
+<Note>
+**Fail-fast on total encrypt failure (v0.6).** If per-device encryption fails for *every* recipient device, the DM send now returns an error instead of emitting a stanza with an empty participant list (which the server would silently swallow, making the message look sent when it wasn't). A partial failure — some devices encrypt, some don't — still sends to the devices that succeeded.
 </Note>
 
 **DM per-device locking:**

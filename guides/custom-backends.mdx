@@ -639,6 +639,10 @@ To target WASM, disable all default features and implement `Runtime` without `Se
 </Tip>
 
 <Note>
+**`Spawnable` trait (v0.6).** The future-bound that generic spawn helpers use is now the `Spawnable` marker trait instead of a hardcoded `Send + 'static`. On native targets `Spawnable = Send + 'static`; on `wasm32` it's just `'static` (WASM runtimes are single-threaded and can't require `Send`). `Runtime::spawn`'s signature is unchanged — this only matters if you write your own generic helpers over spawnable futures, in which case bound them on `wacore::runtime::Spawnable` rather than `Send + 'static` so they compile on both targets.
+</Note>
+
+<Note>
 If you are implementing a single-threaded runtime, override `yield_frequency()` to return `1` and have `yield_now()` return `Some(future)`. This ensures the event loop is not starved during tight processing loops (e.g., decoding incoming frames).
 </Note>
 
@@ -835,10 +839,13 @@ See [Transport API reference](/api/transport#transport-factory) for factory deta
 ### Transport Events
 
 ```rust
+use wacore::net::DisconnectReason;
+
+// TransportEvent (from wacore::net) — shown here for reference.
 pub enum TransportEvent {
     Connected,
     DataReceived(Bytes),
-    Disconnected,
+    Disconnected(DisconnectReason),
 }
 
 // Read pump example
@@ -856,7 +863,7 @@ async fn read_pump(
             Err(_) => break,
         }
     }
-    let _ = event_tx.send(TransportEvent::Disconnected).await;
+    let _ = event_tx.send(TransportEvent::Disconnected(DisconnectReason::StreamEnded)).await;
 }
 ```
 

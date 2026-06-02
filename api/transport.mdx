@@ -107,7 +107,7 @@ while let Ok(event) = events.recv().await {
     match event {
         TransportEvent::Connected => println!("Connected"),
         TransportEvent::DataReceived(bytes) => println!("Received {} bytes", bytes.len()),
-        TransportEvent::Disconnected => break,
+        TransportEvent::Disconnected(reason) => { println!("Disconnected: {reason}"); break; }
     }
 }
 ```
@@ -124,10 +124,14 @@ pub enum TransportEvent {
     /// Raw data has been received from the server
     DataReceived(Bytes),
     
-    /// The connection was lost
-    Disconnected,
+    /// The connection was lost, carrying why it closed
+    Disconnected(DisconnectReason),
 }
 ```
+
+<Note>
+Since v0.6 `Disconnected` carries a `DisconnectReason` instead of being a unit variant (a **breaking change** for custom transports — update your `match` arms and the value you emit). It surfaces *why* the socket closed in logs, so server-initiated closes can be told apart from local shutdowns.
+</Note>
 
 ### Event Types
 
@@ -152,10 +156,29 @@ TransportEvent::DataReceived(bytes)
 
 #### Disconnected
 
-Emitted when the connection is closed (gracefully or due to error).
+Emitted when the connection is closed (gracefully or due to error). The attached `DisconnectReason` says why:
 
 ```rust
-TransportEvent::Disconnected
+pub enum DisconnectReason {
+    /// Server sent a WebSocket close frame. `code` is the RFC 6455 close
+    /// code when present; `reason` is the close payload text.
+    ServerClose { code: Option<u16>, reason: String },
+    /// The stream ended (EOF) without a close frame.
+    StreamEnded,
+    /// A transport-level read error occurred.
+    ReadError(String),
+    /// Local shutdown — no reason available from the wire.
+    Unknown,
+}
+```
+
+`DisconnectReason` implements `Display` for human-readable logging. Custom transports should emit the most specific variant they can determine.
+
+```rust
+TransportEvent::Disconnected(reason) => {
+    tracing::info!(%reason, "transport closed");
+    break;
+}
 ```
 
 ## Tokio WebSocket transport
@@ -458,7 +481,7 @@ async fn read_pump<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             },
         }
     }
-    let _ = tx.send(TransportEvent::Disconnected).await;
+    let _ = tx.send(TransportEvent::Disconnected(DisconnectReason::StreamEnded)).await;
 }
 ```
 
@@ -582,7 +605,7 @@ impl TransportFactory for TcpTransportFactory {
                 }
             }
             
-            event_tx.send(TransportEvent::Disconnected).await.ok();
+            event_tx.send(TransportEvent::Disconnected(DisconnectReason::StreamEnded)).await.ok();
         });
         
         Ok((transport, event_rx))

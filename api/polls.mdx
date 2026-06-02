@@ -297,6 +297,10 @@ The `wacore::poll` module exposes the cryptographic primitives used internally:
 
 WhatsApp wraps message edits, poll edits, poll add-option, and event edits in a single `secret_encrypted_message` envelope keyed by a per-use-case secret derived from the parent message's `message_secret`. v0.6 added support for decrypting all four kinds.
 
+<Note>
+**The client now decrypts these inline on receive.** Since v0.6 the receive path automatically resolves the parent secret from the [`MsgSecretStore`](/api/store#msgsecretstore), decrypts the envelope, and dispatches the result as a normal [`Event::Message`](/concepts/events#message) carrying the decrypted payload — so most apps never call the helpers below. The client captures `MessageContextInfo.message_secret` from inbound messages and seeds secrets from history-sync, so edits decrypt as long as the parent secret is known. Edits whose secret can't be found are skipped silently (no undecryptable event); the raw envelope stays on the message. The manual helpers remain for custom pipelines or when you store secrets yourself.
+</Note>
+
 ```rust
 use whatsapp_rust::features::message_edit::{
     self, SecretEncKind, SecretEncrypted,
@@ -326,7 +330,12 @@ if let Some(envelope) = message_edit::extract_secret_encrypted(&message)? {
 | `decrypt_secret_encrypted(envelope, parent_secret) -> wa::Message` | Empty-AAD AES-GCM decrypt against the canonical addressing of the envelope. |
 | `decrypt_secret_encrypted_with_fallback(envelope, parent_secret, alt_sender) -> wa::Message` | Same as above but retries with `alt_sender` (typically the LID↔PN twin) so edits authored across the migration still decrypt. |
 | `SecretEncrypted::original_sender_jid() -> Option<Jid>` | Returns the JID the parent message was addressed to — pass it as the fallback to recover edits whose sender migrated namespace between the original message and the edit. |
+| `SecretEncrypted::original_sender_for_dispatch(is_from_me, envelope_sender, my_jid) -> Result<Jid>` | Dispatch-time resolver. For `MessageEdit` it returns the **envelope sender** (an author edits their own message, so the secret target is written in the editor's frame); for poll/event kinds it falls back to the target-key resolution. Use this — not `original_sender_jid` — when decrypting incoming peer edits. |
 | `rewrap_as_legacy_edit(plaintext)` | Re-emits a decrypted `MessageEdit` envelope as the legacy `protocol_message { MESSAGE_EDIT }` shape for consumers that already handled the old form. |
+
+<Note>
+For incoming **peer** message edits (edits authored on a contact's other device, or self-synced from your own linked device), the parent-author resolution must use the envelope sender rather than the target key — otherwise the parent author resolves to the receiver and the GCM tag fails. The client handles this internally via `original_sender_for_dispatch`; replicate it if you decrypt edits yourself. `EncryptedEdit` exposes the same method for the `MessageEdit`-only façade.
+</Note>
 
 ```rust
 pub enum SecretEncKind {

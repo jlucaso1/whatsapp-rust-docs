@@ -34,8 +34,29 @@ pub trait HttpClient: Send + Sync {
     /// Must be called from a blocking context (e.g. inside `spawn_blocking`).
     /// Returns an error by default if not implemented.
     fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse>;
+
+    /// Whether this client can stream a request body from a reader (upload).
+    /// Defaults to `false`. Override alongside `execute_upload` to enable
+    /// constant-memory uploads via `Client::upload_stream`.
+    fn supports_upload_streaming(&self) -> bool { false }
+
+    /// Synchronous streaming upload: send `body` (exactly `content_length`
+    /// bytes) as the request body. Implementations MUST set an explicit
+    /// `Content-Length` header rather than chunked transfer-encoding (the
+    /// WhatsApp CDN rejects chunked uploads). Any body set on `request` is
+    /// ignored. Must be called from a blocking context.
+    fn execute_upload(
+        &self,
+        request: HttpRequest,
+        body: UploadBody,        // = Box<dyn std::io::Read + Send>
+        content_length: u64,
+    ) -> Result<HttpResponse>;
 }
 ```
+
+<Note>
+`supports_upload_streaming` / `execute_upload` were added in v0.6 to back [`Client::upload_stream`](/api/upload#upload-stream-constant-memory). Both have safe defaults (returning `false` / an error), so existing custom `HttpClient` implementations keep compiling — implement them only if you want constant-memory uploads through your client. `UreqHttpClient` implements both. `UploadBody` is `Box<dyn std::io::Read + Send>`.
+</Note>
 
 ### Methods
 

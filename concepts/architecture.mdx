@@ -334,7 +334,7 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 
 ### Disconnect cleanup
 
-When a connection is lost or `disconnect()` is called, `cleanup_connection_state()` resets all connection-scoped state to prevent stale data from leaking into the next connection. This cleanup runs exactly once — in the `run()` method after the message loop exits — rather than being duplicated inside the message loop on transport disconnect events:
+When a connection is lost or `disconnect()` is called, `cleanup_connection_state()` resets all connection-scoped state to prevent stale data from leaking into the next connection. It runs from `run()` after the message loop exits (and `disconnect()` also invokes it directly); the function is idempotent and race-tolerant, so it is not duplicated inside the message loop on transport disconnect events and resetting twice is harmless:
 
 | Resource | Action | Reason |
 |----------|--------|--------|
@@ -342,7 +342,7 @@ When a connection is lost or `disconnect()` is called, `cleanup_connection_state
 | `is_connected` | Set to `false` (Release ordering) | After socket is `None` so no task sees connected with a cleared socket |
 | `chat_lanes` | Invalidated | Drop per-chat queue senders so workers exit via channel close — prevents stale workers from the old connection surviving reconnects with outdated signal/crypto state |
 | `pending_retries` | Cleared | Stale keys from detached scope guard cleanup would otherwise suppress the first retry after reconnect |
-| `signal_cache` | Cleared | Prevents stale signal state from leaking across connections |
+| `signal_cache` | **Flushed, then cleared** | Pending identity / sender-key writes are persisted to the backend *before* the cache is dropped. If the flush fails, the cache is kept (not cleared) so dirty state survives. |
 | `response_waiters` | Drained | Pending IQ waiters fail fast with `InternalChannelClosed` instead of hanging until the 75s timeout |
 | Offline sync state | Reset | Counters, timing, and semaphore replaced with fresh single-permit instance |
 | Dead-socket timestamps | Reset to 0 | Prevents stale values from triggering an immediate reconnect on the next connection |
@@ -350,6 +350,10 @@ When a connection is lost or `disconnect()` is called, `cleanup_connection_state
 
 <Note>
 Chat lane invalidation is critical for correctness. Without it, stale message processing workers from the previous connection survive reconnects, holding outdated Signal session state that causes decryption failures on the new connection.
+</Note>
+
+<Note>
+**Flush-before-clear (v0.6).** The signal cache is now flushed to the backend before being cleared on disconnect. Previously the cache was dropped immediately, so a just-advanced sender-key chain that hadn't been persisted yet was lost — on the next send the client would treat the chain as fresh and re-distribute the SKDM to every group device unnecessarily. Disconnect is therefore no longer a "forget all Signal state" operation; it's a "persist, then forget" one. This is a behavior change for anyone relying on the old drop-everything semantics.
 </Note>
 
 **Stream error behavior:**
@@ -427,9 +431,15 @@ This prevents a critical issue where `pkmsg` messages (which carry Sender Key Di
 
 **State reset:** On reconnect or cleanup, all offline sync state is reset (counters, timing, and the semaphore is replaced with a fresh single-permit instance) so stale state does not leak into the next connection attempt.
 
-**Pull-batch backlog drain (v0.6):** Offline resume now drives the same pull-batch loop WA Web uses to drain the backlog: stanzas that the client can't process (unrecognized `<enc type>`, known-but-empty `<enc>` content, duplicates, ciphertexts that decrypt-fail terminally) are transport-acked alongside their retry receipt so the server stops re-delivering them. The canonical example is the Meta AI bot's `msmsg` encryption type — the client cannot decrypt it yet, but before v0.6 the stanza fell through `classify_incoming_message` silently, so the server kept replaying it from the offline queue every reconnect until `<stream:error>` closed the stream. The drain logic also acks duplicate-message PDOs that previously hit the silent-drop branch in `handle_decrypted_plaintext`, and preserves the original `recipient` attribute (via `Client::spawn_node_transport_ack`, which echoes the raw `NodeRef` instead of rebuilding from `MessageInfo`) so LID-routed offline stanzas don't trigger `<stream:error>` on the ack.
+**Pull-batch backlog drain (v0.6):** Offline resume now drives the same pull-batch loop WA Web uses to drain the backlog: stanzas that the client can't process (unrecognized `<enc type>`, known-but-empty `<enc>` content, duplicates, ciphertexts that decrypt-fail terminally) are transport-acked alongside their retry receipt so the server stops re-delivering them. Before this, such a stanza fell through `classify_incoming_message` silently, so the server kept replaying it from the offline queue every reconnect until `<stream:error>` closed the stream. The drain logic also acks duplicate-message PDOs that previously hit the silent-drop branch in `handle_decrypted_plaintext`, and preserves the original `recipient` attribute (via `Client::spawn_node_transport_ack`, which echoes the raw `NodeRef` instead of rebuilding from `MessageInfo`) so LID-routed offline stanzas don't trigger `<stream:error>` on the ack.
+
+<Note>
+The Meta AI bot's `msmsg` (`<enc type="msmsg">`) encryption type was the original motivating case for this drain — it could not be decrypted, only acked. Since the bot-secret decryption landed (see [Bot message decryption](/api/signal#bot-message-decryption-msmsg)), `msmsg` stanzas are decrypted and dispatched as normal `Event::Message`s; the drain still covers genuinely unrecognized or undecryptable enc types.
+</Note>
 
 **Nack on terminal decrypt failure:** When a ciphertext exhausts retries (`max-retry` reached in the PDO recovery state machine), the client now emits a `<nack reason="…">` carrying a structured `NackReason` code instead of silently dropping the message. The full set of 21 codes (`ParsingError`, `InvalidProtobuf`, `MissingMessageSecret`, etc.) mirrors WA Web's reason set so the server stops retransmitting once it sees a terminal nack — see [Protocol → Nack reasons](/advanced/binary-protocol#nack-reasons).
+
+**Ack SKDM-only session decrypts:** A `pkmsg`/`msg` that decrypts successfully but carries only a Sender Key Distribution Message (no user-facing content to dispatch) is now explicitly acked. Previously it could decrypt, skip event dispatch, and leave no ack — so the server kept replaying it from the offline queue. The fix closes that gap so SKDM-only stanzas drain like any other processed message.
 
 ### Deferred device sync
 

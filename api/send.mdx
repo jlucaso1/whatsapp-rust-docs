@@ -698,12 +698,13 @@ The following message types are marked with `decrypt-fail="hide"`:
 | `enc_event_response_message` | Always |
 | `poll_update_message` | Only when `.vote` is present |
 | `message_history_notice` | Always |
-| `secret_encrypted_message` | Only when `SecretEncType` is `EventEdit` or `PollEdit` |
+| `conditional_reveal_message` | Always |
+| `secret_encrypted_message` | Only when `SecretEncType` is `EventEdit`, `PollEdit`, or `PollAddOption` |
 | `bot_invoke_message` | Only when the inner `protocol_message` has type `RequestWelcomeMessage` |
 | `protocol_message` | When type is `EphemeralSyncResponse`, `RequestWelcomeMessage`, or `GroupMemberLabelChange`, or when `edited_message` is present |
 
 Additionally, `decrypt-fail="hide"` is applied for:
-- Messages with an `edit` attribute (except `Empty` and `AdminRevoke` — the server rejects admin revokes with this attribute)
+- Messages with an `edit` attribute (except `Empty`, `AdminRevoke`, and `SenderRevoke` — WA Web never hides revokes and the server rejects revoke stanzas carrying this attribute)
 - Sender Key Distribution Message (SKDM) stanzas — always hidden since they are infrastructure-only
 
 <Note>
@@ -740,10 +741,10 @@ The `type` attribute on the outer `<message>` XML node is determined by `stanza_
 
 | Stanza type | Message types |
 |---|---|
-| `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `extended_text_message` (without `matched_text`), `secret_encrypted_message` with `SecretEncType::MessageEdit`, `poll_result_snapshot_message`, `poll_result_snapshot_message_v3` |
+| `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `album_message`, `extended_text_message` (without `matched_text`), `secret_encrypted_message` with `SecretEncType::MessageEdit`, `poll_result_snapshot_message`, `poll_result_snapshot_message_v3` |
 | `"media"` | `image_message`, `video_message`, `audio_message`, `document_message`, `sticker_message`, `sticker_pack_message`, `location_message`, `contact_message`, `extended_text_message` (with `matched_text`), and all other media types |
 | `"reaction"` | `reaction_message`, `enc_reaction_message` |
-| `"poll"` | `poll_creation_message`, `poll_creation_message_v2`, `poll_creation_message_v3`, `poll_creation_message_v5`, `poll_update_message`, `secret_encrypted_message` with `SecretEncType::PollEdit` |
+| `"poll"` | `poll_creation_message`, `poll_creation_message_v2`, `poll_creation_message_v3`, `poll_creation_message_v5`, `poll_update_message`, `secret_encrypted_message` with `SecretEncType::PollEdit` or `SecretEncType::PollAddOption` |
 | `"event"` | `event_message`, `enc_event_response_message`, `secret_encrypted_message` with `SecretEncType::EventEdit` |
 
 ### Encrypted media type
@@ -768,7 +769,7 @@ The `mediatype` attribute on the inner `<enc>` XML node provides a more specific
 | `"url"` | `extended_text_message` with non-empty `matched_text`, or `group_invite_message` |
 
 <Note>
-Both stanza type and encrypted media type are resolved automatically by the library before encryption. Wrapper messages (`ephemeral_message`, `view_once_message`, etc.) are unwrapped first to determine the underlying content type.
+Both stanza type and encrypted media type are resolved automatically by the library before encryption. Wrapper messages are unwrapped first to determine the underlying content type. Since v0.6 `unwrap_message` peels a much wider set of `FutureProofMessage` wrappers — `group_status_mention_message` / `groupStatusV2`, `spoiler`, `question`, `newsletter`, `lottie`, and ~15 others — so classification follows the inner content rather than defaulting the wrapper to `"text"` (aligning with WA Web).
 </Note>
 
 ---

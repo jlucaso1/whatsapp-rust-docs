@@ -206,6 +206,31 @@ Bot::builder()
 
 See [Events Reference](/concepts/events) for all event types.
 
+### on_event_for
+
+```rust
+pub fn on_event_for<F, Fut>(self, kinds: &[EventKind], handler: F) -> Self
+where
+    F: Fn(Arc<Event>, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Like `on_event`, but registers the handler with a narrowed [`EventInterest`](/concepts/events#typed-event-interest-skip-boxing-unwanted-events) so the event bus skips materializing kinds you don't subscribe to. Useful when you only handle a couple of event types and want to avoid paying the `Arc` allocation for high-frequency events like presence or receipts.
+
+```rust
+use wacore::types::events::EventKind;
+
+Bot::builder()
+    .on_event_for(&[EventKind::Message, EventKind::Connected], |event, client| async move {
+        match &*event {
+            Event::Message(msg, info) => { /* … */ }
+            Event::Connected(_) => println!("online"),
+            _ => {}
+        }
+    })
+    // ...
+```
+
 ### Using ChannelEventHandler
 
 For scenarios where you need to process events outside of a closure (e.g., testing, custom event loops, or runtime-agnostic code), use `ChannelEventHandler` with `register_handler` instead of `on_event`:
@@ -778,7 +803,63 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `sent_message_ttl_secs` | 300 (5 min) | TTL in seconds for sent messages in DB before periodic cleanup. Set to 0 to disable automatic cleanup. |
+| `sent_message_ttl_secs` | 7200 (2 hours) | TTL in seconds for sent messages in DB before periodic cleanup. Set to 0 to disable automatic cleanup. |
+
+<Note>
+The `sent_message_ttl_secs` default was raised from 300s to 7200s. Retry receipts can arrive well after a message is sent (e.g. after the recipient comes back online); a 5-minute TTL could expire the stored payload before its retry, silently dropping the retry. Two hours covers realistic offline gaps.
+</Note>
+
+#### messageSecret retention
+
+The client stores `messageSecret` values so it can later decrypt add-ons that reference an original message — poll votes, poll/event edits, message edits, and Meta AI / fbid bot replies. Retention is bounded by policy and a per-class **event-time horizon** (`expires_at = parent_message_ts + horizon`, not insertion time), so secrets survive offline gaps without growing unbounded.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `msg_secret_policy` | `MsgSecretPolicy` | `Managed` | Which retention tier to use (see below) |
+| `msg_secret_retention` | `MsgSecretRetention` | 30d / 90d / 30d | Per-class horizons (`text` / `poll_event` / `bot`) |
+| `seed_msg_secrets_from_history` | `bool` | `true` | Seed secrets from pairing history-sync blobs |
+| `original_message_resolver` | `Option<Arc<dyn OriginalMessageResolver>>` | `None` | App-supplied fallback when the store misses |
+| `msg_secret_resolver_timeout` | `Duration` | 5s | Timeout for a single resolver call |
+
+```rust
+pub enum MsgSecretPolicy {
+    /// Bounded (default): capture live secrets, seed only the still-relevant
+    /// history slice, prune by per-add-on event-time horizon.
+    Managed,
+    /// Pre-v0.6 behavior: capture/seed only in bot (msmsg) contexts.
+    BotOnly,
+    /// Unbounded: capture/seed everything, never prune.
+    Full,
+    /// Persist nothing in core; rely entirely on `original_message_resolver`.
+    Disabled,
+}
+
+pub struct MsgSecretRetention {
+    pub text: Duration,        // default 30 days — message-edit parents
+    pub poll_event: Duration,  // default 90 days — poll votes / PollAddOption / EventEdit / PollEdit
+    pub bot: Duration,         // default 30 days — outbound msmsg bot context
+}
+```
+
+The `OriginalMessageResolver` trait lets you supply secrets from your own store (required when the policy is `Disabled`):
+
+```rust
+#[async_trait]
+pub trait OriginalMessageResolver: Send + Sync {
+    async fn resolve_msg_secret(
+        &self,
+        chat: &str,
+        sender: &str,
+        msg_id: &str,
+    ) -> Option<[u8; 32]>;
+}
+```
+
+It is consulted only after the in-core [`MsgSecretStore`](/api/store#msgsecretstore) and the LID/PN alternate lookups miss.
+
+<Note>
+`MsgSecretPolicy`, `MsgSecretRetention`, and `OriginalMessageResolver` are re-exported from the crate root (`whatsapp_rust::{MsgSecretPolicy, MsgSecretRetention, OriginalMessageResolver}`). The default `Managed` policy is bounded and needs no tuning for most apps.
+</Note>
 
 #### Custom cache store overrides
 

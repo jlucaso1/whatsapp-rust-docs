@@ -435,6 +435,8 @@ The Meta AI bot's `msmsg` (`<enc type="msmsg">`) encryption type was the origina
 
 **Nack on terminal decrypt failure:** When a ciphertext exhausts retries (`max-retry` reached in the PDO recovery state machine), the client now emits a `<nack reason="…">` carrying a structured `NackReason` code instead of silently dropping the message. The full set of 21 codes (`ParsingError`, `InvalidProtobuf`, `MissingMessageSecret`, etc.) mirrors WA Web's reason set so the server stops retransmitting once it sees a terminal nack — see [Protocol → Nack reasons](/advanced/binary-protocol#nack-reasons).
 
+**Ack SKDM-only session decrypts:** A `pkmsg`/`msg` that decrypts successfully but carries only a Sender Key Distribution Message (no user-facing content to dispatch) is now explicitly acked. Previously it could decrypt, skip event dispatch, and leave no ack — so the server kept replaying it from the offline queue. The fix closes that gap so SKDM-only stanzas drain like any other processed message.
+
 ### Deferred device sync
 
 During offline sync, the client may receive group messages from devices not yet present in the local device registry (for example, a companion device that was paired while the client was offline). Rather than firing a network request for each unknown device individually, the client batches these into a `PendingDeviceSync` set.

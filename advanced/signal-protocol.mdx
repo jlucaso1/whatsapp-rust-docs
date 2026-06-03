@@ -768,16 +768,23 @@ Pre-keys enable asynchronous session establishment in the Signal Protocol. whats
 
 ### Configuration
 
+The per-batch upload count is configurable via `CacheConfig::wanted_pre_key_count` (default `812`, matching WhatsApp Web's `UPLOAD_KEYS_COUNT`). The upload-trigger threshold is a private constant.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `wanted_pre_key_count` (on [`CacheConfig`](/api/bot#pre-key-pool-sizing)) | 812 | Number of pre-keys generated and uploaded per batch. Clamped to `5..=16_777_214` at upload time. |
+| `MIN_PRE_KEY_COUNT` (private const) | 5 | Minimum server-side pre-key count before triggering an upload. |
+
 ```rust
-// src/prekeys.rs
-/// Matches WA Web's UPLOAD_KEYS_COUNT from WAWebSignalStoreApi
-const WANTED_PRE_KEY_COUNT: usize = 812;
-const MIN_PRE_KEY_COUNT: usize = 5;
+use whatsapp_rust::CacheConfig;
+
+let config = CacheConfig {
+    wanted_pre_key_count: 256, // smaller batches for embedded consumers
+    ..Default::default()
+};
 ```
 
-**Constants:**
-- **WANTED_PRE_KEY_COUNT (812)**: Number of pre-keys uploaded in each batch, matching WhatsApp Web
-- **MIN_PRE_KEY_COUNT (5)**: Minimum server-side pre-key count before triggering upload
+Values outside `[5, 16_777_214]` are clamped at upload time (an out-of-range value logs a `warn!`). The floor avoids an empty-but-flagged pool or a re-upload loop; the ceiling prevents duplicate IDs within a single 24-bit batch.
 
 ### Pre-key ID counter and wrap-around
 
@@ -824,7 +831,7 @@ Location: `src/prekeys.rs`
 
 When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.
 
-The public `refresh_pre_keys()` method force-uploads a fresh batch of 812 pre-keys, giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
+The public `refresh_pre_keys()` method force-uploads a fresh batch of `CacheConfig::wanted_pre_key_count` pre-keys (default 812), giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
 
 ```rust
 // After restoring a session from another library

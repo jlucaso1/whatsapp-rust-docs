@@ -1702,7 +1702,7 @@ Any `pkmsg` referencing those old IDs will fail permanently with `InvalidPreKeyI
 **Behavior:**
 
 - Acquires the internal `prekey_upload_lock` so this force-upload cannot race with the count-based and digest-repair upload paths
-- Uploads a full batch of 812 pre-keys with Fibonacci retry backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s)
+- Uploads a full batch of [`CacheConfig::wanted_pre_key_count`](/api/bot#pre-key-pool-sizing) pre-keys (default 812) with Fibonacci retry backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s)
 - Retries until success or the connection is lost
 
 <Warning>

@@ -511,6 +511,37 @@ For bots that only need to respond to new messages, enabling this can significan
 
 ---
 
+### with_wanted_pre_key_count
+
+```rust
+pub fn with_wanted_pre_key_count(self, count: usize) -> Self
+```
+
+Sets the number of one-time pre-keys generated and uploaded per batch. Mirrors WhatsApp Web's `UPLOAD_KEYS_COUNT`. Default: `812`.
+
+The value is clamped at upload time to `5..=65_535`. Values outside that range log a `warn!` and are clamped to the nearest bound.
+
+<ParamField path="count" type="usize" required>
+  Pre-keys per upload batch. Clamped to `5..=65_535`.
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_wanted_pre_key_count(256) // smaller batch for embedded hosts
+    // ...
+```
+
+<Tip>
+Leave this at the default unless you have a specific reason to change it. Embedded or memory-constrained consumers may prefer a smaller batch to shrink the working set during each upload; smaller batches also mean more frequent uploads as peers consume keys.
+</Tip>
+
+<Warning>
+The floor of 5 prevents an empty-but-flagged pool and a re-upload loop (the count guard never clears below the trigger threshold). The ceiling of 65,535 is the wire-format limit — the upload IQ encodes the pre-key list length as a `u16`, so a larger batch would generate and store keys locally and then fail to encode.
+</Warning>
+
+---
+
 ## Building and Running
 
 ### build
@@ -808,28 +839,6 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 <Note>
 The `sent_message_ttl_secs` default was raised from 300s to 7200s. Retry receipts can arrive well after a message is sent (e.g. after the recipient comes back online); a 5-minute TTL could expire the stored payload before its retry, silently dropping the retry. Two hours covers realistic offline gaps.
 </Note>
-
-#### Pre-key pool sizing
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `wanted_pre_key_count` | 812 | Number of one-time pre-keys generated and uploaded per batch. Mirrors WhatsApp Web's `UPLOAD_KEYS_COUNT`. Clamped at upload time to `5..=16_777_214`; values outside that range log a `warn!` and are clamped to the nearest bound. |
-
-Leave this at the default unless you have a specific reason to change it — for example, a memory-constrained or embedded consumer that wants to upload smaller batches. Lower values shrink the working set during each upload, but also shorten the interval between uploads as peers consume keys, so the trade-off is per-batch memory vs. upload frequency.
-
-<Warning>
-The clamp floor of 5 exists because smaller pools either flag the bundle as uploaded while leaving it empty, or loop on re-upload (the count guard never clears). The ceiling of 16,777,214 prevents a single batch from emitting duplicate 24-bit pre-key IDs, which would cause permanent `InvalidPreKeyId` failures on the peer side.
-</Warning>
-
-```rust
-use whatsapp_rust::CacheConfig;
-
-let config = CacheConfig {
-    // Upload a smaller batch on memory-constrained hosts
-    wanted_pre_key_count: 256,
-    ..Default::default()
-};
-```
 
 #### messageSecret retention
 

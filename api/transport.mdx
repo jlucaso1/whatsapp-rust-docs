@@ -485,11 +485,11 @@ async fn read_pump<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 }
 ```
 
-## Implementing Custom Transports
+## Implementing custom transports
 
 You can implement custom transports for different runtimes or protocols.
 
-### Example: Mock Transport for Testing
+### Example: mock transport for testing
 
 ```rust
 use async_trait::async_trait;
@@ -532,7 +532,7 @@ impl TransportFactory for MockTransportFactory {
 }
 ```
 
-### Example: TCP Transport (No TLS)
+### Example: TCP transport (no TLS)
 
 ```rust
 use async_trait::async_trait;
@@ -624,7 +624,7 @@ impl TransportFactory for TcpTransportFactory {
 
 ## Testing Transports
 
-### Unit Test Example
+### Unit test example
 
 ```rust
 #[cfg(test)]

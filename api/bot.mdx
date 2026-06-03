@@ -756,7 +756,7 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
-## Cache Configuration Reference
+## Cache configuration reference
 
 The `CacheConfig` struct controls TTL and capacity for all internal caches. All fields have sensible defaults matching WhatsApp Web behavior.
 
@@ -900,7 +900,7 @@ Fields left as `None` keep the default in-process moka behavior. See [Custom bac
 Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects that cannot be serialized to an external store.
 </Note>
 
-### Custom Configuration Example
+### Custom configuration example
 
 ```rust
 use whatsapp_rust::{CacheConfig, CacheEntryConfig};

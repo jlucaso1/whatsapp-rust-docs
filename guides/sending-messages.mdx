@@ -7,9 +7,9 @@ description: Learn how to send text messages, reactions, quoted replies, album m
 
 This guide covers sending messages, including text, reactions, quotes, album messages (grouped media), sticker packs, and message editing operations using the whatsapp-rust library.
 
-## Sending Text Messages
+## Sending text messages
 
-### Simple Text Message
+### Simple text message
 
 Use the `conversation` field for plain text messages:
 
@@ -30,7 +30,7 @@ println!("Message sent with ID: {}", result.message_id);
 
 `send_message` returns a `SendResult` containing the `message_id` and recipient `to` JID. Use `result.message_key()` to get a `wa::MessageKey` for follow-up operations like album child linking.
 
-### Extended Text Message
+### Extended text message
 
 For messages with formatting, links, or context (replies/quotes):
 
@@ -243,9 +243,9 @@ let result = client.send_message(chat_jid, edited).await?;
 Message editing only works for text messages (conversation or extended_text_message) sent by you within the last 15 minutes.
 </Note>
 
-## Deleting Messages (Revoke)
+## Deleting messages (revoke)
 
-### Delete Your Own Message
+### Delete your own message
 
 ```rust
 use whatsapp_rust::send::RevokeType;
@@ -259,7 +259,7 @@ client.revoke_message(
 
 See [Send API reference](/api/send#revoke_message) for full details.
 
-### Admin Delete (Group Only)
+### Admin delete (group only)
 
 Group admins can delete messages from other participants:
 
@@ -688,9 +688,9 @@ let result = client.send_message_with_options(
 
 See [Send API reference](/api/send#sendoptions) for full details.
 
-## Message Preparation Helpers
+## Message preparation helpers
 
-### Preparing Messages for Quoting
+### Preparing messages for quoting
 
 The `prepare_for_quote` method strips nested context info:
 
@@ -746,7 +746,7 @@ async fn send_safe_message(
 
 <Steps>
 
-### Use the Right Message Type
+### Use the right message type
 
 - **Simple text**: Use `conversation`
 - **Links/formatting**: Use `extended_text_message`
@@ -756,7 +756,7 @@ async fn send_safe_message(
 - **Sticker packs**: Use `create_sticker_pack_zip` + `build_sticker_pack_message` with two uploads (ZIP + thumbnail)
 - **Disappearing chats**: Use `send_message_with_options` with `ephemeral_expiration` matching the chat's timer
 
-### Handle Message IDs
+### Handle message IDs
 
 ```rust
 // Store the result for later operations

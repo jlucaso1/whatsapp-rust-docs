@@ -22,7 +22,7 @@ src/
 └── client.rs            # High-level client orchestration
 ```
 
-## Noise Protocol Handshake
+## Noise protocol handshake
 
 The handshake establishes an encrypted channel using the Noise Protocol. whatsapp-rust supports two interactive patterns to match WhatsApp Web's behavior:
 
@@ -252,7 +252,7 @@ Programmer-side variants (`Proto`, generic `Crypto(String)`, `HkdfExpandFailed`,
 
 Location: `src/handshake.rs`
 
-### Edge Routing Pre-Intro
+### Edge routing pre-intro
 
 For optimized reconnection, the client can include edge routing info in the initial frame:
 
@@ -319,7 +319,7 @@ Location: `src/socket/noise_socket.rs:21-32`
 
 ### Design Patterns
 
-#### Dedicated Sender Task
+#### Dedicated sender task
 
 The socket uses a dedicated task for sending to ensure frame ordering:
 
@@ -355,7 +355,7 @@ impl NoiseSocket {
 
 Location: `src/socket/noise_socket.rs:34-62`
 
-#### Sender Task Implementation
+#### Sender task implementation
 
 ```rust
 async fn sender_task(
@@ -783,7 +783,7 @@ Frame decryption is always sequential (noise protocol counter ordering), but nod
 | Everything else | Spawned concurrently | Maximizes parallelism for non-ordering-sensitive stanzas |
 ```
 
-### 3. Send Message
+### 3. Send message
 
 ```rust
 impl Client {
@@ -996,7 +996,7 @@ loop {
 }
 ```
 
-## Keepalive and Dead Socket Detection
+## Keepalive and dead socket detection
 
 The keepalive loop monitors connection health, matching WhatsApp Web's behavior precisely.
 

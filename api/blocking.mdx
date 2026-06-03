@@ -174,7 +174,7 @@ The unblock stanza only requires the LID; `pn_jid` is omitted.
 </iq>
 ```
 
-### Get Blocklist Request
+### Get blocklist request
 
 ```xml
 <iq xmlns="blocklist" type="get" to="s.whatsapp.net" id="..."/>
@@ -224,7 +224,7 @@ match client.blocking().unblock(&contact).await {
 }
 ```
 
-### Check Before Blocking
+### Check before blocking
 
 ```rust
 let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
@@ -237,7 +237,7 @@ if !client.blocking().is_blocked(&contact).await? {
 }
 ```
 
-### List All Blocked Contacts
+### List all blocked contacts
 
 ```rust
 let blocklist = client.blocking().get_blocklist().await?;
@@ -276,7 +276,7 @@ if should_block {
 }
 ```
 
-### Batch Block Multiple Contacts
+### Batch block multiple contacts
 
 ```rust
 let contacts_to_block = vec![

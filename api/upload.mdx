@@ -102,7 +102,7 @@ pub async fn upload(
   </ParamField>
 </ResponseField>
 
-### Example: Upload and Send Image
+### Example: upload and send image
 
 ```rust
 use wacore::download::MediaType;
@@ -137,7 +137,7 @@ let result = client.send_message(chat_jid, message).await?;
 println!("Image sent: {}", result.message_id);
 ```
 
-### Example: Upload Video with Progress
+### Example: upload video with progress
 
 ```rust
 use wacore::download::MediaType;
@@ -154,7 +154,7 @@ println!("  Path: {}", upload.direct_path);
 // Use upload metadata in VideoMessage...
 ```
 
-### Example: Upload Document
+### Example: upload document
 
 ```rust
 use wacore::download::MediaType;
@@ -189,7 +189,7 @@ let message = wa::Message {
 let result = client.send_message(chat_jid, message).await?;
 ```
 
-### Example: Upload Audio (Voice Note)
+### Example: upload audio (voice note)
 
 ```rust
 use wacore::download::MediaType;

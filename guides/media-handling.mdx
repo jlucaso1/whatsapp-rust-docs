@@ -9,7 +9,7 @@ This guide covers uploading and downloading media (images, videos, audio, docume
 
 ## Downloading Media
 
-### From Message Objects
+### From message objects
 
 Download media directly from message types that implement `Downloadable`:
 
@@ -77,7 +77,7 @@ See [Download API reference](/api/download#download_to_writer) for streaming det
 When the HTTP client supports streaming (like the default `UreqHttpClient`), downloads use ~40KB of memory regardless of file size (8KB buffer + decryption state). If the HTTP client doesn't support streaming, `download_to_writer` automatically falls back to a buffered download — the file is fetched into memory first, then decrypted and written. This fallback ensures the method works with any `HttpClient` implementation.
 </Note>
 
-### From Raw Parameters
+### From raw parameters
 
 Download media when you have the raw encryption parameters:
 
@@ -98,7 +98,7 @@ std::fs::write("downloaded.jpg", data)?;
 
 See [Download API reference](/api/download#download_from_params) for raw parameter downloads.
 
-### Streaming from Raw Parameters
+### Streaming from raw parameters
 
 ```rust
 let file = File::create("large_video.mp4")?;
@@ -284,7 +284,7 @@ println!("File SHA256: {:?}", upload.file_sha256);
 
 See [Upload API reference](/api/upload) for full details.
 
-### Using Upload Response in Messages
+### Using upload response in messages
 
 ```rust
 use waproto::whatsapp as wa;
@@ -340,7 +340,7 @@ let upload = client.upload(video_bytes, MediaType::Video, Default::default()).aw
 
 ## Media Types
 
-### Available Media Types
+### Available media types
 
 ```rust
 pub enum MediaType {
@@ -537,7 +537,7 @@ async fn safe_upload(
 
 ## Advanced Usage
 
-### Custom Media Processing
+### Custom media processing
 
 ```rust
 use image::DynamicImage;
@@ -674,7 +674,7 @@ Media connection refresh and invalidation are managed internally by the client. 
 
 <Steps>
 
-### Use Streaming for Large Files
+### Use streaming for large files
 
 ```rust
 // ❌ Bad: Loads entire file into memory
@@ -690,7 +690,7 @@ let _file = client.download_to_writer(video.as_ref(), file).await?;
 `download_to_writer` works with any HTTP client. With streaming-capable clients (like `UreqHttpClient`), memory usage is constant ~40KB. With non-streaming clients, it falls back to buffered downloads automatically.
 </Note>
 
-### Verify Media Type
+### Verify media type
 
 Check `mimetype` before processing:
 
@@ -709,7 +709,7 @@ if let Some(img) = &message.image_message {
 }
 ```
 
-### Handle Missing Fields
+### Handle missing fields
 
 Media messages may have optional fields:
 
@@ -723,7 +723,7 @@ if let Some(doc) = &message.document_message {
 }
 ```
 
-### Set Proper Dimensions
+### Set proper dimensions
 
 For images and videos, include dimensions:
 

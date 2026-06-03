@@ -662,6 +662,27 @@ let result = client.send_message_with_options(
 // result.message_id will be "3EB0ABC123"
 ```
 
+### Overriding the stanza type
+
+The library infers the `<message type="...">` attribute from the protobuf content of every send. If you're sending a message variant the classifier can't recognize, set `stanza_type_override` to force a specific wire type:
+
+```rust
+use whatsapp_rust::{StanzaType, send::SendOptions};
+
+let options = SendOptions {
+    stanza_type_override: Some(StanzaType::Text),
+    ..Default::default()
+};
+
+let result = client.send_message_with_options(
+    to,
+    message,
+    options,
+).await?;
+```
+
+Leave this as `None` for every supported message type — the classifier already picks the right value, and the override is not preserved across the retry path. See [Stanza types](/api/send#stanza-types) for the available variants.
+
 ### Adding extra stanza nodes
 
 For advanced use cases, you can include custom XML nodes:

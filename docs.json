@@ -22,6 +22,7 @@
     "languages": [
       {
         "language": "en",
+        "default": true,
         "tabs": [
           {
             "tab": "Documentation",

@@ -104,7 +104,7 @@ The `ephemeral_expiration` field contains the disappearing messages timer in sec
 
 The `unavailable_request_id` field is set when a message was recovered via PDO rather than normal decryption. It contains the PDO request message ID, which you can use to correlate recovered messages with the original `UndecryptableMessage` event.
 
-### Message Content Extraction
+### Message content extraction
 
 Use the `MessageExt` trait to extract content:
 
@@ -444,7 +444,7 @@ An optional in-memory L1 cache (`recent_messages` in `CacheConfig`) can be enabl
 
 ## Receipts
 
-### Automatic Delivery Receipts
+### Automatic delivery receipts
 
 The client automatically sends delivery receipts for successfully decrypted messages:
 
@@ -455,7 +455,7 @@ The client automatically sends delivery receipts for successfully decrypted mess
 
 See [Receipt API reference](/api/receipt) for full details.
 
-### Sending Read Receipts
+### Sending read receipts
 
 ```rust
 // Mark a single message as read (DM)
@@ -496,7 +496,7 @@ match event {
 
 ## Advanced Usage
 
-### Custom Encryption Handlers
+### Custom encryption handlers
 
 For custom encryption types (e.g., `pkmsg`, `msg`, `skmsg`):
 
@@ -562,7 +562,7 @@ use wacore_binary::jid::JidExt;
 })
 ```
 
-### Session and Key Management
+### Session and key management
 
 The library automatically manages Signal Protocol sessions:
 
@@ -624,7 +624,7 @@ async fn process_message(
 
 <Steps>
 
-### Use the Bot API for Event Handling
+### Use the bot API for event handling
 
 The Bot API provides a clean interface for message handling:
 
@@ -637,7 +637,7 @@ let bot = Bot::builder()
     .await?;
 ```
 
-### Extract Content with Helper Methods
+### Extract content with helper methods
 
 ```rust
 use wacore::proto_helpers::MessageExt;
@@ -648,7 +648,7 @@ let caption = message.get_caption();
 let base = message.get_base_message();
 ```
 
-### Handle All Event Types
+### Handle all event types
 
 Always handle critical events:
 
@@ -662,7 +662,7 @@ match &*event {
 }
 ```
 
-### Don't Block Event Handlers
+### Don't block event handlers
 
 Spawn tasks for long-running operations:
 

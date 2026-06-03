@@ -515,7 +515,7 @@ pub enum Action {
 }
 ```
 
-## Usage in Main Library
+## Usage in main library
 
 The main `whatsapp-rust` crate uses wacore modules throughout:
 
@@ -567,7 +567,7 @@ Strong typing throughout:
 - Validated newtypes (e.g., `GroupSubject` with length limits)
 - Enum variants with `StringEnum` for protocol values
 
-### Zero-Copy Where Possible
+### Zero-copy where possible
 
 - `Cow<'static, str>` for owned `Node.tag` and `Attrs` keys — known protocol strings (from the token dictionary) are borrowed as static references with zero heap allocation, while unknown strings fall back to owned `String`
 - `NodeStr<'a>` for borrowed `NodeRef.tag`, `AttrsRef` keys, `ValueRef::String`, and `JidRef.user` — a borrowed-or-inline string type where the `Owned` variant uses `CompactString` (inline up to 24 bytes) instead of heap-allocated `String`, reducing allocation pressure during decoding

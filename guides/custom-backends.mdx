@@ -7,7 +7,7 @@ description: Learn how to implement custom storage, transport, and HTTP backends
 
 This guide covers implementing custom backends for storage, network transport, and HTTP operations in whatsapp-rust. The library uses trait-based abstractions to allow full customization.
 
-## Storage Backend Architecture
+## Storage backend architecture
 
 The storage backend is split into four domain-grouped traits:
 
@@ -33,9 +33,9 @@ where
 {}
 ```
 
-## Implementing a Custom Storage Backend
+## Implementing a custom storage backend
 
-### Step 1: Define Your Store
+### Step 1: define your store
 
 ```rust
 use std::sync::Arc;
@@ -59,7 +59,7 @@ impl MyCustomStore {
 }
 ```
 
-### Step 2: Implement SignalStore
+### Step 2: implement SignalStore
 
 Handle Signal protocol cryptographic operations:
 
@@ -231,7 +231,7 @@ impl SignalStore for MyCustomStore {
 
 See [Store API reference](/api/store#signal-store) for all SignalStore methods.
 
-### Step 3: Implement AppSyncStore
+### Step 3: implement AppSyncStore
 
 Handle WhatsApp app state synchronization:
 
@@ -327,7 +327,7 @@ impl AppSyncStore for MyCustomStore {
 
 See [Store API reference](/api/store#app-sync-store) for all AppSyncStore methods.
 
-### Step 4: Implement ProtocolStore
+### Step 4: implement ProtocolStore
 
 Handle WhatsApp Web protocol alignment:
 
@@ -464,7 +464,7 @@ impl ProtocolStore for MyCustomStore {
 
 See [Store API reference](/api/store#protocol-store) for all ProtocolStore methods.
 
-### Step 5: Implement DeviceStore
+### Step 5: implement DeviceStore
 
 Handle device data persistence:
 
@@ -764,7 +764,7 @@ let mut bot = Bot::builder()
 The WebSocket transport handles the persistent WhatsApp protocol connection, while the HTTP client handles media operations (upload/download) and version fetching. Both must be configured separately for full proxy coverage.
 </Note>
 
-## Custom Transport Backend
+## Custom transport backend
 
 ### Transport Trait
 
@@ -912,7 +912,7 @@ impl HttpClient for MyCustomHttpClient {
 If your HTTP client doesn't support streaming, you only need to implement `execute`. The `supports_streaming` method defaults to `false`, and `download_to_writer` will automatically use a buffered fallback.
 </Note>
 
-## SQLite Reference Implementation
+## SQLite reference implementation
 
 The library includes a full SQLite implementation you can use as reference:
 
@@ -939,7 +939,7 @@ let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
   SQLite is bundled by default via the `bundled-sqlite` feature on `whatsapp-rust-sqlite-storage`. No system SQLite installation is required.
 </Note>
 
-## Custom Cache Store
+## Custom cache store
 
 The pluggable cache store adapter lets you replace the default in-process moka caches with an external backend like Redis or Memcached. This is useful for sharing cache state across multiple client instances or for deployments where in-process memory is limited.
 
@@ -1128,7 +1128,7 @@ The following namespaces are used internally by the client:
 
 <Steps>
 
-### Use Connection Pooling
+### Use connection pooling
 
 ```rust
 // ✅ Good: Use connection pool
@@ -1139,7 +1139,7 @@ let backend = MyCustomStore::new(pool);
 let backend = MyCustomStore::new(connection_string);
 ```
 
-### Implement Proper Error Handling
+### Implement proper error handling
 
 ```rust
 use wacore::store::error::{Result, StoreError};
@@ -1153,7 +1153,7 @@ async fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
 }
 ```
 
-### Use Transactions for Batch Operations
+### Use transactions for batch operations
 
 ```rust
 async fn put_mutation_macs(
@@ -1173,7 +1173,7 @@ async fn put_mutation_macs(
 }
 ```
 
-### Implement Database Migrations
+### Implement database migrations
 
 Use a migration system (e.g., Diesel migrations) to manage schema changes:
 

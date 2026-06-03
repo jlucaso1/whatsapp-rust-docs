@@ -137,7 +137,7 @@ let status = PresenceStatus::Available;
 assert_eq!(status.as_str(), "available");
 ```
 
-## Push Name Requirement
+## Push name requirement
 
 WhatsApp requires a push name (display name) to be set before sending presence updates. This matches WhatsApp Web behavior.
 
@@ -187,7 +187,7 @@ The push name is typically set during the pairing/connection process from app st
 <presence type="unsubscribe" to="15551234567@s.whatsapp.net"/>
 ```
 
-## TC Token Handling
+## TC token handling
 
 When subscribing to presence, the library automatically:
 - Looks up TC token for the target JID
@@ -301,6 +301,6 @@ println!("Unsubscribed from {}", contacts[0]);
 client.presence().set_unavailable().await?;
 ```
 
-## Receiving Presence Updates
+## Receiving presence updates
 
 After subscribing to a contact's presence, you'll receive presence events through the event handler. See the [Events](/concepts/events) documentation for details on handling incoming presence updates.

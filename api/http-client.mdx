@@ -304,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### POST Request with Body
+#### POST request with body
 
 ```rust
 let client = UreqHttpClient::new();
@@ -463,11 +463,11 @@ fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpRespons
 }
 ```
 
-## Implementing Custom HTTP Clients
+## Implementing custom HTTP clients
 
 You can implement custom HTTP clients for different runtimes or requirements.
 
-### Example: Reqwest Client (Async)
+### Example: Reqwest client (async)
 
 ```rust
 use async_trait::async_trait;
@@ -518,7 +518,7 @@ impl HttpClient for ReqwestHttpClient {
 }
 ```
 
-### Example: Mock Client for Testing
+### Example: mock client for testing
 
 ```rust
 use async_trait::async_trait;
@@ -598,7 +598,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The HTTP client is primarily used for media operations in whatsapp-rust:
 
-### Media Upload Flow
+### Media upload flow
 
 The client manages media connections internally. Use the high-level `upload` method instead of building requests manually:
 
@@ -615,7 +615,7 @@ Under the hood, the client uses the HTTP client to:
 3. Upload to the CDN with proper auth headers
 4. Parse the response for `direct_path` and file hashes
 
-### Media Download Flow
+### Media download flow
 
 ```rust
 // 1. Extract media info from message
@@ -636,7 +636,7 @@ let file_data = tokio::task::spawn_blocking(move || {
 
 ## Testing
 
-### Unit Test Example
+### Unit test example
 
 ```rust
 #[cfg(test)]

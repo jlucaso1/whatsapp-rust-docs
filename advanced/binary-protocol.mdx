@@ -406,7 +406,7 @@ Location: `wacore/binary/src/encoder.rs:227-237`
 
 ### Packed Encoding
 
-#### Nibble Packing (Numeric Strings)
+#### Nibble packing (numeric strings)
 
 Strings containing only digits, dash, and dot are packed into 4 bits per character:
 
@@ -539,7 +539,7 @@ fn write_list_start(&mut self, len: usize) -> Result<()> {
 
 Location: `wacore/binary/src/encoder.rs:865-876`
 
-### Node Encoding Format
+### Node encoding format
 
 A complete node is encoded as:
 
@@ -804,7 +804,7 @@ pub fn marshal_exact(node: &Node) -> Result<Vec<u8>> {
 
 Location: `wacore/binary/src/marshal.rs:67-76`
 
-### String Hint Cache
+### String hint cache
 
 Repeated strings (like JIDs) are analyzed once and cached. Strings longer than `PACKED_MAX` (127 bytes) are immediately classified as `RawBytes` without running the full classification logic, since they can never be protocol tokens (max 48 bytes), packed nibble/hex, or JIDs:
 
@@ -859,9 +859,9 @@ fn estimate_capacity_node(node: &Node) -> usize {
 
 Location: `wacore/binary/src/marshal.rs:167-200`
 
-## Common Protocol Patterns
+## Common protocol patterns
 
-### IQ (Info/Query) Stanzas
+### IQ (info/query) stanzas
 
 ```rust
 // Request
@@ -941,7 +941,7 @@ pub enum NackReason {
 
 Each variant maps to the integer reason code WA Web sends on the wire. The client picks the variant from the decrypt failure path — `ParsingError` for malformed binary, `InvalidProtobuf` for wa::Message decode failures, `MaxRetryReached` after the PDO recovery state machine gives up, and so on. Consumers building custom transports can reuse the enum to produce wire-compatible nacks.
 
-## Wire Format Examples
+## Wire format examples
 
 ### Simple Message
 
@@ -973,7 +973,7 @@ Binary:
 
 ## Debugging Tools
 
-### Inspecting Encoded Data
+### Inspecting encoded data
 
 Use `evcxr` REPL for interactive exploration:
 

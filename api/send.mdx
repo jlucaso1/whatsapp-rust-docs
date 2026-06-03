@@ -72,7 +72,7 @@ pub struct ChatMessageId {
 }
 ```
 
-### Example: Text Message
+### Example: text message
 
 ```rust
 use waproto::whatsapp as wa;
@@ -110,7 +110,7 @@ let result = client.send_message(newsletter_jid, message).await?;
 Newsletter reactions use a different stanza format and are still sent through `client.newsletter().send_reaction()`. See the [Newsletter API](/api/newsletter#send_reaction).
 </Note>
 
-### Example: Image with Caption
+### Example: image with caption
 
 ```rust
 use waproto::whatsapp as wa;
@@ -421,7 +421,7 @@ pub enum RevokeType {
   Use when a group admin is deleting another user's message. Only valid in groups. Requires `original_sender` JID.
 </ParamField>
 
-### Example: Revoke Own Message
+### Example: revoke own message
 
 ```rust
 // Send a message
@@ -438,7 +438,7 @@ client.revoke_message(
 ).await?;
 ```
 
-### Example: Admin Revoke in Group
+### Example: admin revoke in group
 
 ```rust
 use wacore_binary::jid::Jid;

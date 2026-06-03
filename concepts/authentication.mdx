@@ -31,9 +31,9 @@ sequenceDiagram
     WA->>Companion: Connected!
 ```
 
-## QR Code Pairing
+## QR code pairing
 
-### How It Works
+### How it works
 
 **Location:** `src/pair.rs`, `wacore/src/pair.rs`
 
@@ -44,7 +44,7 @@ sequenceDiagram
 5. **Crypto handshake:** Noise-based key exchange establishes trust
 6. **Completion:** Server sends `pair-success`, device signs identity
 
-### QR Code Contents
+### QR code contents
 
 ```rust
 // src/pair.rs
@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### QR Code Events
+### QR code events
 
 **Event:** `Event::PairingQrCode`
 
@@ -162,9 +162,9 @@ for code in codes_clone {
   The rotation uses `futures::future::select` with an `async_channel` stop signal rather than Tokio-specific primitives. This keeps the QR rotation compatible with any async runtime, since the `Client` uses the pluggable `Runtime` trait for sleep and spawn operations.
 </Note>
 
-## Pair Code (Phone Number Linking)
+## Pair code (phone number linking)
 
-### How It Works
+### How it works
 
 **Location:** `src/pair_code.rs`, `wacore/src/pair_code.rs`
 
@@ -175,7 +175,7 @@ for code in codes_clone {
 5. **Stage 2 - Finish:** Phone confirms, companion sends key bundle
 6. **Completion:** Server sends `pair-success`
 
-### Pair Code Format
+### Pair code format
 
 **Alphabet:** Crockford Base32 (excludes 0, I, O, U)
 ```
@@ -216,7 +216,7 @@ let code = client.pair_with_code(options).await?;
 assert_eq!(code, "MYCODE12");
 ```
 
-### Pair Code Options
+### Pair code options
 
 ```rust
 // wacore/src/pair_code.rs
@@ -282,7 +282,7 @@ The display string sent in `<companion_platform_display>` is built from the reso
 
 The server only validates that the display string is 1..=100 bytes — there is no browser whitelist.
 
-### Pair Code Events
+### Pair code events
 
 **Event:** `Event::PairingCode`
 
@@ -347,7 +347,7 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
 
 ## Cryptography
 
-### Noise Protocol Handshake
+### Noise protocol handshake
 
 whatsapp-rust supports three Noise patterns to mirror WhatsApp Web:
 
@@ -462,7 +462,7 @@ let wrapped_ephemeral = tokio::task::spawn_blocking(move || {
 - **Salt:** 16 random bytes
 - **IV:** 16 random bytes
 
-### Signal Protocol Setup
+### Signal protocol setup
 
 **After pairing:**
 1. Server sends signed device identity
@@ -567,7 +567,7 @@ Event::PairError(PairError { /* ... */ })
 
 ## Error Handling
 
-### QR Code Errors
+### QR code errors
 
 ```rust
 // Handled internally, retries with new QR codes
@@ -576,7 +576,7 @@ info!("All QR codes for this session have expired.");
 client.disconnect().await;
 ```
 
-### Pair Code Errors
+### Pair code errors
 
 `pair_with_code` returns `whatsapp_rust::pair_code::PairError`, which wraps the wacore-side validation/crypto errors (`PairCodeError`) and the IQ transport layer (`IqError`):
 
@@ -639,7 +639,7 @@ The previous catch-all `CryptoError(String)` and `RequestFailed(String)` variant
 
 ## Session Persistence
 
-### After Successful Pairing
+### After successful pairing
 
 **State saved to storage:**
 - Device JID (Phone Number)
@@ -678,7 +678,7 @@ Event::LoggedOut(LoggedOut {
 
 ## Best Practices
 
-### Phone Number Format
+### Phone number format
 
 <CodeGroup>
 ```rust ✅ Correct

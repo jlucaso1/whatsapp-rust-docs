@@ -873,7 +873,7 @@ let mut device = client.device.write().await;
 device.push_name = "New Name".to_string(); // DON'T DO THIS
 ```
 
-## State Management Best Practices
+## State management best practices
 
 ### Read-Only Access
 
@@ -911,9 +911,9 @@ client.persistence_manager
     .await?;
 ```
 
-## Custom Backend Implementation
+## Custom backend implementation
 
-### Example: PostgreSQL Backend
+### Example: PostgreSQL backend
 
 ```rust
 use async_trait::async_trait;

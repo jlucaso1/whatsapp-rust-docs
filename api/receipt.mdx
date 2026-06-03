@@ -37,7 +37,7 @@ pub async fn mark_as_read(
   If empty, this function returns immediately without sending anything.
 </ParamField>
 
-### Example: Mark DM as Read
+### Example: mark DM as read
 
 ```rust
 use wacore_binary::jid::Jid;
@@ -51,7 +51,7 @@ client.mark_as_read(
 ).await?;
 ```
 
-### Example: Mark Group Message as Read
+### Example: mark group message as read
 
 ```rust
 let group_jid: Jid = "120363040237990503@g.us".parse()?;
@@ -64,7 +64,7 @@ client.mark_as_read(
 ).await?;
 ```
 
-### Example: Mark Multiple Messages as Read
+### Example: mark multiple messages as read
 
 ```rust
 let message_ids = vec![
@@ -275,7 +275,7 @@ let mut bot = Bot::builder()
     .await?;
 ```
 
-### Receipt Event Structure
+### Receipt event structure
 
 ```rust
 pub struct Receipt {
@@ -307,7 +307,7 @@ pub struct Receipt {
 
 ---
 
-## Message Tracking Example
+## Message tracking example
 
 Track message delivery and read status:
 
@@ -365,7 +365,7 @@ let mut bot = Bot::builder()
 
 ---
 
-## Played Receipts (Media)
+## Played receipts (media)
 
 For media messages (audio, video), you can send played receipts to indicate the media was played:
 
@@ -385,7 +385,7 @@ You can listen for incoming played receipts via the `Event::Receipt` event with 
 
 ## Best Practices
 
-### Read Receipt Privacy
+### Read receipt privacy
 
 <Tip>
   Respect user privacy settings. If you're building a client, consider adding a setting to disable read receipts.
@@ -401,7 +401,7 @@ if settings.send_read_receipts {
 }
 ```
 
-### Batching Multiple Receipts
+### Batching multiple receipts
 
 Send read receipts for multiple messages at once to reduce network overhead:
 
@@ -419,7 +419,7 @@ if !pending_receipts.is_empty() {
 }
 ```
 
-### Group Message Receipts
+### Group message receipts
 
 Always include the sender JID for group messages:
 

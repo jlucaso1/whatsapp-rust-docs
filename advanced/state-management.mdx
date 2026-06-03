@@ -296,7 +296,7 @@ Location: `wacore/src/store/commands.rs`
 
 ## Usage Patterns
 
-### Reading Device State
+### Reading device state
 
 ```rust
 // In async function
@@ -309,7 +309,7 @@ println!("Push name: {}", device.push_name);
   `get_device_snapshot()` returns a cloned `Device`. This is efficient because most fields are cheap to clone (strings, numbers). Large data like cryptographic keys use `Arc` internally.
 </Note>
 
-### Modifying Device State (Simple)
+### Modifying device state (simple)
 
 For simple state changes, use commands:
 
@@ -327,7 +327,7 @@ persistence_manager.process_command(
 ).await;
 ```
 
-### Modifying Device State (Complex)
+### Modifying device state (complex)
 
 For complex logic involving multiple fields or conditionals:
 
@@ -471,7 +471,7 @@ Output:
 
 ## Best Practices
 
-### 1. Always Use Commands for State Changes
+### 1. Always use commands for state changes
 
 ```rust
 // Bad: Direct modification
@@ -485,7 +485,7 @@ persistence_manager.process_command(
 ).await;
 ```
 
-### 2. Minimize Lock Duration
+### 2. Minimize lock duration
 
 ```rust
 // Bad: Long lock duration
@@ -502,7 +502,7 @@ persistence_manager.process_command(
 ).await;
 ```
 
-### 3. Use Chat Locks for Chat-Specific Operations
+### 3. Use chat locks for chat-specific operations
 
 ```rust
 // Per-chat locks serialize operations on the same chat
@@ -510,7 +510,7 @@ persistence_manager.process_command(
 // to prevent race conditions during message processing.
 ```
 
-### 4. Offload Heavy Operations
+### 4. Offload heavy operations
 
 ```rust
 use tokio::task::spawn_blocking;

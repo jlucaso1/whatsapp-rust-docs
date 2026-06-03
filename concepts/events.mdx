@@ -7,7 +7,7 @@ description: Event system, event handlers, and Event enum types in whatsapp-rust
 
 WhatsApp-Rust uses an event-driven architecture where the client emits events for all WhatsApp protocol interactions. Your application subscribes to these events to handle messages, connection changes, and notifications.
 
-## Event System Architecture
+## Event system architecture
 
 ### CoreEventBus
 
@@ -865,7 +865,7 @@ Event::Presence(update) => {
 }
 ```
 
-## User Update Events
+## User update events
 
 ### PictureUpdate
 
@@ -1069,7 +1069,7 @@ Event::GroupUpdate(update) => {
 A single group notification from the server can contain multiple actions. The library dispatches a separate `GroupUpdate` event for each action, so your handler may receive multiple events from one notification.
 </Note>
 
-## Contact Notification Events
+## Contact notification events
 
 These events are emitted from `<notification type="contacts">` stanzas sent by the server. They are distinct from `ContactUpdate`, which comes from app-state sync mutations.
 
@@ -1199,7 +1199,7 @@ Event::ContactUpdate(update) => {
 The server may also send `<add/>` and `<remove/>` child actions in contacts notifications for lightweight roster changes. These are acknowledged automatically and do not emit events.
 </Note>
 
-## Chat State Events
+## Chat state events
 
 ### PinUpdate
 
@@ -1357,7 +1357,7 @@ Event::DeleteMessageForMeUpdate(update) => {
 }
 ```
 
-## History Sync Events
+## History sync events
 
 ### HistorySync
 
@@ -1823,9 +1823,9 @@ Event::RawNode(node) => {
 `RawNode` is skipped during serialization (`#[serde(skip)]`). Enable it only when debugging or building protocol-level tooling, as it dispatches for every incoming stanza.
 </Note>
 
-## Event Handler Patterns
+## Event handler patterns
 
-### Bot Builder Pattern
+### Bot builder pattern
 
 ```rust
 use whatsapp_rust::bot::Bot;

@@ -33,7 +33,7 @@ pub async fn download(
   Decrypted media bytes. For encrypted media (E2EE), automatically decrypts using AES-256-CBC and verifies HMAC-SHA256. For plaintext media (newsletters/channels), validates SHA-256 hash.
 </ResponseField>
 
-### Example: Download Image
+### Example: download image
 
 ```rust
 use waproto::whatsapp as wa;
@@ -45,7 +45,7 @@ if let Some(image_msg) = message.image_message {
 }
 ```
 
-### Example: Download with Error Handling
+### Example: download with error handling
 
 ```rust
 match client.download(downloadable).await {
@@ -92,7 +92,7 @@ pub async fn download_to_file<W: Write + Seek + Send + Unpin>(
   Writer to output the decrypted data. Typically a `File` or `BufWriter<File>`.
 </ParamField>
 
-### Example: Download to File
+### Example: download to file
 
 ```rust
 use std::fs::File;
@@ -133,7 +133,7 @@ pub async fn download_to_writer<W: Write + Seek + Send + 'static>(
   Returns the writer after successful download, seeked back to position 0.
 </ResponseField>
 
-### Example: Streaming Download
+### Example: streaming download
 
 ```rust
 use std::fs::File;
@@ -193,7 +193,7 @@ pub async fn download_from_params(
   Decrypted media bytes
 </ResponseField>
 
-### Example: Download from Stored Metadata
+### Example: download from stored metadata
 
 ```rust
 use wacore::download::MediaType;
@@ -475,7 +475,7 @@ The `media_key` is expanded using HKDF-SHA256 to derive:
 - 32-byte cipher key
 - 32-byte MAC key
 
-### Plaintext Media (Newsletter/Channel)
+### Plaintext media (newsletter/channel)
 
 1. **Download** plaintext bytes from CDN (often via `static_url`)
 2. **Verify** SHA-256 hash matches `file_sha256`
@@ -485,7 +485,7 @@ The `media_key` is expanded using HKDF-SHA256 to derive:
   Newsletter and channel media is **not encrypted**. The library automatically detects this when `media_key` is absent and switches to plaintext validation.
 </Note>
 
-### Example: Detect Media Type
+### Example: detect media type
 
 ```rust
 if downloadable.is_encrypted() {

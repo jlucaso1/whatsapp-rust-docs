@@ -34,7 +34,7 @@ wacore/libsignal/src/
     └── hash.rs               # HKDF and HMAC primitives
 ```
 
-## Double Ratchet Protocol
+## Double ratchet protocol
 
 The Double Ratchet algorithm provides forward secrecy and post-compromise security for 1:1 messages.
 
@@ -392,7 +392,7 @@ pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<(
 
 Location: `src/client/lid_pn.rs`, `src/client/sessions.rs`, `src/message.rs`
 
-## Sender Keys (Group Encryption)
+## Sender keys (group encryption)
 
 Groups use the Sender Key protocol for efficient multi-recipient encryption.
 
@@ -426,7 +426,7 @@ This ensures the cache key is always in the form `"{group}:{bare_user}@{server}.
 
 Location: `src/message.rs`, `wacore/libsignal/src/store/sender_key_name.rs`, `wacore/binary/src/jid.rs` (`to_non_ad()`)
 
-### Sender Key Distribution
+### Sender key distribution
 
 Each participant generates and distributes a sender key:
 
@@ -707,7 +707,7 @@ Location: `src/send.rs`, `src/client.rs`
 
 ## Cryptographic Primitives
 
-### AES-256-CBC (Message Content)
+### AES-256-CBC (message content)
 
 Used for encrypting message bodies in both 1:1 and group messages:
 
@@ -938,7 +938,7 @@ impl SessionStore for SessionAdapter {
 
 ## Security Considerations
 
-### Identity Key Trust
+### Identity key trust
 
 The implementation verifies identity keys before encryption/decryption:
 
@@ -969,7 +969,7 @@ If you implement a custom message dispatcher, replicate this `is_from_me` check 
 
 Location: `src/message.rs` (`handle_decrypted_plaintext`)
 
-### Duplicate Message Detection
+### Duplicate message detection
 
 The protocol detects and rejects duplicate messages:
 
@@ -1149,7 +1149,7 @@ fn key_for(&self, address: &str) -> Arc<str> {
 
 On the hot path (put/delete for addresses already in the cache), this is always a refcount bump instead of a heap allocation.
 
-### Single-Allocation Session Lock Keys
+### Single-allocation session lock keys
 
 Session lock keys use the full Signal protocol address string (e.g., `5511999887766@c.us.0`). The `JidExt` trait provides methods for generating these strings, defined in `wacore/src/types/jid.rs`:
 

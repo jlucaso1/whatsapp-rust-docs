@@ -768,16 +768,26 @@ Pre-keys enable asynchronous session establishment in the Signal Protocol. whats
 
 ### Configuration
 
+The per-batch upload count is configurable through the builder/factory API (default `812`, matching WhatsApp Web's `UPLOAD_KEYS_COUNT`). The upload-trigger threshold is a private constant.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| [`BotBuilder::with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`Client::set_wanted_pre_key_count`](/api/client#set_wanted_pre_key_count) | 812 | Number of pre-keys generated and uploaded per batch. Clamped to `5..=65_535` at upload time. |
+| `MIN_PRE_KEY_COUNT` (private const) | 5 | Minimum server-side pre-key count before triggering an upload. |
+
 ```rust
-// src/prekeys.rs
-/// Matches WA Web's UPLOAD_KEYS_COUNT from WAWebSignalStoreApi
-const WANTED_PRE_KEY_COUNT: usize = 812;
-const MIN_PRE_KEY_COUNT: usize = 5;
+// Via the Bot builder
+Bot::builder()
+    .with_wanted_pre_key_count(256) // smaller batches for embedded consumers
+    // ...
+
+// Or directly on a Client constructed by hand (before connect)
+client.set_wanted_pre_key_count(256);
 ```
 
-**Constants:**
-- **WANTED_PRE_KEY_COUNT (812)**: Number of pre-keys uploaded in each batch, matching WhatsApp Web
-- **MIN_PRE_KEY_COUNT (5)**: Minimum server-side pre-key count before triggering upload
+Values outside `[5, 65_535]` are clamped at upload time (an out-of-range value logs a `warn!`). The floor avoids an empty-but-flagged pool or a re-upload loop. The ceiling is the wire-format limit: the upload IQ encodes the pre-key list length as a `u16`, so a larger batch would generate keys locally and then fail to encode.
+
+Per-key X25519 generation and prost encoding for the batch are offloaded via `wacore::runtime::blocking` (runtime-agnostic; runs inline on wasm) since the caller-controlled batch size can be large.
 
 ### Pre-key ID counter and wrap-around
 
@@ -824,7 +834,7 @@ Location: `src/prekeys.rs`
 
 When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.
 
-The public `refresh_pre_keys()` method force-uploads a fresh batch of 812 pre-keys, giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
+The public `refresh_pre_keys()` method force-uploads a fresh batch of `Client::wanted_pre_key_count()` pre-keys (default 812; tunable via [`with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`set_wanted_pre_key_count`](/api/client#set_wanted_pre_key_count)), giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
 
 ```rust
 // After restoring a session from another library

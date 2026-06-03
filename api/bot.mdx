@@ -511,6 +511,37 @@ For bots that only need to respond to new messages, enabling this can significan
 
 ---
 
+### with_wanted_pre_key_count
+
+```rust
+pub fn with_wanted_pre_key_count(self, count: usize) -> Self
+```
+
+Sets the number of one-time pre-keys generated and uploaded per batch. Mirrors WhatsApp Web's `UPLOAD_KEYS_COUNT`. Default: `812`.
+
+The value is clamped at upload time to `5..=65_535`. Values outside that range log a `warn!` and are clamped to the nearest bound.
+
+<ParamField path="count" type="usize" required>
+  Pre-keys per upload batch. Clamped to `5..=65_535`.
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_wanted_pre_key_count(256) // smaller batch for embedded hosts
+    // ...
+```
+
+<Tip>
+Leave this at the default unless you have a specific reason to change it. Embedded or memory-constrained consumers may prefer a smaller batch to shrink the working set during each upload; smaller batches also mean more frequent uploads as peers consume keys.
+</Tip>
+
+<Warning>
+The floor of 5 prevents an empty-but-flagged pool and a re-upload loop (the count guard never clears below the trigger threshold). The ceiling of 65,535 is the wire-format limit — the upload IQ encodes the pre-key list length as a `u16`, so a larger batch would generate and store keys locally and then fail to encode.
+</Warning>
+
+---
+
 ## Building and Running
 
 ### build

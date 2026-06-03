@@ -1072,6 +1072,39 @@ pub fn skip_history_sync_enabled(&self) -> bool
 
 Returns `true` if history sync is currently being skipped.
 
+### set_wanted_pre_key_count
+
+```rust
+pub fn set_wanted_pre_key_count(&self, count: usize)
+```
+
+Sets the number of one-time pre-keys generated and uploaded per batch. Mirrors WhatsApp Web's `UPLOAD_KEYS_COUNT`. Default: `812`.
+
+Intended for consumers that construct `Client` directly (rather than via `Bot::builder().with_wanted_pre_key_count(...)`). Set this before calling `connect()`. The value is clamped at upload time to `5..=65_535`; out-of-range values log a `warn!`.
+
+<ParamField path="count" type="usize" required>
+  Pre-keys per upload batch. Clamped to `5..=65_535`.
+</ParamField>
+
+**Example:**
+```rust
+// On a memory-constrained host, upload smaller batches
+client.set_wanted_pre_key_count(256);
+client.connect().await?;
+```
+
+<Warning>
+The floor of 5 prevents an empty-but-flagged pool and a re-upload loop. The ceiling of 65,535 matches the upload IQ's `u16` list-length encoding — larger batches would generate keys locally and then fail to encode.
+</Warning>
+
+### wanted_pre_key_count
+
+```rust
+pub fn wanted_pre_key_count(&self) -> usize
+```
+
+Returns the currently configured pre-key upload batch size.
+
 ### set_force_active_delivery_receipts
 
 ```rust
@@ -1702,7 +1735,7 @@ Any `pkmsg` referencing those old IDs will fail permanently with `InvalidPreKeyI
 **Behavior:**
 
 - Acquires the internal `prekey_upload_lock` so this force-upload cannot race with the count-based and digest-repair upload paths
-- Uploads a full batch of 812 pre-keys with Fibonacci retry backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s)
+- Uploads a full batch of [`Client::wanted_pre_key_count()`](#wanted_pre_key_count) pre-keys (default 812, configurable via [`BotBuilder::with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) or [`set_wanted_pre_key_count`](#set_wanted_pre_key_count)) with Fibonacci retry backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s)
 - Retries until success or the connection is lost
 
 <Warning>

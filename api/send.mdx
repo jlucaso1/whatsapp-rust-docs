@@ -228,6 +228,9 @@ pub struct SendOptions {
     /// message for disappearing messages support.
     /// Common values: 86400 (24h), 604800 (7d), 7776000 (90d).
     pub ephemeral_expiration: Option<u32>,
+    /// Force the `<message type="...">` attribute instead of deriving it from
+    /// content. Escape hatch for a type the classifier can't infer.
+    pub stanza_type_override: Option<StanzaType>,
 }
 ```
 
@@ -241,6 +244,14 @@ pub struct SendOptions {
 
 <ParamField path="ephemeral_expiration" type="Option<u32>" default="None">
   Sets the ephemeral (disappearing) message duration in seconds by injecting `contextInfo.expiration` on the protobuf message. When the recipient's chat has disappearing messages enabled, set this to match the chat's ephemeral timer. Common values: `86400` (24 hours), `604800` (7 days), `7776000` (90 days). Pass `0` or `None` to send a non-ephemeral message.
+</ParamField>
+
+<ParamField path="stanza_type_override" type="Option<StanzaType>" default="None">
+  Forces the `<message type="...">` attribute on the outgoing stanza instead of letting the content classifier pick one. Leave as `None` for normal sends — the library infers the correct type from the protobuf payload. Set this only when you're sending a message variant the classifier can't recognize and the server requires a specific wire type. See [Stanza types](#stanza-types) for the available values.
+
+  <Note>
+    The override is applied when the stanza is first sent. The retry path reclassifies from content, so an override doesn't follow a message through resends.
+  </Note>
 </ParamField>
 
 ### Example: Send with a custom message ID
@@ -741,11 +752,45 @@ The `type` attribute on the outer `<message>` XML node is determined by `stanza_
 
 | Stanza type | Message types |
 |---|---|
-| `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `album_message`, `extended_text_message` (without `matched_text`), `secret_encrypted_message` with `SecretEncType::MessageEdit`, `poll_result_snapshot_message`, `poll_result_snapshot_message_v3` |
+| `"text"` | `conversation`, `protocol_message`, `keep_in_chat_message`, `edited_message`, `pin_in_chat_message`, `album_message`, `extended_text_message` (without `matched_text`), `secret_encrypted_message` with `SecretEncType::MessageEdit`, `poll_result_snapshot_message`, `poll_result_snapshot_message_v3`, `request_payment_message`, `send_payment_message`, `payment_invite_message`, `decline_payment_request_message`, `cancel_payment_request_message` |
 | `"media"` | `image_message`, `video_message`, `audio_message`, `document_message`, `sticker_message`, `sticker_pack_message`, `location_message`, `contact_message`, `extended_text_message` (with `matched_text`), and all other media types |
 | `"reaction"` | `reaction_message`, `enc_reaction_message` |
 | `"poll"` | `poll_creation_message`, `poll_creation_message_v2`, `poll_creation_message_v3`, `poll_creation_message_v5`, `poll_update_message`, `secret_encrypted_message` with `SecretEncType::PollEdit` or `SecretEncType::PollAddOption` |
 | `"event"` | `event_message`, `enc_event_response_message`, `secret_encrypted_message` with `SecretEncType::EventEdit` |
+
+<Note>
+  The payment-family messages (`request_payment_message`, `send_payment_message`, `payment_invite_message`, `decline_payment_request_message`, `cancel_payment_request_message`) classify as `"text"`. These message types only exist on the Android client and are silently dropped by the server when sent as `"media"` (no `mediatype`) or as `"pay"`; `"text"` is the wire type that actually delivers.
+</Note>
+
+#### Overriding the stanza type
+
+When the classifier can't recognize a message variant, set `SendOptions.stanza_type_override` to force the `<message type="...">` attribute. Use the `StanzaType` enum:
+
+```rust
+use whatsapp_rust::{StanzaType, send::SendOptions};
+
+let options = SendOptions {
+    stanza_type_override: Some(StanzaType::Text),
+    ..Default::default()
+};
+
+let result = client
+    .send_message_with_options(to, message, options)
+    .await?;
+```
+
+`StanzaType` variants map to the wire values listed above plus `"pay"`:
+
+| Variant | Wire value |
+|---|---|
+| `StanzaType::Text` | `"text"` |
+| `StanzaType::Media` | `"media"` |
+| `StanzaType::Reaction` | `"reaction"` |
+| `StanzaType::Poll` | `"poll"` |
+| `StanzaType::Event` | `"event"` |
+| `StanzaType::Pay` | `"pay"` |
+
+Leave `stanza_type_override` as `None` for normal sends — the classifier already handles every supported message type.
 
 ### Encrypted media type
 

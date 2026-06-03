@@ -142,7 +142,7 @@
         ]
       },
       {
-        "language": "pt-BR",
+        "language": "pt",
         "tabs": [
           {
             "tab": "Documentação",
@@ -150,9 +150,9 @@
               {
                 "group": "Primeiros Passos",
                 "pages": [
-                  "pt-BR/introduction",
-                  "pt-BR/installation",
-                  "pt-BR/quickstart"
+                  "pt/introduction",
+                  "pt/installation",
+                  "pt/quickstart"
                 ]
               }
             ]

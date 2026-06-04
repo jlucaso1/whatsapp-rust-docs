@@ -381,6 +381,57 @@ pub fn message_key(
 ) -> wa::MessageKey
 ```
 
+## Generic app state action
+
+### send_app_state_action
+
+Send any syncd (app state) `Set` action, driven by a generated schema from the `whatsapp_rust::schemas` registry. Use this as the escape hatch when there isn't a dedicated helper yet (for example, `clear_chat`, `favorites`, `quick_reply`). The typed methods on `ChatActions` and `Labels` are thin wrappers over this same call.
+
+```rust
+pub async fn send_app_state_action(
+    &self,
+    schema: &Schema,
+    index_args: &[&str],
+    value: &wa::SyncActionValue,
+) -> Result<()>
+```
+
+**Parameters:**
+- `schema` — A `&Schema` constant from `whatsapp_rust::schemas` (re-exported from `wacore::appstate::schemas`). The schema decides the collection, action version, and index shape.
+- `index_args` — The non-literal index parts in the order declared by `schema.index_parts`. Literal slots (the action name prefix) are filled automatically.
+- `value` — A `wa::SyncActionValue` with the matching action sub-field set and a `timestamp` in epoch milliseconds.
+
+**When to use it:**
+- The action you need does not have a typed helper on `ChatActions` or `Labels`.
+- You need to interoperate with a schema added to the registry without waiting for a new helper to land.
+
+Prefer the typed wrappers (`pin_chat`, `mute_chat`, `archive_chat`, label methods, etc.) whenever they exist — they handle the timestamp, conflict-resolution fields, and index args for you.
+
+**Example:**
+```rust
+use whatsapp_rust::schemas;
+use whatsapp_rust::waproto::whatsapp as wa;
+
+let value = wa::SyncActionValue {
+    clear_chat_action: Some(Default::default()),
+    timestamp: Some(1_700_000_000_000),
+    ..Default::default()
+};
+
+// CLEAR_CHAT's non-literal index parts are [chatJid, deleteStarred, deleteMedia].
+client
+    .send_app_state_action(
+        &schemas::CLEAR_CHAT,
+        &["15551234567@s.whatsapp.net", "0", "0"],
+        &value,
+    )
+    .await?;
+```
+
+<Note>
+Index arguments are positional and must match `schema.index_parts` length and order, excluding `IndexPart::Literal` slots. Mismatched arity returns an error before any patch is sent.
+</Note>
+
 ## App state sync
 
 All chat actions are synced across devices using WhatsApp's app state synchronization:

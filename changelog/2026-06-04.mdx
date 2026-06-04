@@ -1,6 +1,6 @@
 ---
 title: "June 4, 2026"
-description: "New Labels API for creating, deleting, and associating WhatsApp chat labels, plus query_info now returns Arc<GroupInfo>."
+description: "New Labels API and a generic send_app_state_action escape hatch for syncd actions, plus query_info now returns Arc<GroupInfo>."
 ---
 
 ## New features
@@ -11,6 +11,27 @@ Manage WhatsApp chat labels (etiquetas) from Rust. `client.labels()` exposes `cr
 ```rust
 client.labels().create_label("vip", "VIP", 3).await?;
 client.labels().add_chat_label("vip", &chat_jid).await?;
+```
+
+**Generic `send_app_state_action` API**
+Send any syncd action — including ones without a dedicated helper like `clear_chat`, `favorites`, or `quick_reply` — directly from a schema in the new `whatsapp_rust::schemas` registry. The schema picks the collection, action version, and index shape; you only fill in the typed `SyncActionValue` and the non-literal index args. The existing typed methods on `ChatActions` and `Labels` are now thin wrappers over this same call. See [`send_app_state_action`](/api/chat-actions#send_app_state_action).
+
+```rust
+use whatsapp_rust::schemas;
+use whatsapp_rust::waproto::whatsapp as wa;
+
+let value = wa::SyncActionValue {
+    clear_chat_action: Some(Default::default()),
+    timestamp: Some(1_700_000_000_000),
+    ..Default::default()
+};
+client
+    .send_app_state_action(
+        &schemas::CLEAR_CHAT,
+        &["15551234567@s.whatsapp.net", "0", "0"],
+        &value,
+    )
+    .await?;
 ```
 
 ## Updates

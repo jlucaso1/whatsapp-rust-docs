@@ -1609,7 +1609,7 @@ This event is dispatched after the client has already patched its internal devic
 
 ### IdentityChange
 
-**Emitted:** When a contact reinstalls WhatsApp (their identity key changed). The client performs full session cleanup and proactive re-establishment before emitting this event, matching WhatsApp Web's identity change handling.
+**Emitted:** When a contact reinstalls WhatsApp (their identity key changed). The event fires from two paths: an explicit server `<identity/>` notification, or a locally-detected change discovered while decrypting an incoming message. The `implicit` field distinguishes them.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -1618,12 +1618,17 @@ pub struct IdentityChange {
     pub user: Jid,
     /// Optional LID for the user
     pub lid_user: Option<Jid>,
+    /// `true` when detected locally during decrypt (mirrors WA Web
+    /// `saveIdentity` -> `handleNewIdentity`), `false` when triggered by the
+    /// server's `<identity/>` notification.
+    pub implicit: bool,
 }
 ```
 
 **Fields:**
 - `user` — The phone number JID of the user whose identity changed
 - `lid_user` — The user's LID JID, if provided in the notification
+- `implicit` — `false` for server-pushed `<identity/>` notifications (full cleanup performed); `true` for locally-detected changes during decrypt (lighter cleanup, see below)
 
 This event corresponds to WhatsApp Web's `WAWebHandleIdentityChange` flow. When the server sends an `<identity/>` notification inside a `type="encrypt"` stanza, the client:
 
@@ -1642,14 +1647,32 @@ Additionally, when a message triggers an `UntrustedIdentity` error during decryp
 
 The notification is processed immediately even when received during offline sync, because all cleanup operations are local-only. The background session re-establishment self-defers via `wait_for_offline_delivery_end` when the client is offline.
 
+#### Implicit (locally-detected) identity changes
+
+The client also fires `IdentityChange` with `implicit: true` when decrypting a peer's message replaces an existing identity key with a different one — for example, when a contact's reinstall reaches you through an incoming message before the server `<identity/>` push arrives. This mirrors WhatsApp Web's `saveIdentity` → `handleNewIdentity` flow.
+
+The implicit path is deliberately lighter than the server push:
+
+- Clears the device record (non-primary sessions + per-device sender key tracking)
+- Invalidates the device registry cache so the next send re-runs usync
+- Re-issues an active [TC token](/api/tctoken) if one exists
+
+It does **not** delete the primary session, rotate the `status@broadcast` sender key, or proactively re-establish sessions — the in-flight message is already establishing a new session, and the heavier reset is handled when the server `<identity/>` push reliably follows.
+
 <Note>
-Identity change notifications from companion devices (device ID != 0) and from your own JID are ignored — only primary device identity changes for other users are processed.
+Identity change notifications from companion devices (device ID != 0) and from your own JID are ignored on both paths — only primary device identity changes for other users are processed.
 </Note>
 
 **Example:**
 ```rust
 Event::IdentityChange(change) => {
-    println!("Security code changed for user {}", change.user);
+    if change.implicit {
+        // Detected while decrypting an incoming message — the server
+        // <identity/> push will usually follow with the full reset.
+        println!("Local identity change for {}", change.user);
+    } else {
+        println!("Security code changed for user {}", change.user);
+    }
     if let Some(lid) = &change.lid_user {
         println!("LID: {}", lid);
     }

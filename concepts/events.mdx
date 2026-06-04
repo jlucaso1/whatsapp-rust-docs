@@ -165,6 +165,8 @@ pub enum Event {
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
     DeleteChatUpdate(DeleteChatUpdate),
     DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
+    LabelEditUpdate(LabelEditUpdate),
+    LabelAssociationUpdate(LabelAssociationUpdate),
 
     // History Sync
     HistorySync(Box<LazyHistorySync>),
@@ -1356,6 +1358,74 @@ Event::DeleteMessageForMeUpdate(update) => {
     println!("Message {} in {} deleted for me", update.message_id, update.chat_jid);
 }
 ```
+
+### LabelEditUpdate
+
+**Emitted:** When a chat label is created, renamed, recolored, or deleted on a linked device
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct LabelEditUpdate {
+    pub label_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::LabelEditAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `label_id` — Stable label identifier
+- `action.name` — New display name (`None` when only the deleted flag changes)
+- `action.color` — WhatsApp color index for the swatch
+- `action.deleted` — `Some(true)` when the label was removed
+- `from_full_sync` — `true` while replaying the initial app state full sync
+
+**Example:**
+```rust
+Event::LabelEditUpdate(update) => {
+    if update.action.deleted == Some(true) {
+        println!("Label {} deleted", update.label_id);
+    } else {
+        println!("Label {} renamed to {:?}", update.label_id, update.action.name);
+    }
+}
+```
+
+### LabelAssociationUpdate
+
+**Emitted:** When a label is added to or removed from a chat on a linked device
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct LabelAssociationUpdate {
+    pub label_id: String,
+    pub chat_jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::LabelAssociationAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `label_id` — Identifier of the label being attached or detached
+- `chat_jid` — Chat whose label set changed
+- `action.labeled` — `Some(true)` when the label was added, `Some(false)` when removed
+- `from_full_sync` — `true` while replaying the initial app state full sync
+
+**Example:**
+```rust
+Event::LabelAssociationUpdate(update) => {
+    let attached = update.action.labeled == Some(true);
+    println!(
+        "Label {} {} chat {}",
+        update.label_id,
+        if attached { "added to" } else { "removed from" },
+        update.chat_jid,
+    );
+}
+```
+
+See [Labels](/api/labels) for the outbound API that emits these events on other devices.
 
 ## History sync events
 

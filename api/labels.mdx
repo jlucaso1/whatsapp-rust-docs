@@ -1,0 +1,199 @@
+---
+title: Labels
+description: Create, delete, and associate WhatsApp chat labels, and react to label changes from linked devices
+---
+
+The `Labels` feature manages WhatsApp chat labels (etiquetas) — the colored tags WhatsApp Business uses to organize chats. Outbound calls create, rename, recolor, or delete labels and add or remove a label on a chat. Inbound label changes made on a linked device (such as WhatsApp Web or the phone) are delivered as events.
+
+Labels sync across all linked devices via WhatsApp's app state sync mechanism (the `regular` collection, action version 3).
+
+## Access
+
+Access label operations through the client:
+
+```rust
+let labels = client.labels();
+```
+
+## Create or update a label
+
+### create_label
+
+Create a new label or update an existing one. Because app state is an upsert keyed by `label_id`, calling this with an existing `label_id` renames or recolors that label.
+
+```rust
+pub async fn create_label(
+    &self,
+    label_id: &str,
+    name: &str,
+    color: i32,
+) -> Result<()>
+```
+
+**Parameters:**
+- `label_id` — Stable identifier for the label. Must be non-empty. Reuse the same `label_id` to update the label later.
+- `name` — Display name shown in the WhatsApp UI. Must be non-empty.
+- `color` — WhatsApp color index for the label swatch.
+
+**Example:**
+```rust
+// Create a new "Work" label
+client.labels().create_label("5", "Work", 2).await?;
+
+// Rename and recolor the same label later
+client.labels().create_label("5", "Clients", 4).await?;
+```
+
+## Delete a label
+
+### delete_label
+
+Delete a label. Existing chat associations are kept by the server; WhatsApp Web prunes them from its local database on receipt of the delete.
+
+```rust
+pub async fn delete_label(&self, label_id: &str) -> Result<()>
+```
+
+**Parameters:**
+- `label_id` — The label to delete. Must be non-empty.
+
+**Example:**
+```rust
+client.labels().delete_label("5").await?;
+```
+
+## Associate a label with a chat
+
+### add_chat_label
+
+Tag a chat with a label.
+
+```rust
+pub async fn add_chat_label(
+    &self,
+    label_id: &str,
+    chat_jid: &Jid,
+) -> Result<()>
+```
+
+**Parameters:**
+- `label_id` — The label to apply. Must be non-empty.
+- `chat_jid` — The chat to label.
+
+**Example:**
+```rust
+use wacore_binary::jid::Jid;
+
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+client.labels().add_chat_label("5", &chat).await?;
+```
+
+### remove_chat_label
+
+Remove a label from a chat.
+
+```rust
+pub async fn remove_chat_label(
+    &self,
+    label_id: &str,
+    chat_jid: &Jid,
+) -> Result<()>
+```
+
+**Parameters:**
+- `label_id` — The label to remove. Must be non-empty.
+- `chat_jid` — The chat to untag.
+
+**Example:**
+```rust
+client.labels().remove_chat_label("5", &chat).await?;
+```
+
+## Inbound label events
+
+Label changes made on a linked device are delivered through the event bus. Both events carry the underlying app state action so you can read the new name, color, deleted flag, or labeled state directly.
+
+```rust
+use wacore::types::events::Event;
+
+.on_event(|event, _client| async move {
+    match &*event {
+        Event::LabelEditUpdate(update) => {
+            if update.action.deleted == Some(true) {
+                println!("Label {} deleted", update.label_id);
+            } else {
+                println!(
+                    "Label {} = {:?} (color {:?})",
+                    update.label_id,
+                    update.action.name,
+                    update.action.color,
+                );
+            }
+        }
+        Event::LabelAssociationUpdate(update) => {
+            let attached = update.action.labeled == Some(true);
+            println!(
+                "Label {} {} chat {}",
+                update.label_id,
+                if attached { "added to" } else { "removed from" },
+                update.chat_jid,
+            );
+        }
+        _ => {}
+    }
+})
+```
+
+`from_full_sync` is `true` when the event came from an initial app state full sync, so you can suppress UI notifications during bootstrap.
+
+## App state sync
+
+| Action | Collection | Action version |
+|--------|------------|----------------|
+| Create / update / delete label | `regular` | 3 |
+| Add / remove label association | `regular` | 3 |
+
+<Note>
+App state sync requires the relevant encryption keys, which arrive during initial sync after pairing. Outbound label calls may fail if invoked immediately after pairing before sync completes.
+</Note>
+
+## Error handling
+
+All methods return `Result<(), anyhow::Error>`. Empty `label_id` (and empty `name` for `create_label`) is rejected before any network work.
+
+```rust
+if let Err(e) = client.labels().create_label("", "Work", 0).await {
+    eprintln!("Validation failed: {e}"); // "label_id cannot be empty"
+}
+```
+
+## Complete example
+
+```rust
+use whatsapp_rust::Client;
+use wacore_binary::jid::Jid;
+use std::sync::Arc;
+
+async fn tag_vip_chats(client: &Arc<Client>) -> anyhow::Result<()> {
+    let vip: Jid = "15551234567@s.whatsapp.net".parse()?;
+    let lead: Jid = "15559876543@s.whatsapp.net".parse()?;
+
+    // Create a "VIP" label (color index 3)
+    client.labels().create_label("vip", "VIP", 3).await?;
+
+    // Tag two chats
+    client.labels().add_chat_label("vip", &vip).await?;
+    client.labels().add_chat_label("vip", &lead).await?;
+
+    // Later: drop one of the chats from the label
+    client.labels().remove_chat_label("vip", &lead).await?;
+
+    Ok(())
+}
+```
+
+## See also
+
+- [Events](/concepts/events) — Handle `LabelEditUpdate` and `LabelAssociationUpdate`
+- [Chat actions](/api/chat-actions) — Archive, pin, mute, star, and other app-state-synced chat operations
+- [State management](/advanced/state-management) — How app state sync works under the hood

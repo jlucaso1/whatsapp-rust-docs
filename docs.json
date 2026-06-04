@@ -99,6 +99,7 @@
                   "api/status",
                   "api/profile",
                   "api/chat-actions",
+                  "api/labels",
                   "api/privacy",
                   "api/business",
                   "api/mex",

@@ -1077,11 +1077,13 @@ let cache = TypedCache::from_store(store, "group", Some(Duration::from_secs(3600
 `CacheEntryConfig` provides a `build_typed_ttl` convenience method that automatically selects the right backend: if a custom `CacheStore` is provided, it creates a `TypedCache` backed by the store; otherwise it falls back to an in-process moka cache.
 
 ```rust
-let cache: TypedCache<String, GroupInfo> = config.group_cache.build_typed_ttl(
+let cache: TypedCache<Jid, Arc<GroupInfo>> = config.group_cache.build_typed_ttl(
     config.cache_stores.group_cache.clone(),
     "group",
 );
 ```
+
+The group cache stores `Arc<GroupInfo>` so that warm sends and repeated `query_info` calls reuse the same snapshot instead of deep-cloning the participants list.
 
 #### `invalidate_all` and `clear`
 

@@ -176,9 +176,12 @@ See [Groups API reference](/api/groups#get_participating) for details.
 For lower-level access with caching:
 
 ```rust
+use std::sync::Arc;
 use wacore::client::context::GroupInfo;
 
-let info: GroupInfo = client.groups().query_info(&group_jid).await?;
+// `query_info` returns an `Arc<GroupInfo>` so repeated lookups and warm sends
+// share the same snapshot without copying the participants list.
+let info: Arc<GroupInfo> = client.groups().query_info(&group_jid).await?;
 
 println!("Participants: {:?}", info.participants);
 println!("Addressing mode: {:?}", info.addressing_mode);

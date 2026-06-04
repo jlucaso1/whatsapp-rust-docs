@@ -20,22 +20,31 @@ let groups = client.groups();
 Query group information with caching support.
 
 ```rust
-pub async fn query_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error>
+pub async fn query_info(&self, jid: &Jid) -> Result<Arc<GroupInfo>, anyhow::Error>
 ```
 
 **Parameters:**
 - `jid` - Group JID (must end with `@g.us`)
 
 **Returns:**
-- `GroupInfo` - Contains participants list and addressing mode
+- `Arc<GroupInfo>` - Shared, reference-counted snapshot containing the participants list and addressing mode. Repeated calls for the same group return the same `Arc` from the in-memory cache, so warm sends avoid deep-cloning group metadata.
 
 **Example:**
 ```rust
+use std::sync::Arc;
+use wacore::client::context::GroupInfo;
+
 let group_jid: Jid = "123456789@g.us".parse()?;
-let info = client.groups().query_info(&group_jid).await?;
+let info: Arc<GroupInfo> = client.groups().query_info(&group_jid).await?;
 
 println!("Participants: {}", info.participants.len());
 println!("Addressing mode: {:?}", info.addressing_mode);
+
+// Cheaply share the snapshot across tasks without copying participants.
+let info_for_task = info.clone();
+tokio::spawn(async move {
+    println!("LID map entries: {}", info_for_task.lid_to_pn_map().len());
+});
 ```
 
 ### get_participating
@@ -1043,6 +1052,8 @@ for pic in pictures {
 
 Cached group information returned by `query_info`. Contains participant list, addressing mode, and LID-to-phone mappings for privacy-addressed groups.
 
+`query_info` returns `Arc<GroupInfo>` so that repeated lookups and warm sends share the same snapshot without deep-cloning the participants list.
+
 ```rust
 pub struct GroupInfo {
     pub participants: Vec<Jid>,
@@ -1062,7 +1073,7 @@ pub struct GroupInfo {
 **Example:**
 
 ```rust
-let info = client.groups().query_info(&group_jid).await?;
+let info = client.groups().query_info(&group_jid).await?; // Arc<GroupInfo>
 
 // Access participants and addressing mode
 for participant in &info.participants {

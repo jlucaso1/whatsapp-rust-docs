@@ -91,14 +91,14 @@ for entry in blocklist {
 
 ### is_blocked
 
-Check if a specific contact is blocked.
+Check if a specific contact is blocked. Accepts either a LID or a PN JID; the client resolves the LID↔PN pair from its mapping cache so a PN-input query correctly matches a LID-keyed blocklist entry (and vice versa).
 
 ```rust
 pub async fn is_blocked(&self, jid: &Jid) -> Result<bool, anyhow::Error>
 ```
 
 **Parameters:**
-- `jid` - Contact JID to check
+- `jid` - Contact JID to check (LID or PN)
 
 **Returns:**
 - `bool` - `true` if blocked, `false` otherwise
@@ -106,6 +106,7 @@ pub async fn is_blocked(&self, jid: &Jid) -> Result<bool, anyhow::Error>
 **Behavior:**
 - Compares only the user part of the JID (ignores device ID)
 - Blocking applies to the entire user account, not individual devices
+- Because `block()` stores entries keyed by LID, `is_blocked()` resolves the queried JID's LID/PN pair before matching. If the mapping lookup fails (network or backend error), the call returns `Err` rather than silently falling back to the raw user, which would risk a false negative. When no mapping exists for the JID, the raw user part is used as-is.
 
 **Example:**
 ```rust

@@ -243,8 +243,12 @@ pub mod time;
 
 The `time` module centralizes all timestamp handling. It exposes two independent clocks that should not be confused:
 
-- **Wall clock** (`TimeProvider`, `now_millis`, `now_utc`) — answers "what time is it?". May jump backwards across NTP syncs, manual adjustments, or leap-second smearing. Backed by `chrono::Utc::now()` by default.
+- **Wall clock** (`TimeProvider`, `now_millis`, `now_utc`) — answers "what time is it?". May jump backwards across NTP syncs, manual adjustments, or leap-second smearing. Backed by `chrono::Utc::now()` on native targets.
 - **Monotonic clock** (`MonotonicProvider`, `Instant`) — answers "how much time passed?". Never moves backwards and is immune to NTP adjustments. Backed by `std::time::Instant` on native targets.
+
+<Warning>
+On `wasm32-unknown-unknown` there is no built-in wall-clock source. If you do not register a provider before the first timestamp, `now_millis()` returns `0` (Unix epoch) and logs a single warning. Always call `set_time_provider` with a `Date.now()`-backed (or equivalent) provider during WASM startup — see [Custom wall-clock provider](#custom-wall-clock-provider) below.
+</Warning>
 
 Use the wall clock for stanza timestamps, app-state mutations, and log lines. Use the monotonic clock for timeouts, retry backoff, and latency measurements. Conflating the two silently corrupts elapsed-time logic whenever the system clock is adjusted mid-measurement.
 
@@ -284,6 +288,23 @@ set_time_provider(FixedTime).expect("provider already set");
 <Note>
 `set_time_provider` returns `Err` if a provider has already been set. The provider uses `OnceLock` internally, so it can only be configured once per process.
 </Note>
+
+On `wasm32` targets the epoch fallback is not cached, so a later `set_time_provider` call still takes effect even if a timestamp was read during startup. A typical browser embedder wires `Date.now()` through `wasm-bindgen`:
+
+```rust
+use wacore::time::{TimeProvider, set_time_provider};
+
+struct JsDateProvider;
+
+impl TimeProvider for JsDateProvider {
+    fn now_millis(&self) -> i64 {
+        js_sys::Date::now() as i64
+    }
+}
+
+// Register before constructing the client or sending stanzas.
+set_time_provider(JsDateProvider).expect("provider already set");
+```
 
 #### Instant
 

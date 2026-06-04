@@ -908,7 +908,7 @@ The `wa::Message` protobuf supports various message types. Set exactly one of th
 
 ### Example: Extended text with quote
 
-Use `build_quote_context_with_info` to create a reply with the `remote_jid` field set for cross-platform compatibility:
+Use `build_quote_context_with_info` to create a reply with the correct `participant` and `remote_jid` fields. It takes both the quoted message's chat (`quoted_chat_jid`) and the chat you're sending into (`target_chat_jid`):
 
 ```rust
 use waproto::whatsapp as wa;
@@ -917,7 +917,8 @@ use wacore::proto_helpers::build_quote_context_with_info;
 let context = build_quote_context_with_info(
     quoted_message_id,
     &quoted_sender_jid,
-    &chat_jid,
+    &chat_jid, // quoted_chat_jid
+    &chat_jid, // target_chat_jid (same as quoted for in-place replies)
     &quoted_message,
 );
 
@@ -931,4 +932,4 @@ let message = wa::Message {
 };
 ```
 
-The `remote_jid` is set to the chat JID (group, DM, or newsletter) and is required by iOS clients to display quoted messages correctly. For newsletter chats, the `participant` field is automatically set to the newsletter JID instead of the sender.
+`remote_jid` is emitted only when `quoted_chat_jid` and `target_chat_jid` refer to different chats (a cross-chat quote, such as quoting a status into a DM). Same-chat replies omit it, matching WhatsApp Web. For newsletter chats, the `participant` field is automatically set to the newsletter JID instead of the sender.

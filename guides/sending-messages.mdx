@@ -87,7 +87,9 @@ let result = client.send_message(to, reply).await?;
 
 ### Cross-platform quoted replies with remoteJid
 
-For quoted replies that display correctly on all platforms (including iOS), use `build_quote_context_with_info`. This sets the `remote_jid` field on the `ContextInfo` to the chat JID, which iOS requires to scope the quote correctly:
+For quoted replies that display correctly on all platforms (including iOS), use `build_quote_context_with_info`. It matches WhatsApp Web's behavior: it sets `participant` correctly (channel JID for newsletters, sender for everything else) and emits `remote_jid` only for cross-chat quotes — when the quoted message lives in a different chat than the one you're sending to.
+
+The function takes both the quoted message's chat (`quoted_chat_jid`) and the chat you're sending into (`target_chat_jid`). For an in-place reply these are the same JID, and `remote_jid` is omitted; for a cross-chat quote (for example, quoting a status update into a DM) they differ, and `remote_jid` is set to the quoted chat:
 
 ```rust
 use wacore::proto_helpers::{build_quote_context_with_info, MessageExt};
@@ -98,11 +100,12 @@ let original_message_id = "3EB0ABC123";
 let original_sender: Jid = "1234567890@s.whatsapp.net".parse()?;
 let chat_jid: Jid = "120363040237990503@g.us".parse()?; // group or DM JID
 
-// Build quote context with remote_jid (recommended for cross-platform compatibility)
+// Same-chat reply: quoted_chat and target_chat are identical, so remote_jid is omitted.
 let context = build_quote_context_with_info(
     original_message_id,
     &original_sender,
-    &chat_jid,
+    &chat_jid, // quoted_chat_jid
+    &chat_jid, // target_chat_jid
     &original_message,
 );
 
@@ -119,11 +122,11 @@ let result = client.send_message(chat_jid, reply).await?;
 ```
 
 The `build_quote_context_with_info` function handles two important details:
-- **`remote_jid`** is always set to the chat JID (matching WhatsApp Web's behavior)
-- **`participant`** is set to the sender JID for normal chats, or the newsletter JID for newsletter quotes
+- **`remote_jid`** is set only when `quoted_chat_jid` and `target_chat_jid` refer to different chats (cross-chat quote). For same-chat replies it is omitted, matching WhatsApp Web.
+- **`participant`** is set to the sender JID for normal chats, or the newsletter JID for newsletter quotes.
 
 <Note>
-Use `build_quote_context_with_info` instead of `build_quote_context` when sending replies in groups or newsletters. The `remote_jid` field is required by iOS clients to display the quoted message correctly.
+Pass the same JID for both `quoted_chat_jid` and `target_chat_jid` when replying in-place. Use different JIDs only when forwarding a quote across chats (for example, quoting a status into a DM).
 </Note>
 
 ### Setting context on media messages
@@ -148,7 +151,8 @@ let mut reply = wa::Message {
 let context = build_quote_context_with_info(
     original_message_id,
     &original_sender,
-    &chat_jid,
+    &chat_jid, // quoted_chat_jid
+    &chat_jid, // target_chat_jid
     &original_message,
 );
 
@@ -793,7 +797,7 @@ let key = result.message_key();
 ### Quote context best practices
 
 - Always use `prepare_for_quote()` to avoid nested quote chains
-- Use `build_quote_context_with_info` instead of `build_quote_context` for cross-platform compatibility — it sets `remote_jid` (required by iOS) and correctly resolves the `participant` field for newsletters
+- Use `build_quote_context_with_info` instead of `build_quote_context` for cross-platform compatibility — it correctly resolves the `participant` field for newsletters and emits `remote_jid` only for cross-chat quotes (matching WhatsApp Web)
 - Preserve original media fields when quoting media messages
 
 </Steps>

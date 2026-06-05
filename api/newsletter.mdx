@@ -238,6 +238,65 @@ client.newsletter()
     .await?;
 ```
 
+### edit_message
+
+Edit a previously-sent newsletter message. Channel messages are plaintext, so the edit is sent as a `<message edit="1">` stanza with the new protobuf body — not through the E2E send path.
+
+```rust
+pub async fn edit_message(
+    &self,
+    jid: &Jid,
+    message_id: impl Into<String>,
+    new_content: wa::Message,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID. Non-newsletter JIDs are rejected with an error; use [`Client::edit_message`](/api/send) for DMs and groups.
+- `message_id` — The target message's `message_id` (the wire stanza id, as returned by `send_message` or carried on [`NewsletterMessage`](#newslettermessage)). This is **not** the `server_id` used by reactions. Empty IDs are rejected.
+- `new_content` — Replacement message body. Typically a `wa::Message { conversation: Some(..), .. }` for text edits.
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+let new_body = wa::Message {
+    conversation: Some("edited text".to_string()),
+    ..Default::default()
+};
+
+client.newsletter()
+    .edit_message(&newsletter_jid, original_message_id, new_body)
+    .await?;
+```
+
+### revoke_message
+
+Revoke (delete) a previously-sent newsletter message. Like [`edit_message`](#edit_message), this goes through the plaintext channel path, not the E2E send path.
+
+```rust
+pub async fn revoke_message(
+    &self,
+    jid: &Jid,
+    message_id: impl Into<String>,
+) -> Result<(), anyhow::Error>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID. Non-newsletter JIDs are rejected; use [`Client::revoke_message`](/api/send) for DMs and groups.
+- `message_id` — The target message's `message_id` (wire stanza id, not `server_id`). Empty IDs are rejected.
+
+**Example:**
+```rust
+client.newsletter()
+    .revoke_message(&newsletter_jid, message_id)
+    .await?;
+```
+
+<Note>
+Newsletter JIDs are now also rejected at the root of the E2E send path. If your code accidentally routes a channel JID through `send_message_impl`, `pin_message`, or the standard `edit_message` / `revoke_message` on `Client`, you get an error that names the mis-route instead of a malformed encrypted fan-out.
+</Note>
+
 ### get_messages
 
 Fetch message history from a newsletter.

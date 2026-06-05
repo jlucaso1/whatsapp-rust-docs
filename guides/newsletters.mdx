@@ -154,6 +154,33 @@ client.newsletter()
 
 See [Send API reference](/api/send#send_message) for details.
 
+### Editing and revoking messages
+
+Channels use a plaintext edit/revoke flow that's separate from DM and group messages. Call the helpers on `client.newsletter()` and pass the original message's `message_id` (the wire stanza id returned by `send_message`, **not** the `server_id` used for reactions):
+
+```rust
+use waproto::whatsapp as wa;
+
+// Edit a text message
+let new_body = wa::Message {
+    conversation: Some("Updated announcement".to_string()),
+    ..Default::default()
+};
+
+client.newsletter()
+    .edit_message(&newsletter_jid, message_id.clone(), new_body)
+    .await?;
+
+// Revoke (delete) it
+client.newsletter()
+    .revoke_message(&newsletter_jid, message_id)
+    .await?;
+```
+
+<Warning>
+Don't call `Client::edit_message` or `Client::revoke_message` with a newsletter JID. The E2E send path now rejects channel JIDs outright (including from `pin_message`) so you get a clear error rather than a malformed encrypted stanza. Always go through `client.newsletter()` for channel edits and revokes.
+</Warning>
+
 ## Fetching message history
 
 Retrieve past messages with pagination support:

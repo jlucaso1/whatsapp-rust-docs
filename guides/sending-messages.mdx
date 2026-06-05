@@ -163,53 +163,49 @@ let result = client.send_message(chat_jid, reply).await?;
 
 ## Reactions
 
-### Sending a Reaction
+### Sending a reaction
 
-Reactions are sent using `ReactionMessage`:
-
-```rust
-use waproto::whatsapp::message::ReactionMessage;
-
-let reaction = wa::Message {
-    reaction_message: Some(ReactionMessage {
-        key: Some(wa::MessageKey {
-            remote_jid: Some(chat_jid.to_string()),
-            from_me: Some(false),
-            id: Some(message_id_to_react_to.to_string()),
-            participant: Some(sender_jid.to_string()),
-        }),
-        text: Some("👍".to_string()),
-        sender_timestamp_ms: Some(wacore::time::now_millis()),
-        ..Default::default()
-    }),
-    ..Default::default()
-};
-
-let result = client.send_message(chat_jid, reaction).await?;
-```
-
-### Removing a Reaction
-
-Send an empty reaction text to remove:
+Use `client.send_reaction()` to react to a DM, group, or `status@broadcast` message. The helper builds the `ReactionMessage` payload, stamps `sender_timestamp_ms`, and routes the stanza through the standard send path.
 
 ```rust
-let remove_reaction = wa::Message {
-    reaction_message: Some(ReactionMessage {
-        key: Some(wa::MessageKey {
-            remote_jid: Some(chat_jid.to_string()),
-            from_me: Some(false),
-            id: Some(message_id_to_react_to.to_string()),
-            participant: Some(sender_jid.to_string()),
-        }),
-        text: Some("".to_string()),  // Empty to remove
-        sender_timestamp_ms: Some(wacore::time::now_millis()),
-        ..Default::default()
-    }),
-    ..Default::default()
+use waproto::whatsapp as wa;
+
+let target_key = wa::MessageKey {
+    remote_jid: Some(chat_jid.to_string()),
+    from_me: Some(false),
+    id: Some(message_id_to_react_to.to_string()),
+    // Required for groups and status@broadcast; leave None for DMs.
+    participant: Some(sender_jid.to_string()),
 };
+
+let result = client.send_reaction(&chat_jid, target_key, "👍").await?;
 ```
 
-## Editing messages
+For groups and `status@broadcast`, `target_key.participant` must point to the original sender so the receipt can be attributed. In DMs, leave `participant` as `None`.
+
+If you're already inside an event handler, [`MessageContext::react`](/api/bot#react) fills in `chat`, `target_key`, and `participant` from the incoming message automatically:
+
+```rust
+use whatsapp_rust::bot::MessageContext;
+
+if let Some(ctx) = MessageContext::from_event(&event, client) {
+    ctx.react("❤️").await?;
+}
+```
+
+### Removing a reaction
+
+Pass an empty `emoji` to revoke a previous reaction (matches WhatsApp Web's empty-text-as-revoke semantics):
+
+```rust
+client.send_reaction(&chat_jid, target_key, "").await?;
+```
+
+<Note>
+Newsletter (channel) reactions use a different plaintext stanza format. Use [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) for newsletters instead.
+</Note>
+
+## Editing Messages
 
 Use [`client.edit_message`](/api/send#edit_message) to replace the content of a message you previously sent. Pass the chat JID, the original message ID, and the new content as a plain `wa::Message` — the client builds the correct wire envelope, resolves the participant JID (LID or PN) for groups, and sends the edit with a fresh stanza ID so the server does not deduplicate it against the original.
 

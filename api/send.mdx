@@ -597,6 +597,87 @@ client.unpin_message(chat_jid, key).await?;
 
 ---
 
+## send_reaction
+
+React to a DM, group, or `status@broadcast` message with an emoji. The helper builds the `ReactionMessage` payload (including `sender_timestamp_ms`) and routes it through the standard send path, so the same retry, fan-out, and phash logic that applies to other messages applies here.
+
+```rust
+pub async fn send_reaction(
+    &self,
+    chat: &Jid,
+    target_key: wa::MessageKey,
+    emoji: &str,
+) -> Result<SendResult, anyhow::Error>
+```
+
+<ParamField path="chat" type="&Jid" required>
+  Chat JID where the reaction is delivered. For `status@broadcast`, this is the broadcast JID; the reaction fans out to the status author's devices using `target_key.participant`.
+</ParamField>
+
+<ParamField path="target_key" type="wa::MessageKey" required>
+  Identifies the message being reacted to.
+
+  - `remote_jid` — chat JID of the target message
+  - `from_me` — `true` if you sent the original message, otherwise `false`
+  - `id` — message ID of the target message
+  - `participant` — original sender JID. **Required for groups and `status@broadcast`**; leave as `None` for DMs.
+</ParamField>
+
+<ParamField path="emoji" type="&str" required>
+  Emoji to send (e.g. `"👍"`, `"❤️"`). Pass an empty string (`""`) to remove a previous reaction — this matches WhatsApp Web's empty-text-as-revoke behavior.
+</ParamField>
+
+<ResponseField name="SendResult" type="SendResult">
+  Contains the reaction's `message_id` and resolved recipient `to` JID. See [`SendResult`](#sendresult).
+</ResponseField>
+
+### Example: react to a DM
+
+```rust
+use waproto::whatsapp as wa;
+
+let target_key = wa::MessageKey {
+    remote_jid: Some(chat_jid.to_string()),
+    from_me: Some(false),
+    id: Some(target_message_id.clone()),
+    participant: None, // DMs omit participant
+};
+
+client.send_reaction(&chat_jid, target_key, "👍").await?;
+```
+
+### Example: react to a group message
+
+```rust
+use waproto::whatsapp as wa;
+
+let target_key = wa::MessageKey {
+    remote_jid: Some(group_jid.to_string()),
+    from_me: Some(false),
+    id: Some(target_message_id.clone()),
+    // The original sender — required for groups so the receipt can be attributed.
+    participant: Some(sender_jid.to_string()),
+};
+
+client.send_reaction(&group_jid, target_key, "🎉").await?;
+```
+
+### Example: remove a reaction
+
+```rust
+client.send_reaction(&chat_jid, target_key, "").await?;
+```
+
+<Note>
+Inside an event handler, prefer [`MessageContext::react`](/api/bot#react) — it derives `chat`, `target_key`, and `participant` from the incoming message for you.
+</Note>
+
+<Note>
+Newsletter (channel) reactions use a different plaintext stanza format and are not handled here. Use [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) for newsletters.
+</Note>
+
+---
+
 ## Phash validation (stale device list detection)
 
 When sending group, status, or DM messages, the library automatically validates the participant hash (`phash`) from the server's acknowledgment against the locally computed value. If the hashes differ, the appropriate caches are invalidated so the next send re-fetches current participant devices from the server:

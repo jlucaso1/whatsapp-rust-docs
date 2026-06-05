@@ -724,6 +724,32 @@ pub async fn revoke_message(
 
 Deletes a message in the same chat.
 
+### react
+
+```rust
+pub async fn react(&self, emoji: &str) -> Result<SendResult, anyhow::Error>
+```
+
+Sends an emoji reaction to the incoming message. The chat JID, target message ID, and group/status `participant` are taken from the context — you only supply the emoji. Pass an empty string (`""`) to remove a previously sent reaction.
+
+Internally this calls [`Client::send_reaction`](/api/send#send_reaction) with `self.message_key()` as the target.
+
+**Example:**
+```rust
+use whatsapp_rust::bot::MessageContext;
+
+.on_event(|event, client| async move {
+    if let Some(ctx) = MessageContext::from_event(&event, client) {
+        // React with a thumbs-up to every incoming message.
+        let _ = ctx.react("👍").await;
+    }
+})
+```
+
+<Note>
+Newsletter (channel) messages don't flow through `MessageContext::react`. Use [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) for newsletter reactions.
+</Note>
+
 ---
 
 ## Complete Example

@@ -205,7 +205,7 @@ client.send_reaction(&chat_jid, target_key, "").await?;
 Newsletter (channel) reactions use a different plaintext stanza format. Use [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) for newsletters instead.
 </Note>
 
-## Editing Messages
+## Editing messages
 
 Use [`client.edit_message`](/api/send#edit_message) to replace the content of a message you previously sent. Pass the chat JID, the original message ID, and the new content as a plain `wa::Message` — the client builds the correct wire envelope, resolves the participant JID (LID or PN) for groups, and sends the edit with a fresh stanza ID so the server does not deduplicate it against the original.
 

@@ -373,7 +373,7 @@ let edit_id = client.edit_message(
 ```
 
 <Note>
-  The edit wraps your new content in an `edited_message` (FutureProofMessage) envelope automatically. In group chats, the correct participant JID (LID or PN) is resolved for you.
+  The edit is sent as a top-level `protocolMessage` with `type = MESSAGE_EDIT`, matching the WhatsApp Web wire shape. In group chats, the correct participant JID (LID or PN) is resolved for you, and a fresh stanza ID is used so the server does not deduplicate the edit against the original message.
 </Note>
 
 ---

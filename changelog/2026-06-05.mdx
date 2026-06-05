@@ -1,0 +1,39 @@
+---
+title: "June 5, 2026"
+description: "New send_reaction helper on Client and a MessageContext::react shortcut for DM, group, and status reactions."
+---
+
+## New features
+
+**`Client::send_reaction` helper**
+Send a reaction to a DM, group, or `status@broadcast` message in one call. The helper builds the underlying `ReactionMessage` (including `sender_timestamp_ms`) and routes the stanza through the standard send path, so retry, fan-out, and phash handling all apply. Pass an empty string to remove a previous reaction. For groups and status, set `target_key.participant` to the original sender so the receipt can be attributed. See [`send_reaction`](/api/send#send_reaction).
+
+```rust
+use waproto::whatsapp as wa;
+
+let target_key = wa::MessageKey {
+    remote_jid: Some(group_jid.to_string()),
+    from_me: Some(false),
+    id: Some(target_message_id.clone()),
+    participant: Some(sender_jid.to_string()), // required for groups/status
+};
+
+client.send_reaction(&group_jid, target_key, "🎉").await?;
+```
+
+**`MessageContext::react` shortcut**
+Inside an event handler, [`MessageContext::react`](/api/bot#react) reacts to the incoming message without manually rebuilding the message key — it fills in `chat`, message ID, and group/status `participant` for you.
+
+```rust
+use whatsapp_rust::bot::MessageContext;
+
+.on_event(|event, client| async move {
+    if let Some(ctx) = MessageContext::from_event(&event, client) {
+        let _ = ctx.react("👍").await;
+    }
+})
+```
+
+<Note>
+Newsletter (channel) reactions still go through [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) because they use a different plaintext stanza format.
+</Note>

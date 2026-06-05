@@ -1,7 +1,35 @@
 ---
 title: "June 5, 2026"
-description: "New send_reaction helper on Client and a MessageContext::react shortcut for DM, group, and status reactions."
+description: "Typed MEX operations from generated persisted-query modules, plus a new send_reaction helper and MessageContext::react shortcut."
 ---
+
+## Breaking changes
+
+**Typed MEX operations**
+[`MexRequest`](/api/mex#mexrequest) is now generic over its variables type (`MexRequest<V>`), and the request carries a [`MexDoc`](/api/mex#mexdoc) (operation name + persisted document ID) instead of a free-form `doc_id: &str`. Variables are serialized straight to the wire — there's no intermediate `serde_json::Value` step — so callers pass either a typed `Variables` struct from a generated operation module or any `serde::Serialize` value.
+
+The generated modules live under [`wacore::iq::mex_operations`](/api/wacore) and expose `NAME`, `DOC_ID`, `OPERATION_KIND`, `Variables`, and `Response` per persisted query. Build a request with [`MexRequest::new`](/api/mex#new):
+
+```rust
+use wacore::iq::mex_operations::join_newsletter;
+use whatsapp_rust::features::mex::MexRequest;
+
+let request = MexRequest::new(
+    join_newsletter::NAME,
+    join_newsletter::DOC_ID,
+    join_newsletter::Variables {
+        newsletter_id: Some(jid.to_string()),
+    },
+);
+
+let response = client.mex().mutate(request).await?;
+```
+
+`Mex::query` and `Mex::mutate` are now generic over `V: Serialize`, and a new `MexError::InvalidJid` variant surfaces JID parsing failures from MEX payloads. See [MEX (GraphQL)](/api/mex) for the full reference.
+
+<Note>
+If you previously built requests with `MexRequest { doc_id, variables }`, switch to `MexRequest::new(NAME, DOC_ID, variables)` using the generated module's constants — or, for ad-hoc operations, set `doc: MexDoc { name, id }` directly. Numeric `DOC_ID`s rotate with WhatsApp Web bundle releases; the stable `NAME` keeps diagnostics readable across versions.
+</Note>
 
 ## New features
 

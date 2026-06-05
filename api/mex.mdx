@@ -1,17 +1,53 @@
 ---
 title: MEX (GraphQL)
-description: Execute GraphQL queries and mutations via Meta Exchange
+description: Execute typed GraphQL queries and mutations via Meta Exchange persisted operations
 ---
 
-The `Mex` feature provides access to WhatsApp's Meta Exchange (MEX) GraphQL API, enabling queries and mutations for advanced operations.
+The `Mex` feature wraps WhatsApp's Meta Exchange (MEX) GraphQL API. Operations are persisted: you reference each query or mutation by a `(name, id)` pair pulled from a generated operation module, and pass its typed `Variables`. WhatsApp Web bundle updates rotate the numeric `id`, so the human-readable `name` keeps diagnostics stable across releases.
 
 ## Access
-
-Access MEX operations through the client:
 
 ```rust
 let mex = client.mex();
 ```
+
+## Building a request
+
+Each persisted operation lives in its own module under [`wacore::iq::mex_operations`](/api/wacore). Every module exposes:
+
+- `NAME` — the operation name (e.g. `"WAWebJoinNewsletterMutation"`).
+- `DOC_ID` — the current persisted document ID.
+- `OPERATION_KIND` — `"query"` or `"mutation"`.
+- `Variables` — a typed struct matching the operation's input shape.
+- `Response` — a typed struct matching the operation's output shape.
+
+Construct a [`MexRequest`](#mexrequest) with [`MexRequest::new`](#new) using those constants and a `Variables` value:
+
+```rust
+use wacore::iq::mex_operations::fetch_newsletter;
+use whatsapp_rust::features::mex::MexRequest;
+
+let request = MexRequest::new(
+    fetch_newsletter::NAME,
+    fetch_newsletter::DOC_ID,
+    fetch_newsletter::Variables {
+        input: Some(fetch_newsletter::Input {
+            key: Some(jid.to_string()),
+            r#type: Some("JID".into()),
+            view_role: Some("GUEST".into()),
+        }),
+        fetch_viewer_metadata: Some(true),
+        fetch_full_image: Some(true),
+        fetch_creation_time: Some(true),
+    },
+);
+
+let response = client.mex().query(request).await?;
+```
+
+<Tip>
+For operations whose `Variables` schema is too permissive to model exactly, pass any `serde::Serialize` value (for example a `serde_json::json!({...})`) as the variables — `query` and `mutate` are generic over `V: Serialize`.
+</Tip>
 
 ## Methods
 
@@ -20,33 +56,10 @@ let mex = client.mex();
 Execute a GraphQL query.
 
 ```rust
-pub async fn query(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError>
-```
-
-**Parameters:**
-- `request` - A `MexRequest` containing the document ID and variables
-
-**Returns:**
-- `MexResponse` - The GraphQL response with data and/or errors
-
-**Example:**
-```rust
-use serde_json::json;
-use whatsapp_rust::MexRequest;
-
-let request = MexRequest {
-    doc_id: "29829202653362039",
-    variables: json!({
-        "user_ids": ["15551234567@s.whatsapp.net"]
-    }),
-};
-
-let response = client.mex().query(request).await?;
-
-if response.has_data() {
-    let data = response.data.unwrap();
-    println!("Result: {:?}", data);
-}
+pub async fn query<V: Serialize>(
+    &self,
+    request: MexRequest<V>,
+) -> Result<MexResponse, MexError>
 ```
 
 ### mutate
@@ -54,51 +67,87 @@ if response.has_data() {
 Execute a GraphQL mutation.
 
 ```rust
-pub async fn mutate(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError>
+pub async fn mutate<V: Serialize>(
+    &self,
+    request: MexRequest<V>,
+) -> Result<MexResponse, MexError>
 ```
 
-**Parameters:**
-- `request` - A `MexRequest` containing the document ID and variables
+**Example — mutation with typed variables:**
 
-**Returns:**
-- `MexResponse` - The GraphQL response with data and/or errors
+```rust
+use wacore::iq::mex_operations::join_newsletter;
+use whatsapp_rust::features::mex::MexRequest;
 
-**Example:**
+let request = MexRequest::new(
+    join_newsletter::NAME,
+    join_newsletter::DOC_ID,
+    join_newsletter::Variables {
+        newsletter_id: Some(jid.to_string()),
+    },
+);
+
+let response = client.mex().mutate(request).await?;
+```
+
+**Example — loosely-typed variables with `serde_json`:**
+
 ```rust
 use serde_json::json;
-use whatsapp_rust::MexRequest;
+use wacore::iq::mex::MexDoc;
+use whatsapp_rust::features::mex::MexRequest;
 
 let request = MexRequest {
-    doc_id: "mutation_doc_id_here",
+    doc: MexDoc {
+        name: "WAWebUpdateGroupPropertyMutation",
+        id: "8014515568645029",
+    },
     variables: json!({
-        "input": {
-            "field": "value"
-        }
+        "group_id": group_jid.to_string(),
+        "property": "announcement",
+        "value": true,
     }),
 };
 
 let response = client.mex().mutate(request).await?;
-
-if let Some(errors) = &response.errors {
-    for error in errors {
-        eprintln!("Error: {}", error.message);
-    }
-}
 ```
 
 ## Types
 
-### MexRequest
+### MexDoc
 
-Request structure for GraphQL operations.
+A persisted-query descriptor. Re-exported from `wacore::iq::mex`.
 
 ```rust
-pub struct MexRequest<'a> {
-    /// GraphQL document ID
-    pub doc_id: &'a str,
-    /// Query variables as JSON
-    pub variables: serde_json::Value,
+pub struct MexDoc {
+    /// Human-readable operation name (stable across bundle releases).
+    pub name: &'static str,
+    /// Numeric persisted-query ID (rotates with bundle releases).
+    pub id: &'static str,
 }
+```
+
+### MexRequest
+
+A persisted-query descriptor plus its typed variables. `V` is the variables type — usually the generated `Variables` struct for an operation, but any `Serialize` value works.
+
+```rust
+pub struct MexRequest<V> {
+    pub doc: MexDoc,
+    pub variables: V,
+}
+```
+
+#### new
+
+Pair an operation's `NAME` and `DOC_ID` with its variables.
+
+```rust
+pub fn new(
+    name: &'static str,
+    id: &'static str,
+    variables: V,
+) -> MexRequest<V>
 ```
 
 ### MexResponse
@@ -107,80 +156,68 @@ Response from a GraphQL operation.
 
 ```rust
 pub struct MexResponse {
-    /// Response data (if successful)
+    /// Response data (if successful).
     pub data: Option<serde_json::Value>,
-    /// List of errors (if any)
+    /// List of errors (if any).
     pub errors: Option<Vec<MexGraphQLError>>,
 }
 ```
 
 **Methods:**
-- `has_data()` - Returns `true` if response contains data
-- `has_errors()` - Returns `true` if response contains errors
-- `fatal_error()` - Returns the first fatal error, if any
+- `has_data()` — `true` if the response contains data.
+- `has_errors()` — `true` if the response contains errors.
+- `fatal_error()` — the first fatal error (any error with an `error_code`), if any.
 
 ### MexGraphQLError
 
-GraphQL error structure.
-
 ```rust
 pub struct MexGraphQLError {
-    /// Error message
     pub message: String,
-    /// Error extensions with additional details
     pub extensions: Option<MexErrorExtensions>,
 }
 ```
 
 **Methods:**
-- `error_code()` - Returns the error code if available
-- `is_summary()` - Returns `true` if this is a summary error (`is_summary == true` in extensions)
-- `has_error_code()` - Returns `true` if this error has an error code
+- `error_code()` — the numeric error code, if present.
+- `is_summary()` — `true` when the error is marked as a summary.
+- `has_error_code()` — `true` when an error code is set.
 
 ### MexErrorExtensions
 
-Additional error metadata.
-
 ```rust
 pub struct MexErrorExtensions {
-    /// Numeric error code
     pub error_code: Option<i32>,
-    /// Whether this is a summary error
     pub is_summary: Option<bool>,
-    /// Whether the operation can be retried
     pub is_retryable: Option<bool>,
-    /// Error severity level
     pub severity: Option<String>,
 }
 ```
 
 ## Error handling
 
-The `MexError` enum covers all possible error cases:
-
 ```rust
 pub enum MexError {
-    /// Payload parsing error
+    /// Payload missing or malformed with only a descriptive message.
     PayloadParsing(String),
-    /// Extension error with code and message
+    /// Payload contained an invalid JID.
+    InvalidJid(JidError),
+    /// GraphQL error with a numeric code surfaced as a typed error.
     ExtensionError { code: i32, message: String },
-    /// IQ request failed
+    /// Underlying IQ request failed.
     Request(IqError),
-    /// JSON serialization/deserialization error
+    /// JSON serialization or deserialization error.
     Json(serde_json::Error),
 }
 ```
 
-**Example:**
+`query` and `mutate` automatically convert any fatal GraphQL error (any error with an `error_code`) into `MexError::ExtensionError` so you can match on it without inspecting `response.errors` yourself.
+
 ```rust
+use whatsapp_rust::features::mex::MexError;
+
 match client.mex().query(request).await {
     Ok(response) => {
-        if let Some(fatal) = response.fatal_error() {
-            eprintln!("Fatal error: {} (code: {:?})", 
-                fatal.message, 
-                fatal.error_code()
-            );
-        } else if response.has_data() {
+        if response.has_data() {
             println!("Success: {:?}", response.data);
         }
     }
@@ -206,39 +243,37 @@ if response.has_data() {
 
 ### Handle non-fatal errors
 
+Errors without an `error_code` are non-fatal and surface in `response.errors` alongside any partial data.
+
 ```rust
 let response = client.mex().query(request).await?;
 
 if response.has_errors() {
     for error in response.errors.as_ref().unwrap() {
         if !error.is_summary() && !error.has_error_code() {
-            // Non-fatal: log warning but continue
             eprintln!("Warning: {}", error.message);
         }
     }
 }
 ```
 
-### Extract typed data
+### Decode the typed response
+
+Generated operation modules also expose a `Response` struct that mirrors the GraphQL schema. Decode it from `response.data` with `serde_json`:
 
 ```rust
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct UserResult {
-    jid: String,
-    country_code: String,
-}
+use wacore::iq::mex_operations::fetch_newsletter;
 
 let response = client.mex().query(request).await?;
 
 if let Some(data) = response.data {
-    let users: Vec<UserResult> = serde_json::from_value(
-        data["xwa2_fetch_wa_users"].clone()
-    )?;
-    
-    for user in users {
-        println!("User {} from {}", user.jid, user.country_code);
+    let decoded: fetch_newsletter::Response = serde_json::from_value(data)?;
+    if let Some(newsletter) = decoded.xwa2_newsletter {
+        println!("Newsletter: {:?}", newsletter);
     }
 }
 ```
+
+<Note>
+The persisted `DOC_ID` for each operation is regenerated from the latest WhatsApp Web bundle. Pin to a specific crate version if you need a stable wire format.
+</Note>

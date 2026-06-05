@@ -209,43 +209,30 @@ let remove_reaction = wa::Message {
 };
 ```
 
-## Editing Messages
+## Editing messages
 
-You can edit text messages using `EditedMessage`:
+Use [`client.edit_message`](/api/send#edit_message) to replace the content of a message you previously sent. Pass the chat JID, the original message ID, and the new content as a plain `wa::Message` — the client builds the correct wire envelope, resolves the participant JID (LID or PN) for groups, and sends the edit with a fresh stanza ID so the server does not deduplicate it against the original.
 
 ```rust
-use waproto::whatsapp::message::FutureProofMessage;
-
-let edited = wa::Message {
-    edited_message: Some(Box::new(FutureProofMessage {
-        message: Some(Box::new(wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                key: Some(wa::MessageKey {
-                    remote_jid: Some(chat_jid.to_string()),
-                    from_me: Some(true),
-                    id: Some(original_message_id.to_string()),
-                    participant: None,
-                }),
-                r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
-                edited_message: Some(Box::new(wa::Message {
-                    conversation: Some("This is the edited text".to_string()),
-                    ..Default::default()
-                })),
-                timestamp_ms: Some(wacore::time::now_millis()),
-                ..Default::default()
-            })),
-            ..Default::default()
-        })),
-    })),
+let new_content = wa::Message {
+    conversation: Some("This is the edited text".to_string()),
     ..Default::default()
 };
 
-let result = client.send_message(chat_jid, edited).await?;
+let edit_id = client.edit_message(
+    chat_jid,
+    &result.message_id,
+    new_content,
+).await?;
 ```
 
 <Note>
-Message editing only works for text messages (conversation or extended_text_message) sent by you within the last 15 minutes.
+Message editing only works for text messages (`conversation` or `extended_text_message`) sent by you within the last 15 minutes.
 </Note>
+
+<Warning>
+Do not hand-roll the edit envelope by wrapping a `ProtocolMessage` inside `Message.edited_message` (a `FutureProofMessage`) and passing it to `send_message`. That shape is the history/storage form; on the wire WhatsApp expects a top-level `protocolMessage` with `type = MESSAGE_EDIT`. `client.edit_message` produces the correct shape — manual envelopes will be silently dropped by the server.
+</Warning>
 
 ## Deleting messages (revoke)
 

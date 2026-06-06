@@ -1,0 +1,139 @@
+---
+title: "Metrics with the metrics facade"
+description: "Emit Prometheus and OTLP-ready wa_* counters, histograms, and gauges from whatsapp-rust with the opt-in metrics feature."
+---
+
+## Overview
+
+whatsapp-rust ships an optional `metrics` Cargo feature that emits `wa_*` counters, histograms, and gauges through the [`metrics`](https://docs.rs/metrics) facade. Spans from the [tracing feature](/advanced/observability) tell you the story of a single case; metrics give you the rates and latency percentiles you need for dashboards and alerts.
+
+The library only **emits** through the facade. It never installs a recorder and does not depend on Prometheus or OTLP — your application chooses the recorder and exposes the scrape endpoint.
+
+<Note>
+The `metrics` feature is **off by default**. With it disabled there is no `metrics` dependency, every emit is an inlined no-op, and the duration `Timer` is a zero-sized type that reads no clock. There is zero runtime cost.
+</Note>
+
+## When to use it
+
+Turn on `metrics` when you want to:
+
+- Build Grafana, Datadog, or Honeycomb dashboards for connect success rate, IQ latency percentiles, retry receipts, send throughput, or app-state sync health.
+- Page on connection loss, identity-change spikes, or rising decrypt failure rates.
+- Compare aggregate behavior across deployments without enabling per-trace export.
+
+If you only need to investigate a single incident or trace, prefer the [tracing feature](/advanced/observability) — it is the lower-cardinality counterpart and is designed to work alongside metrics.
+
+## Enabling the feature
+
+Add `whatsapp-rust` with the `metrics` feature, plus the recorder you want to expose. The example below uses Prometheus:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { version = "0.6", features = ["metrics"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+```
+
+For OTLP, swap in `metrics-exporter-opentelemetry` (or any other recorder that implements the `metrics::Recorder` trait).
+
+## Wiring a recorder
+
+Install the recorder once at startup, then build your `Client` as usual. A runnable version of this wiring ships as `examples/metrics.rs` in the source repo:
+
+```rust src/main.rs
+fn main() {
+    // Install a Prometheus recorder. `install_recorder()` sets the global recorder
+    // and returns a handle you can render from your own HTTP endpoint. Use
+    // `PrometheusBuilder::install()` instead (inside a Tokio runtime) to serve
+    // `/metrics` on 0.0.0.0:9000 automatically.
+    let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .expect("install prometheus recorder");
+
+    // Optional: register units and help text for the wa_* metrics.
+    whatsapp_rust::telemetry::describe();
+
+    // Build and run your `whatsapp_rust::Client` as usual; every wa_* metric is
+    // recorded into the recorder above.
+
+    // Serve `handle.render()` from your HTTP `/metrics` route.
+}
+```
+
+Run it with the feature on:
+
+```bash
+cargo run --example metrics --features metrics
+```
+
+## Metric catalogue
+
+All metrics are prefixed with `wa_` and emitted at the same boundaries as the matching `wa.*` tracing spans. Counters and gauges carry the categorical breakdown; the matching duration histograms are unlabeled.
+
+### Counters
+
+| Name | Labels | Description |
+|------|--------|-------------|
+| `wa_recv_total` | `outcome` = `decrypted`, `duplicate`, `undecryptable`, `skmsg` | Inbound messages by decrypt outcome |
+| `wa_send_total` | `kind` = `dm`, `group`, `status` | Outgoing send attempts by kind |
+| `wa_retry_receipt_total` | `reason` | Retry receipts sent, by reason |
+| `wa_iq_total` | `result` = `ok`, `timeout`, `error` | IQ requests by result |
+| `wa_reconnect_total` | — | Reconnect attempts |
+| `wa_stream_error_total` | — | Stream errors received |
+| `wa_connect_total` | `outcome` = `ok`, `fail` | Connection attempts by outcome |
+| `wa_appstate_sync_total` | `outcome` = `ok`, `fail` | App-state collection syncs by outcome |
+| `wa_appstate_mutations_total` | — | App-state mutations applied |
+| `wa_identity_change_total` | — | Peer identity changes that triggered a session reset |
+| `wa_prekey_upload_total` | `outcome` = `ok`, `fail` | Pre-key uploads by outcome |
+
+### Histograms (seconds)
+
+| Name | Description |
+|------|-------------|
+| `wa_iq_duration_seconds` | IQ request round-trip time |
+| `wa_connect_duration_seconds` | Connection establishment time |
+| `wa_decrypt_duration_seconds` | Inbound session-decrypt batch time |
+| `wa_send_duration_seconds` | Outgoing send time |
+| `wa_appstate_sync_duration_seconds` | App-state sync time |
+
+### Gauges
+
+| Name | Description |
+|------|-------------|
+| `wa_connected` | `1` while the client is connected, `0` otherwise |
+
+## Recording your own durations
+
+The same `Timer` the library uses internally is part of the public API. Hold the returned guard for the scope of the operation; it records elapsed seconds on drop:
+
+```rust
+use whatsapp_rust::telemetry;
+
+async fn do_iq() {
+    let _t = telemetry::timer(telemetry::IQ_DURATION);
+    // perform the IQ round-trip; the timer records on drop.
+}
+```
+
+## PII and cardinality
+
+Labels are strictly low-cardinality categorical values (`outcome`, `kind`, `result`, `reason`). The library never uses a JID, phone number, or message ID as a label — that would explode the metrics backend and leak PII. Histograms are unlabeled; the matching `_total` counter carries the categorical breakdown.
+
+<Warning>
+This guarantee only covers identifiers the library emits. If your own code records custom metrics with raw JIDs or phone numbers as labels, you will leak PII and blow up cardinality. Use stable categorical values for your own labels too.
+</Warning>
+
+## Overhead
+
+| Configuration | Cost |
+|---------------|------|
+| Feature off (default) | No dependency, every emit is an inlined no-op, `Timer` is zero-sized |
+| Feature on, no recorder installed | Near-zero (the facade short-circuits) |
+| Feature on, recorder installed | Pay per emit at the recorder's rate |
+
+Durations use the pluggable `wacore::time::Instant`, so WASM and deterministic builds are unaffected.
+
+## Related
+
+- [Observability with tracing](/advanced/observability) — per-case spans that complement the aggregate metrics here.
+- [Installation — feature flags](/installation#feature-flags) — full feature matrix including `metrics`, `tracing`, and `tracing-pii`.

@@ -1,0 +1,165 @@
+---
+title: "Observability with tracing"
+description: "Wire whatsapp-rust into tracing-subscriber or OpenTelemetry with the optional tracing feature, redacted JIDs, and a wa.* span taxonomy."
+---
+
+## Overview
+
+whatsapp-rust ships an optional `tracing` Cargo feature that instruments the library end-to-end: connect/disconnect, receive and decrypt, send, IQ, app state, pairing, media, receipts, retries, notifications, and session/crypto flows. With the feature on you can map a production error to **who** (which account), **where** (which span), **how** (the call path), and **why** (the failure attached to the span).
+
+The library only **emits** `tracing` spans and events. It never installs a subscriber and does not depend on OpenTelemetry — your application owns the subscriber, the filtering, and any OTLP/Jaeger exporter.
+
+<Note>
+The `tracing` feature is **off by default**. With it disabled there is no `tracing` dependency and the instrumentation attributes vanish at compile time, so there is zero runtime cost.
+</Note>
+
+## Enabling the feature
+
+Add `whatsapp-rust` with the `tracing` feature, plus `tracing-subscriber` for the consumer side:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { version = "0.6", features = ["tracing"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+The existing `log::{info,warn,error}!` calls inside the library continue to work. `tracing-subscriber`'s default `tracing-log` feature bridges them into the subscriber, so they appear as events attached to the active `wa.*` span — even before you adopt any new span yourself.
+
+<Warning>
+Do **not** enable the `log` feature on the `tracing` crate together with the log → tracing bridge. That recurses. whatsapp-rust already pins `tracing` with `default-features = false` so the hazard cannot happen inside the library, but be careful when adding `tracing` to your own dependencies.
+</Warning>
+
+## Wiring a subscriber
+
+A minimal `tracing-subscriber` setup driven by `RUST_LOG`:
+
+```rust src/main.rs
+use tracing_subscriber::prelude::*;
+
+fn main() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new("info,whatsapp_rust=debug")
+        });
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // From here, build and run your `whatsapp_rust::Client` as usual.
+    // All `wa.*` spans and bridged log events flow into the subscriber above.
+}
+```
+
+Run it with the feature on:
+
+```bash
+RUST_LOG="info,whatsapp_rust=debug" cargo run --features tracing
+```
+
+A runnable version of this wiring (with OpenTelemetry stubs) ships as `examples/observability.rs` in the source repo.
+
+### OpenTelemetry / OTLP
+
+To export spans to an OTLP collector (Jaeger, Tempo, Honeycomb, etc.), add `opentelemetry`, `opentelemetry-otlp`, and `tracing-opentelemetry`, then append a layer to the subscriber:
+
+```rust src/main.rs
+use tracing_subscriber::prelude::*;
+
+let tracer = opentelemetry_otlp::new_pipeline()
+    .tracing()
+    .with_exporter(opentelemetry_otlp::new_exporter().tonic())
+    .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+
+tracing_subscriber::registry()
+    .with(tracing_subscriber::EnvFilter::from_default_env())
+    .with(tracing_subscriber::fmt::layer())
+    .with(tracing_opentelemetry::layer().with_tracer(tracer))
+    .init();
+```
+
+Every `wa.*` span is then exported as an OTLP span with its fields intact.
+
+## Span taxonomy
+
+Spans are grouped under a stable `wa.<area>.<op>` naming scheme so you can filter or build dashboards per area. The current areas are:
+
+| Area | Covers |
+|------|--------|
+| `wa.conn.*` | Connect, disconnect, reconnect, handshake, read loop, keepalive, frame decrypt, stream errors |
+| `wa.recv.*` | Incoming message parsing and decrypt path |
+| `wa.send.*` | Outgoing send path (DM, group, peer, encryption) |
+| `wa.iq` | IQ request/response round-trips |
+| `wa.appstate.*` | App state sync, patch build/send, key requests |
+| `wa.pair.*` | QR code and pair code authentication |
+| `wa.media.*` | Upload, download, history sync, sticker packs, media conn refresh |
+| `wa.receipt.*` | Receipt processing (delivered, read, played) |
+| `wa.retry.*` | Retry receipt handling |
+| `wa.pdo.*` | Peer Data Operations (message recovery via primary device) |
+| `wa.notif.*` | Notification dispatch (group, devices, chatstate, identity change, privacy token) |
+| `wa.session.*` | Signal session establishment and crypto |
+| `wa.usync.*` | usync queries |
+| `wa.bot.*` | Bot builder, run loop, and `MessageContext` helpers (`send_message`, `react`, `edit_message`, `revoke_message`) |
+
+### Levels
+
+Most spans are emitted at `debug` or `trace`. The connection-lifecycle spans (`wa.conn.connect`, `wa.conn.disconnect`, `wa.conn.reconnect`, `wa.conn.run`, `wa.conn.logout`) are at `info` so connection state is visible at the default level. Failures surface at `ERROR` via `err(Debug)` on the instrumented function, and the existing `warn!`/`error!` log calls surface through the bridge.
+
+The `wa.conn.run` session-root span records your account's own LID, so traces are attributable per account in multi-account deployments.
+
+A downstream binary can statically strip lower levels at compile time with `tracing`'s `release_max_level_info` / `release_max_level_warn` features.
+
+### Filtering examples
+
+`RUST_LOG` accepts span/event targets the same way it accepts log targets:
+
+```bash
+# Default: info everywhere, debug for whatsapp-rust spans
+RUST_LOG="info,whatsapp_rust=debug" cargo run --features tracing
+
+# Only connection lifecycle and IQ traffic
+RUST_LOG="warn,whatsapp_rust[wa.conn]=debug,whatsapp_rust[wa.iq]=debug" cargo run --features tracing
+
+# Trace the send path
+RUST_LOG="info,whatsapp_rust[wa.send]=trace" cargo run --features tracing
+```
+
+## PII handling
+
+WhatsApp identifiers contain phone numbers, so the library redacts them before they reach a span field or a log line.
+
+- **`Jid::observe()`** renders LID, group, broadcast, newsletter, and bot JIDs in full — they are pseudonymous or non-personal, so the same peer or chat still correlates across spans. Phone-number user JIDs are replaced with `pn#<token>`, where the token is a keyed SipHash (the key is a process-lifetime random seed kept only in memory). An unkeyed hash of an E.164 number is reversible by precomputation; the keyed scheme is not.
+- **Legacy group IDs** of the form `<creator-phone>-<timestamp>` keep the timestamp and redact only the numeric prefix.
+- **`observe_protocol_address()`** applies the same scheme to Signal `ProtocolAddress` names embedded in logs.
+- The library's own `log!` calls already pipe JIDs and addresses through these helpers, so the bridged log lines carry the same redaction as the span fields.
+
+<Warning>
+Redaction only covers identifiers the library emits. Anything your own application code logs — raw JIDs, phone numbers, message bodies — reaches the exporter unredacted under your own targets. Scrub them with `Jid::observe()` (and `observe_protocol_address()` for Signal addresses) before logging.
+</Warning>
+
+### `tracing-pii` (local debugging only)
+
+For local debugging where you need to see raw phone numbers, enable the `tracing-pii` feature:
+
+```bash
+cargo run --features "tracing,tracing-pii"
+```
+
+This makes `Jid::observe()` and `observe_protocol_address()` render raw numbers instead of the `pn#<token>` placeholder. **Never enable this in production.**
+
+## Overhead
+
+| Configuration | Cost |
+|---------------|------|
+| Feature off (default) | No dependency, attributes vanish at compile time, zero runtime cost |
+| Feature on, no subscriber installed | Near-zero (tracing's callsite caching) |
+| Feature on, subscriber installed | Pay per emitted span at your chosen level |
+
+Because spans are mostly `debug`/`trace`/`info`, a release build with `release_max_level_info` strips the rest without code changes.
+
+## Related
+
+- [Configuring log targets](/quickstart#configuring-log-targets) — `log`-based filtering that also works with the tracing bridge.
+- [Installation — feature flags](/installation#feature-flags) — full feature matrix including `tracing` and `tracing-pii`.

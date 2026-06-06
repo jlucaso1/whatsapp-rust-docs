@@ -66,6 +66,8 @@ whatsapp-rust supports several optional features:
 | `moka-cache` | Moka in-memory cache | ✅ Yes |
 | `simd` | SIMD-optimized binary protocol encoding/decoding (**requires nightly Rust**) | ✅ Yes |
 | `signal` | Unix signal handling (graceful shutdown on SIGTERM/Ctrl+C) | ✅ Yes |
+| `tracing` | Emit `tracing` spans/events across connect, send, receive, IQ, app state, pairing, media, and session flows. See [Observability](/advanced/observability) | ❌ No |
+| `tracing-pii` | Render raw phone numbers in `tracing` fields instead of redacted `pn#<token>`. Local debugging only — never enable in production | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 | `debug-diagnostics` | Memory diagnostics API (`MemoryDiagnostics`) | ❌ No |

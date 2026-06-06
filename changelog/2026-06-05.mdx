@@ -1,6 +1,6 @@
 ---
 title: "June 5, 2026"
-description: "Typed MEX operations from generated persisted-query modules, plus a new send_reaction helper and MessageContext::react shortcut."
+description: "Typed MEX operations, reaction helpers, newsletter edit/revoke, and an E2E send-path guard for newsletter JIDs."
 ---
 
 ## Breaking changes
@@ -65,3 +65,26 @@ use whatsapp_rust::bot::MessageContext;
 <Note>
 Newsletter (channel) reactions still go through [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) because they use a different plaintext stanza format.
 </Note>
+
+**Newsletter channel edit and revoke**
+Channel messages now have first-class edit and revoke helpers on `client.newsletter()`. Both go out as plaintext `<message>` stanzas (no Signal encryption) and key off the message's wire `message_id` — not the `server_id` used for reactions. See [`edit_message`](/api/newsletter#edit_message) and [`revoke_message`](/api/newsletter#revoke_message).
+
+```rust
+use waproto::whatsapp as wa;
+
+let new_body = wa::Message {
+    conversation: Some("Updated announcement".to_string()),
+    ..Default::default()
+};
+
+client.newsletter()
+    .edit_message(&newsletter_jid, message_id.clone(), new_body)
+    .await?;
+
+client.newsletter()
+    .revoke_message(&newsletter_jid, message_id)
+    .await?;
+```
+
+**Newsletter JIDs rejected on the E2E send path**
+`send_message_impl`, `pin_message`, and `Client::edit_message` / `Client::revoke_message` now reject newsletter JIDs at the root of the encrypted send path. A mis-routed channel JID surfaces a clear error that names the mis-route instead of producing a malformed encrypted fan-out. Use `client.newsletter()` for any channel send, edit, or revoke.

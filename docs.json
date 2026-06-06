@@ -135,6 +135,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-05-abprops",
                   "changelog/2026-06-05",
                   "changelog/2026-06-04",
                   "changelog/2026-06-02"

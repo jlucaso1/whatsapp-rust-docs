@@ -1189,20 +1189,46 @@ Features like group privacy token attachment query the `AbPropsCache` to check w
 
 The client maintains an in-memory `AbPropsCache` that stores server-side A/B experiment properties. The cache is populated each time `fetch_props()` runs (automatically on connect) and is **not persisted** — props are re-fetched on every connection.
 
-Features query the cache via `client.ab_props().is_enabled(config_code)` to check whether a specific experiment flag is active. A prop is considered enabled when its value is `"1"`, `"true"`, or `"enabled"` (case-insensitive).
+Features query the cache by passing a typed `AbProp` constant from the vendored [`wacore::iq::abprops`](/api/wacore#a-b-props-registry) registry. A bool prop is considered enabled when its value is `"1"`, `"true"`, or `"enabled"` (case-insensitive), falling back to the registry default when the server didn't send it.
 
-#### Well-known config codes
+```rust
+use wacore::iq::abprops::web;
 
-The following config codes control privacy token behavior on group operations:
+if client.ab_props().is_enabled(web::PRIVACY_TOKEN_SENDING_ON_GROUP_CREATE).await {
+    // gated behavior
+}
 
-| Constant | Code | Description |
-|----------|------|-------------|
-| `PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES` | `10518` | Attach privacy tokens to all 1:1 messages |
-| `PRIVACY_TOKEN_ON_GROUP_CREATE` | `11261` | Attach privacy tokens when creating groups |
-| `PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD` | `11262` | Attach privacy tokens when adding group participants |
-| `PRIVACY_TOKEN_ONLY_CHECK_LID` | `15491` | Only resolve tokens via LID mappings (skip PN fallback) |
+let bucket_duration = client
+    .ab_props()
+    .get_int(web::TCTOKEN_DURATION)
+    .await;
+```
 
-These constants are defined in `wacore::iq::props::config_codes`.
+The cache exposes:
+
+| Method | Purpose |
+|--------|---------|
+| `is_enabled(prop)` | Truthy check for bool flags, falling back to the registry default |
+| `get(prop)` | Raw `Option<CompactString>` value if the server sent it |
+| `get_int(prop)` | Parsed `i64` for int flags, falling back to the registry default |
+| `is_seeded()` | `true` after the first full (non-delta) fetch has been applied |
+
+#### Watching additional flags
+
+Only flags in the cache's *interest set* are retained when props come in — every other server prop is discarded to avoid allocating for the ~2,000+ flags WhatsApp ships. The interest set is pre-seeded with the flags the library itself reads (see `wacore::iq::props::WATCHED`). If you need to gate your own code on a flag the library doesn't already watch, register it before the first `fetch_props()`:
+
+```rust
+use wacore::iq::abprops::web;
+
+client.ab_props().watch(web::ADMIN_REVOKE_RECEIVER).await;
+// or in bulk:
+client.ab_props().watch_many(&[
+    web::ADD_MEMBER_SYSTEM_MESSAGE,
+    web::ADMIN_ONLY_MENTION_EVERYONE_GROUP_SIZE,
+]).await;
+```
+
+Flags retain their `code`, `value_type`, and `default` straight from the WA Web bundle, so behavior tracks WhatsApp Web without hand-maintained config tables.
 
 <Note>
 The AB props cache is internal to the client. You don't need to interact with it directly — the library automatically checks relevant flags when performing group operations like `create_group` and `add_participants`.

@@ -64,7 +64,8 @@
                   "advanced/binary-protocol",
                   "advanced/state-management",
                   "advanced/websocket-handling",
-                  "advanced/observability"
+                  "advanced/observability",
+                  "advanced/metrics"
                 ]
               }
             ]

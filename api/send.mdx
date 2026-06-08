@@ -597,6 +597,65 @@ client.unpin_message(chat_jid, key).await?;
 
 ---
 
+## keep_message
+
+Keep (or un-keep) a message in a disappearing chat for everyone. This is the `keepInChatMessage` add-on used by WhatsApp Web's "Keep in chat" action: when a chat has disappearing messages enabled, keeping a message prevents it from being deleted when the ephemeral timer expires.
+
+```rust
+pub async fn keep_message(
+    &self,
+    chat: Jid,
+    key: wa::MessageKey,
+    keep: bool,
+) -> Result<SendResult, anyhow::Error>
+```
+
+<ParamField path="chat" type="Jid" required>
+  Chat JID where the target message lives.
+</ParamField>
+
+<ParamField path="key" type="wa::MessageKey" required>
+  The message key identifying the message to keep or un-keep. Construct this from the target message's chat JID, message ID, sender info, and participant (for groups).
+</ParamField>
+
+<ParamField path="keep" type="bool" required>
+  `true` requests `KEEP_FOR_ALL` (keep the message past the disappearing timer). `false` requests `UNDO_KEEP_FOR_ALL` (reverse a previous keep).
+</ParamField>
+
+The keep stanza itself is sent with a fresh message id; only the target message's key is carried in the body, and the body's `timestamp_ms` records the send time (not the kept message's timestamp). The send path classifies this as a text add-on and maps the undo case to a sender-revoke edit attribute automatically, so no extra wiring is required.
+
+### Example: Keep a message for everyone
+
+```rust
+use waproto::whatsapp as wa;
+
+let key = wa::MessageKey {
+    remote_jid: Some(chat_jid.to_string()),
+    id: Some(message_id.clone()),
+    from_me: Some(false),
+    participant: None,
+};
+
+client.keep_message(chat_jid, key, true).await?;
+```
+
+### Example: Undo a previous keep
+
+```rust
+use waproto::whatsapp as wa;
+
+let key = wa::MessageKey {
+    remote_jid: Some(group_jid.to_string()),
+    id: Some(message_id.clone()),
+    from_me: Some(false),
+    participant: Some(sender_jid.to_string()),
+};
+
+client.keep_message(group_jid, key, false).await?;
+```
+
+---
+
 ## send_reaction
 
 React to a DM, group, or `status@broadcast` message with an emoji. The helper builds the `ReactionMessage` payload (including `sender_timestamp_ms`) and routes it through the standard send path, so the same retry, fan-out, and phash logic that applies to other messages applies here.

@@ -488,9 +488,29 @@ let metadata = StickerPackMetadata::new(
 Animated stickers are automatically detected from the WebP data. The `is_animated` field on each sticker proto entry is set based on whether the WebP file contains animation frames. You can also use [`whatsapp_rust::webp::is_animated()`](/api/wacore#is_animated) directly to check WebP files before processing.
 </Note>
 
-## Forwarding media messages
+## Forwarding messages
 
-You can forward media by reusing the original CDN fields from a received message. This avoids downloading and re-uploading the media entirely — it's instant regardless of file size:
+Use `forward_message` to forward any received message to a chat. It produces the same on-wire result as tapping **Forward** in the official clients:
+
+```rust
+// `received` is a `wa::Message` from an incoming event.
+client.forward_message(destination_jid, &received).await?;
+```
+
+The helper takes care of the WhatsApp forwarding rules so you don't have to rebuild the message by hand:
+
+- Sets `context_info.is_forwarded = true` so recipients see the **Forwarded** label.
+- Bumps the forwarding score. Once the score reaches 5, it jumps to the `127` sentinel that clients render as **Forwarded many times**.
+- Strips the reply/quote chain and mentions from the source.
+- Drops the source `message_secret` so the send path mints a fresh one.
+- Unwraps ephemeral and view-once wrappers before sending the inner content.
+- Promotes a bare `conversation` to `extended_text_message` so the forward marker can attach.
+
+Media is relayed from the same CDN blob, so forwarding an image, video, document, audio, or sticker is instant regardless of file size — nothing is downloaded or re-uploaded.
+
+### Manually forwarding media
+
+If you need to customize fields (for example, change a caption) before forwarding, you can still build the `wa::Message` yourself and pass it to `send_message`. Reusing the original CDN fields keeps the send instant:
 
 ```rust
 use waproto::whatsapp as wa;
@@ -509,7 +529,7 @@ if let Some(img) = &received_message.image_message {
 }
 ```
 
-This works because `send_message` accepts any `wa::Message`. If the message already contains CDN fields (`url`, `direct_path`, `media_key`, etc.) from a received message, the server accepts it as-is. See [Media handling - CDN reuse](/guides/media-handling#forwarding-media-via-cdn-reuse) for details on all supported media types and when to fall back to download + re-upload.
+Note that this path does not apply the **Forwarded** marker or the forwarding-score bump. Use `forward_message` whenever you want the recipient to see the standard forward indicator. See [Media handling — CDN reuse](/guides/media-handling#forwarding-media-via-cdn-reuse) for details on supported media types and when to fall back to download + re-upload.
 
 ## Ephemeral (disappearing) messages
 
@@ -719,6 +739,21 @@ This ensures:
 - Nested mentions are stripped
 - Quote chains are broken (except for bot messages)
 - Content fields (text, caption, media) are preserved
+
+### Preparing messages for forwarding
+
+`prepare_for_forward` is the lower-level helper that powers [`forward_message`](#forwarding-messages). It returns a forward-ready `wa::Message` (forward marker set, score bumped, quote chain stripped, source `message_secret` dropped) without sending anything. Reach for it when you need to attach extra fields — for example, a custom caption or stanza nodes — before calling `send_message_with_options`:
+
+```rust
+use wacore::proto_helpers::MessageExt;
+
+let mut forward = *received_message.prepare_for_forward();
+// Tweak the prepared message here if needed, for example overriding a caption.
+
+client.send_message(destination_jid, forward).await?;
+```
+
+For the common case, prefer `client.forward_message(to, &message)` — it unwraps wrapper bodies (ephemeral, view-once) and sends in one call.
 
 See [WAProto API reference](/api/waproto) for message type details.
 

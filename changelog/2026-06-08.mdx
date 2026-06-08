@@ -1,9 +1,29 @@
 ---
-title: "June 8, 2026 — Group picture management and played receipts"
-description: "Manage a group's profile picture from the Groups API, and send played receipts for voice and video notes with the new mark_as_played method."
+title: "June 8, 2026 — Forward messages, played receipts, and group pictures"
+description: "Forward messages with a new high-level API, send played receipts for voice/video notes, and manage group profile pictures."
 ---
 
 ## New features
+
+**Forward messages with `Client::forward_message`**
+
+`Client::forward_message(to, &message)` is a high-level wrapper that turns any received message into a properly forwarded one:
+
+- Sets `context_info.is_forwarded = true` so recipients see the **Forwarded** label.
+- Bumps `forwarding_score`, jumping to the `127` **Forwarded many times** sentinel at 5.
+- Strips the source reply/quote chain and mentions.
+- Drops the source `message_secret` so the send path mints a fresh one.
+- Unwraps ephemeral and view-once wrappers before sending the inner content.
+- Relays existing media from the same CDN blob — no re-download or re-upload.
+
+```rust
+// `received` is a `wa::Message` from an incoming event.
+client.forward_message(destination_jid, &received).await?;
+```
+
+If you need to tweak the prepared body before sending (custom caption, extra stanza nodes), use the underlying `MessageExt::prepare_for_forward` helper directly and pass the result to `send_message_with_options`.
+
+See [`forward_message`](/api/send#forward_message) and the [Forwarding messages guide](/guides/sending-messages#forwarding-messages) for details.
 
 **Send played receipts for voice and video notes**
 

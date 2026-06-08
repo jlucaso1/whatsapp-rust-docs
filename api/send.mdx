@@ -1,6 +1,6 @@
 ---
 title: "send"
-description: "Send, edit, revoke, pin, and unpin messages with advanced options, including album support"
+description: "Send, forward, edit, revoke, pin, and unpin messages with advanced options, including album support"
 ---
 
 ## send_message
@@ -181,6 +181,51 @@ client.send_message(chat_jid.clone(), wrapped).await?;
 ```
 
 See the [Sending Messages guide](/guides/sending-messages#album-messages) for a complete walkthrough.
+
+---
+
+## forward_message
+
+Forward an existing message to a chat. Builds a forward-ready copy of `message` and sends it via `send_message`.
+
+```rust
+pub async fn forward_message(
+    &self,
+    to: Jid,
+    message: &wa::Message,
+) -> Result<SendResult, anyhow::Error>
+```
+
+<ParamField path="to" type="Jid" required>
+  Recipient JID (DM, group, or newsletter).
+</ParamField>
+
+<ParamField path="message" type="&wa::Message" required>
+  Source message to forward. May be a received body or a wrapper (ephemeral / view-once); the inner content is unwrapped automatically before sending.
+</ParamField>
+
+<ResponseField name="SendResult" type="SendResult">
+  Same shape as [`send_message`](#send_message): contains the new `message_id` and the resolved recipient JID.
+</ResponseField>
+
+The helper applies WhatsApp's standard forwarding rules:
+
+- Sets `context_info.is_forwarded = true` so the recipient sees the **Forwarded** label.
+- Bumps `forwarding_score`. At 5 it jumps to the `127` sentinel that clients render as **Forwarded many times**.
+- Strips the reply/quote chain and mentions from the source message.
+- Drops the source `message_context_info` so the send path mints a fresh `message_secret`.
+- Promotes a bare `conversation` to `extended_text_message` so the forward marker can attach.
+- Relays existing media from the same CDN blob (`media_key`, `url`, and friends are carried over) — no re-download or re-upload.
+
+### Example: forward a received message
+
+```rust
+// `received` is a `wa::Message` from an incoming event.
+let result = client.forward_message(destination_jid, &received).await?;
+println!("Forwarded as {:?}", result.message_id);
+```
+
+For lower-level access, see [`MessageExt::prepare_for_forward`](/guides/sending-messages#preparing-messages-for-forwarding), which returns the prepared `wa::Message` without sending it.
 
 ---
 

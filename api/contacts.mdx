@@ -38,6 +38,13 @@ pub async fn is_on_whatsapp(
 - `lid: Option<Jid>` - LID (Linked Identity) if available
 - `pn_jid: Option<Jid>` - Phone number JID, present when the server returns LID as the primary JID
 - `is_business: bool` - Whether this is a WhatsApp Business account
+- `verified_name: Option<VerifiedName>` - Decoded verified business name certificate, when the account is a verified business
+
+**VerifiedName fields:**
+- `name: Option<String>` - Display name shown to other users (decoded from the certificate when the server omits the attribute)
+- `serial: Option<String>` - Certificate serial number
+- `issuer: Option<String>` - Certificate issuer
+- `certificate: Option<Vec<u8>>` - Raw `VerifiedNameCertificate` protobuf bytes, for callers that need to verify the signature themselves
 
 <Note>
 `IsOnWhatsAppResult` is marked `#[non_exhaustive]`, so new fields may be added in future versions without a breaking change.
@@ -58,6 +65,11 @@ for result in results {
         }
         if result.is_business {
             println!("  Business account");
+            if let Some(vn) = &result.verified_name
+                && let Some(name) = &vn.name
+            {
+                println!("  Verified name: {}", name);
+            }
         }
     } else {
         println!("{} is NOT on WhatsApp", result.jid);
@@ -161,6 +173,7 @@ pub async fn get_user_info(
 - `status: Option<String>` - Status message
 - `picture_id: Option<String>` - Profile picture ID
 - `is_business: bool` - Whether business account
+- `verified_name: Option<VerifiedName>` - Decoded verified business name certificate, for verified business accounts (see [`is_on_whatsapp`](#is_on_whatsapp) for field details)
 
 **Example:**
 ```rust
@@ -174,6 +187,12 @@ let user_info = client.contacts().get_user_info(&jids).await?;
 for (jid, info) in user_info {
     println!("User: {}", jid);
     println!("  Business: {}", info.is_business);
+
+    if let Some(vn) = &info.verified_name
+        && let Some(name) = &vn.name
+    {
+        println!("  Verified name: {}", name);
+    }
 
     if let Some(status) = info.status {
         println!("  Status: {}", status);

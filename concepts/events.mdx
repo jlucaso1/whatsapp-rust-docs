@@ -93,7 +93,8 @@ impl EventHandler for MyHandler {
 }
 ```
 
-- **`EventKind`** is a `#[repr(u8)]` discriminant — one variant per `Event` variant (`Message`, `Connected`, `Receipt`, …), at most 64 kinds.
+- **`EventKind`** is a `#[repr(u8)]` discriminant — one variant per `Event` variant (`Message`, `Connected`, `Receipt`, …). The enum is `#[non_exhaustive]`, so `match` blocks on `EventKind` must include a wildcard arm (`_ => …`); new kinds may be added in minor releases as the library tracks new server events.
+- **`EventKind::CAPACITY`** is a public `u8` constant (currently `64`) that bounds the number of kinds. It exists because each discriminant is packed as a bit in `EventInterest`'s `u64` mask, and a future variant that would overflow it fails compilation rather than silently corrupting the mask at runtime. Treat it as a read-only ceiling — you don't need to check it at runtime.
 - **`EventInterest`** is a 64-bit set of kinds. Build it with `EventInterest::of(&[…])`, `EventInterest::ALL` (the default), `EventInterest::none()`, or chain `.with(kind)`. Query it with `.wants(kind)`.
 - The bus exposes `has_handler_for(kind)` and only produces an event when at least one registered handler wants its kind.
 
@@ -686,6 +687,7 @@ pub struct Receipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum ReceiptType {
     Delivered,
     Sender,
@@ -702,6 +704,10 @@ pub enum ReceiptType {
     Other(String),
 }
 ```
+
+<Note>
+`ReceiptType` is `#[non_exhaustive]`. Server-driven sets like this grow over time (recent additions include `EncRekeyRetry`, `ReadSelf`, `PlayedSelf`, `PeerMsg`, and `HistorySync`), so your `match` arms must always include a wildcard (`_ => …`). New variants can be added in minor releases without a breaking change.
+</Note>
 
 **Example:**
 ```rust

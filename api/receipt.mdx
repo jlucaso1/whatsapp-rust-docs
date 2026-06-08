@@ -82,6 +82,86 @@ client.mark_as_read(&chat_jid, None, message_ids).await?;
 
 ---
 
+## mark_as_played
+
+Send played receipts for one or more voice notes or video notes.
+
+Played receipts tell the sender that you've listened to their voice note or watched their video note — they're the equivalent of "read" for playable media. Call this only after the user has actually played the media; if you just want to acknowledge that the message was opened, use [`mark_as_read`](#mark_as_read) instead.
+
+```rust
+pub async fn mark_as_played(
+    &self,
+    chat: &Jid,
+    sender: Option<&Jid>,
+    message_ids: Vec<String>,
+) -> Result<(), anyhow::Error>
+```
+
+<ParamField path="chat" type="&Jid" required>
+  Chat JID where the media message was received. Can be a direct message, group, broadcast list, or newsletter JID.
+</ParamField>
+
+<ParamField path="sender" type="Option<&Jid>" required>
+  Original sender JID.
+
+  - For DMs: pass `None` (the `participant` attribute is dropped on the wire, matching WhatsApp Web).
+  - For groups, broadcast lists, and status broadcasts: pass the JID of the user who sent the media.
+  - For newsletters: the receipt is sent as `played-self`; `sender` is ignored.
+</ParamField>
+
+<ParamField path="message_ids" type="Vec<String>" required>
+  Message IDs of the voice or video notes to mark as played. The first ID becomes the receipt's `id` attribute; any additional IDs are batched into a `<list><item/></list>` child, the same shape as `mark_as_read`.
+
+  If empty, this function returns immediately without sending anything.
+</ParamField>
+
+### Example: mark a DM voice note as played
+
+```rust
+use wacore_binary::jid::Jid;
+
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.mark_as_played(
+    &chat_jid,
+    None, // No participant in DMs
+    vec!["VOICE_MSG_ID".to_string()],
+).await?;
+```
+
+### Example: mark a group voice note as played
+
+```rust
+let group_jid: Jid = "120363040237990503@g.us".parse()?;
+let sender_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.mark_as_played(
+    &group_jid,
+    Some(&sender_jid), // Required in groups and broadcasts
+    vec!["VOICE_MSG_ID".to_string()],
+).await?;
+```
+
+### Example: mark multiple voice notes as played
+
+```rust
+client.mark_as_played(
+    &chat_jid,
+    None,
+    vec![
+        "MSG_1".to_string(),
+        "MSG_2".to_string(),
+        "MSG_3".to_string(),
+    ],
+).await?;
+```
+
+<Note>
+  Played receipts are **not sent automatically** — call `mark_as_played()` from your media player when the user finishes (or starts) playing the audio or video note. The library does not gate this call on the recipient's read-receipts privacy setting, matching `mark_as_read`.
+</Note>
+
+---
+
 ## send_delivery_receipt (Internal)
 
 Sends a delivery receipt to the sender of a message.
@@ -367,19 +447,13 @@ let mut bot = Bot::builder()
 
 ## Played receipts (media)
 
-For media messages (audio, video), you can send played receipts to indicate the media was played:
-
-<Warning>
-  The library does not currently expose a public API for sending played receipts. This feature may be added in a future version.
-</Warning>
-
-Played receipts follow the same pattern as read receipts but use `type="played"`:
+For voice notes and video notes, send played receipts with [`mark_as_played`](#mark_as_played) once the user has played the media. Newsletters send `played-self`; everything else sends `played`. The wire shape mirrors read receipts:
 
 ```xml
 <receipt id="MESSAGE_ID" to="CHAT_JID" type="played" participant="SENDER_JID" />
 ```
 
-You can listen for incoming played receipts via the `Event::Receipt` event with `ReceiptType::Played`.
+You can also listen for incoming played receipts via the `Event::Receipt` event with `ReceiptType::Played` or `ReceiptType::PlayedSelf`.
 
 ---
 

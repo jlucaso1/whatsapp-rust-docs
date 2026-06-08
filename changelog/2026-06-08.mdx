@@ -1,6 +1,6 @@
 ---
-title: "June 8, 2026 — Forward messages and manage group pictures"
-description: "Forward any message with a single call, and set or remove a group's profile picture with new high-level Groups methods."
+title: "June 8, 2026 — Forward messages, played receipts, and group pictures"
+description: "Forward messages with a new high-level API, send played receipts for voice/video notes, and manage group profile pictures."
 ---
 
 ## New features
@@ -24,6 +24,24 @@ client.forward_message(destination_jid, &received).await?;
 If you need to tweak the prepared body before sending (custom caption, extra stanza nodes), use the underlying `MessageExt::prepare_for_forward` helper directly and pass the result to `send_message_with_options`.
 
 See [`forward_message`](/api/send#forward_message) and the [Forwarding messages guide](/guides/sending-messages#forwarding-messages) for details.
+
+**Send played receipts for voice and video notes**
+
+`Client::mark_as_played(chat, sender, message_ids)` now sends `<receipt type="played">` (or `played-self` for newsletters) so recipients can signal that a voice note or video note was played. Pass `Some(sender)` for groups, broadcast lists, and status broadcasts; pass `None` for DMs. Extra message IDs are batched into a `<list>` child, matching `mark_as_read`.
+
+```rust
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.mark_as_played(
+    &chat_jid,
+    None, // No participant for DMs
+    vec!["VOICE_MSG_ID".to_string()],
+).await?;
+```
+
+Inbound `Played` / `PlayedSelf` receipts were already parsed into `Event::Receipt`; this closes the gap on the outbound side. See the [receipt API reference](/api/receipt#mark_as_played).
+
+---
 
 **Set or remove a group's profile picture**
 

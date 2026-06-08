@@ -24,7 +24,7 @@ pub async fn mark_as_read(
   - Group: `120363040237990503@g.us`
 </ParamField>
 
-<ParamField path="sender" type="Option<&Jid>" required>
+<ParamField path="sender" type="Option<&Jid>">
   Message sender JID. Required for group messages, `None` for direct messages.
   
   - For DMs: Pass `None`
@@ -101,7 +101,7 @@ pub async fn mark_as_played(
   Chat JID where the media message was received. Can be a direct message, group, broadcast list, or newsletter JID.
 </ParamField>
 
-<ParamField path="sender" type="Option<&Jid>" required>
+<ParamField path="sender" type="Option<&Jid>">
   Original sender JID.
 
   - For DMs: pass `None` (the `participant` attribute is dropped on the wire, matching WhatsApp Web).

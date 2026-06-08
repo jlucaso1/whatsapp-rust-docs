@@ -1009,6 +1009,69 @@ for result in results {
 }
 ```
 
+### set_profile_picture
+
+Set a group's profile picture. Admin operation.
+
+```rust
+pub async fn set_profile_picture(
+    &self,
+    group_jid: &Jid,
+    image_data: Vec<u8>,
+) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Parameters:**
+- `group_jid` - Group JID (must end with `@g.us`)
+- `image_data` - JPEG image bytes. The caller is responsible for sizing/cropping the image (WhatsApp uses 640x640).
+
+**Returns:**
+- `SetProfilePictureResponse` - Contains the new picture ID
+
+Passing empty `image_data` routes to removal, mirroring the own-picture API. Prefer [`remove_profile_picture`](#remove_profile_picture) when removal is the intent.
+
+**Example:**
+```rust
+use std::fs;
+
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+let image_bytes = fs::read("group_avatar.jpg")?;
+
+let response = client.groups().set_profile_picture(&group_jid, image_bytes).await?;
+if let Some(id) = response.id {
+    println!("Group picture updated: {}", id);
+}
+```
+
+<Warning>
+The image must be a valid JPEG. Other formats are not supported. The caller must be a group admin.
+</Warning>
+
+### remove_profile_picture
+
+Remove a group's profile picture. Admin operation.
+
+```rust
+pub async fn remove_profile_picture(
+    &self,
+    group_jid: &Jid,
+) -> Result<SetProfilePictureResponse, anyhow::Error>
+```
+
+**Parameters:**
+- `group_jid` - Group JID
+
+**Returns:**
+- `SetProfilePictureResponse` - Confirmation of removal
+
+**Example:**
+```rust
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+client.groups().remove_profile_picture(&group_jid).await?;
+```
+
+See [`SetProfilePictureResponse`](/api/profile#setprofilepictureresponse) for the response shape.
+
 ### get_profile_pictures
 
 Batch fetch group profile pictures.

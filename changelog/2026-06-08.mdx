@@ -1,0 +1,31 @@
+---
+title: "June 8, 2026 — Set or remove a group's profile picture"
+description: "The Groups feature now exposes high-level set_profile_picture and remove_profile_picture calls, mirroring the own-picture API on Profile."
+---
+
+## New features
+
+**Set or remove a group's profile picture**
+
+The `Groups` feature now exposes admin-side methods for managing a group's display picture, mirroring the existing own-picture API on `Profile`:
+
+- `Groups::set_profile_picture(group_jid, image_data)` — upload JPEG bytes as the group avatar.
+- `Groups::remove_profile_picture(group_jid)` — clear the group's current picture.
+
+Both calls require the authenticated user to be a group admin. Passing empty bytes to `set_profile_picture` routes to removal, so callers that already model "no image" as an empty buffer keep working. The caller is responsible for sizing and cropping the JPEG (WhatsApp uses 640x640).
+
+```rust
+use std::fs;
+
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+
+// Set
+let image_bytes = fs::read("group_avatar.jpg")?;
+let response = client.groups().set_profile_picture(&group_jid, image_bytes).await?;
+println!("New picture ID: {:?}", response.id);
+
+// Remove
+client.groups().remove_profile_picture(&group_jid).await?;
+```
+
+See [Groups API reference](/api/groups#set_profile_picture) and the [Group management guide](/guides/group-management#set-or-remove-the-group-picture) for details.

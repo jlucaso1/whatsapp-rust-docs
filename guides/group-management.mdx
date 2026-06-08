@@ -548,6 +548,25 @@ for pic in pictures {
 
 See [Groups API reference](/api/groups#get_profile_pictures) for details.
 
+### Set or remove the group picture
+
+Admins can update the group's profile picture by uploading JPEG bytes, or remove it with a dedicated call:
+
+```rust
+use std::fs;
+
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+
+// Set the picture (caller is responsible for sizing/cropping; WhatsApp uses 640x640)
+let image_bytes = fs::read("group_avatar.jpg")?;
+client.groups().set_profile_picture(&group_jid, image_bytes).await?;
+
+// Remove the picture
+client.groups().remove_profile_picture(&group_jid).await?;
+```
+
+See [Groups API reference](/api/groups#set_profile_picture) for details.
+
 ## Group settings
 
 ### Member add mode

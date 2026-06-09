@@ -17,9 +17,11 @@ The client supports both buffered and streaming responses for efficient handling
 
 ```rust
 use async_trait::async_trait;
+use wacore::sync_marker::MaybeSendSync;
 
-#[async_trait]
-pub trait HttpClient: Send + Sync {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait HttpClient: MaybeSendSync {
     /// Executes a given HTTP request and returns the response
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
 
@@ -53,6 +55,10 @@ pub trait HttpClient: Send + Sync {
     ) -> Result<HttpResponse>;
 }
 ```
+
+<Note>
+`MaybeSendSync` is `Send + Sync` on native targets and carries no bounds on `wasm32`. Custom `HttpClient` implementations backed by `!Send` browser `fetch` handles now compile on the wasm port. On native, `Arc<dyn HttpClient>` remains `Send + Sync` as before.
+</Note>
 
 <Note>
 `supports_upload_streaming` / `execute_upload` were added in v0.6 to back [`Client::upload_stream`](/api/upload#upload-stream-constant-memory). Both have safe defaults (returning `false` / an error), so existing custom `HttpClient` implementations keep compiling — implement them only if you want constant-memory uploads through your client. `UreqHttpClient` implements both. `UploadBody` is `Box<dyn std::io::Read + Send>`.

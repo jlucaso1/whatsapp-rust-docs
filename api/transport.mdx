@@ -17,9 +17,11 @@ The `Transport` trait represents an active network connection as a simple byte p
 
 ```rust
 use async_trait::async_trait;
+use wacore::sync_marker::MaybeSendSync;
 
-#[async_trait]
-pub trait Transport: Send + Sync {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait Transport: MaybeSendSync {
     /// Sends raw data to the server
     async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error>;
 
@@ -27,6 +29,10 @@ pub trait Transport: Send + Sync {
     async fn disconnect(&self);
 }
 ```
+
+<Note>
+`MaybeSendSync` is `Send + Sync` on native targets and carries no bounds on `wasm32`. This means `Arc<dyn Transport>` remains thread-safe on native, while implementations backed by `!Send` JS handles (e.g. a browser `WebSocket`) compile on the wasm port without wrapping.
+</Note>
 
 ### Methods
 
@@ -69,14 +75,19 @@ transport.disconnect().await;
 Creates new transport instances and associated event streams.
 
 ```rust
-#[async_trait]
-pub trait TransportFactory: Send + Sync {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait TransportFactory: MaybeSendSync {
     /// Creates a new transport and returns it along with a stream of events
     async fn create_transport(
         &self,
     ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error>;
 }
 ```
+
+<Note>
+Like `Transport`, `TransportFactory` uses `MaybeSendSync` so that factory implementations holding `!Send` JS state compile on `wasm32`. On native the bound is `Send + Sync` as before.
+</Note>
 
 ### Methods
 
@@ -615,7 +626,7 @@ impl TransportFactory for TcpTransportFactory {
 
 ### Best Practices
 
-1. **Thread Safety** - Transport must be `Send + Sync`
+1. **Thread Safety** - On native, implementations must be `Send + Sync` (enforced via `MaybeSendSync`). On `wasm32`, `MaybeSendSync` carries no bounds, so `!Send` implementations backed by JS handles compile.
 2. **Error Handling** - Return descriptive errors from `send()`
 3. **Graceful Shutdown** - Implement proper cleanup in `disconnect()`
 4. **Event Channel Size** - Use bounded channels with reasonable capacity

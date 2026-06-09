@@ -306,6 +306,102 @@ client.chat_actions().delete_chat(&jid, false, None).await?;
 This operation is not reversible. The chat and optionally its media will be removed from all linked devices.
 </Warning>
 
+## Clear chat
+
+### clear_chat
+
+Clear a chat's messages while **keeping the chat** itself (WhatsApp Web's "Clear chat"). Unlike [`delete_chat`](#delete_chat), the chat stays in the list — only its messages are removed. Syncs across all linked devices.
+
+```rust
+pub async fn clear_chat(
+    &self,
+    jid: &Jid,
+    delete_starred: bool,
+    delete_media: bool,
+    message_range: Option<SyncActionMessageRange>,
+) -> Result<()>
+```
+
+**Parameters:**
+- `jid` - The chat JID to clear
+- `delete_starred` - Also remove starred messages
+- `delete_media` - Also remove downloaded media files
+- `message_range` - Optional message range for multi-device conflict resolution. Pass `None` in most cases
+
+Both flags are encoded in the mutation index (not the proto body), matching WhatsApp Web's `clearChat` action.
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Clear all messages, including starred ones and downloaded media
+client.chat_actions().clear_chat(&jid, true, true, None).await?;
+
+// Clear messages but keep starred messages and media
+client.chat_actions().clear_chat(&jid, false, false, None).await?;
+```
+
+A clear performed on another linked device arrives as an [`Event::ClearChatUpdate`](/concepts/events#clearchatupdate).
+
+## Save contact
+
+### save_contact
+
+Save or rename a contact, syncing the name to your other linked devices (WhatsApp Web's contact-sync action).
+
+```rust
+pub async fn save_contact(
+    &self,
+    jid: &Jid,
+    full_name: Option<String>,
+    first_name: Option<String>,
+    save_on_primary_addressbook: bool,
+) -> Result<()>
+```
+
+**Parameters:**
+- `jid` - The contact's JID. **Must be a bare phone-number JID** — LIDs and device-specific JIDs are rejected (LID contacts use a separate path on WhatsApp Web).
+- `full_name` - Full display name, or `None`
+- `first_name` - Short name, or `None` (omitted when absent; WhatsApp Web derives no default)
+- `save_on_primary_addressbook` - Whether to save the name to the phone's address book
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.chat_actions()
+    .save_contact(&jid, Some("Jane Doe".into()), Some("Jane".into()), true)
+    .await?;
+```
+
+## Status mute
+
+### set_user_status_mute
+
+Mute or unmute a contact, group, or channel's **status updates** across linked devices (WhatsApp Web's `userStatusMute`). This is distinct from [`mute_chat`](#mute_chat), which silences a chat's message notifications.
+
+```rust
+pub async fn set_user_status_mute(
+    &self,
+    jid: &Jid,
+    muted: bool,
+) -> Result<()>
+```
+
+**Parameters:**
+- `jid` - The entity whose status updates to mute/unmute
+- `muted` - `true` hides their status updates, `false` unmutes
+
+**Example:**
+```rust
+let jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+client.chat_actions().set_user_status_mute(&jid, true).await?;  // mute status
+client.chat_actions().set_user_status_mute(&jid, false).await?; // unmute
+```
+
+A status-mute change on another linked device arrives as an [`Event::UserStatusMuteUpdate`](/concepts/events#userstatusmuteupdate).
+
 ## Delete message for me
 
 ### delete_message_for_me
@@ -445,6 +541,9 @@ All chat actions are synced across devices using WhatsApp's app state synchroniz
 | Star | `regular_high` |
 | Delete chat | `regular_high` |
 | Delete message for me | `regular_high` |
+| Clear chat | `regular_high` |
+| Status mute | `regular_high` |
+| Save contact | `critical_unblock_low` |
 
 <Note>
 App state sync requires encryption keys to be available. These are typically obtained during initial sync after authentication. Actions may fail if called immediately after pairing before sync completes.
@@ -476,6 +575,12 @@ use wacore::types::events::Event;
         }
         Event::DeleteChatUpdate(update) => {
             println!("Chat {} deleted (media: {})", update.jid, update.delete_media);
+        }
+        Event::ClearChatUpdate(update) => {
+            println!("Chat {} cleared (media: {})", update.jid, update.delete_media);
+        }
+        Event::UserStatusMuteUpdate(update) => {
+            println!("Status of {} muted: {}", update.jid, update.muted);
         }
         Event::DeleteMessageForMeUpdate(update) => {
             println!("Message {} in {} deleted for me", update.message_id, update.chat_jid);

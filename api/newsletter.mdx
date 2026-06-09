@@ -185,6 +185,48 @@ let updated = client.newsletter()
 println!("Updated: {}", updated.name);
 ```
 
+### set_follower_mute
+
+Mute or unmute a newsletter's **follower-activity** notifications (WhatsApp Web's `MUTE_FOLLOWER_ACTIVITY`). Sent via MEX as a user-setting update.
+
+```rust
+pub async fn set_follower_mute(&self, jid: &Jid, muted: bool) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `muted` — `true` silences notifications, `false` re-enables them
+
+**Example:**
+```rust
+// Mute
+client.newsletter().set_follower_mute(&newsletter_jid, true).await?;
+
+// Unmute
+client.newsletter().set_follower_mute(&newsletter_jid, false).await?;
+```
+
+### set_admin_mute
+
+Mute or unmute a newsletter's **admin-activity** notifications (WhatsApp Web's `MUTE_ADMIN_ACTIVITY`). Only meaningful for owners/admins.
+
+```rust
+pub async fn set_admin_mute(&self, jid: &Jid, muted: bool) -> Result<(), MexError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `muted` — `true` silences admin-activity notifications, `false` re-enables them
+
+**Example:**
+```rust
+client.newsletter().set_admin_mute(&newsletter_jid, true).await?;
+```
+
+<Note>
+The mute state is sent as `ON`/`OFF`; the mute expiration is local database state and is never put on the wire, matching WhatsApp Web's `WAWebNewsletterUpdateUserSettingJob`.
+</Note>
+
 ### Sending messages
 
 Newsletter message sending is handled by the unified `client.send_message()` method. See the [Send API reference](/api/send#send_message) for full details.

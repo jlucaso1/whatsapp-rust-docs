@@ -423,6 +423,56 @@ let edit_id = client.edit_message(
 
 ---
 
+## edit_message_encrypted
+
+Edit a message via the **message-secret encrypted** path (a `secret_encrypted_message` with `secret_enc_type = MESSAGE_EDIT`) instead of the plaintext `protocolMessage` edit produced by [`edit_message`](#edit_message). This is the form Community Announcement Groups require, and the shape WhatsApp Web sends when its `message_edit_to_message_secret_sender_enabled` flag is on. The new content is encrypted under the original message's secret.
+
+```rust
+pub async fn edit_message_encrypted(
+    &self,
+    to: Jid,
+    original_id: impl Into<String>,
+    new_content: wa::Message,
+) -> Result<String, anyhow::Error>
+```
+
+<ParamField path="to" type="Jid" required>
+  Chat JID where the original message was sent. Newsletter/channel JIDs are rejected — use [`Newsletter::edit_message`](/api/newsletter#edit_message) for channels.
+</ParamField>
+
+<ParamField path="original_id" type="String" required>
+  ID of the message to edit. You can only edit your own messages, so the original sender and the editor are both you.
+</ParamField>
+
+<ParamField path="new_content" type="wa::Message" required>
+  Replacement message content.
+</ParamField>
+
+<ResponseField name="message_id" type="String">
+  Message ID of the edit message.
+</ResponseField>
+
+### Example: encrypted edit
+
+```rust
+use waproto::whatsapp as wa;
+
+let edit_id = client.edit_message_encrypted(
+    chat_jid,
+    &original_id,
+    wa::Message {
+        conversation: Some("edited (encrypted)".to_string()),
+        ..Default::default()
+    },
+).await?;
+```
+
+<Note>
+Use [`edit_message`](#edit_message) for ordinary DM and group edits. Reach for `edit_message_encrypted` only when the chat requires the message-secret edit form (e.g. Community Announcement Groups). Inbound encrypted edits are decrypted automatically on receive — see [decrypting secret-encrypted envelopes](/api/polls#decrypting-secret-encrypted-envelopes).
+</Note>
+
+---
+
 ## revoke_message
 
 Delete a message for everyone in the chat (revoke).
@@ -701,6 +751,48 @@ client.keep_message(group_jid, key, false).await?;
 
 ---
 
+## set_chat_disappearing_timer
+
+Turn disappearing messages on or off for a **1:1 chat**. Sends an `EPHEMERAL_SETTING` protocol message, mirroring WhatsApp Web's chat-action.
+
+```rust
+pub async fn set_chat_disappearing_timer(
+    &self,
+    chat: Jid,
+    duration: u32,
+) -> Result<SendResult, anyhow::Error>
+```
+
+<ParamField path="chat" type="Jid" required>
+  The 1:1 chat (PN or LID). Group, status, and newsletter JIDs are rejected — for groups use [`Groups::set_ephemeral`](/api/groups#set_ephemeral); for the account default use `Client::set_default_disappearing_mode`.
+</ParamField>
+
+<ParamField path="duration" type="u32" required>
+  Timer in **seconds**. Common values: `86400` (24h), `604800` (7 days), `7776000` (90 days). Pass `0` to turn disappearing messages off.
+</ParamField>
+
+<ResponseField name="SendResult" type="SendResult">
+  Result of the setting message send. See [SendResult](#sendresult).
+</ResponseField>
+
+### Example: enable and disable
+
+```rust
+let chat: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+// Enable 7-day disappearing messages
+client.set_chat_disappearing_timer(chat.clone(), 604_800).await?;
+
+// Turn it off
+client.set_chat_disappearing_timer(chat, 0).await?;
+```
+
+<Note>
+This sets the chat-wide timer. To keep an individual message past the timer, use [`keep_message`](#keep_message).
+</Note>
+
+---
+
 ## send_reaction
 
 React to a DM, group, or `status@broadcast` message with an emoji. The helper builds the `ReactionMessage` payload (including `sender_timestamp_ms`) and routes it through the standard send path, so the same retry, fan-out, and phash logic that applies to other messages applies here.
@@ -808,6 +900,8 @@ When you call `send_message` or `send_message_with_options`, the library automat
 | `event_message` | Adds a `<meta event_type="creation"/>` child node |
 | `enc_event_response_message` | Adds a `<meta event_type="response"/>` child node |
 | `secret_encrypted_message` with `SecretEncType::EventEdit` | Adds a `<meta event_type="edit"/>` child node |
+| view-once media (image/video/voice wrapped as view-once) | Adds the `<meta view_once="true"/>` attribute so recipients render the one-time bubble |
+| group send to tagged members (member labels) | Adds the `appdata` / `tag_reason` meta attributes |
 
 This means you can construct a raw `wa::Message` with any of these fields set and pass it directly to `send_message_with_options` — the correct protocol metadata is derived automatically. Any nodes you provide via `extra_stanza_nodes` in `SendOptions` are merged with the auto-inferred nodes.
 

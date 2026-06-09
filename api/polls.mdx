@@ -68,6 +68,58 @@ let (result, secret) = client
 println!("Poll sent with ID: {}", result.message_id);
 ```
 
+### create_quiz
+
+Create a quiz poll — a single-select poll with exactly one correct answer. Quizzes are inherently single-select (WhatsApp Web forces `selectableOptionsCount = 1`); the chosen option is sent as the poll's `correctAnswer` and `poll_type` is set to `QUIZ`.
+
+```rust
+pub async fn create_quiz(
+    &self,
+    to: &Jid,
+    name: &str,
+    options: &[String],
+    correct_index: usize,
+) -> Result<(SendResult, Vec<u8>)>
+```
+
+<ParamField path="to" type="&Jid" required>
+  Recipient JID. Can be a direct message or group chat.
+</ParamField>
+
+<ParamField path="name" type="&str" required>
+  Quiz question or title.
+</ParamField>
+
+<ParamField path="options" type="&[String]" required>
+  List of answer options (2–12 entries, no duplicates).
+</ParamField>
+
+<ParamField path="correct_index" type="usize" required>
+  0-based index into `options` of the correct answer. Out-of-range indices return an error.
+</ParamField>
+
+<ResponseField name="(send_result, message_secret)" type="(SendResult, Vec<u8>)">
+  Same shape as [`create`](#create): a [`SendResult`](/api/send#sendresult) plus the 32-byte secret needed to decrypt votes. Votes are cast, decrypted, and aggregated exactly like a regular single-select poll.
+</ResponseField>
+
+**Example:**
+
+```rust
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let options = vec![
+    "Paris".to_string(),
+    "London".to_string(),
+    "Berlin".to_string(),
+];
+
+// The correct answer is "Paris" (index 0).
+let (result, secret) = client
+    .polls()
+    .create_quiz(&chat_jid, "Capital of France?", &options, 0)
+    .await?;
+```
+
 ### vote
 
 Cast a vote on an existing poll.

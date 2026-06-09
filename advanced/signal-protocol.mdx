@@ -719,7 +719,7 @@ let dm_phash = prepared.phash;
 // On DM phash mismatch:
 if !jid.is_group() && !jid.is_status_broadcast() {
     client.invalidate_device_cache(&jid.user).await;
-    if let Some(own_pn) = &client.persistence_manager.get_device_snapshot().await.pn {
+    if let Some(own_pn) = &client.persistence_manager.get_device_snapshot().pn {
         client.invalidate_device_cache(&own_pn.user).await;
     }
 }

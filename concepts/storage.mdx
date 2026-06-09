@@ -88,16 +88,16 @@ impl PersistenceManager {
 **Purpose:** Read-only access to device state
 
 ```rust
-pub async fn get_device_snapshot(&self) -> Device {
-    self.device.read().await.clone()
+pub fn get_device_snapshot(&self) -> Arc<Device> {
+    self.device_snapshot.read().unwrap().clone()
 }
 ```
 
 **Usage:**
 ```rust
-let device = client.persistence_manager.get_device_snapshot().await;
-println!("Device ID: {:?}", device.pn);
-println!("Push Name: {}", device.push_name);
+let snapshot = client.persistence_manager.get_device_snapshot();
+println!("Device ID: {:?}", snapshot.pn);
+println!("Push Name: {}", snapshot.push_name);
 ```
 
 #### modify_device
@@ -878,9 +878,9 @@ device.push_name = "New Name".to_string(); // DON'T DO THIS
 ### Read-Only Access
 
 ```rust
-// Cheap snapshot for read-only access
-let device = client.persistence_manager.get_device_snapshot().await;
-println!("JID: {:?}", device.pn);
+// Cheap snapshot for read-only access — sync, no .await
+let snapshot = client.persistence_manager.get_device_snapshot();
+println!("JID: {:?}", snapshot.pn);
 ```
 
 ### Modifications

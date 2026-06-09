@@ -504,8 +504,8 @@ persistence_manager.modify_device(|device| {
 }).await;
 
 // Good: Release lock during expensive operation
-let device = persistence_manager.get_device_snapshot().await;
-let data = expensive_calculation(&device.pn);
+let snapshot = persistence_manager.get_device_snapshot();
+let data = expensive_calculation(&snapshot.pn);
 persistence_manager.process_command(
     DeviceCommand::SetPushName(data)
 ).await;

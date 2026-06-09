@@ -139,6 +139,7 @@
                 "pages": [
                   "changelog/overview",
                   "changelog/2026-06-09",
+                  "changelog/2026-06-09-non-exhaustive",
                   "changelog/2026-06-08",
                   "changelog/2026-06-06",
                   "changelog/2026-06-05-abprops",

@@ -1302,6 +1302,7 @@ pub struct MembershipRequest {
 Result of a participant change operation (add, remove, approve, reject).
 
 ```rust
+#[non_exhaustive]
 pub struct ParticipantChangeResponse {
     pub jid: Jid,
     pub status: Option<String>,
@@ -1309,6 +1310,10 @@ pub struct ParticipantChangeResponse {
     pub add_request: Option<AddRequestInfo>,
 }
 ```
+
+<Note>
+`ParticipantChangeResponse` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+</Note>
 
 `add_request` is populated when the server responds with HTTP 403 carrying an `<add_request>` child — that happens when a participant has privacy blocked direct adds and the inviter must send them a v4 invite link out-of-band. Since v0.6 the value is preserved instead of being dropped, so consumers can drive the v4 invite flow without parsing the raw IQ.
 
@@ -1381,10 +1386,15 @@ pub struct GroupProfilePicture {
 Result of creating a group.
 
 ```rust
+#[non_exhaustive]
 pub struct CreateGroupResult {
     pub metadata: GroupMetadata,
 }
 ```
+
+<Note>
+`CreateGroupResult` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+</Note>
 
 The `metadata` field carries the full group state returned by the server (same shape as [`get_metadata`](#get_metadata)). `metadata.participants` is `Vec<GroupParticipant>` — note that masked-number `display_name` labels live on `GroupParticipantInfo` (which carries `<participant>` children of *notification* events), not on `GroupParticipant` here.
 

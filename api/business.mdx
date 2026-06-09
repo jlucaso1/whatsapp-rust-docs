@@ -81,6 +81,7 @@ if let Some(profile) = client.get_business_profile(&jid).await? {
 ### BusinessProfile
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessProfile {
     pub wid: Option<Jid>,
     pub description: String,
@@ -92,27 +93,36 @@ pub struct BusinessProfile {
 }
 ```
 
+`BusinessProfile` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
+
 ### BusinessCategory
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessCategory {
     pub id: String,
     pub name: String,
 }
 ```
 
+`BusinessCategory` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
+
 ### BusinessHours
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessHours {
     pub timezone: Option<String>,
     pub business_config: Option<Vec<BusinessHoursConfig>>,
 }
 ```
 
+`BusinessHours` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
+
 ### BusinessHoursConfig
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessHoursConfig {
     pub day_of_week: DayOfWeek,
     pub mode: BusinessHourMode,
@@ -120,6 +130,8 @@ pub struct BusinessHoursConfig {
     pub close_time: u32,
 }
 ```
+
+`BusinessHoursConfig` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### DayOfWeek
 

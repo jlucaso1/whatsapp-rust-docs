@@ -45,6 +45,7 @@ pub async fn upload(
   Contains all metadata needed to include the media in a message:
   
   ```rust
+  #[non_exhaustive]
   pub struct UploadResponse {
       pub url: String,
       pub direct_path: String,
@@ -68,6 +69,10 @@ pub async fn upload(
       pub fn file_enc_sha256_vec(&self) -> Vec<u8> { ... }
   }
   ```
+
+  <Note>
+  `UploadResponse` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+  </Note>
   
   <ParamField path="url" type="String">
     Full CDN URL where the encrypted file was uploaded
@@ -240,7 +245,7 @@ client.send_message(chat_jid, msg).await?;
 ```
 
 | Builder | Options struct | Notable fields (all optional) | MIME default |
-|---------|----------------|-------------------------------|--------------|
+|---------|----------------|-------------------------------|-------------|
 | `media::image_message(upload, opts)` | `ImageOptions` | `caption`, `mimetype`, `jpeg_thumbnail` | `image/jpeg` |
 | `media::video_message(upload, opts)` | `VideoOptions` | `caption`, `mimetype`, `jpeg_thumbnail`, `duration_seconds`, `gif_playback` | `video/mp4` |
 | `media::document_message(upload, opts)` | `DocumentOptions` | `mimetype`, `file_name`, `title`, `caption`, `page_count`, `jpeg_thumbnail` | `application/octet-stream` |

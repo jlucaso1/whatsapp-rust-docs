@@ -176,6 +176,10 @@ pub async fn get_user_info(
 - `verified_name: Option<VerifiedName>` - Decoded verified business name certificate, for verified business accounts (see [`is_on_whatsapp`](#is_on_whatsapp) for field details)
 - `devices: Vec<u16>` - Device IDs from the `<devices version="2">` sublist the same usync query returns (device `0` is the primary). Empty when the server omits the sublist — no extra request is needed.
 
+<Note>
+`UserInfo` is `#[non_exhaustive]`, so new fields may be added in future versions without a breaking change.
+</Note>
+
 **Example:**
 ```rust
 let jids = vec![

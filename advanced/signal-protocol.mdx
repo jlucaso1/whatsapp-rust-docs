@@ -1165,8 +1165,9 @@ All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`,
 |-----------|--------|-------|
 | `store_session` | clone all fields + prost encode | move (zero-cost) |
 | `load_session` | prost decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
+| `peek_session` | deep-clone record (1–2 KB) | `Arc` refcount bump; returns `Option<Arc<SessionRecord>>` |
 | `store_sender_key` | serialize to bytes + store bytes | store `SenderKeyRecord` object directly |
-    | `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |
+| `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |
 | `flush` (batched) | write bytes to DB | serialize sessions + sender keys + write bytes to DB |
 
 ### Arc previous sessions

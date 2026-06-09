@@ -701,6 +701,7 @@ The library includes several allocation-reduction strategies that the integratio
 - **`CompactString` for JIDs** — JID user fields use `compact_str::CompactString` which stores strings up to 24 bytes inline (no heap allocation), covering the vast majority of phone numbers and LID identifiers
 - **`Server` enum** — JID server fields use a `#[repr(u8)]` enum instead of heap-allocated strings, making JID construction and comparison zero-allocation
 - **Zero-copy node decoding** — Received stanzas are decoded as `NodeRef` borrowing directly from the network buffer via `OwnedNodeRef` (yoke-based self-referential type), avoiding cloning string/byte payloads during decode
+- **`Arc<str>` sharing in `LidPnEntry`** — `LidPnEntry.lid` and `.phone_number` are `Arc<str>` instead of `String`. `LidPnCache` reuses the entry's own `Arc`s as the map keys for both lookup directions, so each identifier is allocated once per mapping rather than once as key and again inside the entry. Because this cache is unbounded by design, the saving compounds over the contact base (~40–80 B per mapping, ~0.5–1 MB for 10k contacts). Constructors accept `impl Into<Arc<str>>`, so `String` and `&str` call sites are unaffected; direct field reads return `Arc<str>` — use `&*entry.lid` for `&str` comparisons. Wire/persistence format is unchanged.
 - **Pre-allocated buffers** — History sync decompression uses a `compressed_size_hint` with a 4x multiplier for buffer pre-allocation, reducing `Vec` reallocation during decompression
 
 ### CI integration

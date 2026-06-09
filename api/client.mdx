@@ -954,7 +954,7 @@ Unified LID-PN lookup that auto-routes based on the JID type. Pass a phone numbe
 </ParamField>
 
 <ResponseField name="LidPnEntry" type="Option<LidPnEntry>">
-  Contains `lid` (String), `phone_number` (String), `created_at` (i64 Unix timestamp), and `learning_source` ([`LearningSource`](#learningsource))
+  Contains `lid` (`Arc<str>`), `phone_number` (`Arc<str>`), `created_at` (i64 Unix timestamp), and `learning_source` ([`LearningSource`](#learningsource)). Use `&*entry.lid` for `&str` comparisons or pass directly to anything that accepts `AsRef<str>`.
 </ResponseField>
 
 **Example:**

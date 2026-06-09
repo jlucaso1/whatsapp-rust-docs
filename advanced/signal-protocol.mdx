@@ -616,7 +616,15 @@ The group send path no longer serializes encryption behind a client-level lock. 
 This is an internal performance change — no public method on `Client::send_message` was renamed, and the order of `<to>` children in the resulting stanza is unchanged. If you implemented a custom `SignalStore`, note that `update_device_lists(records: Vec<DeviceListRecord>)` is now part of the trait so the fan-out can batch its writes.
 
 <Note>
-While *per-device* encryption runs concurrently, the sender-key chain itself is serialized **per `(group, sender)` pair** (v0.6). SKDM creation and `skmsg` encryption on the same chain can't race, so two concurrent sends to the same group ratchet the sender key deterministically instead of corrupting the chain. Different groups (or different senders) still encrypt fully in parallel.
+While *per-device* encryption runs concurrently, the sender-key chain is protected by **two separate locks per `(group, sender)` pair**:
+
+1. **Session-setup lock** (`SenderKeyStore::session_setup_lock`) — held only across `ensure_sessions_for_devices` (prekey fetch + X3DH). May span network I/O. Warm sends (no SKDM needed) never take it, so they are never blocked by a cold send's network round-trip.
+
+2. **Chain lock** (`SenderKeyStore::sender_key_lock`) — held across SKDM creation + pairwise encrypt fan-out + `skmsg` encrypt. Pure CPU; never spans network I/O. This is the invariant that prevents two concurrent sends from splitting the key between the SKDM and the `skmsg`.
+
+Prior to [#807](https://github.com/oxidezap/whatsapp-rust/pull/807), a single chain lock covered both phases, causing concurrent group sends to serialize behind a server round-trip whenever a new session needed to be established. Now only the CPU phase is in the critical section. Different groups (or different senders) encrypt fully in parallel, unchanged.
+
+`encrypt_for_devices` is composed of two public halves: `ensure_sessions_for_devices` (network, returns `SessionPlan`) and `encrypt_for_devices_with_sessions` (CPU, consumes `SessionPlan`). The DM path calls `encrypt_for_devices` unchanged; the group path calls them separately with the chain lock taken only around the second.
 </Note>
 
 ### In-memory sender key device cache

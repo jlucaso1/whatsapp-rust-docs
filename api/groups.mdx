@@ -43,7 +43,7 @@ println!("Addressing mode: {:?}", info.addressing_mode);
 // Cheaply share the snapshot across tasks without copying participants.
 let info_for_task = info.clone();
 tokio::spawn(async move {
-    println!("LID map entries: {}", info_for_task.lid_to_pn_map().len());
+    println!("Participants in task: {}", info_for_task.participants.len());
 });
 ```
 
@@ -1140,9 +1140,8 @@ pub struct GroupInfo {
 
 | Method | Description |
 |---|---|
-| `lid_to_pn_map() -> &HashMap<String, Jid>` | Access the LID-to-phone number mapping |
 | `phone_jid_for_lid_user(lid_user: &str) -> Option<&Jid>` | Look up the phone JID for a LID user |
-| `lid_jid_for_phone_user(phone_user: &str) -> Option<&Jid>` | Look up the LID JID for a phone number |
+| `lid_user_for_phone_user(phone_user: &str) -> Option<&CompactString>` | Look up the LID user string for a phone number |
 | `phone_device_jid_to_lid(phone_device_jid: &Jid) -> Jid` | Convert a phone-based device JID to LID format |
 
 **Example:**

@@ -7,14 +7,14 @@ description: "Several protocol paths that previously swallowed errors or returne
 
 **`is_on_whatsapp` rejects unsupported JID types ([#817](https://github.com/oxidezap/whatsapp-rust/pull/817))**
 
-Passing a non-PN/non-LID JID (group, newsletter, etc.) to `contacts().is_on_whatsapp()` now returns an error immediately. Previously those JIDs were silently dropped with a `warn!` log, making it easy to miss that part of the input was ignored.
+Passing a non-PN/non-LID JID (group, newsletter, etc.) to `contacts().is_on_whatsapp()` now returns an error immediately. Previously the method silently dropped those JIDs with a `warn!` log, making it easy to miss the ignored input.
 
 ```rust
 // This now returns Err("is_on_whatsapp only supports PN and LID JIDs, got …")
 client.contacts().is_on_whatsapp(&[Jid::group("120363021033254949")]).await?;
 ```
 
-Validate your inputs to `is_on_whatsapp` contain only `Jid::pn(...)` or `Jid::lid(...)` values.
+Validate that your inputs to `is_on_whatsapp` contain only `Jid::pn(...)` or `Jid::lid(...)` values.
 
 **`IqError::UnexpectedResponseType` added ([#817](https://github.com/oxidezap/whatsapp-rust/pull/817))**
 

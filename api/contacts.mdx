@@ -27,7 +27,7 @@ pub async fn is_on_whatsapp(
 ```
 
 **Parameters:**
-- `jids` - Array of JIDs to check. Supports `Jid::pn("phone_number")` for phone number lookups and `Jid::lid("lid_value")` for LID lookups. Passing any non-PN/non-LID JID (groups, newsletters, etc.) returns an error immediately.
+- `jids` - Array of JIDs to check. Supports `Jid::pn("phone_number")` for phone number lookups and `Jid::lid("lid_value")` for LID lookups. If you pass a non-PN/non-LID JID (groups, newsletters, etc.), the method returns an error immediately.
 
 **Returns:**
 - `Vec<IsOnWhatsAppResult>` - Registration status for each JID
@@ -193,7 +193,7 @@ pub async fn get_user_info(
 - `text: Option<String>` - Human-readable error description
 - `backoff: Option<u32>` - Server-suggested retry delay in seconds
 
-Per-subprotocol errors are preserved on the result struct rather than failing the whole request. This means one user returning a privacy error for their status does not block retrieving devices for the other users in the same batch. Check the `*_error` fields when a corresponding `Option` field is `None` and you need to distinguish "not set" from "server error".
+The library preserves per-subprotocol errors on the result struct rather than failing the whole request. A privacy error from one user's status does not block retrieval of devices for other users in the same batch. Check the `*_error` fields when a corresponding `Option` field is `None` and you need to distinguish "not set" from "server error".
 
 ```rust
 let user_info = client.contacts().get_user_info(&[jid]).await?;
@@ -249,7 +249,7 @@ The implementation automatically:
 
 All methods return `Result<T, anyhow::Error>`. Common errors:
 
-- Unsupported JID type passed to `is_on_whatsapp` (only PN and LID JIDs are accepted)
+- Passing an unsupported JID type to `is_on_whatsapp` (only PN and LID JIDs are accepted)
 - Invalid JID format
 - Network errors
 - Rate limiting

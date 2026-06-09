@@ -186,11 +186,10 @@ let info: Arc<GroupInfo> = client.groups().query_info(&group_jid).await?;
 println!("Participants: {:?}", info.participants);
 println!("Addressing mode: {:?}", info.addressing_mode);
 
-    // Access LID-to-phone mapping if available
-    let mapping = info.lid_to_pn_map();
-    if !mapping.is_empty() {
-        for (lid, pn) in mapping {
-        println!("LID {} -> Phone {}", lid, pn);
+// Look up phone numbers for LID participants
+for participant in &info.participants {
+    if let Some(phone_jid) = info.phone_jid_for_lid_user(&participant.user) {
+        println!("LID {} -> Phone {}", participant, phone_jid);
     }
 }
 ```
@@ -836,10 +835,11 @@ For LID-based groups, you may need phone number mappings:
 let info = client.groups().query_info(&group_jid).await?;
 
 if info.addressing_mode == AddressingMode::Lid {
-    // Get LID-to-phone mapping
-    let mapping = info.lid_to_pn_map();
-    for (lid, pn_jid) in mapping {
-        println!("LID {} maps to phone {}", lid, pn_jid);
+    // Look up phone number for each LID participant
+    for participant in &info.participants {
+        if let Some(phone_jid) = info.phone_jid_for_lid_user(&participant.user) {
+            println!("LID {} maps to phone {}", participant, phone_jid);
+        }
     }
 }
 ```

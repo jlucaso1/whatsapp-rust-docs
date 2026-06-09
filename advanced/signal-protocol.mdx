@@ -527,6 +527,31 @@ async fn handle_unknown_device_sync(&self, info: &Arc<MessageInfo>) {
 
 Location: `src/message.rs`, `src/client/device_registry.rs`, `src/pending_device_sync.rs`
 
+### Retry receipt from unknown group device
+
+When the client receives a retry receipt, `handle_retry_receipt` checks whether the requesting device is present in the local device registry. Previously the handler dropped all retries from unregistered devices — this was safe for WA Web because WA Web keeps participant device lists fresh via a pre-send sync, so any legitimate requester is already known before the send.
+
+For a library client, a participant device can legitimately be absent from the local registry: if the device joined between the last device-list sync and the group send, it will have received the `skmsg` from the server but never obtained a sender key, causing it to retry indefinitely. For exactly this case the retry receipt carries a `<keys>` bundle — the ADV-signed `device-identity`, the identity key, a one-time prekey, and the signed prekey — which is everything needed to establish a Signal session and resend.
+
+The handler now delegates to `should_drop_unknown_device_retry` in `wacore::protocol::retry`:
+
+```rust
+// wacore/src/protocol/retry.rs
+pub fn should_drop_unknown_device_retry(keys_present: bool, device_known: bool) -> bool {
+    !keys_present && !device_known
+}
+```
+
+| `keys_present` | `device_known` | Result |
+|---|---|---|
+| `true` | `false` | **Recover** — build a session from the embedded bundle and resend |
+| `false` | `false` | **Drop** — no bundle to recover from and device is unknown |
+| any | `true` | **Resend** — device is in registry, proceed normally |
+
+When the bundle includes a `<device-identity>`, `process_retry_key_bundle` validates the ADV chain against the requester's account key (using the stored primary identity as a fallback when the server omits `account_signature_key`). A present-but-invalid ADV result is a hard error; the session is not built. If `<device-identity>` is absent from the bundle, or if no account key can be found, the check is skipped with a warning and the session is built anyway — matching the behaviour of the regular prekey-fetch path. The drop predicate only gates on syntactic `<keys>` presence, so the ADV guarantee is conditional on the bundle including a well-formed `<device-identity>`. This mirrors whatsmeow's approach of building the prekey session directly from the receipt bundle without a device-registry gate.
+
+Location: `src/retry.rs`, `wacore/src/protocol/retry.rs`
+
 ### Immutable sender key loading
 
 The `SenderKeyStore` trait's `load_sender_key` method takes `&self` (not `&mut self`), allowing sender key lookups to proceed under a **read lock**. This is safe because loading a sender key is a pure read operation — no state is mutated. The `store_sender_key` method still requires `&mut self` since it modifies state.

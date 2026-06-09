@@ -309,12 +309,15 @@ Result of creating a community.
 
 ```rust
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CreateCommunityResult {
     pub metadata: GroupMetadata,
 }
 ```
 
 The `metadata` field carries the full community parent metadata from the server, with the inline `description: Option<String>` already populated. See [`GroupMetadata`](/api/groups#groupmetadata) for the full field list.
+
+`CreateCommunityResult` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
 
 <Note>
 Prior to v0.6 this struct exposed only `gid: Jid` and derived `PartialEq, Eq`. The `Eq` derives were dropped because `GroupMetadata` does not implement them.
@@ -326,6 +329,7 @@ A subgroup within a community. Implements `PartialEq` and `Eq`.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CommunitySubgroup {
     pub id: Jid,
     pub subject: String,
@@ -334,6 +338,8 @@ pub struct CommunitySubgroup {
     pub is_general_chat: bool,
 }
 ```
+
+`CommunitySubgroup` is `#[non_exhaustive]`.
 
 **Fields:**
 - `id` — Subgroup JID
@@ -348,11 +354,14 @@ Result of linking subgroups to a community. Implements `PartialEq` and `Eq`.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LinkSubgroupsResult {
     pub linked_jids: Vec<Jid>,
     pub failed_groups: Vec<(Jid, u32)>,
 }
 ```
+
+`LinkSubgroupsResult` is `#[non_exhaustive]`.
 
 ### UnlinkSubgroupsResult
 
@@ -360,11 +369,14 @@ Result of unlinking subgroups from a community. Implements `PartialEq` and `Eq`.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UnlinkSubgroupsResult {
     pub unlinked_jids: Vec<Jid>,
     pub failed_groups: Vec<(Jid, u32)>,
 }
 ```
+
+`UnlinkSubgroupsResult` is `#[non_exhaustive]`.
 
 ### GroupType
 

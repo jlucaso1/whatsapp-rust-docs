@@ -63,7 +63,7 @@ if let Some(profile) = client.get_business_profile(&jid).await? {
     if let Some(configs) = &profile.business_hours.business_config {
         for config in configs {
             println!(
-                "  {:?}: {:?} ({}–{})",
+                "  {:?}: {:?} ({}\u{2013}{})",
                 config.day_of_week,
                 config.mode,
                 config.open_time,
@@ -81,6 +81,7 @@ if let Some(profile) = client.get_business_profile(&jid).await? {
 ### BusinessProfile
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessProfile {
     pub wid: Option<Jid>,
     pub description: String,
@@ -92,27 +93,36 @@ pub struct BusinessProfile {
 }
 ```
 
+`BusinessProfile` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+
 ### BusinessCategory
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessCategory {
     pub id: String,
     pub name: String,
 }
 ```
 
+`BusinessCategory` is `#[non_exhaustive]`.
+
 ### BusinessHours
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessHours {
     pub timezone: Option<String>,
     pub business_config: Option<Vec<BusinessHoursConfig>>,
 }
 ```
 
+`BusinessHours` is `#[non_exhaustive]`.
+
 ### BusinessHoursConfig
 
 ```rust
+#[non_exhaustive]
 pub struct BusinessHoursConfig {
     pub day_of_week: DayOfWeek,
     pub mode: BusinessHourMode,
@@ -120,6 +130,8 @@ pub struct BusinessHoursConfig {
     pub close_time: u32,
 }
 ```
+
+`BusinessHoursConfig` is `#[non_exhaustive]`.
 
 ### DayOfWeek
 

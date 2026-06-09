@@ -14,9 +14,13 @@ pub async fn mark_as_read(
     &self,
     chat: &Jid,
     sender: Option<&Jid>,
-    message_ids: Vec<String>,
+    message_ids: &[&str],
 ) -> Result<(), anyhow::Error>
 ```
+
+<Note>
+`message_ids` is a borrowed slice `&[&str]` to avoid per-call allocations — pass `&["ID"]` or `&["ID_1", "ID_2"]`.
+</Note>
 
 <ParamField path="chat" type="&Jid" required>
   Chat JID where the messages were received. Can be:
@@ -31,7 +35,7 @@ pub async fn mark_as_read(
   - For groups: Pass the JID of the user who sent the message(s)
 </ParamField>
 
-<ParamField path="message_ids" type="Vec<String>" required>
+<ParamField path="message_ids" type="&[&str]" required>
   List of message IDs to mark as read. Can be a single ID or multiple IDs.
   
   If empty, this function returns immediately without sending anything.
@@ -47,7 +51,7 @@ let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
 client.mark_as_read(
     &chat_jid,
     None, // No sender for DMs
-    vec!["MESSAGE_ID_123".to_string()]
+    &["MESSAGE_ID_123"],
 ).await?;
 ```
 
@@ -60,24 +64,24 @@ let sender_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
 client.mark_as_read(
     &group_jid,
     Some(&sender_jid), // Must specify sender in groups
-    vec!["MESSAGE_ID_456".to_string()]
+    &["MESSAGE_ID_456"],
 ).await?;
 ```
 
 ### Example: mark multiple messages as read
 
 ```rust
-let message_ids = vec![
-    "MSG_1".to_string(),
-    "MSG_2".to_string(),
-    "MSG_3".to_string(),
-];
+let message_ids = ["MSG_1", "MSG_2", "MSG_3"];
 
-client.mark_as_read(&chat_jid, None, message_ids).await?;
+client.mark_as_read(&chat_jid, None, &message_ids).await?;
 ```
 
 <Note>
   Read receipts are **not sent automatically** by the library. You must explicitly call `mark_as_read()` when you want to notify the sender that messages have been read.
+</Note>
+
+<Note>
+  `mark_as_read` adapts the wire shape to the chat, matching WhatsApp Web: a newsletter read is sent as `read-self`, and a `status@broadcast` read carries `context="status"` plus `peer_participant_pn` (the resolved LID→PN) when the status author is a LID. You don't pass anything extra — the same call handles all three cases.
 </Note>
 
 ---
@@ -93,9 +97,13 @@ pub async fn mark_as_played(
     &self,
     chat: &Jid,
     sender: Option<&Jid>,
-    message_ids: Vec<String>,
+    message_ids: &[&str],
 ) -> Result<(), anyhow::Error>
 ```
+
+<Note>
+`message_ids` is a borrowed slice `&[&str]`, matching [`mark_as_read`](#mark_as_read).
+</Note>
 
 <ParamField path="chat" type="&Jid" required>
   Chat JID where the media message was received. Can be a direct message, group, broadcast list, or newsletter JID.
@@ -109,7 +117,7 @@ pub async fn mark_as_played(
   - For newsletters: the receipt is sent as `played-self`; `sender` is ignored.
 </ParamField>
 
-<ParamField path="message_ids" type="Vec<String>" required>
+<ParamField path="message_ids" type="&[&str]" required>
   Message IDs of the voice or video notes to mark as played. The first ID becomes the receipt's `id` attribute; any additional IDs are batched into a `<list><item/></list>` child, the same shape as `mark_as_read`.
 
   If empty, this function returns immediately without sending anything.
@@ -125,7 +133,7 @@ let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
 client.mark_as_played(
     &chat_jid,
     None, // No participant in DMs
-    vec!["VOICE_MSG_ID".to_string()],
+    &["VOICE_MSG_ID"],
 ).await?;
 ```
 
@@ -138,7 +146,7 @@ let sender_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
 client.mark_as_played(
     &group_jid,
     Some(&sender_jid), // Required in groups and broadcasts
-    vec!["VOICE_MSG_ID".to_string()],
+    &["VOICE_MSG_ID"],
 ).await?;
 ```
 
@@ -148,11 +156,7 @@ client.mark_as_played(
 client.mark_as_played(
     &chat_jid,
     None,
-    vec![
-        "MSG_1".to_string(),
-        "MSG_2".to_string(),
-        "MSG_3".to_string(),
-    ],
+    &["MSG_1", "MSG_2", "MSG_3"],
 ).await?;
 ```
 
@@ -363,6 +367,7 @@ pub struct Receipt {
     pub message_ids: Vec<String>,
     pub timestamp: DateTime<Utc>,
     pub r#type: ReceiptType,
+    pub offline: bool,
 }
 ```
 
@@ -371,6 +376,10 @@ pub struct Receipt {
   - `chat` - Chat JID where the receipt originated
   - `sender` - JID of the user who sent the receipt
   - `is_group` - Whether this is from a group
+</ParamField>
+
+<ParamField path="offline" type="bool">
+  `true` when the receipt carried the `offline` attribute — i.e. it was drained from the server's offline queue on reconnect rather than delivered live. Use it to distinguish a backlog of receipts received at login from real-time ones.
 </ParamField>
 
 <ParamField path="message_ids" type="Vec<String>">
@@ -471,7 +480,7 @@ struct Settings {
 }
 
 if settings.send_read_receipts {
-    client.mark_as_read(&chat_jid, sender, message_ids).await?;
+    client.mark_as_read(&chat_jid, sender, &message_ids).await?;
 }
 ```
 
@@ -480,7 +489,7 @@ if settings.send_read_receipts {
 Send read receipts for multiple messages at once to reduce network overhead:
 
 ```rust
-let mut pending_receipts: Vec<String> = Vec::new();
+let mut pending_receipts: Vec<&str> = Vec::new();
 
 // Collect message IDs
 pending_receipts.push(msg_id_1);
@@ -489,7 +498,7 @@ pending_receipts.push(msg_id_3);
 
 // Send batch
 if !pending_receipts.is_empty() {
-    client.mark_as_read(&chat_jid, None, pending_receipts).await?;
+    client.mark_as_read(&chat_jid, None, &pending_receipts).await?;
 }
 ```
 
@@ -502,13 +511,13 @@ if message_info.source.is_group {
     client.mark_as_read(
         &message_info.source.chat,
         Some(&message_info.source.sender), // Required for groups
-        vec![message_info.id.clone()]
+        &[message_info.id.as_str()],
     ).await?;
 } else {
     client.mark_as_read(
         &message_info.source.chat,
         None, // No sender for DMs
-        vec![message_info.id.clone()]
+        &[message_info.id.as_str()],
     ).await?;
 }
 ```

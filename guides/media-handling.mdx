@@ -83,15 +83,18 @@ Download media when you have the raw encryption parameters:
 
 ```rust
 use wacore::download::MediaType;
+use whatsapp_rust::download::DownloadParams;
 
-let data = client.download_from_params(
-    "/v/t62.1234-5/...",          // direct_path
-    &media_key,                    // media_key (32 bytes)
-    &file_sha256,                  // file_sha256
-    &file_enc_sha256,              // file_enc_sha256
-    12345,                         // file_length
-    MediaType::Image,              // media_type
-).await?;
+let params = DownloadParams::encrypted(
+    "/v/t62.1234-5/...",  // direct_path
+    &media_key,            // media_key (32 bytes)
+    &file_sha256,          // file_sha256
+    &file_enc_sha256,      // file_enc_sha256
+    12345,                 // file_length
+    MediaType::Image,      // media_type
+);
+
+let data = client.download_from_params(&params).await?;
 
 std::fs::write("downloaded.jpg", data)?;
 ```
@@ -101,16 +104,17 @@ See [Download API reference](/api/download#download_from_params) for raw paramet
 ### Streaming from raw parameters
 
 ```rust
-let file = File::create("large_video.mp4")?;
-let file = client.download_from_params_to_writer(
+let params = DownloadParams::encrypted(
     direct_path,
     &media_key,
     &file_sha256,
     &file_enc_sha256,
     file_length,
     MediaType::Video,
-    file,
-).await?;
+);
+
+let file = File::create("large_video.mp4")?;
+let file = client.download_from_params_to_writer(&params, file).await?;
 ```
 
 See [Download API reference](/api/download#download_from_params_to_writer) for streaming from raw parameters.
@@ -286,6 +290,26 @@ See [Upload API reference](/api/upload) for full details.
 
 ### Using upload response in messages
 
+The `whatsapp_rust::media` module turns an `UploadResponse` into a ready-to-send `wa::Message`, so you don't hand-assemble the CDN/crypto fields (url, direct_path, media_key, the two SHA-256 hashes, file_length, media_key_timestamp, streaming_sidecar):
+
+```rust
+use whatsapp_rust::media::{self, ImageOptions};
+
+let upload = client.upload(image_data, MediaType::Image, Default::default()).await?;
+
+let message = media::image_message(upload, ImageOptions {
+    caption: Some("Check out this image!".to_string()),
+    ..Default::default()
+});
+
+let result = client.send_message(to, message).await?;
+```
+
+`media::video_message`, `media::document_message`, and `media::audio_message` work the same way with their own options structs (and carry the streaming sidecar for video/audio). See [media message builders](/api/upload#high-level-message-builders).
+
+<Accordion title="Building the message by hand">
+You can still assemble the proto yourself when you need a field the options structs don't expose (e.g. explicit `width`/`height`):
+
 ```rust
 use waproto::whatsapp as wa;
 
@@ -311,6 +335,7 @@ let message = wa::Message {
 
 let result = client.send_message(to, message).await?;
 ```
+</Accordion>
 
 ### Sending media as an album
 

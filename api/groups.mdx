@@ -52,11 +52,15 @@ tokio::spawn(async move {
 Get all groups the client is participating in.
 
 ```rust
-pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, anyhow::Error>
+pub async fn get_participating(&self) -> Result<HashMap<Jid, GroupMetadata>, anyhow::Error>
 ```
 
 **Returns:**
-- `HashMap<String, GroupMetadata>` - Map of group JID strings to metadata
+- `HashMap<Jid, GroupMetadata>` - Map of group `Jid` to metadata
+
+<Note>
+This map is keyed by `Jid`. Call `.to_string()` on the key if you need the string form.
+</Note>
 
 `GroupMetadata` implements `PartialEq` and `Eq`, allowing direct comparison of group metadata instances.
 
@@ -109,8 +113,8 @@ See [Community API](/api/community) for community-specific operations.
 ```rust
 let groups = client.groups().get_participating().await?;
 
-for (jid_str, metadata) in groups {
-    println!("Group: {} ({})", metadata.subject, jid_str);
+for (jid, metadata) in groups {
+    println!("Group: {} ({})", metadata.subject, jid);
     println!("  Participants: {}", metadata.participants.len());
     
     for participant in &metadata.participants {
@@ -228,14 +232,18 @@ pub async fn set_description(
     &self,
     jid: &Jid,
     description: Option<GroupDescription>,
-    prev: Option<String>,
+    prev: Option<&str>,
 ) -> Result<(), anyhow::Error>
 ```
 
 **Parameters:**
 - `jid` - Group JID
 - `description` - New description (max 2048 characters) or `None` to delete
-- `prev` - Current description ID for conflict detection (pass `None` if unknown)
+- `prev` - Current description ID for conflict detection, borrowed as `Option<&str>` (pass `None` if unknown)
+
+<Note>
+`prev` borrows the id (`Option<&str>`). Pass `Some("PREV_ID")` or `None`.
+</Note>
 
 **Example:**
 ```rust
@@ -243,6 +251,10 @@ let group_jid: Jid = "123456789@g.us".parse()?;
 let desc = GroupDescription::new("This is our group chat")?;
 
 client.groups().set_description(&group_jid, Some(desc), None).await?;
+
+// Replace an existing description, passing the previous description id for conflict detection
+let updated = GroupDescription::new("Updated topic")?;
+client.groups().set_description(&group_jid, Some(updated), Some("PREV_ID")).await?;
 
 // Delete description
 client.groups().set_description(&group_jid, None, None).await?;

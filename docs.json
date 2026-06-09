@@ -108,6 +108,7 @@
                   "api/newsletter",
                   "api/community",
                   "api/polls",
+                  "api/events",
                   "api/spam-report",
                   "api/tctoken",
                   "api/signal"
@@ -137,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-09",
                   "changelog/2026-06-08",
                   "changelog/2026-06-06",
                   "changelog/2026-06-05-abprops",

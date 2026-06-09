@@ -165,6 +165,8 @@ pub enum Event {
     StarUpdate(StarUpdate),
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
     DeleteChatUpdate(DeleteChatUpdate),
+    ClearChatUpdate(ClearChatUpdate),
+    UserStatusMuteUpdate(UserStatusMuteUpdate),
     DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
     LabelEditUpdate(LabelEditUpdate),
     LabelAssociationUpdate(LabelAssociationUpdate),
@@ -684,6 +686,9 @@ pub struct Receipt {
     pub message_ids: Vec<MessageId>,
     pub timestamp: DateTime<Utc>,
     pub r#type: ReceiptType,
+    /// `true` when the receipt was drained from the server's offline queue on
+    /// reconnect (carried the `offline` attribute) rather than delivered live.
+    pub offline: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1333,6 +1338,70 @@ Event::DeleteChatUpdate(update) => {
     println!("Chat {} deleted (media deleted: {})", update.jid, update.delete_media);
 }
 ```
+
+### ClearChatUpdate
+
+**Emitted:** When a chat's messages are cleared (but the chat is kept) on a linked device
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct ClearChatUpdate {
+    pub jid: Jid,
+    /// From the index, not the proto — ClearChatAction only has messageRange.
+    pub delete_starred: bool,
+    /// From the index, not the proto.
+    pub delete_media: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::ClearChatAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `jid` - The chat that was cleared
+- `delete_starred` - Whether starred messages were also removed
+- `delete_media` - Whether downloaded media was also removed
+- `from_full_sync` - `true` while replaying the initial app state full sync
+
+**Example:**
+```rust
+Event::ClearChatUpdate(update) => {
+    println!("Chat {} cleared (starred: {}, media: {})",
+        update.jid, update.delete_starred, update.delete_media);
+}
+```
+
+See [`clear_chat`](/api/chat-actions#clear_chat) for the outbound API that emits this on other devices.
+
+### UserStatusMuteUpdate
+
+**Emitted:** When a contact/group/channel's status updates are muted or unmuted on a linked device
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct UserStatusMuteUpdate {
+    pub jid: Jid,
+    /// `true` = status muted, `false` = unmuted.
+    pub muted: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::UserStatusMuteAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `jid` - The entity whose status updates were (un)muted
+- `muted` - `true` when status was muted, `false` when unmuted
+- `from_full_sync` - `true` while replaying the initial app state full sync
+
+**Example:**
+```rust
+Event::UserStatusMuteUpdate(update) => {
+    println!("Status of {} {}", update.jid, if update.muted { "muted" } else { "unmuted" });
+}
+```
+
+See [`set_user_status_mute`](/api/chat-actions#set_user_status_mute) for the outbound API.
 
 ### DeleteMessageForMeUpdate
 

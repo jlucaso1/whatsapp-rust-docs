@@ -716,6 +716,10 @@ The `read_messages_loop` runs on the `run()` caller's task — not spawned — s
 async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
     let transport_events = self.transport_events.lock().await.take()
         .ok_or_else(|| anyhow!("Cannot start message loop: not connected"))?;
+    // Noise socket is stable for the lifetime of this loop; resolve once
+    // instead of locking the mutex on every inbound frame.
+    let noise_socket = self.get_noise_socket().await
+        .map_err(|_| anyhow!("Cannot start message loop: no noise socket"))?;
     let mut frame_decoder = FrameDecoder::new();
 
     loop {
@@ -732,7 +736,7 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
 
                         let mut frames_in_batch: u32 = 0;
                         while let Some(encrypted_frame) = frame_decoder.decode_frame() {
-                            if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
+                            if let Some(node) = self.decrypt_frame(&noise_socket, encrypted_frame) {
                                 // Inline vs spawned processing (see below)
                                 if is_critical(&node) {
                                     self.process_decrypted_node(node).await;

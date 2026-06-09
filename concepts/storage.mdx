@@ -37,7 +37,8 @@ Manages all device state changes and persistence operations. Acts as the gatekee
 
 ```rust
 pub struct PersistenceManager {
-    device: Arc<RwLock<Device>>,
+    device: Arc<tokio::sync::RwLock<Device>>,
+    device_snapshot: std::sync::RwLock<Arc<Device>>,
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
     save_notify: Arc<Event>,  // event_listener::Event (runtime-agnostic)
@@ -45,7 +46,8 @@ pub struct PersistenceManager {
 ```
 
 **Fields:**
-- `device`: In-memory device state (protected by `async_lock::RwLock`)
+- `device`: In-memory device state (protected by `tokio::sync::RwLock`; write-locked only during mutations)
+- `device_snapshot`: Cached `Arc<Device>` rebuilt under the write guard on every mutation — read by `get_device_snapshot()` with no contention against writers
 - `backend`: Storage backend implementation
 - `dirty`: Flag indicating unsaved changes
 - `save_notify`: Notification channel for background saver (uses `event_listener::Event` for runtime-agnostic operation)
@@ -71,8 +73,10 @@ impl PersistenceManager {
             Device::new(backend.clone())
         };
 
+        let snapshot = Arc::new(device.clone());
         Ok(Self {
-            device: Arc::new(RwLock::new(device)),
+            device: Arc::new(tokio::sync::RwLock::new(device)),
+            device_snapshot: std::sync::RwLock::new(snapshot),
             backend,
             dirty: Arc::new(AtomicBool::new(false)),
             save_notify: Arc::new(Event::new()),
@@ -111,6 +115,9 @@ where
 {
     let mut device_guard = self.device.write().await;
     let result = modifier(&mut device_guard);
+
+    // Rebuild the cached snapshot before releasing the write lock
+    *self.device_snapshot.write().unwrap() = Arc::new(device_guard.clone());
 
     self.dirty.store(true, Ordering::Relaxed);
     self.save_notify.notify(1);

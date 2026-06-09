@@ -81,7 +81,7 @@ client.mark_as_read(&chat_jid, None, &message_ids).await?;
 </Note>
 
 <Note>
-  `mark_as_read` adapts the wire shape to the chat, matching WhatsApp Web: a newsletter read is sent as `read-self`, and a `status@broadcast` read carries `context="status"` plus `peer_participant_pn` (the resolved LID→PN) when the status author is a LID. You don't pass anything extra — the same call handles all three cases.
+  `mark_as_read` adapts the wire shape to the chat, matching WhatsApp Web. A newsletter read is sent as `read-self`. A `status@broadcast` read carries `context="status"`. When the status author is a LID, it also adds `peer_participant_pn` (the resolved LID→PN). The same call handles all three cases — you don't pass anything extra.
 </Note>
 
 ---
@@ -379,7 +379,7 @@ pub struct Receipt {
 </ParamField>
 
 <ParamField path="offline" type="bool">
-  `true` when the receipt carried the `offline` attribute — i.e. it was drained from the server's offline queue on reconnect rather than delivered live. Use it to distinguish a backlog of receipts received at login from real-time ones.
+  `true` when the receipt carried the `offline` attribute. That means it was drained from the server's offline queue on reconnect rather than delivered live. Use it to tell a backlog of receipts received at login apart from real-time ones.
 </ParamField>
 
 <ParamField path="message_ids" type="Vec<String>">

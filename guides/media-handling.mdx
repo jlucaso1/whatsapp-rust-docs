@@ -296,6 +296,7 @@ See [Upload API reference](/api/upload) for full details.
 The `whatsapp_rust::media` module turns an `UploadResponse` into a ready-to-send `wa::Message`, so you don't hand-assemble the CDN/crypto fields (url, direct_path, media_key, the two SHA-256 hashes, file_length, media_key_timestamp, streaming_sidecar):
 
 ```rust
+use wacore::download::MediaType;
 use whatsapp_rust::media::{self, ImageOptions};
 
 let upload = client.upload(image_data, MediaType::Image, Default::default()).await?;

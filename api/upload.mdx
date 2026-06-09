@@ -224,7 +224,12 @@ let result = client.send_message(chat_jid, message).await?;
 The `whatsapp_rust::media` module turns an [`UploadResponse`](#upload) into a ready-to-send `wa::Message`, so you don't hand-assemble the CDN/crypto fields (url, direct_path, media_key, file_sha256, file_enc_sha256, file_length, media_key_timestamp, streaming_sidecar) on every send. Each builder takes the upload result plus a typed options struct with sensible MIME defaults.
 
 ```rust
+use wacore::download::MediaType;
 use whatsapp_rust::media::{self, ImageOptions, VideoOptions, AudioOptions, DocumentOptions};
+use std::fs;
+
+let chat_jid: Jid = "15551234567@s.whatsapp.net".parse()?;
+let image_bytes = fs::read("photo.jpg")?;
 
 let upload = client.upload(image_bytes, MediaType::Image, Default::default()).await?;
 let msg = media::image_message(upload, ImageOptions {
@@ -244,7 +249,14 @@ client.send_message(chat_jid, msg).await?;
 The `video_message` and `audio_message` builders carry the upload's `streaming_sidecar` (progressive-playback HMAC table) when present. For fields the options structs don't expose (e.g. explicit image `width`/`height`), assemble the proto by hand as shown above.
 
 ```rust
+use wacore::download::MediaType;
+use whatsapp_rust::media::{self, AudioOptions};
+use std::fs;
+
 // Voice note (push-to-talk) with a waveform preview
+let opus_bytes = fs::read("voice.ogg")?;
+let waveform_bytes: Vec<u8> = vec![]; // optional PCM waveform preview
+
 let upload = client.upload(opus_bytes, MediaType::Audio, Default::default()).await?;
 let msg = media::audio_message(upload, AudioOptions {
     ptt: Some(true),

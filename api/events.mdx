@@ -3,7 +3,7 @@ title: Events
 description: Create WhatsApp event messages and collect encrypted RSVPs
 ---
 
-The `Events` feature creates WhatsApp **event** messages (the scheduled-event bubble with a date, location, and join link) and sends RSVPs. Like polls, an event carries a per-message `message_secret`; responders derive their RSVP encryption key from it, so you must keep the secret to send or decrypt responses.
+The `Events` feature creates WhatsApp **event** messages — the scheduled-event bubble with a date, location, and join link. It also sends RSVPs. Like polls, an event carries a per-message `message_secret`. Responders derive their RSVP encryption key from that secret. Keep the secret so you can send and decrypt responses later.
 
 ## Access
 
@@ -185,7 +185,7 @@ pub struct EventCreationParams {
 
 ### EventResponseType
 
-Re-exported from the generated proto.
+`whatsapp_rust` re-exports this enum from the generated proto.
 
 ```rust
 pub enum EventResponseType {

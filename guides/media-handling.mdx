@@ -203,16 +203,19 @@ The `LinkThumbnail` variant in `MediaType` supports downloading thumbnails for U
 
 ```rust
 use wacore::download::MediaType;
+use whatsapp_rust::download::DownloadParams;
 
 // LinkThumbnail uses HKDF info "WhatsApp Link Thumbnail Keys"
-let thumbnail = client.download_from_params(
+let params = DownloadParams::encrypted(
     thumbnail_direct_path,
     &thumbnail_media_key,
     &thumbnail_sha256,
     &thumbnail_enc_sha256,
     thumbnail_length,
     MediaType::LinkThumbnail,
-).await?;
+);
+
+let thumbnail = client.download_from_params(&params).await?;
 ```
 
 ## Forwarding media via CDN reuse

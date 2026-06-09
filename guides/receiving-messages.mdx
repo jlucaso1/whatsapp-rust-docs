@@ -462,14 +462,14 @@ See [Receipt API reference](/api/receipt) for full details.
 client.mark_as_read(
     &chat_jid,
     None, // No sender for DMs
-    vec!["msg1".to_string()],
+    &["msg1"],
 ).await?;
 
 // Mark multiple messages as read (group)
 client.mark_as_read(
     &group_jid,
     Some(&sender_jid), // Must specify sender in groups
-    vec!["msg1".to_string(), "msg2".to_string(), "msg3".to_string()],
+    &["msg1", "msg2", "msg3"],
 ).await?;
 ```
 

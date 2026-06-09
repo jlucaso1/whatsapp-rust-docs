@@ -128,6 +128,8 @@ The dead, fully-buffering `download_to_file` is gone. Use [`download_to_writer`]
 
 **Companion device-identity (ADV) validation**: fetched pre-key bundles are validated against the companion device-identity, rejecting bundles whose identity doesn't check out before a session is built.
 
+**ADV account-key fallback from store** ([#790](https://github.com/oxidezap/whatsapp-rust/pull/790)): Fixed a regression where contacts' companion devices (WhatsApp Web / Desktop) stopped receiving messages after the ADV validation above was introduced. The server legitimately omits `account_signature_key` from a companion's `<device-identity>` because the client already holds that key as the contact's primary (device 0) identity in the Signal store — the prior validation rejected those bundles outright. The fix mirrors WA Web's `validateADVwithIdentityKey` (`e.accountSignatureKey || t`): the in-blob key is preferred; when absent, the contact's stored primary identity is loaded via `Client::load_account_identity` and used as the fallback. The validation result is now the three-state `wacore::adv::AdvValidation` (`Valid` / `Invalid` / `NoAccountKey`) instead of a boolean — an unverifiable-for-lack-of-key bundle is logged and kept rather than dropped, preserving the existing "device-identity absent" behaviour.
+
 **IQ errors keep `error_type` + `backoff`**: failed IQ responses now surface the server's `error_type` and server-directed `backoff` (seconds) instead of dropping them, so callers can honour retry hints.
 
 **wasm**: the cache backend is now target-aware so the `moka-cache` default no longer breaks `wasm32` builds.

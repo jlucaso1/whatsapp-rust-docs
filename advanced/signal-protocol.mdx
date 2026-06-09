@@ -1,1 +1,707 @@
-[SIGNAL_CONTENT_PLACEHOLDER]
+---
+title: 'Signal Protocol Implementation'
+description: 'Deep dive into end-to-end encryption, Double Ratchet algorithm, and Signal Protocol in whatsapp-rust'
+---
+
+## Overview
+
+whatsapp-rust implements the Signal Protocol for end-to-end encryption of both one-on-one and group messages. The implementation is based on Signal's libsignal library, adapted for WhatsApp's specific protocol requirements.
+
+<Warning>
+  The Signal Protocol implementation handles cryptographic primitives. Any modifications to this code require expert-level understanding of cryptographic protocols to avoid security vulnerabilities.
+</Warning>
+
+## Architecture
+
+The Signal Protocol implementation is split across two main locations:
+
+- **`wacore/libsignal/`** - Platform-agnostic Signal Protocol core (Rust port of libsignal)
+- **`src/store/signal*.rs`** - WhatsApp-specific storage integration with Diesel/SQLite
+
+### Key Components
+
+```
+wacore/libsignal/src/
+├── protocol/
+│   ├── session_cipher.rs      # Encryption/decryption for 1:1 messages
+│   ├── group_cipher.rs        # Encryption/decryption for group messages
+│   ├── ratchet.rs            # Double Ratchet implementation
+│   ├── sender_keys.rs        # Sender Key protocol for groups
+│   └── state/                # Session state management
+└── crypto/
+    ├── aes_cbc.rs            # AES-256-CBC for message content
+    ├── aes_gcm.rs            # AES-GCM for media encryption
+    └── hash.rs               # HKDF and HMAC primitives
+```
+
+See the [Architecture guide](/concepts/architecture) for the full crate layout.
+
+## Double ratchet protocol
+
+The Double Ratchet algorithm provides forward secrecy and post-compromise security for 1:1 messages.
+
+### Session Initialization
+
+Two participants initialize a session using Diffie-Hellman key exchange:
+
+```rust
+// Alice initiates the session (sender)
+pub fn initialize_alice_session<R: Rng + CryptoRng>(
+    parameters: &AliceSignalProtocolParameters,
+    rng: &mut R,
+) -> Result<SessionState>
+
+// Bob initializes as responder
+pub fn initialize_bob_session(
+    parameters: &BobSignalProtocolParameters,
+) -> Result<SessionState>
+```
+
+The session state contains:
+- `root_key`: The current root key for the KDF chain
+- `sender_chain`: The current sending ratchet chain
+- `receiver_chains`: Stack of receiving ratchet chains (max 5)
+- `pending_pre_key`: Optional pending pre-key for initial messages
+
+### Message Encryption
+
+Each message is encrypted using a unique message key derived from the chain:
+
+```rust
+let (chain_key, message_key) = chain_key.next_chain_and_message_key()?;
+
+// Encrypt with AES-256-CBC
+let ciphertext = aes_cbc_encrypt(&message_key.cipher_key, &message_key.iv, plaintext)?;
+
+// Authenticate with HMAC-SHA256
+let mac = hmac_sha256(&message_key.mac_key, &serialized_message)?;
+```
+
+### Forward Secrecy
+
+The Double Ratchet ensures forward secrecy through two mechanisms:
+
+1. **Symmetric ratchet**: After each message, the chain key advances using HKDF — old keys are immediately discarded
+2. **Diffie-Hellman ratchet**: When a new ratchet key is received, a new root key and chain key are derived from the DH output
+
+Location: `wacore/libsignal/src/protocol/ratchet.rs`, `wacore/libsignal/src/protocol/session_cipher.rs`
+
+## Group messaging
+
+Group messages use the **Sender Key** protocol, which is more efficient for large groups than the Double Ratchet.
+
+### Sender Key Distribution
+
+When joining a group or sending the first message, the sender distributes their sender key to all participants:
+
+```rust
+// Generate sender key
+let sender_key_id = rng.gen::<u32>();
+let iteration = 0u32;
+let chain_key = SenderChainKey::new(1, random_32_bytes(&mut rng));
+let signing_key_pair = KeyPair::generate(&mut rng);
+
+// Distribute via SKDM (Sender Key Distribution Message)
+let skdm = SenderKeyDistributionMessage::new(
+    sender_key_id,
+    iteration,
+    &chain_key.seed,
+    signing_key_pair.public_key,
+)?;
+```
+
+Each participant stores the received sender key and uses it to decrypt future group messages from that sender.
+
+### Group Encryption
+
+Group message encryption is significantly faster than 1:1 encryption:
+
+```rust
+// Sender encrypts once for all recipients
+let ciphertext = group_cipher.encrypt(plaintext)?;
+
+// Each recipient decrypts with the same key material
+let plaintext = group_cipher.decrypt(&ciphertext)?;
+```
+
+This is O(1) for encryption vs O(n) for 1:1 messages to n recipients.
+
+Location: `wacore/libsignal/src/protocol/group_cipher.rs`, `wacore/libsignal/src/protocol/sender_keys.rs`
+
+## Device management
+
+### Device Registry
+
+The client maintains a local device registry that maps user JIDs to their known devices. This registry is populated:
+
+1. On initial login/sync
+2. When receiving messages from a device (via LID resolution)
+3. When explicitly syncing device lists (via usync)
+4. When receiving device-list notifications from the server
+
+### Multi-Device Sends
+
+The DM send path builds the full device list in a WA Web-compliant manner (matching `WAWebSendUserMsgJob` and `WAWebDBDeviceListFanout`):
+
+1. **Registry-first lookup** — `get_devices_from_registry()` is called without triggering LID migration side-effects
+2. **Network fallback** — only triggered on a cache miss (not on stale data) to avoid spurious LID migrations
+3. **Hosted-device filtering** — devices with `key_index >= 130` are filtered out (matching `WAWebDBDeviceListFanout`)
+4. **Self-DM deduplication** — when sending to your own account, the recipient and own device lists overlap. A `HashSet`-based dedup pass (matching WA Web's `Map` keyed by `toString`) removes duplicates.
+
+```rust
+// Build device list — local registry first, network on miss
+let devices = match self.get_devices_from_registry(&user).await {
+    Some(devices) => devices,
+    None => self.get_user_devices(&user, false).await?,
+};
+```
+
+### Unknown device detection
+
+Unknown devices are detected in two situations during message *receive*:
+
+1. **After successful `skmsg` decrypt** — if the sender device is not in the registry, the decrypted message is still **processed and delivered normally**. Signal decryption success already proves the sender holds a valid session key, so discarding the message would only add latency via an unnecessary retry round-trip. A background device sync is triggered to update the local device registry.
+2. **After a `NoSenderKeyState` error** — if the sender device is unknown, the retry reason is upgraded from `NoSession` to `UnknownCompanionNoPrekey`
+
+In both cases, the client queues a device list synchronization for the sender's user JID. The behavior depends on the connection state:
+
+- **Online**: the client immediately invalidates the cached device registry for the user and fires a background usync request to refresh the device list
+- **Offline** (during offline sync): the unknown device's user JID is batched into a `PendingDeviceSync` set, which is flushed after offline sync completes (see [Deferred device sync](/concepts/architecture#deferred-device-sync))
+
+The deduplication in `PendingDeviceSync` ensures that repeated unknown-device encounters for the same user (e.g., during a message burst) result in only one usync request:
+
+```rust
+// Dedup: skip if sync already pending/in-flight for this user
+if !self.pending_device_sync.add(user_jid.clone()).await {
+    return;
+}
+```
+
+This mechanism ensures that group messages from newly-paired companion devices are delivered immediately without waiting for a retry round-trip. The background device sync updates the local registry so future messages from the same device are recognized directly.
+
+Location: `src/message.rs`, `src/client/device_registry.rs`, `src/pending_device_sync.rs`
+
+### Retry receipt from unknown group device
+
+When the client receives a retry receipt, `handle_retry_receipt` checks whether the requesting device is present in the local device registry. Previously the handler dropped all retries from unregistered devices — this was safe for WA Web because WA Web keeps participant device lists fresh via a pre-send sync, so any legitimate requester is already known before the send.
+
+For a library client, a participant device can legitimately be absent from the local registry: if the device joined between the last device-list sync and the group send, it will have received the `skmsg` from the server but never obtained a sender key, causing it to retry indefinitely. The retry receipt may carry a `<keys>` bundle — the ADV-signed `device-identity`, the identity key, a one-time prekey, and the signed prekey — which is everything needed to establish a Signal session and resend. But a newly-linked device that has no bundle still retries forever if the client only drops it: the reconciliation that fires when a prekey fetch returns 406 never triggers for that device because it was never in the send set.
+
+Whenever a retry arrives from an unknown device, `handle_retry_receipt` now calls `schedule_unknown_device_sync` **before** consulting `should_drop_unknown_device_retry`. This treats the retry as a staleness signal: the requester's user JID is enqueued for a device-list resync (deduplicated via `PendingDeviceSync`, so a retry storm from a single device cannot fan out into a usync storm). Once the resync completes, the device appears in the registry and future sends include it in the sender-key distribution — the retries stop. This mirrors WA Web's `syncDeviceListJob` trigger on the retry path.
+
+The drop predicate still controls whether the *current* retry is recovered or dropped:
+
+```rust
+// wacore/src/protocol/retry.rs
+pub fn should_drop_unknown_device_retry(keys_present: bool, device_known: bool) -> bool {
+    !keys_present && !device_known
+}
+```
+
+| `keys_present` | `device_known` | Result |
+|---|---|---|
+| `true` | `false` | **Recover** — build a session from the embedded bundle and resend; resync also triggered |
+| `false` | `false` | **Drop** — no bundle to recover this message; device-list resync triggered so device is learned for the next send |
+| any | `true` | **Resend** — device is in registry, proceed normally |
+
+When the bundle includes a `<device-identity>`, `process_retry_key_bundle` validates the ADV chain against the requester's account key (using the stored primary identity as a fallback when the server omits `account_signature_key`). A present-but-invalid ADV result is a hard error; the session is not built. If `<device-identity>` is absent from the bundle, or if no account key can be found, the check is skipped with a warning and the session is built anyway — matching the behaviour of the regular prekey-fetch path. The drop predicate only gates on syntactic `<keys>` presence, so the ADV guarantee is conditional on the bundle including a well-formed `<device-identity>`. This mirrors whatsmeow's approach of building the prekey session directly from the receipt bundle without a device-registry gate.
+
+Location: `src/retry.rs`, `wacore/src/protocol/retry.rs`, `src/pending_device_sync.rs`
+
+### Immutable sender key loading
+
+The `SenderKeyStore` trait's `load_sender_key` method takes `&self` (not `&mut self`), allowing sender key lookups to proceed under a **read lock**. This is safe because loading a sender key is a pure read operation — no state is mutated. The `store_sender_key` method still requires `&mut self` since it modifies state.
+
+This means concurrent group decryptions for different senders can load sender keys in parallel without contention, while writes (SKDM processing) still serialize correctly.
+
+<Note>
+If you implement `SenderKeyStore` for a custom backend, `load_sender_key` must use `&self` (immutable reference). Implementations that previously required `&mut self` for internal caching should use interior mutability (e.g., `Mutex` or `RwLock`) instead.
+</Note>
+
+### Sender key existence check
+
+Before distributing sender keys, the group message path checks whether the local sender key already exists. This check uses the `SignalStoreCache` with a **read lock** (`get_sender_key()`), matching the status broadcast path. This avoids acquiring a write lock and prevents unnecessary SKDM re-distribution on every group send.
+
+```rust
+// Check if sender key already exists before distributing
+let existing_key = self.signal_store
+    .get_sender_key(&sender_key_name)
+    .await?;
+
+if existing_key.is_some() {
+    // Skip distribution—key already established
+    return Ok(());
+}
+```
+
+Location: `src/send.rs`, `src/store/signal.rs`
+
+## Key management
+
+### Pre-key bundles
+
+WhatsApp uses pre-key bundles for session initialization, following the X3DH (Extended Triple Diffie-Hellman) protocol:
+
+```rust
+pub struct PreKeyBundle {
+    pub registration_id: u32,
+    pub device_id: u32,
+    pub pre_key_id: Option<u32>,
+    pub pre_key_public: Option<PublicKey>,
+    pub signed_pre_key_id: u32,
+    pub signed_pre_key_public: PublicKey,
+    pub signed_pre_key_signature: Vec<u8>,
+    pub identity_key: IdentityKey,
+}
+```
+
+### Pre-key rotation
+
+The client maintains a pool of one-time pre-keys and rotates them when running low:
+
+- **Target pool size**: 100 pre-keys
+- **Upload threshold**: Upload new keys when fewer than 10 remain
+- **Signed pre-key rotation**: Rotated periodically (every 7 days)
+
+Location: `src/keys.rs`
+
+### Identity key management
+
+Each device has a long-term identity key pair used for authentication:
+
+```rust
+pub struct IdentityKeyPair {
+    pub public_key: IdentityKey,
+    pub private_key: PrivateKey,
+}
+```
+
+Identity keys are:
+1. Generated on first registration
+2. Stored persistently in SQLite
+3. Used to sign pre-keys
+4. Included in pre-key bundles for recipient verification
+
+Location: `src/store/signal.rs`
+
+## Storage architecture
+
+### Signal store integration
+
+The `SignalStore` trait provides the persistence layer for Signal Protocol state:
+
+```rust
+pub trait SignalStore {
+    async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>>;
+    async fn store_session(&self, address: &ProtocolAddress, record: &SessionRecord) -> Result<()>;
+    async fn load_pre_key(&self, id: PreKeyId) -> Result<PreKeyRecord>;
+    async fn store_pre_key(&self, id: PreKeyId, record: &PreKeyRecord) -> Result<()>;
+    async fn remove_pre_key(&self, id: PreKeyId) -> Result<()>;
+    // ... other methods
+}
+```
+
+### Caching layer
+
+The `SignalStoreCache` wraps the persistent `SignalStore` with an in-memory cache:
+
+- **Session cache**: LRU cache for frequently-accessed sessions
+- **Sender key cache**: In-memory cache for group sender keys
+- **Pre-key cache**: Not cached (accessed rarely, only during session setup)
+
+The cache uses `tokio::sync::RwLock` for concurrent access:
+
+```rust
+pub struct SignalStoreCache {
+    inner: Arc<dyn SignalStore>,
+    session_cache: RwLock<LruCache<ProtocolAddress, SessionRecord>>,
+    sender_key_cache: RwLock<HashMap<SenderKeyName, SenderKeyRecord>>,
+}
+```
+
+Location: `src/store/signal.rs`, `src/store/signal_cache.rs`
+
+## Encryption flow
+
+### Outbound message encryption
+
+1. **Resolve recipient devices** — look up all devices for the recipient JID
+2. **Build session** — use cached session or initialize a new one with a pre-key bundle
+3. **Encrypt per device** — each device gets its own encrypted copy
+4. **Assemble stanza** — combine all encrypted payloads into a single message stanza
+
+```rust
+// Simplified encryption flow
+for device in &recipient_devices {
+    let encrypted = self.encrypt_message_for_device(
+        &recipient_jid,
+        device.device_id,
+        &plaintext,
+    ).await?;
+    stanza.add_child(encrypted);
+}
+```
+
+### Inbound message decryption
+
+1. **Identify message type** — `pkmsg` (pre-key), `msg` (regular), or `skmsg` (sender key group)
+2. **Look up session** — find or create session for the sender's device
+3. **Decrypt payload** — use Signal cipher to decrypt
+4. **Parse content** — deserialize the protobuf message
+
+```rust
+match enc_type {
+    EncType::PreKey => {
+        // New session establishment
+        let plaintext = session_cipher.decrypt_pre_key_message(&msg).await?;
+    }
+    EncType::Msg => {
+        // Existing session
+        let plaintext = session_cipher.decrypt_message(&msg).await?;
+    }
+    EncType::SenderKey => {
+        // Group message
+        let plaintext = group_cipher.decrypt(&msg).await?;
+    }
+}
+```
+
+Location: `src/message/receive.rs`, `src/crypto.rs`
+
+## Protocol compliance
+
+### WhatsApp-specific extensions
+
+WhatsApp extends the Signal Protocol with several custom features:
+
+1. **Linked device identity (LID)**: Devices are identified by a random LID rather than phone number, improving privacy
+2. **ADV (Account Device Verification)**: Cryptographic chain linking devices to an account
+3. **Sender key message (skmsg)**: Custom framing for group messages
+4. **Protocol nodes**: Binary encoding for all Signal messages
+
+### Signal Protocol version
+
+whatsapp-rust implements Signal Protocol version 3, which includes:
+
+- X3DH for session initialization
+- Double Ratchet for message encryption
+- Sender Key protocol for groups
+- Sealed sender for metadata privacy
+
+## Error handling
+
+### Decryption errors
+
+Common decryption errors and their recovery paths:
+
+| Error | Cause | Recovery |
+|-------|-------|----------|
+| `SessionNotFound` | No session for sender device | Request retry with pre-key bundle |
+| `InvalidMessage` | MAC verification failed | Request retry; possible session corruption |
+| `DuplicateMessage` | Message already processed | Silently ignore |
+| `InvalidPreKeyId` | Pre-key already consumed | Attempt PN→LID session migration |
+| `NoSenderKeyState` | Missing group sender key | Request retry with SKDM |
+
+### Session recovery
+
+When a session becomes corrupted or invalid, the client can recover through several mechanisms:
+
+1. **Pre-key reset**: Request a fresh pre-key bundle and reinitialize the session
+2. **Sender key request**: Ask the sender to redistribute their sender key
+3. **Full re-registration**: As a last resort, re-register all devices
+
+## LID Migration
+
+### Overview
+
+WhatsApp's Linked Device Identity (LID) system assigns a random identifier to each device instead of using the phone number directly. This improves privacy by preventing third parties from correlating devices to phone numbers.
+
+### Session Migration
+
+When a message arrives addressed to a LID but the Signal session is stored under the phone number (PN), the client performs automatic migration:
+
+```rust
+async fn attempt_pn_to_lid_migration(
+    &self,
+    lid_address: &ProtocolAddress,
+    pn_address: &ProtocolAddress,
+) -> Result<bool> {
+    // Check if PN session exists
+    if let Some(pn_session) = self.store.load_session(pn_address).await? {
+        // Copy session to LID address
+        self.store.store_session(lid_address, &pn_session).await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+```
+
+### Migration Triggers
+
+PN→LID migration is attempted when:
+
+1. **`SessionNotFound`** for a LID address: the PN session may exist
+2. **`InvalidPreKeyId`** for a LID address: the session exists under PN with a consumed pre-key
+
+If a message arrives from a LID address and decryption fails with `SessionNotFound` or `InvalidPreKeyId`, the client attempts PN→LID migration as a fallback before requesting a retry:
+
+1. Look up the PN for the LID address via `resolve_pn_from_lid()`
+2. Check if a Signal session exists under the PN address
+3. Retry decryption with the migrated session (already in the cache — no reload needed)
+4. If `DuplicatedMessage` occurs during post-migration retry, it is silently ignored
+5. Fall back to retry receipt only if migration does not resolve the issue
+
+The `InvalidPreKeyId` case occurs when a `PreKeyMessage` references a consumed one-time prekey, but the session actually exists under a PN address (legacy migration). Migrating the session lets Signal use the existing ratchet state instead of looking up the consumed prekey. This migration is attempted in both the identity-change retry path and the initial decryption path.
+
+Location: `src/message/receive.rs`, `src/lid.rs`
+
+## ADV (Account Device Verification)
+
+### Overview
+
+ADV provides a cryptographic chain that links companion devices to an account's primary identity. This prevents unauthorized devices from impersonating legitimate account holders.
+
+### Verification Chain
+
+The ADV chain consists of:
+
+1. **Account key**: The primary device's long-term identity key
+2. **Device key**: The companion device's identity key
+3. **Account signature**: The account key's signature over the device key
+4. **Device signature**: The device key's signature over the account key signature
+
+```rust
+pub struct DeviceIdentity {
+    pub raw_id: u64,
+    pub key_index: u32,
+    pub identity_key: Vec<u8>,
+    pub account_signature: Vec<u8>,
+    pub account_signature_key: Option<Vec<u8>>,
+    pub device_signature: Vec<u8>,
+}
+```
+
+### Validation
+
+When receiving a pre-key bundle from a companion device, the ADV chain is validated:
+
+```rust
+pub fn validate_adv_signed_key_index(
+    device_identity: &DeviceIdentity,
+    account_key: Option<&[u8]>,
+) -> AdvValidation
+```
+
+The three-state `AdvValidation` result:
+
+- **`Valid`**: ADV chain checks out — session is built
+- **`Invalid`**: ADV chain verification failed — session is rejected (hard error)
+- **`NoAccountKey`**: No account key available to verify against — session is built with a warning (matches WA Web's fallback behavior)
+
+### Account Key Fallback
+
+WA Web's `validateADVwithIdentityKey` uses `e.accountSignatureKey || t`, where `t` is the stored primary identity. The server legitimately omits `account_signature_key` from a companion's `<device-identity>` when the client already holds that key as the contact's primary (device 0) identity in the Signal store.
+
+The client mirrors this: when the in-blob key is absent, `Client::load_account_identity` is called to retrieve the contact's stored primary identity as a fallback. This fallback is used in both the pre-key fetch path and the retry-receipt handler.
+
+Location: `wacore/src/adv.rs`, `src/retry.rs`
+
+## Pre-key management
+
+### Upload lifecycle
+
+Pre-keys are uploaded to WhatsApp servers in batches and consumed during session initialization:
+
+1. **Initial upload**: 100 pre-keys uploaded on registration
+2. **Count-based replenishment**: When the server reports fewer than 10 remaining, a new batch is uploaded
+3. **Digest-based repair**: If the server-reported key digest doesn't match the local set, upload a fresh batch
+4. **Force upload**: Available for manual intervention
+
+### Key counts
+
+```rust
+// Threshold for automatic replenishment
+const PREKEY_UPLOAD_THRESHOLD: u32 = 10;
+
+// Target pool size per upload
+const PREKEY_UPLOAD_COUNT: usize = 30;
+```
+
+### Upload deduplication
+
+All upload paths (count-based, digest-based, and forced) serialize through a shared `prekey_upload_lock`. This prevents concurrent upload races where two simultaneous triggers could upload duplicate key IDs.
+
+Internally, this acquires `prekey_upload_lock` to prevent races with the count-based and digest-based upload paths, then calls `upload_pre_keys_with_retry(force: true)` which uses Fibonacci backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s).
+
+Location: `src/keys.rs`
+
+## Sealed sender
+
+### Overview
+
+Sealed sender hides the message sender from the server. In WhatsApp's implementation, the sender's identity is encrypted within the message payload itself.
+
+### Implementation
+
+Sealed sender messages use an additional layer of encryption:
+
+```rust
+// Sender certificate contains encrypted sender identity
+pub struct SenderCertificate {
+    pub sender_device_id: u32,
+    pub sender_uuid: String,
+    pub sender_e164: Option<String>,
+    pub sender_identity_key: PublicKey,
+    pub expiration: u64,
+    pub signer: ServerCertificate,
+    pub certificate: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+```
+
+Location: `wacore/libsignal/src/sealed_sender.rs`
+
+## Security considerations
+
+### Thread safety
+
+All Signal Protocol operations that modify session state use `session_locks`:
+
+```rust
+// Session locks ensure per-sender serialization
+let _lock = self.session_locks.lock_for(&sender_address).await;
+```
+
+This serializes encrypt/decrypt operations for the same sender but allows parallel operations for different senders.
+
+### Key deletion
+
+One-time pre-keys are deleted immediately after use:
+
+```rust
+// Remove the consumed pre-key
+self.store.remove_pre_key(pre_key_id).await?;
+```
+
+This ensures forward secrecy — even if the long-term identity key is compromised, past messages encrypted with consumed pre-keys cannot be decrypted.
+
+### Replay protection
+
+The Signal Protocol provides replay protection through:
+
+1. **Message counters**: Each message has a counter within its chain
+2. **Duplicate detection**: Messages with seen counters are rejected (`DuplicateMessage` error)
+3. **Chain advancement**: The ratchet advances forward-only, preventing replay of old states
+
+## Session recreation throttling
+
+### Overview
+
+When a remote device's session becomes corrupted, the client can recreate the session by sending a new `pkmsg` (pre-key message) that forces the remote to initialize a fresh session. However, unthrottled recreation creates a DoS vector: an attacker can repeatedly trigger session recreations.
+
+### Throttle implementation
+
+| Internal `RetryReason` | Trigger | Recovery |
+|---|---|---|
+| `NoSession` | `SessionNotFound` (no Signal session yet for the device) | Request a fresh prekey bundle via retry receipt; install the new session before retrying decryption. |
+
+The throttle is a per-peer cooldown (1-hour TTL after the last recreate). In v0.6 the implementation moved from a `Mutex<HashMap<Jid, Instant>>` to a bounded TTL cache (moka, ~256 entries): the per-peer check-and-stamp is now atomic (serialized by the existing per-peer session lock) and lock-free at the map level, so concurrent retry-receipt spawns from the same peer can't trigger duplicate recreates. The behavior is unchanged — if a peer is already in cooldown, the client skips re-creation and falls back to a normal retry receipt rather than thrashing the session. Under more than ~256 distinct peers retrying within the window, the cache may evict a recent entry, costing at most one extra recreate (bounded and self-healing). Peer-addressed `pkmsg` carries the protocol identity so the receiver can verify ownership before installing the new session, blocking spoofed sibling recoveries.
+
+This closed a deadlock where self-DM fan-out to a sibling device produced repeated BadMac decrypt failures: the recipient would request a retry, the sender would re-encrypt against the same broken session, and the cycle would continue until the user manually relogged. With the throttled re-creation plus identity-validated pkmsg, the second receipt installs a fresh session and decryption resumes.
+
+The same three-state ADV validation (`Valid` / `Invalid` / `NoAccountKey`) applies in the retry-receipt handler (`src/retry.rs`) when a companion device requests a re-send.
+
+Location: `src/client.rs`, `src/retry.rs`, `wacore/libsignal/src/protocol/session_cipher.rs`, `wacore/src/send.rs`
+
+## Sender key cache
+
+### Overview
+
+The `SenderKeyCache` provides an in-memory cache for SKDM (Sender Key Distribution Message) tracking. It records which `(group_jid, device_jid)` pairs have received the sender key, avoiding redundant SKDM distributions on every group send.
+
+### Cache invalidation
+
+The cache is invalidated in several cases:
+
+- **Sender key rotation**: When a new sender key is generated for a group
+- **Participant change**: When a new participant joins the group (triggers full redistribution)
+- **Explicit invalidation:** The cache is invalidated when sender key state changes (rotation, error recovery, retry failures) so stale data is never served
+- **Retry failures**: When a device repeatedly fails to decrypt, the sender key is rotated
+
+### Invalidation table
+
+| Trigger | Action |
+|---------|--------|
+| Successful SKDM send | Add `(group, device)` to cache |
+| Participant join | Invalidate entire group entry |
+| Sender key rotation | Invalidate entire group entry |
+| Retry failure for a group message | Invalidate group entry |
+| Identity change | Invalidate specific device entries |
+| Identity change (`clear_device_record`) | No global tracker wipe — per-device SKDM redistribution is driven by retry receipts (`markForgetSenderKey`), matching WhatsApp Web's `WAWebUpdateLocalSignalSession`. The `status@broadcast` sender key is still deleted for forward secrecy. |
+
+### PreparedGroupStanza
+
+`prepare_group_stanza` returns a `PreparedGroupStanza` struct containing the stanza `node` and a `skdm_devices: Vec<Jid>` field listing exactly which devices received SKDM in this stanza. This eliminates the need for callers to re-resolve devices after sending, closing a race window where the device list could change between stanza preparation and post-ACK tracking update.
+
+Location: `src/send.rs`, `src/sender_key_cache.rs`
+
+## Phash validation
+
+### Overview
+
+`phash` (participant hash) is a SHA-256 digest computed over the sorted set of participant device JIDs. WhatsApp servers compute the same hash over the canonical device set and include it in message ACKs.
+
+### Phash validation for stale device list detection
+
+When sending group, status, or DM messages, the library validates the participant hash (`phash`) returned in the server's acknowledgment against the locally computed `phash`. A mismatch indicates that the server's view of participant devices differs from the client's — meaning the local device list is stale.
+
+**Group messages**: On a `phash` mismatch from a group ACK, the client invalidates the registry entry for the group JID and the current sender's user JID, then re-fetches via usync. The sending `Arc<Client>` and group JID are captured at send time and passed into the ACK handler so the invalidation happens without any global lock.
+
+**Status broadcast ("My Status")**: Status broadcasts check `phash` against all known recipients (all contacts with a valid session). A mismatch triggers invalidation of **all** recipients' registry entries, then a full usync to rebuild the complete contact device list.
+
+**DM messages**: For DM messages, the phash covers both recipient and own devices (matching WA Web's `syncDeviceListJob([recipient, me])`). On mismatch, the client invalidates the device registry cache for both the recipient's user JID and your own phone number (PN) JID, ensuring the next send re-fetches the current device list for both parties.
+
+The phash is computed over the canonical JID form for all devices in the send set (excluding self):
+
+```rust
+// Compute phash over sorted participant device JIDs
+let sorted_devices = sort_and_deduplicate_devices(&devices);
+let phash = sha256(sorted_devices.iter().map(|d| d.to_canonical_string()));
+```
+
+Location: `src/send.rs`, `src/usync.rs`
+
+## Signal store cache details
+
+### Cache architecture
+
+The `SignalStoreCache` is a two-level architecture:
+
+- **L1**: In-memory `SignalStoreCache` (fast, unbounded in-process)
+- **L2**: SQLite via Diesel (persistent, survives restarts)
+
+Reads check L1 first; on miss, fall through to L2 and populate L1. Writes go to both L1 and L2.
+
+### Session cache
+
+Session records are cached in a `HashMap` keyed by `ProtocolAddress`. The cache holds the most recently used sessions:
+
+```rust
+pub struct SignalStoreCache {
+    inner: Arc<dyn SignalStore + Send + Sync>,
+    sessions: RwLock<HashMap<ProtocolAddress, SessionRecord>>,
+    sender_keys: RwLock<HashMap<SenderKeyName, SenderKeyRecord>>,
+    identity_keys: RwLock<HashMap<ProtocolAddress, IdentityKey>>,
+}
+```
+
+### Lock granularity
+
+All cache operations use `RwLock`:
+
+- **Read operations** (`load_session`, `load_sender_key`, `get_identity`): Acquire read lock — multiple concurrent readers allowed
+- **Write operations** (`store_session`, `store_sender_key`, `save_identity`): Acquire write lock — exclusive access
+
+This allows concurrent decryptions for different senders without contention.
+
+Location: `src/store/signal.rs`, `src/store/signal_adapter.rs`, `wacore/src/store/signal_cache.rs`

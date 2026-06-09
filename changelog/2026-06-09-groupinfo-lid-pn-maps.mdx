@@ -27,7 +27,9 @@ let lid_jid: Option<&Jid> = info.lid_jid_for_phone_user("15551234567");
 
 // After — returns the LID user string; reconstruct the Jid on demand if needed
 let lid_user: Option<&CompactString> = info.lid_user_for_phone_user("15551234567");
-// if you need a full Jid: Jid::lid(lid_user.clone())
+if let Some(u) = lid_user {
+    let jid = Jid::lid(u.clone());
+}
 ```
 
 The sole internal consumer (`phone_device_jid_into_lid`) reconstructs the `Jid::lid` on demand — the new API avoids pre-allocating N `Jid`s per `GroupInfo` build while keeping the same behaviour for callers.

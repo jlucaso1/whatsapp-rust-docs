@@ -715,7 +715,7 @@ impl Client {
         ).await??;
         
         // Perform Noise handshake
-        let device = self.persistence_manager.get_device_snapshot().await;
+        let device = self.persistence_manager.get_device_snapshot();
         let noise_socket = do_handshake(
             &device,
             transport,

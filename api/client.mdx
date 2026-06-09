@@ -920,7 +920,7 @@ Native profiles (`android`, `smb_android`, `ios`, `macos`, `windows`) automatica
 ### get_push_name
 
 ```rust
-pub async fn get_push_name(&self) -> String
+pub fn get_push_name(&self) -> String
 ```
 
 Returns the current push name (display name).
@@ -928,7 +928,7 @@ Returns the current push name (display name).
 ### get_pn
 
 ```rust
-pub async fn get_pn(&self) -> Option<Jid>
+pub fn get_pn(&self) -> Option<Jid>
 ```
 
 Returns the phone number JID.
@@ -936,7 +936,7 @@ Returns the phone number JID.
 ### get_lid
 
 ```rust
-pub async fn get_lid(&self) -> Option<Jid>
+pub fn get_lid(&self) -> Option<Jid>
 ```
 
 Returns the LID (Linked Identity).
@@ -1402,7 +1402,7 @@ This bypasses node logging and `wait_for_sent_node` waiter resolution. Use [`sen
 ### generate_message_id
 
 ```rust
-pub async fn generate_message_id(&self) -> String
+pub fn generate_message_id(&self) -> String
 ```
 
 Generates a unique WhatsApp-protocol-conformant message ID. Combines timestamp, user JID, and random components for uniqueness.

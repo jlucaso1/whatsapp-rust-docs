@@ -110,48 +110,54 @@ The `PersistenceManager` is the gatekeeper for all state changes.
 
 ```rust
 pub struct PersistenceManager {
-    device: Arc<RwLock<Device>>,
+    device: Arc<tokio::sync::RwLock<Device>>,
+    device_snapshot: std::sync::RwLock<Arc<Device>>,
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
     save_notify: Arc<Notify>,
 }
 ```
 
-Location: `src/store/persistence_manager.rs:11-16`
+`device_snapshot` is rebuilt under the `device` write guard inside `modify_device` — the single mutation funnel — so it is always coherent with committed state.
+
+Location: `src/store/persistence_manager.rs`
 
 ### Key Methods
 
 #### Read-Only Access
 
 ```rust
-// Get a snapshot of device state (cheap clone)
-pub async fn get_device_snapshot(&self) -> Device {
-    self.device.read().await.clone()
+// Returns the cached Arc<Device> snapshot — sync, no clone, no contention against writers
+pub fn get_device_snapshot(&self) -> Arc<Device> {
+    self.device_snapshot.read().unwrap().clone()
 }
 ```
 
-Location: `src/store/persistence_manager.rs:61-63`
+Location: `src/store/persistence_manager.rs`
 
 #### State Modification
 
 ```rust
-// Modify device state with a closure
+// Modify device state with a closure; rebuilds device_snapshot under the write guard
 pub async fn modify_device<F, R>(&self, modifier: F) -> R
 where
     F: FnOnce(&mut Device) -> R,
 {
     let mut device_guard = self.device.write().await;
     let result = modifier(&mut device_guard);
-    
+
+    // Rebuild the cached snapshot before releasing the write lock
+    *self.device_snapshot.write().unwrap() = Arc::new(device_guard.clone());
+
     // Mark dirty and notify background saver
     self.dirty.store(true, Ordering::Relaxed);
     self.save_notify.notify_one();
-    
+
     result
 }
 ```
 
-Location: `src/store/persistence_manager.rs:69-80`
+Location: `src/store/persistence_manager.rs`
 
 #### Command Processing
 
@@ -218,8 +224,10 @@ pub async fn new(backend: Arc<dyn Backend>) -> Result<Self> {
         Device::new(backend.clone())
     };
     
+    let snapshot = Arc::new(device.clone());
     Ok(Self {
-        device: Arc::new(RwLock::new(device)),
+        device: Arc::new(tokio::sync::RwLock::new(device)),
+        device_snapshot: std::sync::RwLock::new(snapshot),
         backend,
         dirty: Arc::new(AtomicBool::new(false)),
         save_notify: Arc::new(Notify::new()),
@@ -299,14 +307,14 @@ Location: `wacore/src/store/commands.rs`
 ### Reading device state
 
 ```rust
-// In async function
-let device = persistence_manager.get_device_snapshot().await;
-println!("Device JID: {:?}", device.pn);
-println!("Push name: {}", device.push_name);
+// sync — no .await needed
+let snapshot = persistence_manager.get_device_snapshot();
+println!("Device JID: {:?}", snapshot.pn);
+println!("Push name: {}", snapshot.push_name);
 ```
 
 <Note>
-  `get_device_snapshot()` returns a cloned `Device`. This is efficient because most fields are cheap to clone (strings, numbers). Large data like cryptographic keys use `Arc` internally.
+  `get_device_snapshot()` is a plain `fn` (not `async`) and returns `Arc<Device>` — a refcount bump, no `Device` clone. Borrow fields directly from the held `Arc`; clone individual fields only when ownership escapes the scope. Don't hold the snapshot across an await point — doing so pins an old allocation while the live state may have advanced.
 </Note>
 
 ### Modifying device state (simple)
@@ -347,11 +355,12 @@ persistence_manager.modify_device(|device| {
 
 ### RwLock Semantics
 
-The `Device` is protected by a `tokio::sync::RwLock`:
+Device state uses two separate locks with different roles:
 
-- **Multiple readers**: `get_device_snapshot()` can be called concurrently
-- **Single writer**: `modify_device()` blocks all other access
-- **Writer priority**: Pending writes block new reads (avoid reader starvation)
+- **`device_snapshot` (`std::sync::RwLock<Arc<Device>>`)**: read by `get_device_snapshot()`. Readers never contend with writers — they take a brief `std::sync` read lock to clone the `Arc`, then release immediately. The snapshot is updated inside the `tokio::sync::RwLock` write guard in `modify_device`, so readers always see fully committed state.
+- **`device` (`tokio::sync::RwLock<Device>`)**: write-locked inside `modify_device()`. Only store-adapter code that needs `&mut Device` trait access (`get_device_arc()`) takes a read lock here directly.
+
+In practice: `get_device_snapshot()` is contention-free for readers, and the tokio write lock is only held during actual mutations (rare).
 
 ### Session locks and message queues
 
@@ -495,8 +504,8 @@ persistence_manager.modify_device(|device| {
 }).await;
 
 // Good: Release lock during expensive operation
-let device = persistence_manager.get_device_snapshot().await;
-let data = expensive_calculation(&device.pn);
+let snapshot = persistence_manager.get_device_snapshot();
+let data = expensive_calculation(&snapshot.pn);
 persistence_manager.process_command(
     DeviceCommand::SetPushName(data)
 ).await;

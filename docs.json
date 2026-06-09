@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-09-error-strictness",
                   "changelog/2026-06-09-arc-device-snapshot",
                   "changelog/2026-06-09-recv-zero-copy",
                   "changelog/2026-06-09",

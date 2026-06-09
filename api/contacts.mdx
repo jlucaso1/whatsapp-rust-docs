@@ -27,7 +27,7 @@ pub async fn is_on_whatsapp(
 ```
 
 **Parameters:**
-- `jids` - Array of JIDs to check. Supports `Jid::pn("phone_number")` for phone number lookups and `Jid::lid("lid_value")` for LID lookups. Non-PN/non-LID JIDs (groups, newsletters) are skipped with a warning.
+- `jids` - Array of JIDs to check. Supports `Jid::pn("phone_number")` for phone number lookups and `Jid::lid("lid_value")` for LID lookups. If you pass a non-PN/non-LID JID (groups, newsletters, etc.), the method returns an error immediately.
 
 **Returns:**
 - `Vec<IsOnWhatsAppResult>` - Registration status for each JID
@@ -39,6 +39,9 @@ pub async fn is_on_whatsapp(
 - `pn_jid: Option<Jid>` - Phone number JID, present when the server returns LID as the primary JID
 - `is_business: bool` - Whether this is a WhatsApp Business account
 - `verified_name: Option<VerifiedName>` - Decoded verified business name certificate, when the account is a verified business
+- `contact_error: Option<UsyncSubprotocolError>` - Server error for the `contact` subprotocol (e.g. privacy-blocked lookup); `is_registered` will be `false`
+- `lid_error: Option<UsyncSubprotocolError>` - Server error for the `lid` subprotocol; `lid` will be `None`
+- `business_error: Option<UsyncSubprotocolError>` - Server error for the `business` subprotocol; `is_business` will be `false`
 
 **VerifiedName fields:**
 - `name: Option<String>` - Display name shown to other users (decoded from the certificate when the server omits the attribute)
@@ -170,15 +173,38 @@ pub async fn get_user_info(
 **UserInfo fields:**
 - `jid: Jid` - WhatsApp JID
 - `lid: Option<Jid>` - LID if available
+- `lid_error: Option<UsyncSubprotocolError>` - Server error for the `lid` subprotocol; `lid` will be `None`
 - `status: Option<String>` - Status message
+- `status_error: Option<UsyncSubprotocolError>` - Server error for the `status` subprotocol (e.g. privacy-hidden status); `status` will be `None`
 - `picture_id: Option<String>` - Profile picture ID
+- `picture_error: Option<UsyncSubprotocolError>` - Server error for the `picture` subprotocol; `picture_id` will be `None`
 - `is_business: bool` - Whether business account
+- `business_error: Option<UsyncSubprotocolError>` - Server error for the `business` subprotocol; `is_business` will be `false`
 - `verified_name: Option<VerifiedName>` - Decoded verified business name certificate, for verified business accounts (see [`is_on_whatsapp`](#is_on_whatsapp) for field details)
 - `devices: Vec<u16>` - Device IDs from the `<devices version="2">` sublist the same usync query returns (device `0` is the primary). Empty when the server omits the sublist — no extra request is needed.
+- `devices_error: Option<UsyncSubprotocolError>` - Server error for the `devices` subprotocol; `devices` will be empty
 
 <Note>
 `UserInfo` is `#[non_exhaustive]`, so new fields may be added in future versions without a breaking change.
 </Note>
+
+**UsyncSubprotocolError fields:**
+- `code: Option<u16>` - Numeric error code from the server (e.g. `403`, `404`)
+- `text: Option<String>` - Human-readable error description
+- `backoff: Option<u32>` - Server-suggested retry delay in seconds
+
+The library preserves per-subprotocol errors on the result struct rather than failing the whole request. A privacy error from one user's status does not block retrieval of devices for other users in the same batch. Check the `*_error` fields when a corresponding `Option` field is `None` and you need to distinguish "not set" from "server error".
+
+```rust
+let user_info = client.contacts().get_user_info(&[jid]).await?;
+if let Some(info) = user_info.get(&jid) {
+    if info.status.is_none() {
+        if let Some(err) = &info.status_error {
+            println!("Status hidden: code={:?} text={:?}", err.code, err.text);
+        }
+    }
+}
+```
 
 **Example:**
 ```rust
@@ -223,6 +249,7 @@ The implementation automatically:
 
 All methods return `Result<T, anyhow::Error>`. Common errors:
 
+- Passing an unsupported JID type to `is_on_whatsapp` (only PN and LID JIDs are accepted)
 - Invalid JID format
 - Network errors
 - Rate limiting

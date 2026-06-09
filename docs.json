@@ -147,6 +147,7 @@
                   "changelog/2026-06-09-usync-empty-record",
                   "changelog/2026-06-09-retry-resync",
                   "changelog/2026-06-09-arc-session-cache",
+                  "changelog/2026-06-09-lid-pn-arc-str",
                   "changelog/2026-06-09-group-send-perf",
                   "changelog/2026-06-09-groupinfo-lid-pn-maps",
                   "changelog/2026-06-08",

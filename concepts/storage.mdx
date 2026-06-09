@@ -465,8 +465,8 @@ The `LidPnCache` provides an in-memory cache for LID to phone number mappings, u
 
 ```rust
 pub struct LidPnCache {
-    lid_to_entry: Cache<String, LidPnEntry>,
-    pn_to_entry: Cache<String, LidPnEntry>,
+    lid_to_entry: TypedCache<Arc<str>, Arc<LidPnEntry>>,
+    pn_to_entry: TypedCache<Arc<str>, Arc<LidPnEntry>>,
 }
 ```
 

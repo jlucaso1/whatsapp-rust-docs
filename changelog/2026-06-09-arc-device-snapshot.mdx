@@ -21,20 +21,20 @@ description: "get_device_snapshot() is now sync and returns Arc<Device>. The rel
 
 ```rust
 // Before
-let device = client.get_device_snapshot().await;
+let device = client.persistence_manager().get_device_snapshot().await;
 let pn = device.pn.clone();
 
 let push_name = client.get_push_name().await;
 let id = client.generate_message_id().await;
 
 // After
-let snapshot = client.get_device_snapshot();   // fn, no .await
+let snapshot = client.persistence_manager().get_device_snapshot();   // fn, no .await
 let pn = snapshot.pn.clone();
 
 let push_name = client.get_push_name();         // fn, no .await
 let id = client.generate_message_id();          // fn, no .await
 ```
 
-`get_device_arc()` is kept but its role is narrowed to store-adapter internals that need `&mut Device` trait access. All plain read paths should use `get_device_snapshot()` instead.
+`get_device_arc()` is kept but its role is narrowed to store-adapter internals that need `&mut Device` trait access. All plain read paths should use `persistence_manager().get_device_snapshot()` instead.
 
 **No other breaking changes.** `modify_device`, `process_command`, and `DeviceCommand` are unchanged.

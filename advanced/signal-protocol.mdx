@@ -905,6 +905,29 @@ The lock-acquisition for the digest-key validator also moved into `validate_dige
 
 Location: `src/handlers/notification.rs`, `src/pair.rs`, `src/prekeys.rs`
 
+### ADV companion identity validation
+
+When fetching a pre-key bundle for a contact's companion device (WhatsApp Web / Desktop), the bundle's `<device-identity>` element is validated to confirm that the fetched identity key is cryptographically bound to the account. This guards against a relay substituting a forged identity key, matching WA Web's `SessionApi.createSignalSession`.
+
+**Account key resolution** mirrors WA Web's `validateADVwithIdentityKey` (`e.accountSignatureKey || t`):
+
+1. **In-blob key**: If `ADVSignedDeviceIdentity.account_signature_key` is present and non-empty, it is used directly.
+2. **Stored identity fallback**: The server legitimately omits this field for a contact's companion because the client already holds the contact's primary (device 0) identity in the Signal identity store. When the field is absent, `Client::load_account_identity` loads it — reading through the `SignalStoreCache` so any unflushed mutations from the current session are visible. `PreKeyFetchSpec::with_account_identities` threads the pre-loaded map into `wacore`'s stateless prekey parser, keeping store access in the `whatsapp-rust` crate.
+
+**Validation results** (`wacore::adv::AdvValidation`):
+
+| Variant | Condition | Action |
+|---------|-----------|--------|
+| `Valid` | Both account and device signatures verified | Session is established normally |
+| `Invalid` | Blob is malformed, or signatures fail against the available key | Bundle is rejected — a relay swapping in a forged identity lands here |
+| `NoAccountKey` | Neither the blob nor the store has the key | Bundle is kept, ADV check skipped (logged as `warn!`) |
+
+`NoAccountKey` does not weaken security beyond the pre-existing "device-identity absent" path: a relay could already strip the entire `<device-identity>` element to bypass the check. It exists so brand-new contacts whose primary identity has never been seen are not silently dropped.
+
+The same three-state validation applies in the retry-receipt handler (`src/retry.rs`) when a companion device requests a re-send.
+
+Location: `wacore/src/adv.rs`, `wacore/src/iq/prekeys.rs`, `src/prekeys.rs`
+
 ## Storage Integration
 
 whatsapp-rust integrates Signal Protocol storage through a layered architecture:

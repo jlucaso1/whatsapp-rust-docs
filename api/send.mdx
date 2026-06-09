@@ -62,7 +62,7 @@ impl SendResult {
 }
 ```
 
-`SendResult` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+`SendResult` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### ChatMessageId
 

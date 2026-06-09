@@ -102,7 +102,7 @@ View-once image/video/voice sends now carry the `view_once` meta attribute, matc
 
 **`Client::custom_enc_handlers` field type changed ([#792](https://github.com/oxidezap/whatsapp-rust/pull/792))**
 
-The `pub custom_enc_handlers` field type changed from `Arc<async_lock::RwLock<HashMap<String, Arc<dyn EncHandler>>>>` to `std::sync::OnceLock<HashMap<String, Arc<dyn EncHandler>>>`. Code that previously did `client.custom_enc_handlers.read().await` or `.write().await` must switch to `.get()`. Handlers are still registered exclusively through `BotBuilder::with_enc_handler()` — direct runtime insertion is no longer possible (and was never intended).
+The `pub custom_enc_handlers` field type changed from `Arc<async_lock::RwLock<HashMap<String, Arc<dyn EncHandler>>>>` to `std::sync::OnceLock<HashMap<String, Arc<dyn EncHandler>>>`. Migration depends on how the field was used: code that read handlers via `.read().await` should switch to `.get()`; code that inserted handlers via `.write().await.insert(...)` must move those registrations to `BotBuilder::with_enc_handler()` before `build()` — runtime insertion is no longer possible.
 
 **`get_participating` returns `HashMap<Jid, GroupMetadata>`**
 

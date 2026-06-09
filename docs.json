@@ -144,6 +144,7 @@
                   "changelog/2026-06-09-device-list-remove",
                   "changelog/2026-06-09-usync-empty-record",
                   "changelog/2026-06-09-retry-resync",
+                  "changelog/2026-06-09-group-send-perf",
                   "changelog/2026-06-08",
                   "changelog/2026-06-06",
                   "changelog/2026-06-05-abprops",

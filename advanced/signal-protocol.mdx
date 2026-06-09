@@ -1131,13 +1131,22 @@ The `SignalStoreCache` stores sessions and sender keys as deserialized objects (
 
 ```rust
 // wacore/src/store/signal_cache.rs
+enum SessionEntry {
+    /// Arc so peek_session (retry / LID-migration checks) bumps a refcount
+    /// instead of deep-cloning the record (KBs with archived states).
+    Present(Arc<SessionRecord>),
+    Absent,
+    /// Taken by load_session; has_session treats as present, flush/eviction skip.
+    CheckedOut,
+}
+
 struct SessionStoreState {
-    cache: HashMap<Arc<str>, Option<SessionRecord>>,  // Objects, not bytes
+    cache: HashMap<Arc<str>, SessionEntry>,  // Objects, not bytes
     dirty: HashSet<Arc<str>>,
     deleted: HashSet<Arc<str>>,
 }
 
-// Same pattern for sender keys
+// Sender keys use the same object-caching pattern
 struct SenderKeyStoreState {
     cache: HashMap<Arc<str>, Option<SenderKeyRecord>>,  // Objects, not bytes
     dirty: HashSet<Arc<str>>,
@@ -1165,8 +1174,9 @@ All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`,
 |-----------|--------|-------|
 | `store_session` | clone all fields + prost encode | move (zero-cost) |
 | `load_session` | prost decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
+| `peek_session` | deep-clone record (1–2 KB) | `Arc` refcount bump; returns `Option<Arc<SessionRecord>>` |
 | `store_sender_key` | serialize to bytes + store bytes | store `SenderKeyRecord` object directly |
-    | `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |
+| `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |
 | `flush` (batched) | write bytes to DB | serialize sessions + sender keys + write bytes to DB |
 
 ### Arc previous sessions

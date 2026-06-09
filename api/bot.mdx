@@ -286,6 +286,10 @@ Registers a custom handler for specific encrypted message types.
   Handler implementation
 </ParamField>
 
+<Note>
+On `wasm32` targets, `EncHandler` drops the `Send + Sync` supertrait — your handler can capture `!Send` JS handles. On native, `Send + Sync` is retained via `MaybeSendSync` so `Arc<dyn EncHandler>` remains thread-safe. This mirrors the convention used by `EventHandler` and `SendContextResolver`.
+</Note>
+
 ---
 
 ## Configuration

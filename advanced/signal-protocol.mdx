@@ -1131,13 +1131,22 @@ The `SignalStoreCache` stores sessions and sender keys as deserialized objects (
 
 ```rust
 // wacore/src/store/signal_cache.rs
+enum SessionEntry {
+    /// Arc so peek_session (retry / LID-migration checks) bumps a refcount
+    /// instead of deep-cloning the record (KBs with archived states).
+    Present(Arc<SessionRecord>),
+    Absent,
+    /// Taken by load_session; has_session treats as present, flush/eviction skip.
+    CheckedOut,
+}
+
 struct SessionStoreState {
-    cache: HashMap<Arc<str>, Option<SessionRecord>>,  // Objects, not bytes
+    cache: HashMap<Arc<str>, SessionEntry>,  // Objects, not bytes
     dirty: HashSet<Arc<str>>,
     deleted: HashSet<Arc<str>>,
 }
 
-// Same pattern for sender keys
+// Sender keys use the same object-caching pattern
 struct SenderKeyStoreState {
     cache: HashMap<Arc<str>, Option<SenderKeyRecord>>,  // Objects, not bytes
     dirty: HashSet<Arc<str>>,

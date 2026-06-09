@@ -364,7 +364,7 @@ If a message arrives from a LID address and decryption fails with `SessionNotFou
 1. Look up the PN for the sender's LID
 2. Attempt to migrate PN sessions to LID via the signal cache (same cache-first logic as proactive migration)
 3. Retry decryption with the migrated session (already in the cache — no reload needed)
-4. If `DuplicatedMessage` occurs during post-migration retry, it is silently ignored
+4. If `DuplicateMessage` occurs during post-migration retry, it is silently ignored
 5. Fall back to retry receipt only if migration does not resolve the issue
 
 The `InvalidPreKeyId` case occurs when a `PreKeyMessage` references a consumed one-time prekey, but the session actually exists under a PN address (legacy migration). Migrating the session lets Signal use the existing ratchet state instead of looking up the consumed prekey. This migration is attempted in both the identity-change retry path and the initial decryption path.
@@ -531,9 +531,11 @@ Location: `src/message.rs`, `src/client/device_registry.rs`, `src/pending_device
 
 When the client receives a retry receipt, `handle_retry_receipt` checks whether the requesting device is present in the local device registry. Previously the handler dropped all retries from unregistered devices — this was safe for WA Web because WA Web keeps participant device lists fresh via a pre-send sync, so any legitimate requester is already known before the send.
 
-For a library client, a participant device can legitimately be absent from the local registry: if the device joined between the last device-list sync and the group send, it will have received the `skmsg` from the server but never obtained a sender key, causing it to retry indefinitely. For exactly this case the retry receipt carries a `<keys>` bundle — the ADV-signed `device-identity`, the identity key, a one-time prekey, and the signed prekey — which is everything needed to establish a Signal session and resend.
+For a library client, a participant device can legitimately be absent from the local registry: if the device joined between the last device-list sync and the group send, it will have received the `skmsg` from the server but never obtained a sender key, causing it to retry indefinitely. The retry receipt may carry a `<keys>` bundle — the ADV-signed `device-identity`, the identity key, a one-time prekey, and the signed prekey — which is everything needed to establish a Signal session and resend. But a newly-linked device that has no bundle still retries forever if the client only drops it: the reconciliation that fires when a prekey fetch returns 406 never triggers for that device because it was never in the send set.
 
-The handler now delegates to `should_drop_unknown_device_retry` in `wacore::protocol::retry`:
+Whenever a retry arrives from an unknown device, `handle_retry_receipt` now calls `schedule_unknown_device_sync` **before** consulting `should_drop_unknown_device_retry`. This treats the retry as a staleness signal: the requester's user JID is enqueued for a device-list resync (deduplicated via `PendingDeviceSync`, so a retry storm from a single device cannot fan out into a usync storm). Once the resync completes, the device appears in the registry and future sends include it in the sender-key distribution — the retries stop. This mirrors WA Web's `syncDeviceListJob` trigger on the retry path.
+
+The drop predicate still controls whether the *current* retry is recovered or dropped:
 
 ```rust
 // wacore/src/protocol/retry.rs
@@ -544,13 +546,13 @@ pub fn should_drop_unknown_device_retry(keys_present: bool, device_known: bool) 
 
 | `keys_present` | `device_known` | Result |
 |---|---|---|
-| `true` | `false` | **Recover** — build a session from the embedded bundle and resend |
-| `false` | `false` | **Drop** — no bundle to recover from and device is unknown |
+| `true` | `false` | **Recover** — build a session from the embedded bundle and resend; resync also triggered |
+| `false` | `false` | **Drop** — no bundle to recover this message; device-list resync triggered so device is learned for the next send |
 | any | `true` | **Resend** — device is in registry, proceed normally |
 
 When the bundle includes a `<device-identity>`, `process_retry_key_bundle` validates the ADV chain against the requester's account key (using the stored primary identity as a fallback when the server omits `account_signature_key`). A present-but-invalid ADV result is a hard error; the session is not built. If `<device-identity>` is absent from the bundle, or if no account key can be found, the check is skipped with a warning and the session is built anyway — matching the behaviour of the regular prekey-fetch path. The drop predicate only gates on syntactic `<keys>` presence, so the ADV guarantee is conditional on the bundle including a well-formed `<device-identity>`. This mirrors whatsmeow's approach of building the prekey session directly from the receipt bundle without a device-registry gate.
 
-Location: `src/retry.rs`, `wacore/src/protocol/retry.rs`
+Location: `src/retry.rs`, `wacore/src/protocol/retry.rs`, `src/pending_device_sync.rs`
 
 ### Immutable sender key loading
 
@@ -690,7 +692,7 @@ When sending group, status, or DM messages, the library validates the participan
 **On mismatch, the following caches are invalidated:**
 
 | Send path | Sender key device cache | Group info cache | Device registry |
-|-----------|------------------------|-----------------|-----------------|
+|-----------|------------------------|-----------------|----------------|
 | Group messages | Invalidated | Invalidated | — |
 | Status messages | Invalidated | Not invalidated | — |
 | DM messages | — | — | Recipient + own PN devices invalidated |
@@ -797,7 +799,7 @@ The per-batch upload count is configurable through the builder/factory API (defa
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| [`BotBuilder::with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`Client::set_wanted_pre_key_count`](/api/client#set_wanted_pre_key_count) | 812 | Number of pre-keys generated and uploaded per batch. Clamped to `5..=65_535` at upload time. |
+| [`BotBuilder::with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`Client::set_wanted_pre_key_count`](/api/client#set-wanted-pre-key-count) | 812 | Number of pre-keys generated and uploaded per batch. Clamped to `5..=65_535` at upload time. |
 | `MIN_PRE_KEY_COUNT` (private const) | 5 | Minimum server-side pre-key count before triggering an upload. |
 
 ```rust
@@ -859,7 +861,7 @@ Location: `src/prekeys.rs`
 
 When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.
 
-The public `refresh_pre_keys()` method force-uploads a fresh batch of `Client::wanted_pre_key_count()` pre-keys (default 812; tunable via [`with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`set_wanted_pre_key_count`](/api/client#set_wanted_pre_key_count)), giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
+The public `refresh_pre_keys()` method force-uploads a fresh batch of `Client::wanted_pre_key_count()` pre-keys (default 812; tunable via [`with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`set_wanted_pre_key_count`](/api/client#set-wanted-pre-key-count)), giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
 
 ```rust
 // After restoring a session from another library
@@ -1035,7 +1037,7 @@ The protocol detects and rejects duplicate messages:
 if chain_index > counter {
     return match state.get_message_keys(their_ephemeral, counter)? {
         Some(keys) => Ok(keys),
-        None => Err(SignalProtocolError::DuplicatedMessage(chain_index, counter)),
+        None => Err(SignalProtocolError::DuplicateMessage(chain_index, counter)),
     };
 }
 ```

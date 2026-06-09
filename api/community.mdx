@@ -317,7 +317,7 @@ pub struct CreateCommunityResult {
 
 The `metadata` field carries the full community parent metadata from the server, with the inline `description: Option<String>` already populated. See [`GroupMetadata`](/api/groups#groupmetadata) for the full field list.
 
-`CreateCommunityResult` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+`CreateCommunityResult` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 <Note>
 Prior to v0.6 this struct exposed only `gid: Jid` and derived `PartialEq, Eq`. The `Eq` derives were dropped because `GroupMetadata` does not implement them.
@@ -339,7 +339,7 @@ pub struct CommunitySubgroup {
 }
 ```
 
-`CommunitySubgroup` is `#[non_exhaustive]`.
+`CommunitySubgroup` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 **Fields:**
 - `id` — Subgroup JID
@@ -361,7 +361,7 @@ pub struct LinkSubgroupsResult {
 }
 ```
 
-`LinkSubgroupsResult` is `#[non_exhaustive]`.
+`LinkSubgroupsResult` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### UnlinkSubgroupsResult
 
@@ -376,7 +376,7 @@ pub struct UnlinkSubgroupsResult {
 }
 ```
 
-`UnlinkSubgroupsResult` is `#[non_exhaustive]`.
+`UnlinkSubgroupsResult` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### GroupType
 

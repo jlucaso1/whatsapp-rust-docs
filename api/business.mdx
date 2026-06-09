@@ -63,7 +63,7 @@ if let Some(profile) = client.get_business_profile(&jid).await? {
     if let Some(configs) = &profile.business_hours.business_config {
         for config in configs {
             println!(
-                "  {:?}: {:?} ({}\u{2013}{})",
+                "  {:?}: {:?} ({}–{})",
                 config.day_of_week,
                 config.mode,
                 config.open_time,
@@ -93,7 +93,7 @@ pub struct BusinessProfile {
 }
 ```
 
-`BusinessProfile` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+`BusinessProfile` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### BusinessCategory
 
@@ -105,7 +105,7 @@ pub struct BusinessCategory {
 }
 ```
 
-`BusinessCategory` is `#[non_exhaustive]`.
+`BusinessCategory` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### BusinessHours
 
@@ -117,7 +117,7 @@ pub struct BusinessHours {
 }
 ```
 
-`BusinessHours` is `#[non_exhaustive]`.
+`BusinessHours` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### BusinessHoursConfig
 
@@ -131,7 +131,7 @@ pub struct BusinessHoursConfig {
 }
 ```
 
-`BusinessHoursConfig` is `#[non_exhaustive]`.
+`BusinessHoursConfig` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 ### DayOfWeek
 

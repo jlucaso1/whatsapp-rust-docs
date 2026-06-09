@@ -196,7 +196,7 @@ pub async fn get_user_info(
 Per-subprotocol errors are preserved on the result struct rather than failing the whole request. This means one user returning a privacy error for their status does not block retrieving devices for the other users in the same batch. Check the `*_error` fields when a corresponding `Option` field is `None` and you need to distinguish "not set" from "server error".
 
 ```rust
-let info = client.contacts().get_user_info(&[jid]).await?;
+let user_info = client.contacts().get_user_info(&[jid]).await?;
 if let Some(info) = user_info.get(&jid) {
     if info.status.is_none() {
         if let Some(err) = &info.status_error {

@@ -364,7 +364,7 @@ If a message arrives from a LID address and decryption fails with `SessionNotFou
 1. Look up the PN for the sender's LID
 2. Attempt to migrate PN sessions to LID via the signal cache (same cache-first logic as proactive migration)
 3. Retry decryption with the migrated session (already in the cache — no reload needed)
-4. If `DuplicatedMessage` occurs during post-migration retry, it is silently ignored
+4. If `DuplicateMessage` occurs during post-migration retry, it is silently ignored
 5. Fall back to retry receipt only if migration does not resolve the issue
 
 The `InvalidPreKeyId` case occurs when a `PreKeyMessage` references a consumed one-time prekey, but the session actually exists under a PN address (legacy migration). Migrating the session lets Signal use the existing ratchet state instead of looking up the consumed prekey. This migration is attempted in both the identity-change retry path and the initial decryption path.
@@ -799,7 +799,7 @@ The per-batch upload count is configurable through the builder/factory API (defa
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| [`BotBuilder::with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`Client::set_wanted_pre_key_count`](/api/client#set_wanted_pre-key-count) | 812 | Number of pre-keys generated and uploaded per batch. Clamped to `5..=65_535` at upload time. |
+| [`BotBuilder::with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`Client::set_wanted_pre_key_count`](/api/client#set-wanted-pre-key-count) | 812 | Number of pre-keys generated and uploaded per batch. Clamped to `5..=65_535` at upload time. |
 | `MIN_PRE_KEY_COUNT` (private const) | 5 | Minimum server-side pre-key count before triggering an upload. |
 
 ```rust
@@ -861,7 +861,7 @@ Location: `src/prekeys.rs`
 
 When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.
 
-The public `refresh_pre_keys()` method force-uploads a fresh batch of `Client::wanted_pre_key_count()` pre-keys (default 812; tunable via [`with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`set_wanted_pre_key_count`](/api/client#set_wanted_pre_key_count)), giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
+The public `refresh_pre_keys()` method force-uploads a fresh batch of `Client::wanted_pre_key_count()` pre-keys (default 812; tunable via [`with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`set_wanted_pre_key_count`](/api/client#set-wanted-pre-key-count)), giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
 
 ```rust
 // After restoring a session from another library
@@ -1037,7 +1037,7 @@ The protocol detects and rejects duplicate messages:
 if chain_index > counter {
     return match state.get_message_keys(their_ephemeral, counter)? {
         Some(keys) => Ok(keys),
-        None => Err(SignalProtocolError::DuplicatedMessage(chain_index, counter)),
+        None => Err(SignalProtocolError::DuplicateMessage(chain_index, counter)),
     };
 }
 ```

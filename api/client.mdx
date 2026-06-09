@@ -867,10 +867,10 @@ Tracks the number of consecutive reconnection failures. Used internally for Fibo
 ### custom_enc_handlers
 
 ```rust
-pub custom_enc_handlers: Arc<async_lock::RwLock<HashMap<String, Arc<dyn EncHandler>>>>
+pub custom_enc_handlers: std::sync::OnceLock<HashMap<String, Arc<dyn EncHandler>>>
 ```
 
-Custom handlers for encrypted message types. You can register handlers for specific encryption types that the client doesn't natively support. Access requires `.read().await` for lookups and `.write().await` for modifications. These are also registerable via `BotBuilder::with_enc_handler()`.
+Custom handlers for encrypted message types. Set once at `Bot::build` and immutable afterward; read lock-free via `.get()`. Register handlers exclusively through `BotBuilder::with_enc_handler()` — direct mutation after build is not possible.
 
 ### RECONNECT_BACKOFF_STEP
 

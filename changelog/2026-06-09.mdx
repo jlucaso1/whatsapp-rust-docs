@@ -133,3 +133,5 @@ The dead, fully-buffering `download_to_file` is gone. Use [`download_to_writer`]
 **IQ errors keep `error_type` + `backoff`**: failed IQ responses now surface the server's `error_type` and server-directed `backoff` (seconds) instead of dropping them, so callers can honour retry hints.
 
 **wasm**: the cache backend is now target-aware so the `moka-cache` default no longer breaks `wasm32` builds.
+
+**`EncHandler` wasm portability** ([#793](https://github.com/oxidezap/whatsapp-rust/pull/793)): `EncHandler` now uses `MaybeSendSync` as its supertrait and gates `async_trait` with `?Send` on `wasm32`, matching the convention of `EventHandler` and `SendContextResolver`. Custom enc handlers that capture `!Send` JS handles now compile on the wasm32 port. No change on native — the blanket `MaybeSendSync` impl keeps `Arc<dyn EncHandler>` `Send + Sync`.

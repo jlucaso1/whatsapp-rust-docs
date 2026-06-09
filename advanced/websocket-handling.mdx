@@ -637,6 +637,8 @@ Location: `wacore/noise/src/framing.rs`
 The transport layer abstracts WebSocket implementation:
 
 ```rust
+use bytes::Bytes;
+
 #[async_trait]
 pub trait Transport: Send + Sync {
     async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error>;
@@ -646,7 +648,9 @@ pub trait Transport: Send + Sync {
 pub enum TransportEvent {
     Connected,
     Disconnected,
-    DataReceived(Vec<u8>),
+    /// Inbound payload. Carrying `Bytes` (rather than `Vec<u8>`) lets the
+    /// receive path adopt the allocation zero-copy via `feed_bytes`.
+    DataReceived(Bytes),
 }
 ```
 

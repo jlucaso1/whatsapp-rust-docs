@@ -1,0 +1,40 @@
+---
+title: "June 10, 2026 — Group send: per-group device list memoized behind a topology generation"
+description: "Warm repeat sends to the same group skip the per-member registry fan-out entirely. A topology generation counter fused into every device-registry and LID-PN write ensures the memo is invalidated by construction."
+---
+
+## Performance
+
+**Group send: memoized per-group device list ([#824](https://github.com/oxidezap/whatsapp-rust/pull/824))**
+
+Every group send previously resolved the full participant device set from scratch — feeding both the phash and the SKDM filter — paying a per-member registry fan-out on every call. After #823 reduced that to 2 cache lookups per participant, a warm send to an 800-member group still cost ~514 µs per send.
+
+**Topology-validated memo.** The resolved (LID-converted) device list is now memoized per group as an `Arc<Vec<Jid>>`. The memo is valid exactly while both conditions hold:
+
+- The cached `GroupInfo` `Arc` is still the same pointer (any metadata refresh or membership change produces a new `Arc`, invalidating the memo for free).
+- The device topology generation is unchanged (any registry write or LID-PN mapping change bumps it).
+
+A warm repeat send is a refcount bump on the shared `Arc` — not a clone of the full device list.
+
+**Enforced-by-construction writes.** The topology tracker is fused directly into the write chokepoints:
+
+- `DeviceRegistryCache` wraps the old `TypedCache` with an `insert` that records touched users and an `invalidate` that records the key. DB-fallback cache fills use a separate `promote` path (no bump, since the data is what the DB would have returned anyway).
+- `LidPnCache::add` records both the LID and PN keys, since a mapping change alters which canonical record either key resolves to.
+
+A future write path cannot forget a topology bump because there is no unrecorded write API.
+
+**Scoped invalidation.** Each change logs which users it touched (in both namespaces). When a memo's generation goes stale, it first checks the log: if every change since its stamp touched users outside the group, the memo re-stamps itself instead of recomputing. Write storms on unrelated groups do not flush every memo. Any ambiguous case (log overflow past the memo's stamp, or a global event such as a mapping-cache clear) falls through to a full recompute rather than serving stale data.
+
+**Disabled for shared external stores.** When the device registry or LID-PN cache is backed by a shared external store (e.g. Redis shared across pods), writes from other processes are invisible to this process's in-process topology tracker. The memo is disabled in that configuration and every send resolves normally. The `group_devices_memo_enabled` flag is set at `Client` construction based on whether store-backed caches are configured.
+
+**Status path unchanged.** The status broadcast path builds a fresh `GroupInfo` per send (no stable `Arc` identity to memoize against), so it continues to use the unmemoized `resolve_skdm_targets` path.
+
+**Benchmark** (release, warm caches, 800 members × 2 devices, back-to-back on the same machine):
+
+| | Warm send resolution |
+|---|---|
+| Per-member fan-out (after #823) | 514 µs |
+| Memo hit | **161 ns** (~3200×) |
+| Re-stamp after unrelated-group write storm (1 write between every send) | 1.0 µs (vs. 514 µs recompute) |
+
+**No breaking changes.** The public API is unchanged. The status send path behavior is untouched.

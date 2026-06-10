@@ -7,7 +7,7 @@ description: "get_devices_from_registry now probes only the single relevant dire
 
 **Group send: directed LID-PN probe in `get_devices_from_registry` ([#823](https://github.com/oxidezap/whatsapp-rust/pull/823))**
 
-Each call to `get_devices_from_registry` resolves a `Jid` to its canonical lookup keys before hitting the device registry cache. Previously, the key resolver (`resolve_lookup_keys`) only received the bare user string, so it blindly probed **both** directions of the LID-PN map — `get_phone_number` then `get_current_lid` — for every group member: 3 moka lookups per participant before the registry lookup.
+Each call to `get_devices_from_registry` resolves a `Jid` to its canonical lookup keys before hitting the device registry cache. Previously, the key resolver (`resolve_lookup_keys`) only received the bare user string. It blindly probed **both** directions of the LID-PN map — `get_phone_number` then `get_current_lid` — for every group member. This resulted in 3 moka lookups per participant before the registry lookup.
 
 **Server-aware probe.** A hot caller in `get_devices_from_registry` already holds the full `Jid`, and the namespace fully determines which direction is meaningful:
 

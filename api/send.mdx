@@ -449,7 +449,7 @@ pub async fn edit_message_encrypted(
 </ParamField>
 
 <ParamField path="message_secret" type="&[u8]" required>
-  The 32-byte secret of the original message. Must be exactly 32 bytes. Stored when the original message was sent (returned in `SendResult` via `send_message_with_options`) or retrieved from your message store.
+  The 32-byte secret of the original message. Must be exactly 32 bytes. Persist it from `MessageContextInfo.message_secret` on the sent message and retrieve it by message ID from your store.
 </ParamField>
 
 <ParamField path="new_content" type="wa::Message" required>

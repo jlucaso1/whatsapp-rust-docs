@@ -1,13 +1,13 @@
 ---
 title: Community management
-description: Learn how to create communities, manage subgroups, and query community metadata in whatsapp-rust
+description: Learn how to create communities, manage subgroups, query community metadata, send encrypted CAG reactions, and post channel comments in whatsapp-rust
 ---
 
 ## Overview
 
 Communities are parent groups that contain linked subgroups. They use the `w:g2` IQ namespace for mutations and MEX (GraphQL) for metadata queries.
 
-This guide covers creating communities, linking and unlinking subgroups, querying subgroup metadata, and identifying group types within a community hierarchy.
+This guide covers creating communities, linking and unlinking subgroups, querying subgroup metadata, identifying group types, sending encrypted reactions to Community Announcement Groups, and posting channel comments.
 
 ## Accessing the Community API
 
@@ -224,6 +224,103 @@ The classification is based on these `GroupMetadata` fields:
 
 See [Groups API reference](/api/groups#get_metadata) for all `GroupMetadata` fields.
 
+## Community Announcement Group (CAG) reactions
+
+The default announcement subgroup of a community — the one where `is_default_sub_group` is `true` — is a Community Announcement Group (CAG). CAGs require encrypted reactions; plaintext reactions are silently dropped by the server.
+
+`client.send_reaction()` handles this transparently. The same call works for DMs, regular groups, and CAGs with no change to your code:
+
+```rust
+let target_key = wa::MessageKey {
+    remote_jid: Some(cag_jid.to_string()),
+    from_me: Some(false),
+    id: Some("3EB0POSTID".to_string()),
+    // participant must be the post author.
+    participant: Some(post_author_jid.to_string()),
+};
+
+client.send_reaction(&cag_jid, target_key, "🔥").await?;
+
+// Remove a reaction with an empty emoji:
+client.send_reaction(&cag_jid, target_key, "").await?;
+```
+
+For CAG chats the library checks `GroupInfo::is_community_announce` (populated from metadata and cached). When `true`, the reaction is encrypted with the target post's `messageSecret` (captured when the post was received) and shipped as an `enc_reaction_message` envelope. If the parent secret is not available the call fails with a descriptive error rather than emitting a plaintext reaction the channel would drop.
+
+Incoming encrypted reactions from CAG posts are decrypted transparently by the receive path and surfaced as a normal `reaction_message` event. The `key` field is filled from the envelope's `target_message_key`, so your event handler looks identical to a regular group reaction:
+
+```rust
+Event::Message(msg, info) => {
+    if let Some(reaction) = &msg.reaction_message {
+        println!("Reaction: {:?}", reaction.text);
+        println!("On post:  {:?}", reaction.key.as_ref().and_then(|k| k.id.as_deref()));
+    }
+}
+```
+
+## Channel comments
+
+Post encrypted threaded replies under a CAG post using `client.comments()`:
+
+```rust
+use whatsapp_rust::features::Comments;
+
+let parent_key = wa::MessageKey {
+    remote_jid: Some(cag_jid.to_string()),
+    from_me: Some(false),
+    id: Some("3EB0POSTID".to_string()),
+    // participant must point to the post author so receivers can derive the
+    // decryption key from the envelope. The library resolves the author
+    // automatically when from_me is true and participant is omitted.
+    participant: Some(post_author_jid.to_string()),
+};
+
+// Send a text comment:
+let result = client.comments()
+    .send_text(&cag_jid, parent_key.clone(), "Great post!")
+    .await?;
+println!("Comment sent: {}", result.message_id);
+```
+
+For arbitrary message bodies, use `send_message`:
+
+```rust
+let body = wa::Message {
+    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        text: Some("Great post!".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let result = client.comments()
+    .send_message(&cag_jid, parent_key, body)
+    .await?;
+```
+
+Comments require the parent post's `messageSecret` to have been captured when the post was received (via `msg_secret_policy`). If it was not captured the call returns an error explaining that the secret is missing.
+
+Each comment carries a fresh `messageSecret` of its own so it can receive encrypted reactions. The comment's secret is persisted under the comment's own id and sender.
+
+### Receiving comments
+
+Incoming encrypted comments are decrypted transparently on the receive path. The decrypted body is dispatched as a normal `Event::Message`. Because the inner `Message` proto has no slot for the parent post key, the threading link surfaces on `MessageInfo::comment_target`:
+
+```rust
+Event::Message(msg, info) => {
+    if let Some(parent_key) = &info.comment_target {
+        // This is a channel comment.
+        println!("Comment on post: {:?}", parent_key.id);
+
+        if let Some(text) = msg.text_content() {
+            println!("Comment text: {}", text);
+        }
+    }
+}
+```
+
+`comment_target` is `None` for all other message types.
+
 ## Error handling
 
 Community mutations return `anyhow::Error`, while MEX-based queries (`get_subgroups`, `get_subgroup_participant_counts`) return `MexError`:
@@ -244,5 +341,7 @@ match client.community().get_subgroups(&community_jid).await {
 
 - [Community API reference](/api/community) — Full API details and types
 - [Group management](/guides/group-management) — Manage individual groups
+- [Sending messages](/guides/sending-messages#reactions) — Reactions API overview
+- [Receiving messages](/guides/receiving-messages) — Handle message events including comments
 - [Events](/concepts/events) — Handle group update events
 - [MEX API](/api/mex) — Understand the GraphQL layer used by community queries

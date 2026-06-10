@@ -17,7 +17,7 @@ This release brings the Rust client into full parity with that model.
 
 Upload batches now re-offer leftover generated-but-unuploaded keys first, generating only as many new keys as needed to reach the configured count:
 
-- A previous failed upload leaves both watermarks past the window. The next attempt mints strictly fresh ids — the abandoned stored rows are never regenerated over (the prekey-collision class on partial success).
+- **FIRST is advanced past the window *before* the IQ is sent** (matching WA Web's `markKeyAsUploaded` ordering in `PreKeysJob.js`). This means that after a mid-flight IQ failure the window is intentionally empty — the server state is unknown and re-offering an id a peer may already have consumed would corrupt the server pool. The next upload attempt mints strictly fresh ids. The abandoned rows stay stored locally and remain decryptable if the upload did land. What the window *reuse* protects is everything *before* the send: keys generated but never sent (process death or disconnect between the generation and IQ phases).
 - A window with more leftovers than the target uploads only `wanted` of them and generates nothing, without regressing `NEXT_PK_ID`.
 - A corrupt `first > next` pair and windows that would cross the 24-bit id boundary collapse to a fresh window automatically.
 

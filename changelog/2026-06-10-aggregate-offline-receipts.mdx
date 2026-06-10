@@ -1,0 +1,33 @@
+---
+title: "June 10, 2026 — perf: aggregate offline delivery receipts per chat"
+description: "Delivery receipts for offline-sync backlogs are now batched into one stanza per chat instead of one per message, cutting reconnect traffic by ~43% in wire bytes."
+---
+
+## Performance
+
+**Receipt: aggregate offline delivery receipts per chat ([#820](https://github.com/oxidezap/whatsapp-rust/pull/820))**
+
+When WhatsApp delivers a backlog of queued messages after reconnect (offline sync), the client previously sent one `<receipt>` stanza per message — N messages produced N stanzas, N Noise frame encryptions, and N socket writes. WhatsApp Web handles this case with `sendAggregateOfflineReceipts`, which groups the backlog by chat and author into a single stanza per group.
+
+whatsapp-rust now matches that behavior. Offline-drained messages (those carrying the `offline` attr in their stanza) are buffered during the sync window and flushed as aggregate receipts when the window closes. Live messages keep the existing 1:1 path behind a single bool check.
+
+**Wire shape** mirrors WA Web's `sendAggregateReceipts`: the first message ID is the `id` attr; the rest go into `<list><item id="…"/>` children. Receipts are grouped by `(chat, author, receipt type, self-fanout recipient)` — fine enough that merging across any axis would corrupt routing, coarse enough to collapse an entire chat's backlog into one stanza. Each chunk caps at 256 IDs.
+
+**Measured on a 200-message offline backlog from one chat (release build, 100 runs):**
+
+| | Stanzas | Wire bytes | Build + marshal |
+|---|---|---|---|
+| Before (individual) | 200 | 6 000 | 113 µs |
+| After (aggregate) | 1 | 3 428 (−43%) | 86 µs (−24%) |
+
+The dominant saving is not captured above: 199 fewer Noise frame encryptions and 199 fewer socket writes per 200-message chat backlog, plus the equivalent reduction on the server.
+
+**Lifecycle guarantees:**
+
+- A receipt that arrives after the sync window closes (the late-receipt race) observes the completed flag under the buffer lock and falls back to the standard 1:1 path — no receipt can strand in the buffer.
+- `disconnect()`, `reconnect()`, and `reconnect_immediately()` all drain the buffer into the `outbound_flush` window before closing it, preserving delivery guarantees during a mid-sync disconnect.
+- The buffer is drained with `mem::take` so it holds zero capacity between offline windows (asserted in tests).
+
+## Breaking changes
+
+None. The public API is unchanged; live receipts keep the exact same wire shape and timing.

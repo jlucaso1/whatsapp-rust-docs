@@ -446,7 +446,7 @@ An optional in-memory L1 cache (`recent_messages` in `CacheConfig`) can be enabl
 
 ### Automatic delivery receipts
 
-The client automatically sends delivery receipts for successfully decrypted messages:
+The client automatically sends delivery receipts for successfully decrypted messages. During an offline-sync reconnect, receipts are buffered and flushed as one aggregate `<receipt>` per (chat, author) group rather than one stanza per message — matching WhatsApp Web's `sendAggregateOfflineReceipts`. Live receipts keep the existing per-message path:
 
 ```rust
 // Happens automatically after message decryption

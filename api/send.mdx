@@ -10,12 +10,12 @@ Send a message to a user, group, or newsletter. Newsletter messages are sent as 
 ```rust
 pub async fn send_message(
     &self,
-    to: Jid,
+    to: impl Into<Jid>,
     message: wa::Message,
 ) -> Result<SendResult, anyhow::Error>
 ```
 
-<ParamField path="to" type="Jid" required>
+<ParamField path="to" type="impl Into<Jid>" required>
   Recipient JID. Can be:
   - Direct message: `15551234567@s.whatsapp.net`
   - Group: `120363040237990503@g.us`
@@ -158,7 +158,7 @@ let album_parent = wa::Message {
     ..Default::default()
 };
 
-let parent_result = client.send_message(chat_jid.clone(), album_parent).await?;
+let parent_result = client.send_message(&chat_jid, album_parent).await?;
 let parent_key = parent_result.message_key();
 
 // 2. Send each child media wrapped as an album child
@@ -178,7 +178,7 @@ let image1 = wa::Message {
 };
 
 let wrapped = wrap_as_album_child(image1, parent_key.clone());
-client.send_message(chat_jid.clone(), wrapped).await?;
+client.send_message(&chat_jid, wrapped).await?;
 
 // Repeat for each additional image/video in the album
 ```
@@ -194,12 +194,12 @@ Forward an existing message to a chat. Builds a forward-ready copy of `message` 
 ```rust
 pub async fn forward_message(
     &self,
-    to: Jid,
+    to: impl Into<Jid>,
     message: &wa::Message,
 ) -> Result<SendResult, anyhow::Error>
 ```
 
-<ParamField path="to" type="Jid" required>
+<ParamField path="to" type="impl Into<Jid>" required>
   Recipient JID (DM, group, or newsletter).
 </ParamField>
 
@@ -239,13 +239,13 @@ Send a message with additional customization options.
 ```rust
 pub async fn send_message_with_options(
     &self,
-    to: Jid,
+    to: impl Into<Jid>,
     message: wa::Message,
     options: SendOptions,
 ) -> Result<SendResult, anyhow::Error>
 ```
 
-<ParamField path="to" type="Jid" required>
+<ParamField path="to" type="impl Into<Jid>" required>
   Recipient JID
 </ParamField>
 
@@ -373,13 +373,13 @@ Edit a previously sent message.
 ```rust
 pub async fn edit_message(
     &self,
-    to: Jid,
+    to: impl Into<Jid>,
     original_id: impl Into<String>,
     new_content: wa::Message,
 ) -> Result<String, anyhow::Error>
 ```
 
-<ParamField path="to" type="Jid" required>
+<ParamField path="to" type="impl Into<Jid>" required>
   Chat JID where the original message was sent
 </ParamField>
 
@@ -402,7 +402,7 @@ use waproto::whatsapp as wa;
 
 // Send original message
 let result = client.send_message(
-    chat_jid.clone(),
+    &chat_jid,
     wa::Message {
         conversation: Some("Hello!".to_string()),
         ..Default::default()
@@ -411,7 +411,7 @@ let result = client.send_message(
 
 // Edit it
 let edit_id = client.edit_message(
-    chat_jid,
+    &chat_jid,
     &result.message_id,
     wa::Message {
         conversation: Some("Hello, edited!".to_string()),
@@ -433,18 +433,23 @@ Edit a message via the **message-secret encrypted** path (a `secret_encrypted_me
 ```rust
 pub async fn edit_message_encrypted(
     &self,
-    to: Jid,
+    to: impl Into<Jid>,
     original_id: impl Into<String>,
+    message_secret: &[u8],
     new_content: wa::Message,
 ) -> Result<String, anyhow::Error>
 ```
 
-<ParamField path="to" type="Jid" required>
+<ParamField path="to" type="impl Into<Jid>" required>
   Chat JID where the original message was sent. Newsletter/channel JIDs are rejected — use [`Newsletter::edit_message`](/api/newsletter#edit_message) for channels.
 </ParamField>
 
 <ParamField path="original_id" type="String" required>
   ID of the message to edit. You can only edit your own messages, so the original sender and the editor are both you.
+</ParamField>
+
+<ParamField path="message_secret" type="&[u8]" required>
+  The 32-byte secret of the original message. Must be exactly 32 bytes. Stored when the original message was sent (returned in `SendResult` via `send_message_with_options`) or retrieved from your message store.
 </ParamField>
 
 <ParamField path="new_content" type="wa::Message" required>
@@ -461,8 +466,9 @@ pub async fn edit_message_encrypted(
 use waproto::whatsapp as wa;
 
 let edit_id = client.edit_message_encrypted(
-    chat_jid,
+    &chat_jid,
     &original_id,
+    &message_secret,
     wa::Message {
         conversation: Some("edited (encrypted)".to_string()),
         ..Default::default()
@@ -485,13 +491,13 @@ This sends a revoke protocol message that removes the message for all participan
 ```rust
 pub async fn revoke_message(
     &self,
-    to: Jid,
+    to: impl Into<Jid>,
     message_id: impl Into<String>,
     revoke_type: RevokeType,
 ) -> Result<(), anyhow::Error>
 ```
 
-<ParamField path="to" type="Jid" required>
+<ParamField path="to" type="impl Into<Jid>" required>
   Chat JID (direct message or group)
 </ParamField>
 
@@ -535,13 +541,13 @@ pub enum RevokeType {
 ```rust
 // Send a message
 let result = client.send_message(
-    chat_jid,
+    &chat_jid,
     message
 ).await?;
 
 // Delete it (sender revoke)
 client.revoke_message(
-    chat_jid,
+    &chat_jid,
     &result.message_id,
     RevokeType::Sender
 ).await?;
@@ -579,13 +585,13 @@ Pin a message in a chat for all participants.
 ```rust
 pub async fn pin_message(
     &self,
-    chat: Jid,
+    chat: impl Into<Jid>,
     key: wa::MessageKey,
     duration: PinDuration,
 ) -> Result<(), anyhow::Error>
 ```
 
-<ParamField path="chat" type="Jid" required>
+<ParamField path="chat" type="impl Into<Jid>" required>
   Chat JID where the message to pin is located
 </ParamField>
 
@@ -665,12 +671,12 @@ Unpin a previously pinned message.
 ```rust
 pub async fn unpin_message(
     &self,
-    chat: Jid,
+    chat: impl Into<Jid>,
     key: wa::MessageKey,
 ) -> Result<(), anyhow::Error>
 ```
 
-<ParamField path="chat" type="Jid" required>
+<ParamField path="chat" type="impl Into<Jid>" required>
   Chat JID where the pinned message is located
 </ParamField>
 
@@ -702,13 +708,13 @@ Keep (or un-keep) a message in a disappearing chat for everyone. This is the `ke
 ```rust
 pub async fn keep_message(
     &self,
-    chat: Jid,
+    chat: impl Into<Jid>,
     key: wa::MessageKey,
     keep: bool,
 ) -> Result<SendResult, anyhow::Error>
 ```
 
-<ParamField path="chat" type="Jid" required>
+<ParamField path="chat" type="impl Into<Jid>" required>
   Chat JID where the target message lives.
 </ParamField>
 
@@ -803,13 +809,13 @@ React to a DM, group, or `status@broadcast` message with an emoji. The helper bu
 ```rust
 pub async fn send_reaction(
     &self,
-    chat: &Jid,
+    chat: impl Into<Jid>,
     target_key: wa::MessageKey,
     emoji: &str,
 ) -> Result<SendResult, anyhow::Error>
 ```
 
-<ParamField path="chat" type="&Jid" required>
+<ParamField path="chat" type="impl Into<Jid>" required>
   Chat JID where the reaction is delivered. For `status@broadcast`, this is the broadcast JID; the reaction fans out to the status author's devices using `target_key.participant`.
 </ParamField>
 

@@ -24,7 +24,7 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let result = client.send_message(to, message).await?;
+let result = client.send_message(&to, message).await?;
 println!("Message sent with ID: {}", result.message_id);
 ```
 
@@ -382,7 +382,7 @@ let album_parent = wa::Message {
     ..Default::default()
 };
 
-let parent_result = client.send_message(chat_jid.clone(), album_parent).await?;
+let parent_result = client.send_message(&chat_jid, album_parent).await?;
 let parent_key = parent_result.message_key();
 
 // Step 2: Upload and send each child image
@@ -406,7 +406,7 @@ for image_data in [image1_bytes, image2_bytes, image3_bytes] {
 
     // Wrap as album child and send
     let wrapped = wrap_as_album_child(image_msg, parent_key.clone());
-    client.send_message(chat_jid.clone(), wrapped).await?;
+    client.send_message(&chat_jid, wrapped).await?;
 }
 ```
 
@@ -436,16 +436,16 @@ let album_parent = wa::Message {
     ..Default::default()
 };
 
-let parent_result = client.send_message(chat_jid.clone(), album_parent).await?;
+let parent_result = client.send_message(&chat_jid, album_parent).await?;
 let parent_key = parent_result.message_key();
 
 // Send image children
 let image_wrapped = wrap_as_album_child(image_msg, parent_key.clone());
-client.send_message(chat_jid.clone(), image_wrapped).await?;
+client.send_message(&chat_jid, image_wrapped).await?;
 
 // Send video children
 let video_wrapped = wrap_as_album_child(video_msg, parent_key.clone());
-client.send_message(chat_jid.clone(), video_wrapped).await?;
+client.send_message(&chat_jid, video_wrapped).await?;
 ```
 
 ## Sticker packs
@@ -840,7 +840,7 @@ async fn send_safe_message(
         ..Default::default()
     };
 
-    match client.send_message(to.clone(), message).await {
+    match client.send_message(&to, message).await {
         Ok(result) => {
             println!("✅ Message sent: {}", result.message_id);
             Ok(result.message_id)
@@ -873,10 +873,10 @@ async fn send_safe_message(
 
 ```rust
 // Store the result for later operations
-let result = client.send_message(to, message).await?;
+let result = client.send_message(&chat_jid, message).await?;
 
 // Use the message ID for reactions, edits, or deletes
-client.revoke_message(to, &result.message_id, RevokeType::Sender).await?;
+client.revoke_message(&chat_jid, &result.message_id, RevokeType::Sender).await?;
 
 // Use message_key() for album child linking or pinning
 let key = result.message_key();

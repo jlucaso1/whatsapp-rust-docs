@@ -1,0 +1,21 @@
+---
+title: "June 10, 2026 — App state sync: fix ltHash double-subtraction for SET+REMOVE on the same index"
+description: "A syncd patch carrying both a SET and a REMOVE for the same index no longer double-subtracts the previous value, preventing a permanent PatchSnapshotMACMismatch that would stall collection sync."
+---
+
+## Bug Fix
+
+**App state sync: match WA Web index-mode ltHash for SET+REMOVE on the same index ([#829](https://github.com/oxidezap/whatsapp-rust/pull/829))**
+
+A `SyncdPatch` that contains both a `SET` and a `REMOVE` mutation for the same index is a valid input: WA Web's `validateNoSameIndexForMultipleMutations` allows cross-operation pairs, and our `detect_duplicate_index_in_patch` mirrors that. However, the previous ltHash math subtracted the previous store value twice for such a patch — once via the `SET`'s prev lookup, and once via the `REMOVE`'s lookup (which incorrectly resolved through the in-patch overlay and returned the `SET`'s value). The net hash dropped the index entirely (`base − v0`), while the persisted MAC store ended up keeping the index present with the `SET`'s value.
+
+If the server ever emits such a patch, the locally computed snapshot MAC would diverge from the patch's, causing a `PatchSnapshotMACMismatch` error that stalls the collection in a retry loop. Worse, because the MAC store and the ltHash would then permanently disagree, every subsequent snapshot MAC for that collection would re-fail even after a refetch.
+
+**Fix.** The implementation now mirrors WA Web's index-mode (`WAWebSyncdAntiTampering`, gate `d`):
+
+- `update_hash` pre-collects all index MACs that appear in any `REMOVE` in the patch. For a `SET` whose index is in that set, the prev-value lookup is suppressed — the `REMOVE` owns the subtraction. This gate is active only when every mutation in the patch carries an index (matching WA Web's `d` condition); an index-less mutation keeps the legacy math.
+- `process_patch`'s in-patch overlay no longer feeds `REMOVE` lookups. `REMOVE` always resolves its previous value against the store, never against an earlier `SET` in the same patch. The overlay's only remaining role is collapsing `SET`-overwrite chains (last-write-wins per index), which is unchanged.
+
+Net result for `[SET X v1, REMOVE X]` with store value `v0`: `base + v1 − v0`, regardless of mutation order. This is exactly the state the MAC store ends in (delete `removed_index_macs`, then put `added_macs` leaves index `X` present with value `v1`). The hash and the store now agree by construction.
+
+**No breaking changes.** Public API is unchanged; this is internal hash math only.

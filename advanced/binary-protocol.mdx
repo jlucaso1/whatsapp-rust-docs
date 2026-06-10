@@ -63,10 +63,13 @@ pub enum NodeValue {
     Jid(Jid),                // Optimized for WhatsApp identifiers
 }
 
-pub struct Attrs(pub Vec<(Cow<'static, str>, NodeValue)>);
+pub type AttrsVec = smallvec::SmallVec<[(Cow<'static, str>, NodeValue); 2]>;
+pub struct Attrs(pub AttrsVec);
 ```
 
 Like `Node.tag`, attribute keys use `Cow<'static, str>` so that common protocol attribute names (like `"id"`, `"type"`, `"to"`, `"from"`) reference static memory from the token dictionary rather than allocating on the heap.
+
+`AttrsVec` is a `SmallVec` with inline capacity 2. Nodes carrying ≤2 attributes — the common per-recipient fanout shapes (`to` with 1 attr, `enc` with 2) — keep their attributes on the stack alongside the node with no heap allocation. Nodes with ≥3 attributes spill to the heap as before. See [Inline attribute storage](#inline-attribute-storage) for performance numbers.
 
 #### NodeValue API
 
@@ -858,6 +861,21 @@ fn estimate_capacity_node(node: &Node) -> usize {
 ```
 
 Location: `wacore/binary/src/marshal.rs:167-200`
+
+### Inline attribute storage
+
+`Attrs` uses `AttrsVec = SmallVec<[(Cow<'static, str>, NodeValue); 2]>` instead of a plain `Vec`. The `SmallVec` stores up to 2 entries inline inside the struct itself, eliminating the per-node heap allocation for the attribute buffer on the encode hot path.
+
+Inline capacity 2 is the measured optimum: the per-recipient fanout nodes (`to` with 1 attr, `enc` with 2) stay inline, while stanza roots with 3+ attrs spill once per stanza. A larger inline array (4) grows `Node` from ~184 bytes to ~296 bytes — moving nodes through children `Vec`s then costs more than the spared spills save.
+
+**Impact (iai-callgrind vs. `Vec` backing):**
+- `marshal_allocating` (typical stanza): −6.6% instructions
+- `marshal_many_children_allocating` (2048 children): −9.9% instructions, −25% RAM hits
+- Allocation count per DM stanza: −27% (15→11 allocs); per group stanza with 800 participants: −40% (4012→2412 allocs)
+
+The `spilled()` method on `SmallVec` reports whether a given node's attrs overflowed to the heap — useful in allocation tests (see `wacore/binary/tests/attrs_inline_alloc.rs`).
+
+Location: `wacore/binary/src/node.rs`, `wacore/binary/tests/attrs_inline_alloc.rs`
 
 ## Common protocol patterns
 

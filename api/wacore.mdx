@@ -176,7 +176,7 @@ pub trait Runtime: Send + Sync + 'static {
 ```
 
 | Method | Purpose |
-|--------|---------|
+|--------|--------|
 | `spawn` | Spawn a background task, returning an `AbortHandle` for cancellation. The handle is `#[must_use]` — dropping it aborts the task. Call `.detach()` for fire-and-forget tasks |
 | `sleep` | Return a future that completes after a duration |
 | `spawn_blocking` | Offload a blocking closure to a thread pool |
@@ -444,7 +444,7 @@ let decoded = unmarshal_ref(&bytes)?;
 **Key exports:**
 - `CompactString` - Re-export of `compact_str::CompactString`, used by `Jid.user`, `NodeValue::String`, and `NodeContent::String`
 - `jid::{Jid, JidRef, Server, JidExt}` - WhatsApp JID types. `Server` is an enum (`#[repr(u8)]`) with variants for all known WhatsApp server domains (`Pn`, `Lid`, `Group`, `Broadcast`, `Newsletter`, `Hosted`, `HostedLid`, `Messenger`, `Interop`, `Bot`, `Legacy`). `JidExt` provides helper methods (`is_group()`, `is_newsletter()`, etc.) for both owned and borrowed JID types
-- `node::{Node, NodeRef, NodeStr, NodeValue, ValueRef, OwnedNodeRef}` - Protocol node types. `Node` (owned) for building outgoing stanzas, `NodeRef` (borrowed) for reading received stanzas, `NodeStr` for borrowed-or-inline decoded strings, `OwnedNodeRef` for yoke-based zero-copy self-referential nodes shared as `Arc<OwnedNodeRef>`. The entire `NodeRef` type family (`NodeRef`, `NodeStr`, `ValueRef`, `JidRef`, `NodeContentRef`, `OwnedNodeRef`) implements `serde::Serialize`, producing output identical to their owned counterparts — enabling zero-copy serialization without converting to `Node` first
+- `node::{Node, NodeRef, NodeStr, NodeValue, ValueRef, OwnedNodeRef, AttrsVec}` - Protocol node types. `Node` (owned) for building outgoing stanzas, `NodeRef` (borrowed) for reading received stanzas, `NodeStr` for borrowed-or-inline decoded strings, `OwnedNodeRef` for yoke-based zero-copy self-referential nodes shared as `Arc<OwnedNodeRef>`. `AttrsVec` is `SmallVec<[(Cow<'static, str>, NodeValue); 2]>`, the inline-capable backing store for `Attrs` (≤2 attrs stay on the stack; see [Binary Protocol](/advanced/binary-protocol#inline-attribute-storage)). The entire `NodeRef` type family (`NodeRef`, `NodeStr`, `ValueRef`, `JidRef`, `NodeContentRef`, `OwnedNodeRef`) implements `serde::Serialize`, producing output identical to their owned counterparts — enabling zero-copy serialization without converting to `Node` first
 - `builder::NodeBuilder` - Fluent node builder with `new(&'static str)` / `new_dynamic(String)`, `attr()`, `jid_attr()`, `children()`, `bytes()`, `string_content()`, and `apply_content()` chaining methods
 - `marshal::*` - Binary marshaling functions
 - `attrs::{AttrParser, AttrParserRef}` - Attribute parsing utilities for owned `Node` and borrowed `NodeRef` respectively
@@ -638,7 +638,7 @@ Running the protocol benchmarks requires:
 #### Available suites
 
 | Suite | Location | What it measures |
-|-------|----------|-----------------|
+|-------|----------|------------------|
 | `send_receive_benchmark` | `wacore/benches/send_receive_benchmark.rs` | Full send/receive pipeline — DM send, DM receive, group send (steady-state skmsg), group send with SKDM distribution (10/50/256 participants), and group receive. Uses real `prepare_peer_stanza` and `prepare_group_stanza` functions with in-memory Signal stores |
 | `reporting_token_benchmark` | `wacore/benches/reporting_token_benchmark.rs` | Reporting token generation — key derivation, token calculation, and full generation pipeline for simple and extended messages |
 | `binary_benchmark` | `wacore/binary/benches/binary_benchmark.rs` | Binary protocol encoding/decoding — marshal and unmarshal operations for various node sizes and structures |
@@ -666,7 +666,7 @@ The `bench-integration` test suite (`tests/bench-integration/`) measures real-wo
 #### Scenarios
 
 | Scenario | What it measures |
-|----------|-----------------|
+|----------|------------------|
 | `connect_to_ready` | Client creation through `Connected` event — includes transport connect, Noise handshake, and initial sync |
 | `send_message` | Single DM send (sender side) — protobuf encoding, Signal encrypt, node marshal, and WebSocket write. Also measures amortized cost over 20 consecutive sends |
 | `send_and_receive_message` | Full round-trip — send a DM and wait for delivery on the receiver. Also measures amortized cost over 20 round-trips |
@@ -703,6 +703,7 @@ The library includes several allocation-reduction strategies that the integratio
 - **Zero-copy node decoding** — Received stanzas are decoded as `NodeRef` borrowing directly from the network buffer via `OwnedNodeRef` (yoke-based self-referential type), avoiding cloning string/byte payloads during decode
 - **`Arc<str>` sharing in `LidPnEntry`** — `LidPnEntry.lid` and `.phone_number` are `Arc<str>` instead of `String`. `LidPnCache` reuses the entry's own `Arc`s as the map keys for both lookup directions, so each identifier is allocated once per mapping rather than once as key and again inside the entry. Because this cache is unbounded by design, the saving compounds over the contact base (~40–80 B per mapping, ~0.5–1 MB for 10k contacts). Constructors accept `impl Into<Arc<str>>`, so `String` and `&str` call sites are unaffected; direct field reads return `Arc<str>` — use `&*entry.lid` for `&str` comparisons. Wire/persistence format is unchanged.
 - **Pre-allocated buffers** — History sync decompression uses a `compressed_size_hint` with a 4x multiplier for buffer pre-allocation, reducing `Vec` reallocation during decompression
+- **Inline attribute storage** — `Attrs` uses `AttrsVec` (`SmallVec<[...; 2]>`) instead of `Vec`. Nodes with ≤2 attributes (the common per-recipient fanout shapes `to` and `enc`) keep their attributes on the stack alongside the node, eliminating the per-node allocation for attribute storage. Allocation count: −27% per DM stanza (15→11 allocs); −40% for group fanout with 800 participants (4012→2412 allocs)
 
 ### CI integration
 

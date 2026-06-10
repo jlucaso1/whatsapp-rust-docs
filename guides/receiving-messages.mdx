@@ -98,11 +98,18 @@ if let Some(expiration) = info.ephemeral_expiration {
 if let Some(request_id) = &info.unavailable_request_id {
     println!("Recovered via PDO request: {}", request_id);
 }
+
+// Check if this is a decrypted channel comment (CAG threaded reply)
+if let Some(parent_key) = &info.comment_target {
+    println!("Comment on post: {:?}", parent_key.id);
+}
 ```
 
 The `ephemeral_expiration` field contains the disappearing messages timer in seconds, extracted from the message's `contextInfo.expiration`. This tells you how long the message will be visible before it auto-deletes. Use this value when sending replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
 
 The `unavailable_request_id` field is set when a message was recovered via PDO rather than normal decryption. It contains the PDO request message ID, which you can use to correlate recovered messages with the original `UndecryptableMessage` event.
+
+The `comment_target` field is set when the dispatched message is a decrypted CAG channel comment. It contains the `MessageKey` of the parent post. The inner `Message` proto has no slot for the threading link, so it surfaces here instead. See [Channel comments](#channel-comments) below.
 
 ### Message content extraction
 
@@ -217,12 +224,16 @@ See [Media Handling Guide](/guides/media-handling) for download details.
 
 ### Reactions
 
+Incoming reactions — including encrypted CAG reactions — are dispatched in the same `reaction_message` shape. Encrypted reactions from Community Announcement Groups are decrypted transparently on the receive path; the `key` field is filled from the envelope's `target_message_key` before dispatch.
+
 ```rust
 if let Some(reaction) = &message.reaction_message {
     if let Some(emoji) = &reaction.text {
-        println!("👍 Reaction: {}", emoji);
-    } else {
-        println!("Reaction removed");
+        if emoji.is_empty() {
+            println!("Reaction removed");
+        } else {
+            println!("👍 Reaction: {}", emoji);
+        }
     }
     
     if let Some(key) = &reaction.key {
@@ -230,6 +241,26 @@ if let Some(reaction) = &message.reaction_message {
     }
 }
 ```
+
+### Channel Comments
+
+Encrypted channel comments from Community Announcement Groups are decrypted transparently and dispatched as `Event::Message` carrying the comment body. The parent post key surfaces on `MessageInfo::comment_target` (the inner `Message` proto has no slot for the threading link):
+
+```rust
+Event::Message(msg, info) => {
+    if let Some(parent_key) = &info.comment_target {
+        // This Event::Message is a decrypted CAG channel comment.
+        println!("Comment on post: {:?}", parent_key.id);
+        println!("Post author:     {:?}", parent_key.participant);
+
+        if let Some(text) = msg.text_content() {
+            println!("Comment text: {}", text);
+        }
+    }
+}
+```
+
+The comment's own `messageSecret` (carried in the outer envelope) is persisted under the comment's id and sender, so that future encrypted reactions targeting the comment can be decrypted. `comment_target` is `None` for all other message types.
 
 ### Quoted Messages
 
@@ -685,6 +716,7 @@ Spawn tasks for long-running operations:
 
 ## Next Steps
 
-- [Sending Messages](/guides/sending-messages) - Send text, reactions, and replies
+- [Sending Messages](/guides/sending-messages) - Send text, reactions, channel comments, and replies
 - [Media Handling](/guides/media-handling) - Download and process media
 - [Group Management](/guides/group-management) - Handle group events
+- [Community management](/guides/communities) - CAG reactions and channel comments

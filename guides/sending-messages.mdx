@@ -1,11 +1,11 @@
 ---
 title: Sending Messages
-description: Learn how to send text messages, reactions, quoted replies, album messages, sticker packs, and edit messages in whatsapp-rust
+description: Learn how to send text messages, reactions, channel comments, quoted replies, album messages, sticker packs, and edit messages in whatsapp-rust
 ---
 
 ## Overview
 
-This guide covers sending messages, including text, reactions, quotes, album messages (grouped media), sticker packs, and message editing operations using the whatsapp-rust library.
+This guide covers sending messages, including text, reactions, channel comments, quotes, album messages (grouped media), sticker packs, and message editing operations using the whatsapp-rust library.
 
 ## Sending text messages
 
@@ -193,6 +193,19 @@ if let Some(ctx) = MessageContext::from_event(&event, client) {
 }
 ```
 
+### Reactions in Community Announcement Groups
+
+Community Announcement Groups (CAGs) — the default announcement subgroup of a community — require encrypted reactions. `send_reaction` handles this transparently: it detects CAG chats automatically and sends the reaction as an encrypted `enc_reaction_message` envelope instead of a plaintext stanza.
+
+No change to your call is needed. The only requirement is that the target post's `messageSecret` was captured when the post was received. If it was not captured (for example, `msg_secret_policy` is disabled without a resolver, or the post arrived before the current session), the call returns an error rather than emitting a plaintext reaction the channel would reject.
+
+```rust
+// Works for DMs, regular groups, and CAGs — no API difference.
+client.send_reaction(&cag_jid, target_key, "🔥").await?;
+```
+
+See [Community management — CAG reactions](/guides/communities#community-announcement-group-cag-reactions) for details.
+
 ### Removing a reaction
 
 Pass an empty `emoji` to revoke a previous reaction (matches WhatsApp Web's empty-text-as-revoke semantics):
@@ -204,6 +217,61 @@ client.send_reaction(&chat_jid, target_key, "").await?;
 <Note>
 Newsletter (channel) reactions use a different plaintext stanza format. Use [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) for newsletters instead.
 </Note>
+
+## Channel Comments
+
+Channel comments are encrypted threaded replies under a Community Announcement Group (CAG) post. Use `client.comments()` to send them:
+
+```rust
+use whatsapp_rust::features::Comments;
+
+let parent_key = wa::MessageKey {
+    remote_jid: Some(cag_jid.to_string()),
+    from_me: Some(false),
+    id: Some("3EB0POSTID".to_string()),
+    // participant must be the post author.
+    participant: Some(post_author_jid.to_string()),
+};
+
+// Text comment:
+let result = client.comments()
+    .send_text(&cag_jid, parent_key, "Great post!")
+    .await?;
+println!("Comment sent: {}", result.message_id);
+```
+
+For arbitrary message bodies:
+
+```rust
+let body = wa::Message {
+    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        text: Some("Great post!".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+
+let result = client.comments()
+    .send_message(&cag_jid, parent_key, body)
+    .await?;
+```
+
+The `parent_key.participant` field must identify the post author so receivers can derive the HKDF decryption key from the envelope. When `from_me` is `true` and `participant` is absent the library resolves the author to your own identity.
+
+Incoming encrypted comments are decrypted transparently. The comment body is dispatched as `Event::Message` and the parent post key is available on `MessageInfo::comment_target`:
+
+```rust
+Event::Message(msg, info) => {
+    if let Some(parent_key) = &info.comment_target {
+        println!("Comment on post: {:?}", parent_key.id);
+        if let Some(text) = msg.text_content() {
+            println!("Text: {}", text);
+        }
+    }
+}
+```
+
+See [Community management — Channel comments](/guides/communities#channel-comments) for full details.
 
 ## Editing messages
 
@@ -798,6 +866,8 @@ async fn send_safe_message(
 - **Albums**: Use `album_message` parent + `wrap_as_album_child` for grouped media
 - **Sticker packs**: Use `create_sticker_pack_zip` + `build_sticker_pack_message` with two uploads (ZIP + thumbnail)
 - **Disappearing chats**: Use `send_message_with_options` with `ephemeral_expiration` matching the chat's timer
+- **CAG reactions**: Use `send_reaction` — encryption is applied automatically for CAG chats
+- **Channel comments**: Use `client.comments().send_text()` or `send_message()`
 
 ### Handle message IDs
 
@@ -826,3 +896,4 @@ let key = result.message_key();
 - [Media Handling](/guides/media-handling) - Upload and download media
 - [Polls](/guides/polls) - Create polls and process votes
 - [Group Management](/guides/group-management) - Work with group chats
+- [Community management](/guides/communities) - CAG reactions and channel comments

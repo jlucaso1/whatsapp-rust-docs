@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-10-cag-enc-reactions-comments",
                   "changelog/2026-06-10-hrtb-closures",
                   "changelog/2026-06-10-server-aware-lookup-probe",
                   "changelog/2026-06-10-phash-arena-sort",

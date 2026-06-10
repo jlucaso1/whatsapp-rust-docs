@@ -239,7 +239,8 @@ let target_key = wa::MessageKey {
     participant: Some(post_author_jid.to_string()),
 };
 
-client.send_reaction(&cag_jid, target_key, "🔥").await?;
+// send_reaction takes target_key by value; clone it to reuse for removal.
+client.send_reaction(&cag_jid, target_key.clone(), "🔥").await?;
 
 // Remove a reaction with an empty emoji:
 client.send_reaction(&cag_jid, target_key, "").await?;

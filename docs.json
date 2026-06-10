@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-10-server-aware-lookup-probe",
                   "changelog/2026-06-10-phash-arena-sort",
                   "changelog/2026-06-10-attrs-inline-smallvec",
                   "changelog/2026-06-09-error-strictness",

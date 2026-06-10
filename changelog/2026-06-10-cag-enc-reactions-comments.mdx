@@ -85,7 +85,7 @@ let info = MessageInfo {
 };
 ```
 
-**`GroupInfo`** gains `is_community_announce: Option<bool>`. Blobs persisted before this field deserialize with `None` ("unknown") and trigger one metadata re-query when the value is first needed. No migration is required — existing serialized blobs remain valid.
+**`GroupInfo`** gains `is_community_announce: Option<bool>`. Blobs persisted before this field was added will deserialize with `None` ("unknown") and trigger one metadata re-query when the value is first needed. No migration is required — existing serialized blobs remain valid.
 
 **`SecretEncKind`** gains two variants that must be covered in exhaustive `match` arms:
 

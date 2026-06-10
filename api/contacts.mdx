@@ -245,6 +245,10 @@ The implementation automatically:
 - Includes tokens in profile picture requests
 - Skips tokens for groups and newsletters
 
+## Async compatibility
+
+`is_on_whatsapp` and `get_user_info` work correctly when called from `#[async_trait]` implementations or any context that boxes the returned future (`Box<dyn Future + Send>`). Earlier versions produced a compile error (`"implementation of FnOnce is not general enough"`) that could not be worked around in user code. Fixed in [#826](https://github.com/oxidezap/whatsapp-rust/pull/826) with no API changes.
+
 ## Error handling
 
 All methods return `Result<T, anyhow::Error>`. Common errors:

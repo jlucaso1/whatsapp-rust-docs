@@ -1,0 +1,18 @@
+---
+title: "June 10, 2026 — App state: batch previous-MAC prefetch in build_patch"
+description: "build_patch now fetches all previous value MACs in a single get_mutation_macs call, matching the inbound patch path and eliminating a latent N+1 query pattern."
+---
+
+## Performance
+
+**App state: batch previous-MAC prefetch in `build_patch` ([#821](https://github.com/oxidezap/whatsapp-rust/pull/821))**
+
+`build_patch` prefetched the previous value MAC for each outbound mutation by calling `get_mutation_mac` (singular) in a loop — one backend round-trip per mutation. The inbound `apply_patch` path had the same N+1 shape and was fixed in [#687](https://github.com/oxidezap/whatsapp-rust/pull/687) to use the batched `get_mutation_macs` (one query with a chunked `IN` clause). The outbound builder was never migrated.
+
+`build_patch` now mirrors the inbound path: it collects and deduplicates the index MACs for all mutations, then fetches all previous value MACs with a single `get_mutation_macs` call.
+
+Every current caller passes a single-element mutation vector, so this removes a latent N+1 rather than an active hot spot. The change future-proofs multi-mutation patches and makes both the inbound and outbound paths consistent.
+
+## Breaking changes
+
+None. `build_patch` keeps its existing signature. Custom `AppSyncStore` backends that override `get_mutation_macs` with an efficient batched implementation will now benefit on the outbound path as well as the inbound path.

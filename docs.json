@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-10-build-patch-batch-macs",
                   "changelog/2026-06-10-attrs-inline-smallvec",
                   "changelog/2026-06-09-error-strictness",
                   "changelog/2026-06-09-arc-device-snapshot",

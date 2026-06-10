@@ -238,6 +238,10 @@ pub trait SignalStore: Send + Sync {
     async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>>; // has default impl looping over load_prekey
 
     async fn remove_prekey(&self, id: u32) -> Result<()>;
+    /// Mark already-stored prekeys as uploaded. UPDATE semantics — a key
+    /// consumed (deleted) between the upload snapshot and this call must stay
+    /// deleted, never resurrected by an upsert.
+    async fn mark_prekeys_uploaded(&self, ids: &[u32]) -> Result<()>;
     async fn get_max_prekey_id(&self) -> Result<u32>;
 
     // Signed PreKey Operations
@@ -597,7 +601,9 @@ pub struct Device {
     #[serde(default)]
     pub props_hash: Option<String>,          // A/B experiment tracking
     #[serde(default)]
-    pub next_pre_key_id: u32,               // Monotonic counter for prekey IDs
+    pub next_pre_key_id: u32,               // Monotonic counter; advances at generation time (WA Web NEXT_PK_ID)
+    #[serde(default)]
+    pub first_unupload_pre_key_id: u32,     // First generated-but-unuploaded key (WA Web FIRST_UNUPLOAD_PK_ID); 0 = unset/legacy
     #[serde(default)]
     pub server_has_prekeys: bool,            // Whether server has prekeys uploaded
     #[serde(default)]
@@ -667,6 +673,7 @@ CREATE TABLE device (
     edge_routing_info BLOB,
     props_hash TEXT,
     next_pre_key_id INTEGER NOT NULL DEFAULT 0,
+    first_unupload_pre_key_id INTEGER NOT NULL DEFAULT 0,  -- WA Web FIRST_UNUPLOAD_PK_ID; 0 = unset/legacy
     server_has_prekeys BOOLEAN NOT NULL DEFAULT 0,
     nct_salt BLOB,
     server_cert_chain BLOB,  -- Cached two-cert chain for Noise IK resume
@@ -835,7 +842,13 @@ pub enum DeviceCommand {
     SetPushName(String),
     SetPlatform(String),
     SetAccount(Option<wa::AdvSignedDeviceIdentity>),
-    SetNextPreKeyId(u32),
+    /// Update both prekey watermarks atomically. Both must always move
+    /// together — split updates are how the pre-watermark model lost track
+    /// of generated keys. Replaces the removed `SetNextPreKeyId` variant.
+    SetPreKeyWatermarks {
+        next_pre_key_id: u32,
+        first_unupload_pre_key_id: u32,
+    },
     SetNctSalt(Option<Vec<u8>>),
     SetNctSaltFromHistorySync(Vec<u8>),
     // ... more commands
@@ -861,6 +874,10 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::SetAccount(account) => {
             device.account = account;
+        }
+        DeviceCommand::SetPreKeyWatermarks { next_pre_key_id, first_unupload_pre_key_id } => {
+            device.next_pre_key_id = next_pre_key_id;
+            device.first_unupload_pre_key_id = first_unupload_pre_key_id;
         }
         // ...
     }

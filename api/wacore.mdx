@@ -505,7 +505,7 @@ use wacore::libsignal::{
   - `Aes256GcmKey` — connection-lifetime pre-keyed AEAD state that holds the expanded AES cipher and GHASH subkey
   - `TransportAead` — pluggable AEAD interface used by `NoiseCipher`
   - `transport_aead(key: &[u8; 32])` — creates a `Box<dyn TransportAead>` from the active `SignalCryptoProvider`
-  - `SignalCryptoProvider::transport_aead` — override to precompute key-dependent state once per connection
+  - `SignalCryptoProvider::transport_aead` — optional method with a default implementation that preserves existing behavior; override only to precompute key-dependent state once per connection for improved performance
 - `protocol` - Protocol message types
 - `store` - Store trait definitions
 
@@ -745,7 +745,7 @@ The library includes several allocation-reduction strategies that the integratio
 - **Inline attribute storage** — `Attrs` uses `AttrsVec` (`SmallVec<[...; 2]>`) instead of `Vec`. Nodes with ≤2 attributes (the common per-recipient fanout shapes `to` and `enc`) keep their attributes on the stack alongside the node, eliminating the per-node allocation for attribute storage. Allocation count: −27% per DM stanza (15→11 allocs); −40% for group fanout with 800 participants (4012→2412 allocs)
 - **Secret-presence pre-scan in history sync** — before prost decodes a `HistorySyncMsg` (30+ fields, String allocations), a shallow varint walk checks whether the message carries `message_secret` at any level. Messages without a secret are skipped entirely. Bench (20k messages, secret-dense fixture): −29.5% allocations (56,020 → 39,520), −4.3% allocated bytes. Production blobs are secret-sparse so the saving is larger in practice
 - **Inline storage in `HistoryMsgSecretRecord`** — `chat_id` is `Arc<str>` (allocated once per conversation, shared across all records in that conversation), `msg_id` is `CompactString` (inline for typical 20–22 char WA IDs on 64-bit targets; smaller inline limit on 32-bit/wasm32), and `secret` is `SecretBytes` (inline for secrets ≤32 bytes, heap for larger)
-- **Pre-keyed Noise transport cipher** — `NoiseCipher` holds a `Box<dyn TransportAead>` backed by a pre-keyed `Aes256GcmKey` (via `RustCryptoProvider`), computing the AES key schedule and GHASH subkey once per connection instead of on every frame. Decrypt improves ~20% on 1500-byte stanzas (AES-NI host); encrypt improves ~7%. See [changelog](/changelog/2026-06-11-noise-prekeyed-gcm).
+- **Pre-keyed Noise transport cipher** — `NoiseCipher` holds a `Box<dyn TransportAead>` backed by a pre-keyed `Aes256GcmKey` (via `RustCryptoProvider`). The AES key schedule and GHASH subkey are computed once per connection instead of on every frame. Decrypt improves ~20% on 1500-byte stanzas (AES-NI host); encrypt improves ~7%. See [changelog](/changelog/2026-06-11-noise-prekeyed-gcm).
 
 ### CI integration
 

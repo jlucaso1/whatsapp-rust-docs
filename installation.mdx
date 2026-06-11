@@ -210,7 +210,7 @@ The build process:
 
 1. Uses `rust:alpine` with [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) (pinned to a fixed release with `--locked`) for efficient, reproducible dependency caching
 2. Detects the host target triple at build time — `docker buildx build --platform linux/arm64` produces native binaries without Dockerfile changes
-3. Enables `-Zshare-generics=y` and recompiles `std` with the release profile (`-Zbuild-std`) so it participates in fat LTO; together these reduce `.text` by ~15% compared to a plain `cargo build --release`
+3. Enables `-Zshare-generics=y` (−5.6% `.text`) and recompiles `std` with the release profile (`-Zbuild-std`, −~300 KiB more) so it participates in fat LTO — together these two flags account for roughly 8% of the cumulative 15% reduction achieved across the full optimization series
 4. Caches dependency compilation via `cargo chef cook --target` in a separate layer for fast rebuilds
 5. Produces a final image from `scratch` containing only the binary
 

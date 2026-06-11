@@ -28,7 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Scan this QR code with WhatsApp:\n{code}");
         })
         .on_message(|ctx| async move {
-            println!("Message from {}: {:?}", ctx.info.source.sender, ctx.message.text_content());
+            if ctx.message.text_content() == Some("ping") {
+                if let Err(e) = ctx.reply("pong").await {
+                    eprintln!("Failed to reply: {e}");
+                }
+            }
         })
         .build()
         .await?;

@@ -35,6 +35,7 @@ The same holds for git consumers — no need to pin every sibling crate:
 ```toml Cargo.toml
 [dependencies]
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
 If you need to declare a sibling crate explicitly (for example to enable a crate-specific feature flag), you can still add it individually. The full multi-crate form:

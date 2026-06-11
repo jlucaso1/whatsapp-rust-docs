@@ -89,7 +89,7 @@ impl SignalCryptoProvider for MyProvider {
 
 **`IkServerHelloOutcome::Continue` is now `Box<IkHandshakeOutcome>` (`wacore-noise`)**
 
-`NoiseCipher` now stores the `Aes256GcmKey` inline (round keys live in the struct), making it significantly larger. Clippy's `large_enum_variant` lint requires boxing the `Continue` variant to keep the enum balanced. Match arms that bind the payload by value must dereference the box:
+`NoiseCipher` now holds a `Box<dyn TransportAead>` instead of a bare `[u8; 32]` key. `IkHandshakeOutcome` contains two `NoiseCipher` fields; with `Fallback` already boxed behind a pointer, clippy's `large_enum_variant` lint flagged the unboxed `Continue` variant as oversized. Match arms that bind the payload by value must dereference the box:
 
 ```rust
 // Before

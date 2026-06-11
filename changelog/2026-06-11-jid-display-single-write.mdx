@@ -1,6 +1,6 @@
 ---
 title: "June 11, 2026 — Binary: Jid::Display emits a single write_str"
-description: "Jid and JidRef Display now render into a 64-byte stack buffer and emit a single write_str, so ToString allocates exactly once. jid.to_string() median drops from 176.7 ns to 69.7 ns."
+description: "Jid and JidRef Display now render into a 64-byte stack buffer and emit a single write_str, so ToString allocates exactly once for typical JIDs. jid.to_string() median drops from 176.7 ns to 69.7 ns."
 ---
 
 ## Performance
@@ -9,7 +9,7 @@ description: "Jid and JidRef Display now render into a 64-byte stack buffer and 
 
 `jid.to_string()` previously paid one `malloc` plus a realloc chain: `Display` wrote up to seven fragments (`user`, `.`, `agent`, `:`, `device`, `@`, `server`) into the initially-empty `String`, growing the buffer piece by piece. This ran on every `MessageKey` build, receipt, stanza attribute write, and PDO key — making it a consistent hot-path allocator.
 
-`Display` now writes the JID into a 64-byte `[u8; 64]` stack buffer first and emits a single `write_str` to the formatter. A `ToString`-backed `String` therefore calls `reserve` exactly once at the final length with no reallocation. JIDs with unusually long user parts (rare in practice) exceed the 64-byte budget and fall back to the original fragment-by-fragment path, keeping behavior identical for all inputs.
+`Display` now writes the JID into a 64-byte `[u8; 64]` stack buffer first and emits a single `write_str` to the formatter. When the JID fits in the stack buffer (the common case), a `ToString`-backed `String` calls `reserve` exactly once at the final length with no reallocation. JIDs with unusually long user parts (rare in practice) exceed the 64-byte budget and fall back to the original fragment-by-fragment path, keeping behavior identical for all inputs.
 
 `format!` and log sites also benefit: one `write_str` into the format buffer instead of seven, while padding and width specifiers work exactly as before.
 

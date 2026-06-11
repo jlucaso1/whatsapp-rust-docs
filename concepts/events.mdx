@@ -2243,11 +2243,11 @@ Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc
 .on_event(|event, client| async move {
     // Only handle events you care about
     match &*event {
-        Event::Message(msg, info) if !info.source.is_from_me => {
-            // Only handle messages from others
-        }
         Event::Message(msg, info) if info.source.is_group => {
             // Only handle group messages
+        }
+        Event::Message(msg, info) if !info.source.is_from_me => {
+            // Only handle messages from others
         }
         _ => {}
     }

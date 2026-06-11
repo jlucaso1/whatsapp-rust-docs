@@ -261,12 +261,15 @@ On WASM targets (`target_arch = "wasm32"`), all `Send` bounds are automatically 
 
 ```rust
 pub struct HistoryMsgSecretRecord {
-    pub chat_id: Arc<str>,       // shared per conversation
-    pub msg_id: CompactString,   // inline for typical 20–22 char WA IDs
-    pub secret: SecretBytes,     // inline ≤32 bytes, heap for larger
-    pub is_forwarded: bool,
-    pub is_poll: bool,
-    pub is_bot: bool,
+    pub chat_id: Arc<str>,                  // shared per conversation
+    pub from_me: bool,
+    pub key_participant: Option<String>,
+    pub web_msg_participant: Option<String>,
+    pub msg_id: CompactString,              // inline for typical 20–22 char WA IDs
+    pub secret: SecretBytes,                // inline ≤32 bytes, heap for larger
+    pub timestamp: Option<u64>,
+    pub is_poll_or_event: bool,
+    pub is_bot_invocation: bool,
 }
 ```
 

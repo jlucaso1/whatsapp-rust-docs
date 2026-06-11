@@ -843,6 +843,7 @@ pub struct CacheEntryConfig {
 | `recent_messages` | 5 minutes | 0 (disabled) | Optional L1 in-memory cache for sent messages (retry support) |
 | `message_retry_counts` | 5 minutes | 1,000 | Retry count tracking |
 | `pdo_pending_requests` | 30 seconds | 500 | PDO pending requests |
+| `pdo_requested` | 24 hours | 512 | PDO placeholder-resend memo — at-most-once per message |
 | `sender_key_devices_cache` | 1 hour (TTI) | 500 | Per-group SKDM distribution state |
 
 <Note>

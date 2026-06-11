@@ -205,10 +205,11 @@ docker build -t whatsapp-rust .
 
 O processo de build:
 
-1. Usa `rust:alpine` com [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) para cache eficiente de dependências
-2. Compila nativamente contra musl no Alpine para um binário totalmente estático
-3. Faz cache da compilação de dependências via `cargo chef cook` em uma camada separada para rebuilds rápidos
-4. Produz uma imagem final a partir de `scratch` contendo apenas o binário
+1. Usa `rust:alpine` com [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) (fixado em uma versão específica com `--locked`) para cache eficiente e reproduzível de dependências
+2. Detecta a triple de alvo do host em tempo de build — `docker buildx build --platform linux/arm64` produz binários nativos sem alterações no Dockerfile
+3. Habilita `-Zshare-generics=y` (−5,6% no `.text`) e recompila `std` com o perfil de release (`-Zbuild-std`, −~300 KiB adicionais) para participar do LTO gordo — juntas, essas duas flags reduzem o `.text` em cerca de 8%; a série completa de otimizações (#842–#845) alcançou 15% no total
+4. Faz cache da compilação de dependências via `cargo chef cook --target` em uma camada separada para rebuilds rápidos
+5. Produz uma imagem final a partir de `scratch` contendo apenas o binário
 
 ### Execute o contêiner
 
@@ -229,7 +230,7 @@ O contêiner suporta desligamento gracioso sem configuração adicional. Quando 
 Como a imagem é construída a partir de `scratch`, o PID 1 é o próprio binário. Ele lida com sinais diretamente — nenhum sistema init como `tini` é necessário.
 
 <Note>
-  O Dockerfile usa `rust:alpine`, que constrói para o alvo musl da arquitetura do host. Para compilação cruzada para outras arquiteturas, você precisa modificar a imagem base e a configuração de build no Dockerfile.
+  O Dockerfile detecta a triple de alvo do host em tempo de build via `rustc -vV`, então `docker buildx build --platform linux/arm64` (ou qualquer outra plataforma suportada) funciona nativamente sem modificar o Dockerfile. As flags de build exclusivas do nightly (`-Zshare-generics`, `-Zbuild-std`) se aplicam apenas dentro desta imagem — consumidores stable e invocações locais de `cargo build` não são afetados.
 </Note>
 
 ## Próximos passos

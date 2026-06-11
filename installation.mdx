@@ -208,10 +208,11 @@ docker build -t whatsapp-rust .
 
 The build process:
 
-1. Uses `rust:alpine` with [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) for efficient dependency caching
-2. Compiles natively against musl on Alpine for a fully static binary
-3. Caches dependency compilation via `cargo chef cook` in a separate layer for fast rebuilds
-4. Produces a final image from `scratch` containing only the binary
+1. Uses `rust:alpine` with [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) (pinned to a fixed release with `--locked`) for efficient, reproducible dependency caching
+2. Detects the host target triple at build time — `docker buildx build --platform linux/arm64` produces native binaries without Dockerfile changes
+3. Enables `-Zshare-generics=y` (−5.6% `.text`) and recompiles `std` with the release profile (`-Zbuild-std`, −~300 KiB more) so it participates in fat LTO — together these two flags reduce `.text` by roughly 8%; the full optimization series (#842–#845) achieved 15% total
+4. Caches dependency compilation via `cargo chef cook --target` in a separate layer for fast rebuilds
+5. Produces a final image from `scratch` containing only the binary
 
 ### Run the container
 
@@ -232,7 +233,7 @@ The container supports graceful shutdown out of the box. When the `signal` featu
 Since the image is built from `scratch`, PID 1 is the binary itself. It handles signals directly — no init system like `tini` is needed.
 
 <Note>
-  The Dockerfile uses `rust:alpine` which builds for the host architecture's musl target. For cross-compilation to other architectures, you need to modify the base image and build configuration in the Dockerfile.
+  The Dockerfile detects the host target triple at build time via `rustc -vV`, so `docker buildx build --platform linux/arm64` (or any other supported platform) works natively without modifying the Dockerfile. The nightly-only build flags (`-Zshare-generics`, `-Zbuild-std`) apply only inside this image — stable consumers and local `cargo build` invocations are unaffected.
 </Note>
 
 ## Next steps

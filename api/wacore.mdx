@@ -501,7 +501,11 @@ use wacore::libsignal::{
 
 **Key modules:**
 - `core` - Core session cipher logic
-- `crypto` - Cryptographic primitives (HKDF, HMAC, AES-CBC, AES-GCM). Public exports include `Aes256GcmKey` (connection-lifetime pre-keyed AEAD state; holds the expanded AES cipher and GHASH subkey for the Noise transport layer), `TransportAead` (pluggable AEAD interface used by `NoiseCipher`), `transport_aead(key: &[u8; 32])` (creates a `Box<dyn TransportAead>` from the active `SignalCryptoProvider`), and `SignalCryptoProvider` (override `transport_aead` to precompute key-dependent state once per connection)
+- `crypto` - Cryptographic primitives (HKDF, HMAC, AES-CBC, AES-GCM). Noise transport exports:
+  - `Aes256GcmKey` — connection-lifetime pre-keyed AEAD state that holds the expanded AES cipher and GHASH subkey
+  - `TransportAead` — pluggable AEAD interface used by `NoiseCipher`
+  - `transport_aead(key: &[u8; 32])` — creates a `Box<dyn TransportAead>` from the active `SignalCryptoProvider`
+  - `SignalCryptoProvider::transport_aead` — override to precompute key-dependent state once per connection
 - `protocol` - Protocol message types
 - `store` - Store trait definitions
 
@@ -532,7 +536,7 @@ use wacore::noise::{
 - `XxHandshakeState` - Three-message XX handshake (cold start / fallback)
 - `IkHandshakeState` - Resumed IK handshake using a cached server static
 - `XxFallbackHandshakeState` - Server-driven recovery from a stale IK static, continuing the existing transcript
-- `IkServerHelloOutcome` - Either `Continue(Box<IkHandshakeOutcome>)` (IK succeeds; `Continue` is boxed because `IkHandshakeOutcome` holds two `NoiseCipher` fields, making it oversized relative to the already-boxed `Fallback` variant — clippy's `large_enum_variant` lint) or `Fallback` (pivot into XXfallback)
+- `IkServerHelloOutcome` - Either `Continue(Box<IkHandshakeOutcome>)` when IK succeeds or `Fallback` to pivot into XXfallback. `Continue` boxes its payload because `IkHandshakeOutcome` holds two `NoiseCipher` fields, making it oversized relative to the already-boxed `Fallback` variant (clippy's `large_enum_variant` lint).
 - `VerifiedServerCertChain` - Output of XX/XXfallback; persisted by the client to enable IK on the next connect
 - `HandshakeUtils` - Protocol message building/parsing
 - `framing` - WebSocket frame encoding

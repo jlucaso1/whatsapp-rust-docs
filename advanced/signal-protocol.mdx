@@ -1432,12 +1432,12 @@ Location: `wacore/src/types/jid.rs:33-51`
 
 ### Sender key signing cache
 
-`SenderKeyState` memoizes the parsed signing `PrivateKey` in a `OnceLock<PrivateKey>` field alongside the protobuf state. The key is pre-warmed via `PrivateKey::precompute_signing_cache()` before memoization — clones of an initialized `OnceLock` carry its contents, so every caller receives a warm clone and skips the XEdDSA scalar + Edwards basepoint re-derivation.
+`SenderKeyState` memoizes the parsed signing `PrivateKey` in a `OnceLock<PrivateKey>` field alongside the protobuf state. The implementation pre-warms the key via `PrivateKey::precompute_signing_cache()` before memoization — clones of an initialized `OnceLock` carry its contents, so every caller receives a warm clone and skips the XEdDSA scalar + Edwards basepoint re-derivation.
 
 **Population points:**
 
-- **`SenderKeyState::new`** — the caller-supplied key is inserted directly; no re-deserialization
-- **`signing_key_private()` on first call after a cold load** — the key is deserialized, warmed, then memoized; a benign concurrent-first race computes equal values and `OnceLock` discards the loser silently
+- **`SenderKeyState::new`** — inserts the caller-supplied key directly; no re-deserialization
+- **`signing_key_private()` on first call after a cold load** — deserializes, warms, then memoizes the key; a benign concurrent-first race computes equal values and `OnceLock` discards the loser silently
 
 The memo is never serialized (protobuf surface unchanged). After a cold database load the memo is absent and rebuilds on the first `signing_key_private()` call. Since the moka record cache writes the live `SenderKeyState` back after every send, the warm memo effectively persists for the cache lifetime.
 

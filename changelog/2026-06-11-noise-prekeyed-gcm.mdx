@@ -105,4 +105,4 @@ IkServerHelloOutcome::Continue(boxed) => {
 }
 ```
 
-Match arms that forward the `Continue` value without inspecting its fields, or that use wildcard patterns, are unaffected.
+Match arms using wildcard patterns, or that keep the whole `Continue(boxed)` value without extracting the inner type, are unaffected. Arms that bind the payload and pass it to a callee expecting `IkHandshakeOutcome` must either dereference the box (`*boxed`) or update the callee to accept `Box<IkHandshakeOutcome>`.

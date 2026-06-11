@@ -1512,11 +1512,12 @@ See [Labels](/api/labels) for the outbound API that emits these events on other 
 Event::HistorySync(Box<LazyHistorySync>)
 ```
 
-**LazyHistorySync** wraps the decompressed protobuf bytes of a history sync blob and only decodes the full `wa::HistorySync` proto on demand. Cheap metadata (`sync_type`, `chunk_order`, `progress`) is available without decoding, so you can filter or route events without paying the decode cost.
+**LazyHistorySync** holds the original compressed zlib payload and only decodes the full `wa::HistorySync` proto on demand. Cheap metadata (`sync_type`, `chunk_order`, `progress`) is available without decoding. Queued events are ~10× smaller than the decompressed form — a typical `InitialBootstrap` chunk is 5–20 MB inflated, ~1–2 MB compressed.
 
 ```rust
 pub struct LazyHistorySync {
-    raw_bytes: Bytes,
+    compressed: Bytes,         // original zlib payload (reference-counted)
+    decompressed_size: usize,  // exact inflated byte count
     sync_type: i32,
     chunk_order: Option<u32>,
     progress: Option<u32>,
@@ -1541,32 +1542,46 @@ impl LazyHistorySync {
     /// `None`.
     pub fn peer_data_request_session_id(&self) -> Option<&str>;
 
-    /// Full decode of the history sync proto, cached via OnceLock.
-    /// Returns `None` if decoding fails.
-    pub fn get(&self) -> Option<&wa::HistorySync>;
+    /// Exact inflated byte count (known without decompressing).
+    pub fn decompressed_size(&self) -> usize;
 
-    /// Access the raw decompressed protobuf bytes for custom/partial decoding.
-    pub fn raw_bytes(&self) -> &[u8];
+    /// The stored compressed bytes (reference-counted, zero-copy).
+    pub fn compressed_bytes(&self) -> &Bytes;
+
+    /// Inflate the payload into a fresh buffer on each call (no caching).
+    /// Use `get()` for repeated full-proto access.
+    pub fn decompress(&self) -> std::io::Result<Bytes>;
+
+    /// Streaming reader: yields one conversation at a time with bounded
+    /// peak memory. See the `HistorySyncStream` section below.
+    pub fn stream(&self) -> HistorySyncStream<'_>;
+
+    /// Full decode of the history sync proto, cached via OnceLock.
+    /// Returns `None` if decoding fails. The compressed payload stays
+    /// accessible after this call — `compressed_bytes()`, `decompress()`,
+    /// and `stream()` all keep working.
+    pub fn get(&self) -> Option<&wa::HistorySync>;
 }
 ```
 
 **Key characteristics:**
 
 - **Metadata without decoding** — `sync_type()`, `chunk_order()`, `progress()`, and `peer_data_request_session_id()` are extracted during the streaming phase and available immediately
-- **Parse-once semantics** — `get()` decodes the full proto on first call and caches the result via `OnceLock`. With `Arc<Event>` dispatch, all handlers share the same `LazyHistorySync` instance
-- **Raw bytes access** — `raw_bytes()` provides the decompressed protobuf bytes for custom or partial decoding without triggering the full decode
-- **Cheap clone** — Cloning shares the underlying `Bytes` buffer (reference-counted) but creates a fresh `OnceLock`, so each clone decodes independently
+- **Parse-once semantics** — `get()` decodes the full proto on first call and caches the result via `OnceLock`. With `Arc<Event>` dispatch, all handlers share the same `LazyHistorySync` instance. The compressed payload is never consumed — `get()` can be called multiple times and other accessors still work afterward
+- **Cheap clone** — `Clone` is a refcount bump on the compressed buffer; no decode cache is carried over, so each cloned instance re-inflates independently on demand
+- **Decompress on demand** — `decompress()` re-inflates into a fresh buffer on every call (no caching). Use `get()` for repeated full-proto access, or `stream()` for memory-bounded incremental access
+- **Streaming** — `stream()` yields one conversation at a time via `HistorySyncStream`, keeping peak memory near the largest single conversation rather than the full decompressed size
 - **Serialization** — Only metadata (sync_type, chunk_order, progress, peer_data_request_session_id) is serialized, not the blob
 - **On-demand correlation** — `peer_data_request_session_id()` is set only on syncs the server pushes in response to `fetchMessageHistory` / `requestPlaceholderResend`. Server-initiated syncs (initial bootstrap, recent, push-name) return `None`. Use it to route the blob back to the request that triggered it.
 
-<Warning>
-Full decode via `get()` materializes the proto in memory alongside the raw bytes (~2x decompressed size). For large `InitialBootstrap` blobs, prefer `raw_bytes()` with partial decoding if you only need specific fields.
-</Warning>
+<Tip>
+For large `InitialBootstrap` blobs, prefer `stream()` for incremental processing or `decompress()` for one-shot custom decoding. When `decompressed_size()` is large (e.g. > 256 KB), wrap the call in `tokio::task::spawn_blocking` (cloning `compressed_bytes()` into the closure) to avoid blocking the async runtime.
+</Tip>
 
-**Example:**
+**Example — full decode:**
 ```rust
 Event::HistorySync(lazy_sync) => {
-    println!("History sync type: {}, progress: {:?}", 
+    println!("History sync type: {}, progress: {:?}",
         lazy_sync.sync_type(), lazy_sync.progress());
 
     // Full decode (cached after first call)
@@ -1578,18 +1593,76 @@ Event::HistorySync(lazy_sync) => {
 }
 ```
 
-**Partial decoding with raw bytes:**
+**Example — streaming (memory-bounded):**
 ```rust
 Event::HistorySync(lazy_sync) => {
-    // Decode only what you need from raw protobuf bytes
-    let history = wa::HistorySync::decode(lazy_sync.raw_bytes()).unwrap();
-    println!("Conversations: {}", history.conversations.len());
+    let mut stream = lazy_sync.stream();
+
+    while let Some(conv) = stream.next_conversation()? {
+        println!("Conversation: {:?}", conv.id);
+    }
+
+    // Decode everything that is not a conversation (pushnames, mappings, …)
+    let remainder = stream.remainder()?;
+    println!("Pushnames: {}", remainder.pushnames.len());
+}
+```
+
+**Example — decompress for custom parsing:**
+```rust
+Event::HistorySync(lazy_sync) => {
+    let bytes = lazy_sync.decompress()?;
+    let history = wa::HistorySync::decode(bytes.as_ref())?;
 }
 ```
 
 <Note>
 The blob is only retained in memory if event handlers are registered. If no handlers are listening, the history sync pipeline extracts internal data (pushname, NCT salt, TC tokens) and discards the blob without allocating it for event dispatch.
 </Note>
+
+### HistorySyncStream
+
+`wacore::history_sync::HistorySyncStream` iterates a compressed blob with bounded memory. At any point, only the current inflate window plus the largest single serialized conversation is resident — the full decompressed blob is never materialized.
+
+```rust
+pub struct HistorySyncStream<'a> { /* … */ }
+
+impl<'a> HistorySyncStream<'a> {
+    /// Wrap a compressed blob with a decompressed-size cap.
+    /// Use `MAX_DECOMPRESSED` (64 MB) as the default cap, or
+    /// `LazyHistorySync::decompressed_size()` for an exact-size bound.
+    pub fn new(compressed: &'a [u8], max_decompressed: u64) -> Self;
+
+    /// Advance to the next conversation, returning its raw bytes.
+    /// Returns `Ok(None)` when all conversations are exhausted.
+    pub fn next_conversation_bytes(&mut self) -> Result<Option<&[u8]>, HistorySyncError>;
+
+    /// Advance to the next conversation, decoding it via prost.
+    /// Corrupt entries are skipped and counted via `skipped_conversations()`.
+    pub fn next_conversation(&mut self) -> Result<Option<wa::Conversation>, HistorySyncError>;
+
+    /// Number of conversations skipped due to decode errors.
+    pub fn skipped_conversations(&self) -> usize;
+
+    /// Decode all non-conversation fields (pushnames, mappings, nctSalt, …)
+    /// regardless of wire order.
+    ///
+    /// Must be called after exhausting conversations. Calling it early
+    /// (while unread conversations remain) returns
+    /// `Err(HistorySyncError::UnreadConversations)`.
+    pub fn remainder(self) -> Result<wa::HistorySync, HistorySyncError>;
+}
+
+/// Default decompressed-size cap for `HistorySyncStream::new`.
+pub const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
+```
+
+**Error variants relevant to streaming:**
+
+| Variant | When |
+|---------|------|
+| `HistorySyncError::UnreadConversations` | `remainder()` called before conversations were exhausted |
+| Other I/O variants | Truncated zlib stream, malformed length-delimited field |
 
 ### OfflineSyncPreview
 
@@ -1966,9 +2039,9 @@ Event::DisappearingModeChanged(change) => {
 
 ## Raw stanza events
 
-### RawNode
+### `RawNode`
 
-**Emitted:** For every decoded stanza before router dispatch. This is an opt-in event gated by `Client::set_raw_node_forwarding(true)` — it is not emitted by default to avoid overhead.
+**Emitted:** The raw stanza received from the server. To receive this event, call `client.set_raw_node_forwarding(true)` to enable dispatch and include `EventKind::RawNode` in your handler's `interest()`. When forwarding is disabled or no handler wants `RawNode`, the bus skips this dispatch entirely (zero overhead on the hot path).
 
 ```rust
 Event::RawNode(Arc<OwnedNodeRef>)
@@ -2115,22 +2188,23 @@ Since events are dispatched as `Arc<Event>`, you can forward them to channels wi
 
 ## Performance Optimization
 
-### LazyHistorySync
+### `LazyHistorySync`
 
-**Purpose:** Avoid parsing large protobuf blobs unless needed. The raw decompressed bytes flow through the pipeline as reference-counted `Bytes`, and full protobuf decoding only happens if your code calls `get()`.
+**Purpose:** Avoid parsing large protobuf blobs unless needed. The compressed payload is stored as reference-counted `Bytes`, and full protobuf decoding only happens if your code calls `get()`. See the [HistorySync event reference](#lazyhistorysync) for the complete API.
 
 ```rust
 pub struct LazyHistorySync {
-    raw_bytes: Bytes,                                  // Reference-counted decompressed bytes
-    sync_type: i32,                                    // Cheap metadata
+    compressed: Bytes,         // Original zlib payload (reference-counted, ~10× smaller than decompressed)
+    decompressed_size: usize,  // Exact inflated byte count
+    sync_type: i32,            // Cheap metadata
     chunk_order: Option<u32>,
     progress: Option<u32>,
-    peer_data_request_session_id: Option<String>,      // Set only on ON_DEMAND syncs
-    parsed: OnceLock<Option<Box<wa::HistorySync>>>,    // Decoded on first access
+    peer_data_request_session_id: Option<String>,   // Set only on ON_DEMAND syncs
+    parsed: OnceLock<Option<Box<wa::HistorySync>>>, // Decoded on first access
 }
 ```
 
-**Cloning:** `Bytes` is reference-counted so cloning the raw data is O(1). However, `parsed` uses a plain `OnceLock` (not `Arc<OnceLock>`), so each clone gets its own parse cache and parses independently. This is acceptable because parsing is idempotent and the common case is a single handler.
+**Cloning:** `Clone` is a refcount bump on the compressed buffer. No decode cache is carried over — each clone re-inflates independently on demand.
 
 **Usage:**
 ```rust
@@ -2139,15 +2213,19 @@ Event::HistorySync(lazy_sync) => {
     let sync_type = lazy_sync.sync_type();
     let progress = lazy_sync.progress();
 
-    // Full decode happens only on first call to get()
+    // Full decode (cached after first call)
     if let Some(history) = lazy_sync.get() {
         for conv in &history.conversations {
             process_conversation(conv);
         }
     }
 
-    // Or use raw bytes for custom partial decoding
-    let raw = lazy_sync.raw_bytes();
+    // Streaming: memory-bounded, one conversation at a time
+    let mut stream = lazy_sync.stream();
+    while let Some(conv) = stream.next_conversation()? { /* … */ }
+
+    // One-shot inflate for custom parsing
+    let bytes = lazy_sync.decompress()?;
 }
 ```
 
@@ -2165,11 +2243,11 @@ Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc
 .on_event(|event, client| async move {
     // Only handle events you care about
     match &*event {
-        Event::Message(msg, info) if !info.source.is_from_me => {
-            // Only handle messages from others
-        }
         Event::Message(msg, info) if info.source.is_group => {
             // Only handle group messages
+        }
+        Event::Message(msg, info) if !info.source.is_from_me => {
+            // Only handle messages from others
         }
         _ => {}
     }

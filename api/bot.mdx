@@ -483,8 +483,8 @@ When your bot receives history sync data, the pipeline:
 1. **Stream-decrypts** external blobs in 8KB chunks (or moves inline payloads without copying)
 2. **Decompresses** zlib data on a blocking thread with pre-allocated buffers capped at 8 MiB
 3. **Walks protobuf fields manually** instead of decoding the entire message tree — only internal data (pushname, NCT salt, TC tokens) is extracted at this stage
-4. **Wraps the decompressed blob** in a [`LazyHistorySync`](/concepts/events#lazyhistorysync) with cheap metadata (sync type, chunk order, progress) available without decoding
-5. **Dispatches** `Event::HistorySync(Box<LazyHistorySync>)` — full protobuf decoding is deferred until you call `.get()`. Use `.raw_bytes()` for custom partial decoding if you only need specific fields
+4. **Wraps the compressed payload** in a [`LazyHistorySync`](/concepts/events#lazyhistorysync) with cheap metadata (sync type, chunk order, progress) available without decoding
+5. **Dispatches** `Event::HistorySync(Box<LazyHistorySync>)` — full protobuf decoding is deferred until you call `.get()`. Use `.stream()` for incremental memory-bounded access, `.decompress()` for one-shot inflation, or `.compressed_bytes()` for the raw compressed payload
 
 If no event handlers are registered, the blob is not retained in memory.
 

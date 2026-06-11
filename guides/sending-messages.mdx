@@ -18,10 +18,14 @@ When you're already inside an `on_message` handler:
 ```rust
 .on_message(|ctx| async move {
     // Reply without quoting
-    ctx.reply("pong").await?;
+    if let Err(e) = ctx.reply("pong").await {
+        eprintln!("Failed to reply: {e}");
+    }
 
     // Reply quoting the received message
-    ctx.reply_quoting("pong").await?;
+    if let Err(e) = ctx.reply_quoting("pong").await {
+        eprintln!("Failed to reply: {e}");
+    }
 })
 ```
 

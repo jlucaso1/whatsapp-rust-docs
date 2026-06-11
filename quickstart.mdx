@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   bot.run().await;
   ```
 
-  `bot.run().await` runs the bot on the current task until it disconnects or logs out. To run in the background instead, use `bot.spawn()`, which returns a [`BotHandle`](/api/bot#bothandle) with `client()`, `shutdown()`, and `abort()`.
+  `bot.run().await` runs the bot on the current task until it disconnects or logs out. To run in the background instead, use `bot.spawn()`, which returns a [`BotHandle`](/api/bot) with `client()`, `shutdown()`, and `abort()`.
 </Step>
 
 </Steps>

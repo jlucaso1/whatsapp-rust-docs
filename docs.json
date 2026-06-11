@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-11-pdo-once-per-message",
                   "changelog/2026-06-11-history-sync-secret-prescan",
                   "changelog/2026-06-10-jid-into-api-convention",
                   "changelog/2026-06-10-prekey-unupload-watermark",

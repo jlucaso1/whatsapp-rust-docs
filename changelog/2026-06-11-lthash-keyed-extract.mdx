@@ -1,0 +1,25 @@
+---
+title: "June 11, 2026 — App state: pre-key the ltHash HKDF extract"
+description: "The HMAC key-schedule for the ltHash HKDF extract is now computed once at startup and cloned per derivation, removing two SHA-256 compressions from every MAC in an app-state patch."
+---
+
+## Performance
+
+**App state: pre-keyed HKDF extract in ltHash ([#847](https://github.com/oxidezap/whatsapp-rust/pull/847))**
+
+Every MAC processed during app-state patch application runs `hkdf_sha256_into`, which performs an HKDF-extract followed by HKDF-expand. The extract step keys HMAC-SHA-256 with a fixed zero block (RFC 5869 defines no-salt as a zero hash-length block), so the HMAC key-schedule — two SHA-256 block compressions for the ipad/opad precomputation — was identical for every MAC yet was recomputed each time.
+
+The ipad/opad compressions are now computed once at startup in a `LazyLock<Hmac<Sha256>>`. Each derivation clones the keyed state and feeds only the IKM, then passes the resulting PRK to `Hkdf::from_prk` for the expand step as before. This removes two of the ~17 SHA-256 compressions each MAC previously required.
+
+**Measured (812-MAC bench, SHA-NI host):**
+
+| | Median | Mean |
+|---|---|---|
+| Before | 707 µs | 735 µs |
+| After | 670 µs | 654 µs |
+
+Software-SHA paths (no SHA-NI) see a larger relative gain because the extract compressions weigh more there.
+
+Equivalence is pinned by a differential test that compares the new path against plain `Hkdf::new(None, key)` across keys of varying lengths and values. All existing ltHash and patch-processing suites pass unchanged.
+
+**No breaking changes.** Output is byte-identical to before; no public API was modified.

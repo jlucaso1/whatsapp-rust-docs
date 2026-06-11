@@ -1,0 +1,21 @@
+---
+title: "June 11, 2026 — curve25519-dalek 5 and x25519-dalek 3 release candidates"
+description: "Upgrades the Curve25519 crypto stack to the latest release candidates, gaining timing-safety improvements and a leaner transitive dependency tree."
+---
+
+## Dependencies
+
+**Upgrade `curve25519-dalek` 4 → 5.0.0-rc.0 and `x25519-dalek` 2 → 3.0.0-rc.0 ([#851](https://github.com/oxidezap/whatsapp-rust/pull/851))**
+
+The vendored `libsignal` crate's Curve25519 dependencies are bumped to the latest release candidates. The upgrade touches only `wacore/libsignal/Cargo.toml` and the lockfile — no API changes and no source changes were required.
+
+**What changes:**
+
+- **Timing-safety improvement.** Compressed Edwards and Ristretto point equality is now constant-time. Results are identical; the change only hardens the implementation against timing side-channels in key comparison paths.
+- **Cleaner dependency tree.** The dalek 4.x pin forced two extra transitive entries: `rand_core 0.6` (alongside the workspace's `rand_core 0.9`) and `zeroize_derive`. Both are removed. The `cpufeatures` duplicate (0.2 + 0.3) collapses to a single 0.3 entry.
+- **`rand_core` alignment.** `x25519-dalek` now depends on `rand_core 0.10`, which unifies with the workspace `rand 0.10` instead of pulling in the old 0.6 series.
+- **`fiat-crypto` 0.2 → 0.3** and **`digest`/`sha2`** align with the workspace 0.11 series.
+
+**Caveat:** Both crates are release candidates. For a pre-1.0 library this is acceptable, and the lockfile pins the exact `rc.0` checksums, so a future breaking `rc.1` will not be picked up without an explicit bump.
+
+**Validation:** All 2180 workspace tests pass (including libsignal protocol vectors, XEdDSA, Noise handshake, and pairing crypto). Clippy strict-clean. wasm32 release build green. Crypto bench medians are within 2% of the previous baseline.

@@ -1,0 +1,23 @@
+---
+title: "June 11, 2026 — wacore: drop prost PartialEq anchor from skdm-only check"
+description: "Replacing a proto struct equality check with encoded_len() == 0 removes all 148 prost-derived eq impls from the release binary, saving ~102 KiB of .text."
+---
+
+## Performance
+
+**`wacore`: replace `Message::eq` with `encoded_len() == 0` in the skdm-only check ([#846](https://github.com/oxidezap/whatsapp-rust/pull/846))**
+
+`is_sender_key_distribution_only` previously checked whether the carrier message (with its SKDM and context fields temporarily removed) was empty by comparing it against `wa::Message::default()`. That single `==` call anchored prost's entire derived `PartialEq` tree — 148 `eq` functions, 4.2k IR lines for `Message::eq` alone — into the release binary, contributing 94 KiB of `.text`.
+
+The check is now `waproto::codec::message_encoded_len(msg) == 0`. Under proto2 presence rules, a field only contributes encoded bytes when it is set, so zero encoded length is exactly the same predicate as equality with `Message::default()`. The encode-length tree is already retained by the codec path (pinned in #842), so no new codegen appears anywhere.
+
+**Measured (release build):**
+
+| Metric | Before | After | Delta |
+|---|---|---|---|
+| `.text` section | 11.65 MiB | 11.55 MiB | **−102 KiB** |
+| proto `eq` impls | 148 | 0 | **−148** |
+
+The fast path above the check still short-circuits typical content messages before either walk runs; cost for the common case is unchanged.
+
+**No breaking changes.** The behavior of `is_sender_key_distribution_only` is identical; the reduction is codegen-only.

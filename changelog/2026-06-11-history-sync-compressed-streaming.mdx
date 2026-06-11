@@ -7,7 +7,9 @@ description: "HistorySync events now hold compressed bytes (~10x smaller), LazyH
 
 **History sync: store compressed payload, expose streaming reader ([#853](https://github.com/oxidezap/whatsapp-rust/pull/853))**
 
-`Event::HistorySync` previously carried a fully-decoded `Box<wa::HistorySync>` — the entire conversation history as a heap-allocated Rust struct. Large `InitialBootstrap` chunks could reach 5–20 MB of heap after decoding. The event is now `Box<LazyHistorySync>`, which retains the original zlib-compressed bytes (~10× smaller) and decodes on demand.
+Previously, `Event::HistorySync` carried the fully decompressed blob. A typical `InitialBootstrap` chunk is 5–20 MB inflated — roughly 10× the compressed size. If you registered a history sync handler, your bot paid O(decompressed) retained memory for every queued event.
+
+The event is now `Box<LazyHistorySync>`, which retains the original zlib-compressed bytes (~10× smaller) and decodes on demand.
 
 **New API surface on `LazyHistorySync`:**
 

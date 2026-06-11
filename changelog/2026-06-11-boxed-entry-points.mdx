@@ -1,0 +1,27 @@
+---
+title: "June 11, 2026 — Boxed entry-point futures reduce consumer binary size"
+description: "Bot::build, Bot::run, and Client::connect now return boxed futures internally, eliminating ~331 KiB of duplicate async state-machine codegen in consumer crates. Public API signatures are unchanged."
+---
+
+## Performance
+
+**Boxed entry-point futures: eliminate consumer-side coroutine reinstantiation ([#843](https://github.com/oxidezap/whatsapp-rust/pull/843))**
+
+Rust async fn state machines are `LocalCopy` items across crate boundaries: any consumer crate that awaits a library future codegens the entire state machine graph into its own binary. On the demo binary, the three cold entry points (`Bot::build`, `Bot::run`, `Client::connect`) together caused ~1.8 MiB of re-instantiation in the consumer crate. `#[inline(never)]` has no effect on coroutine instantiation mode — measured and confirmed.
+
+**Change.** Each entry point now delegates through a private `#[inline(never)]` function that returns the real state machine as `Pin<Box<dyn Future<Output = T> + Send>>`. The consumer's copy of each entry point shrinks to a tiny shim coroutine that polls through a vtable; the construction, run-loop, and connect graphs are compiled exactly once, inside the library.
+
+**Measured impact** (on top of #842):
+
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| `.text` section | 11.85 MiB | 11.74 MiB | −113 KiB |
+| Consumer reinstantiation | 1815 KiB | 1484 KiB | −331 KiB |
+
+**Cost.** One `Box::pin` heap allocation per process at startup for each entry point (three total). These are all once-per-session calls; the allocation is negligible.
+
+**What stays static.** The send graph (`send_message_impl` and the cache coroutines it calls) remains monomorphised per-consumer. Erasing it would require a `Box::pin` per outgoing message — the same allocation #673 removed — so it is deliberately left as-is. The only stable-Rust alternative is `-Zshare-generics` (nightly only).
+
+**New public type.** `wacore::runtime::BoxFuture<'a, T>` is a platform-aware type alias for the boxed future bound: `Send` on native targets (multi-threaded executors), non-`Send` on `wasm32` (single-threaded). Use it when type-erasing entry-point futures in your own code.
+
+**No breaking changes** — `Bot::build`, `Bot::run`, and `Client::connect` keep their existing `async fn` signatures. Call sites require no changes.

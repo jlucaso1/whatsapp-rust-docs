@@ -74,10 +74,11 @@ wacore/
 
 **Build Process:**
 
-The generated code (`whatsapp.rs`) is checked into version control. The `prost-build` dependency is gated behind an optional `generate` feature, so `build.rs` is a no-op during normal builds. To regenerate after modifying the `.proto` file:
+`build.rs` always runs, reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256, and writes `whatsapp.rs` and `tags.rs` into `OUT_DIR`. Neither generated file is committed. To regenerate after modifying `whatsapp.proto`:
 
 ```bash
-cargo build -p waproto --features generate
+scripts/regenerate-proto-desc.sh   # updates whatsapp.desc + .sha256
+cargo build -p waproto
 ```
 
 **Generated Types:**

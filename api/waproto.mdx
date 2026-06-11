@@ -24,7 +24,7 @@ waproto/
 └── build.rs                 # Always-on: generates whatsapp.rs + tags.rs → OUT_DIR
 ```
 
-`whatsapp.rs` and `tags.rs` are written to `OUT_DIR` at build time and are not committed.
+The build writes `whatsapp.rs` and `tags.rs` to `OUT_DIR`. Do not commit these files.
 
 ## Usage
 
@@ -680,7 +680,7 @@ let json = r#"{"account_type": "enterprise"}"#;
 
 ## waproto::tags
 
-The `waproto::tags` module is generated from the compiled protobuf descriptor at build time. It contains one `pub mod` per proto message with one `pub const FIELD_NAME: u32 = N;` per field. Nested messages produce nested modules.
+The build generates the `waproto::tags` module from the compiled protobuf descriptor. You get one `pub mod` per proto message with one `pub const FIELD_NAME: u32 = N;` per field. Nested messages produce nested modules.
 
 ```rust
 use waproto::tags;
@@ -693,11 +693,11 @@ let _ = tags::history_sync::CONVERSATIONS;     // 2
 let _ = tags::history_sync::PUSHNAMES;         // 7
 ```
 
-These constants are used internally by `wacore`'s history-sync wire walkers and are pinned by compile-time `assert!` blocks in the hand-written mirror structs. If `whatsapp.proto` renumbers a field the consts update automatically on next build; if a field referenced by the walkers is renamed or removed, compilation fails rather than the decoder silently reading the wrong wire data.
+The history-sync wire walkers use these constants internally, and compile-time `assert!` blocks pin them in the hand-written mirror structs. If `whatsapp.proto` renumbers a field the consts update automatically on next build; if a field referenced by the walkers is renamed or removed, compilation fails rather than the decoder silently reading the wrong wire data.
 
 ## Code generation
 
-Protobuf code is generated at build time — `build.rs` always runs. It reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256 against `src/whatsapp.desc.sha256`, and writes two files into `OUT_DIR`:
+The build generates protobuf code — `build.rs` always runs. It reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256 against `src/whatsapp.desc.sha256`, and writes two files into `OUT_DIR`:
 
 - **`whatsapp.rs`** — full prost-generated structs and enums
 - **`tags.rs`** — `waproto::tags` field-number constants (see [waproto::tags](#waproto-tags) above)

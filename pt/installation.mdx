@@ -91,11 +91,10 @@ O crate `waproto` tem suas próprias feature flags:
 
 | Feature | Descrição | Incluída por padrão |
 |---------|-----------|---------------------|
-| `generate` | Habilita `prost-build` para regenerar código protobuf a partir de `whatsapp.proto`. Necessário apenas ao modificar o arquivo `.proto` | ❌ Não |
 | `serde-deserialize` | Adiciona o derive `Deserialize` e `#[serde(default)]` a todos os tipos protobuf | ❌ Não |
 | `serde-snake-case` | Aceita nomes de variantes de enum em snake_case durante a desserialização (implica `serde-deserialize`) | ❌ Não |
 
-O código protobuf gerado (`whatsapp.rs`) é versionado, então `prost-build` nunca é necessário para builds normais. Isso mantém a árvore de dependências menor e a compilação mais rápida. Todos os tipos protobuf derivam `Serialize` por padrão. Habilite `serde-deserialize` quando precisar analisar tipos protobuf a partir de JSON (por exemplo, em uma ponte WASM). Habilite `serde-snake-case` quando sua fonte JSON usa snake_case para variantes de enum (prost gera PascalCase por padrão).
+O `build.rs` sempre executa e gera `whatsapp.rs` no `OUT_DIR` — nenhuma feature flag é necessária para builds normais. Todos os tipos protobuf derivam `Serialize` por padrão. Habilite `serde-deserialize` quando precisar analisar tipos protobuf a partir de JSON (por exemplo, em uma ponte WASM). Habilite `serde-snake-case` quando sua fonte JSON usa snake_case para variantes de enum (prost gera PascalCase por padrão).
 
 ```toml Cargo.toml
 [dependencies]

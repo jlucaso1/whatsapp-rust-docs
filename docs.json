@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-11-noise-prekeyed-gcm",
                   "changelog/2026-06-11-dockerfile-share-generics",
                   "changelog/2026-06-11-pdo-once-per-message",
                   "changelog/2026-06-11-history-sync-secret-prescan",

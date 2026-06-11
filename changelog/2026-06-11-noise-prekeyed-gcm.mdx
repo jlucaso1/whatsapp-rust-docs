@@ -1,0 +1,108 @@
+---
+title: "June 11, 2026 — Noise transport: pre-keyed AES-256-GCM"
+description: "The Noise transport cipher precomputes the AES key schedule and GHASH subkey once per connection instead of on every frame. Decrypt improves ~20% on typical 1500-byte stanzas. IkServerHelloOutcome::Continue now boxes its payload."
+---
+
+## Performance
+
+**Noise transport: pre-keyed AES-256-GCM cipher ([#850](https://github.com/oxidezap/whatsapp-rust/pull/850))**
+
+Previously every Noise frame — in both directions — re-ran the AES-256 key schedule and re-derived the GHASH subkey `H = E_K(0)`, despite the transport key being fixed for the lifetime of a connection. The CodSpeed flamegraph showed `setup_gcm` at 16.9% of the seal for 1500-byte frames, the same shape as the ltHash fix in [#847](https://github.com/oxidezap/whatsapp-rust/pull/847): a per-call recomputation of a constant.
+
+A new `Aes256GcmKey` type holds the expanded AES cipher and keyed GHASH state, computed once at `NoiseCipher` construction. Per frame, only the nonce-dependent work remains (CTR init and one pad block); the keyed state is cloned, which is a plain round-key copy with no `aeskeygenassist` and no polyval re-keying.
+
+Output is byte-identical to the prior path, verified by a differential test across sizes 0–4096 bytes, nonce shapes, and AAD forms, plus tamper rejection.
+
+The handshake path retains the per-call setup because its keys change at each step.
+
+**Measured on 1500-byte frames (AES-NI + CLMUL host):**
+
+| Direction | Before | After | Δ |
+|-----------|--------|-------|---|
+| Decrypt median | 11.51 µs | 9.19 µs | **−20%** |
+| Encrypt median | 9.76 µs | 9.08 µs | −7% |
+
+64 KB frames are unchanged (the data path dominates). The CodSpeed simulation runner takes the software polyval path where the key schedule weighs more, so the relative win on the 1500-byte benches may appear larger there.
+
+## New API (`wacore-libsignal`)
+
+**`Aes256GcmKey`** — connection-lifetime AES-256-GCM handle. Holds the expanded cipher and GHASH subkey; use the `new_with_key` constructors on `Aes256GcmEncryption` / `Aes256GcmDecryption` to create per-frame contexts without re-running the key schedule:
+
+```rust
+use wacore_libsignal::crypto::{Aes256GcmKey, Aes256GcmEncryption, Aes256GcmDecryption};
+
+// Compute once per connection
+let key = Aes256GcmKey::new(&key_bytes)?;
+
+// Per-frame encrypt
+let mut enc = Aes256GcmEncryption::new_with_key(&key, &nonce, aad)?;
+enc.encrypt(&mut buf);
+let tag = enc.compute_tag();
+
+// Per-frame decrypt
+let mut dec = Aes256GcmDecryption::new_with_key(&key, &nonce, aad)?;
+dec.decrypt(&mut buf);
+dec.verify_tag(&tag)?;
+```
+
+**`TransportAead` trait** — connection-lifetime AEAD interface used internally by `NoiseCipher`. `RustCryptoProvider` overrides `transport_aead` to return an `Aes256GcmKey`; custom providers receive a default implementation that routes each call through their existing `aes_256_gcm_encrypt_in_place` / `aes_256_gcm_decrypt_in_place` methods with no behavior change:
+
+```rust
+pub trait TransportAead: Send + Sync {
+    fn encrypt_in_place(
+        &self,
+        nonce: &[u8; 12],
+        aad: &[u8],
+        buffer: &mut dyn GcmInPlaceBuffer,
+    ) -> Result<(), CryptoProviderError>;
+
+    fn decrypt_in_place(
+        &self,
+        nonce: &[u8; 12],
+        aad: &[u8],
+        buffer: &mut dyn GcmInPlaceBuffer,
+    ) -> Result<(), CryptoProviderError>;
+}
+```
+
+**`transport_aead(key: &[u8; 32])`** — free function that creates a `Box<dyn TransportAead>` from the currently installed `SignalCryptoProvider`.
+
+**`SignalCryptoProvider::transport_aead`** — new optional method on the provider trait. The default routes every call through `aes_256_gcm_encrypt_in_place` / `aes_256_gcm_decrypt_in_place`; override to precompute key-dependent state once:
+
+```rust
+impl SignalCryptoProvider for MyProvider {
+    // Override to gain the pre-keyed speedup
+    fn transport_aead(
+        &'static self,
+        key: &[u8; 32],
+    ) -> Result<Box<dyn TransportAead>, CryptoProviderError> {
+        Ok(Box::new(Aes256GcmKey::new(key)?))
+    }
+}
+```
+
+<Note>
+  Custom `SignalCryptoProvider` implementations do not need to change. The default `transport_aead` method dispatches every frame through the existing `aes_256_gcm_*` hooks, preserving current behavior. Override only when you want the pre-keyed speedup on a custom backend.
+</Note>
+
+## Breaking changes
+
+**`IkServerHelloOutcome::Continue` is now `Box<IkHandshakeOutcome>` (`wacore-noise`)**
+
+`NoiseCipher` now stores the `Aes256GcmKey` inline (round keys live in the struct), making it significantly larger. Clippy's `large_enum_variant` lint requires boxing the `Continue` variant to keep the enum balanced. Match arms that bind the payload by value must dereference the box:
+
+```rust
+// Before
+IkServerHelloOutcome::Continue(outcome) => {
+    let IkHandshakeOutcome { write_cipher, read_cipher } = outcome;
+    // ...
+}
+
+// After
+IkServerHelloOutcome::Continue(boxed) => {
+    let IkHandshakeOutcome { write_cipher, read_cipher } = *boxed;
+    // ...
+}
+```
+
+Match arms that forward the `Continue` value without inspecting its fields, or that use wildcard patterns, are unaffected.

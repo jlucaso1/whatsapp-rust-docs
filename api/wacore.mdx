@@ -501,7 +501,7 @@ use wacore::libsignal::{
 
 **Key modules:**
 - `core` - Core session cipher logic
-- `crypto` - Cryptographic primitives (HKDF, HMAC, AES)
+- `crypto` - Cryptographic primitives (HKDF, HMAC, AES-CBC, AES-GCM). Public exports include `Aes256GcmKey` (connection-lifetime pre-keyed AEAD state; holds the expanded AES cipher and GHASH subkey for the Noise transport layer), `TransportAead` (pluggable AEAD interface used by `NoiseCipher`), `transport_aead(key: &[u8; 32])` (creates a `Box<dyn TransportAead>` from the active `SignalCryptoProvider`), and `SignalCryptoProvider` (override `transport_aead` to precompute key-dependent state once per connection)
 - `protocol` - Protocol message types
 - `store` - Store trait definitions
 
@@ -532,7 +532,7 @@ use wacore::noise::{
 - `XxHandshakeState` - Three-message XX handshake (cold start / fallback)
 - `IkHandshakeState` - Resumed IK handshake using a cached server static
 - `XxFallbackHandshakeState` - Server-driven recovery from a stale IK static, continuing the existing transcript
-- `IkServerHelloOutcome` - Either `Continue` (IK succeeds) or `Fallback` (pivot into XXfallback)
+- `IkServerHelloOutcome` - Either `Continue(Box<IkHandshakeOutcome>)` (IK succeeds; `Continue` boxes its payload because `NoiseCipher` grew to hold inline AES round keys, making the unboxed variant too large relative to `Fallback`) or `Fallback` (pivot into XXfallback)
 - `VerifiedServerCertChain` - Output of XX/XXfallback; persisted by the client to enable IK on the next connect
 - `HandshakeUtils` - Protocol message building/parsing
 - `framing` - WebSocket frame encoding
@@ -741,6 +741,7 @@ The library includes several allocation-reduction strategies that the integratio
 - **Inline attribute storage** — `Attrs` uses `AttrsVec` (`SmallVec<[...; 2]>`) instead of `Vec`. Nodes with ≤2 attributes (the common per-recipient fanout shapes `to` and `enc`) keep their attributes on the stack alongside the node, eliminating the per-node allocation for attribute storage. Allocation count: −27% per DM stanza (15→11 allocs); −40% for group fanout with 800 participants (4012→2412 allocs)
 - **Secret-presence pre-scan in history sync** — before prost decodes a `HistorySyncMsg` (30+ fields, String allocations), a shallow varint walk checks whether the message carries `message_secret` at any level. Messages without a secret are skipped entirely. Bench (20k messages, secret-dense fixture): −29.5% allocations (56,020 → 39,520), −4.3% allocated bytes. Production blobs are secret-sparse so the saving is larger in practice
 - **Inline storage in `HistoryMsgSecretRecord`** — `chat_id` is `Arc<str>` (allocated once per conversation, shared across all records in that conversation), `msg_id` is `CompactString` (inline for typical 20–22 char WA IDs on 64-bit targets; smaller inline limit on 32-bit/wasm32), and `secret` is `SecretBytes` (inline for secrets ≤32 bytes, heap for larger)
+- **Pre-keyed Noise transport cipher** — `NoiseCipher` holds an `Aes256GcmKey` that precomputes the AES key schedule and GHASH subkey once per connection instead of on every frame. Decrypt improves ~20% on 1500-byte stanzas (AES-NI host); encrypt improves ~7%. See [changelog](/changelog/2026-06-11-noise-prekeyed-gcm).
 
 ### CI integration
 

@@ -1,0 +1,57 @@
+---
+title: "June 11, 2026 — Group send: memoize participant-list hash on device-list entry"
+description: "The group phash is now computed once per topology change and served from a OnceLock on the device-list memo entry. Warm sends skip N JID clones, two sorts, and a SHA-256. prepare_group_stanza signature updated."
+---
+
+## Performance
+
+**Group send: phash memoized on the device-list memo entry ([#840](https://github.com/oxidezap/whatsapp-rust/pull/840))**
+
+Building on the arena-sort work from [#822](/changelog/2026-06-10-phash-arena-sort) and the device-list memo from #824, this change eliminates the phash recomputation on every warm group send.
+
+Previously, `prepare_group_stanza` called `build_group_phash_set` + `participant_list_hash` on every invocation — one JID clone per device, a hosted filter, a sort-dedup, then another sort and a SHA-256 over the full set. The CodSpeed flamegraph for `bench_group_send_256` showed this at ~212 µs of a ~475 µs warm send (\~45%). Both inputs are stable between sends for the same group: the device set is already pinned in the per-group device-list memo entry, and the sending JID is constant per session.
+
+**`ResolvedGroupDevices`** (new, in `wacore::send`) bundles the resolved device slice with a lazily computed `phash` in a `OnceLock` that lives behind the memo entry's `Arc`:
+
+- **Invalidation is free.** Any topology change produces a new memo entry and so a new, cold `ResolvedGroupDevices`; the #824 re-stamp path returns the same `Arc`, so a warm phash survives write storms on unrelated groups. No new invalidation rule is needed.
+- **Sender identity is pinned.** The cell stores `(sending_jid, hash)` together, so a sending-identity change (PN/LID mode flip, re-pair) recomputes without poisoning the cached value for the original sender.
+- **Zero-allocation serve.** A phash is 10 bytes (`"2:"` + 8 base64 chars), stored inline in `CompactString`. The stanza attribute builder accepts `CompactString` directly, so a warm send costs one inline copy and no heap allocation.
+
+The cold (`force_skdm`) and broadcast paths keep direct `build_group_phash_set` + `participant_list_hash` computation unchanged.
+
+**New public item — `ResolvedGroupDevices`**
+
+```rust
+use wacore::send::ResolvedGroupDevices;
+
+// Wraps the resolved device list returned by the group device registry.
+let resolved = ResolvedGroupDevices::new(devices);
+
+// Access the raw slice:
+let jids: &[Jid] = resolved.devices();
+
+// Warm phash (computed once per (entry, sending jid), then memoized):
+if let Some(hash) = resolved.phash(&own_sending_jid) {
+    // hash is a CompactString — inline, no allocation
+}
+```
+
+## Breaking changes
+
+**`prepare_group_stanza` — `all_devices_for_phash` parameter type (`wacore`)**
+
+The `all_devices_for_phash` argument changed from `Option<Arc<Vec<Jid>>>` to `Option<Arc<ResolvedGroupDevices>>`.
+
+If you call `prepare_group_stanza` directly, wrap the resolved device list:
+
+```rust
+// Before
+let all_devices_for_phash: Option<Arc<Vec<Jid>>> = Some(Arc::new(devices));
+
+// After
+use wacore::send::ResolvedGroupDevices;
+let all_devices_for_phash: Option<Arc<ResolvedGroupDevices>> =
+    Some(Arc::new(ResolvedGroupDevices::new(devices)));
+```
+
+The internal `GroupDevicesMemo.devices` field changed type in the same way, but that field is `pub(crate)` and not part of the public API.

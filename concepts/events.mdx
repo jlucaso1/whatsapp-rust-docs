@@ -1020,7 +1020,7 @@ pub struct GroupParticipantInfo {
 }
 ```
 
-`display_name` carries the server-provided label for a participant — for non-contacts this is typically the masked phone number (`"+55••••••••79"`). It is populated only when the participant appears as a `<participant>` child of a group notification; entries that arrive via `<requested_user>` (membership requests) leave it `None`.
+`display_name` carries the server-provided label for a participant — for non-contacts this is typically the masked phone number (`"+55•••••••••79"`). It is populated only when the participant appears as a `<participant>` child of a group notification; entries that arrive via `<requested_user>` (membership requests) leave it `None`.
 
 Membership request variants include a `request_method` field of type `MembershipRequestMethod`:
 
@@ -1895,98 +1895,412 @@ pub struct NewsletterLiveUpdateReaction {
 Event::NewsletterLiveUpdate(update) => {
     println!("Newsletter {} updated:", update.newsletter_jid);
     for msg in &update.messages {
-        for reaction in &msg.reactions {
-            println!("  {} × {}", reaction.code, reaction.count);
+        for r in &msg.reactions {
+            println!("  Message {}: {} x{}", msg.server_id, r.code, r.count);
         }
     }
 }
 ```
 
+<Note>
+You must call `client.newsletter().subscribe_live_updates(&jid)` to receive these events. The subscription has a limited duration (typically 300 seconds) and must be renewed periodically.
+</Note>
+
 ## Call Events
 
 ### IncomingCall
 
-**Emitted:** When an incoming call is received
+**Emitted:** When the server delivers a `<call>` stanza — voice or video, 1-on-1 or group. Mirrors WhatsApp Web's inbound call signaling.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct IncomingCall {
     pub from: Jid,
-    pub id: String,
-    pub is_video: bool,
-    pub is_group: bool,
+    /// Stanza id; distinct from `CallAction::call_id`.
+    pub stanza_id: String,
+    pub notify: Option<String>,
+    pub platform: Option<String>,
+    pub version: Option<String>,
+    #[serde(with = "chrono::serde::ts_seconds")]
     pub timestamp: DateTime<Utc>,
+    pub offline: bool,
+    pub action: CallAction,
 }
 ```
 
-**Example:**
+The `action` field is a tagged enum that mirrors the inner stanza child (`<offer>`, `<offer_notice>`, `<preaccept>`, `<accept>`, `<reject>`, `<terminate>`):
+
 ```rust
-Event::IncomingCall(call) => {
-    println!("{} call from {}",
-        if call.is_video { "Video" } else { "Voice" },
-        call.from
-    );
-    // Reject call (bots cannot accept calls)
-    client.reject_call(&call.id, &call.from).await?;
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CallAction {
+    Offer {
+        call_id: String,
+        call_creator: Jid,
+        caller_pn: Option<Jid>,
+        caller_country_code: Option<String>,
+        device_class: Option<String>,
+        joinable: bool,
+        is_video: bool,
+        audio: Vec<CallAudioCodec>,
+        /// Set on group calls. Primary group signal per `WAWebVoipGatingUtils`.
+        group_jid: Option<Jid>,
+    },
+    /// Group-call notification fan-out to members. The router acks it via the
+    /// generic call ack — no offer-receipt is expected.
+    OfferNotice {
+        call_id: String,
+        call_creator: Jid,
+        is_video: bool,
+        is_group: bool,
+    },
+    PreAccept { call_id: String, call_creator: Jid },
+    Accept    { call_id: String, call_creator: Jid },
+    Reject    { call_id: String, call_creator: Jid },
+    Terminate {
+        call_id: String,
+        call_creator: Jid,
+        duration: Option<u32>,
+        audio_duration: Option<u32>,
+    },
 }
 ```
+
+**Behavior:**
+- The router automatically acks every `<call>` stanza. For `Offer` it additionally sends an `<receipt><offer/></receipt>` so the caller's UI advances past "ringing".
+- `OfferNotice` is the server's fan-out to other group members when a group call starts. No offer-receipt is sent — only the generic ack.
+- Use `action.call_id()` and `action.call_creator()` to access the common identifiers without matching every variant.
+
+**Detecting group calls:**
+
+```rust
+Event::IncomingCall(call) => match &call.action {
+    CallAction::Offer { is_video, group_jid: Some(group), .. } => {
+        // 1-to-many group call offer addressed directly to you.
+        let kind = if *is_video { "video" } else { "voice" };
+        println!("Incoming group {kind} call in {group} from {}", call.from);
+    }
+    CallAction::Offer { is_video, group_jid: None, .. } => {
+        let kind = if *is_video { "video" } else { "voice" };
+        println!("Incoming 1-on-1 {kind} call from {}", call.from);
+    }
+    CallAction::OfferNotice { is_group: true, is_video, call_creator, .. } => {
+        // Group-call fan-out: another member started a call in a group you belong to.
+        let kind = if *is_video { "video" } else { "voice" };
+        println!("Group {kind} call started by {call_creator}");
+    }
+    CallAction::Terminate { call_id, duration, .. } => {
+        println!("Call {call_id} ended after {:?}s", duration);
+    }
+    _ => {}
+},
+```
+
+<Note>
+`group_jid` on `CallAction::Offer` is the primary signal for distinguishing a group call from a 1-on-1 call (matches WhatsApp Web's `WAWebVoipGatingUtils`). `OfferNotice` is the secondary signal for members who were not directly offered the call — for example, when you are a passive group member receiving the announcement that a call started.
+</Note>
 
 ## Notification Events
 
 ### DisappearingModeChanged
 
-**Emitted:** When the global disappearing messages setting changes
+**Emitted:** When a contact changes their default disappearing messages setting. Sent by the server as a `<notification type="disappearing_mode">` stanza.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct DisappearingModeChanged {
-    pub expiration: u32,
-    pub initiator: DisappearingModeInitiator,
-    pub timestamp: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum DisappearingModeInitiator {
-    Changed,
-    Cleared,
+    pub from: Jid,
+    pub duration: u32,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub setting_timestamp: DateTime<Utc>,
 }
 ```
+
+**Fields:**
+- `from` - The contact whose disappearing messages setting changed
+- `duration` - New duration in seconds (`0` = disabled, `86400` = 24 hours, `604800` = 7 days, etc.)
+- `setting_timestamp` - `DateTime<Utc>` indicating when the setting was changed (serialized as Unix timestamp in seconds)
+
+<Note>
+You should only apply this update if `setting_timestamp` is newer than your previously stored value for this contact. This prevents out-of-order updates from overwriting newer settings.
+</Note>
 
 **Example:**
 ```rust
-Event::DisappearingModeChanged(mode) => {
-    if mode.expiration == 0 {
-        println!("Disappearing messages disabled globally");
+Event::DisappearingModeChanged(change) => {
+    let status = if change.duration == 0 {
+        "disabled".to_string()
     } else {
-        println!("Default disappearing: {}s", mode.expiration);
-    }
+        format!("enabled ({}s)", change.duration)
+    };
+    println!("Contact {} changed disappearing messages: {}", change.from, status);
 }
 ```
 
-## RawNode
+## Raw stanza events
 
-**Emitted:** The raw stanza received from the server, dispatched only when at least one handler has `EventKind::RawNode` in its `interest()`. When no handler wants `RawNode`, the bus skips this dispatch entirely (zero overhead on the hot path).
+### `RawNode`
+
+**Emitted:** The raw stanza received from the server. To receive this event, call `client.set_raw_node_forwarding(true)` to enable dispatch and include `EventKind::RawNode` in your handler's `interest()`. When forwarding is disabled or no handler wants `RawNode`, the bus skips this dispatch entirely (zero overhead on the hot path).
 
 ```rust
 Event::RawNode(Arc<OwnedNodeRef>)
 ```
 
-Opt in via `interest()`:
+This is a library extension with no WhatsApp Web equivalent. It gives you access to every raw decoded stanza before any routing or parsing occurs. The `OwnedNodeRef` uses yoke-based zero-copy decoding, so string and byte payloads are borrowed directly from the network buffer without allocation.
+
+**Example:**
 ```rust
-fn interest(&self) -> EventInterest {
-    EventInterest::of(&[EventKind::RawNode])
+client.set_raw_node_forwarding(true);
+
+// In your event handler:
+Event::RawNode(node) => {
+    let node_ref = node.get();
+    println!("Raw stanza tag: {}, attrs: {:?}", node_ref.tag, node_ref.attrs);
 }
 ```
 
-This event gives you access to every raw stanza. Use it for debugging, protocol research, or handling server messages that do not yet have a dedicated event type.
+<Note>
+`RawNode` is skipped during serialization (`#[serde(skip)]`). Enable it only when debugging or building protocol-level tooling, as it dispatches for every incoming stanza.
+</Note>
 
-## Related
+## Event handler patterns
+
+### Bot builder pattern
+
+```rust
+use whatsapp_rust::bot::Bot;
+use wacore::types::events::Event;
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .on_event(|event, client| async move {
+        match &*event {
+            Event::Message(msg, info) => {
+                // Handle message
+            }
+            Event::Connected(_) => {
+                // Handle connection
+            }
+            _ => {}
+        }
+    })
+    .build()
+    .await?;
+```
+
+### Multiple Handlers
+
+```rust
+struct MessageHandler;
+impl EventHandler for MessageHandler {
+    fn handle_event(&self, event: Arc<Event>) {
+        if let Event::Message(msg, info) = &*event {
+            // Handle messages
+        }
+    }
+}
+
+struct ConnectionHandler;
+impl EventHandler for ConnectionHandler {
+    fn handle_event(&self, event: Arc<Event>) {
+        match &*event {
+            Event::Connected(_) => { /* ... */ }
+            Event::Disconnected(_) => { /* ... */ }
+            _ => {}
+        }
+    }
+}
+
+client.register_handler(Arc::new(MessageHandler));
+client.register_handler(Arc::new(ConnectionHandler));
+```
+
+### ChannelEventHandler
+
+`ChannelEventHandler` is a built-in event handler that forwards events to an `async_channel` for async consumption. It uses `async-channel` (runtime-agnostic) instead of Tokio channels, so it works with any async executor — including WASM targets.
+
+Events are buffered in an unbounded channel, so events fired before the receiver starts listening are not lost.
+
+```rust
+use wacore::types::events::{ChannelEventHandler, Event};
+use std::sync::Arc;
+
+let (handler, event_rx) = ChannelEventHandler::new();
+client.register_handler(handler);
+
+// Wait for events asynchronously
+while let Ok(event) = event_rx.recv().await {
+    match &*event {
+        Event::Connected(_) => {
+            println!("Connected!");
+            break;
+        }
+        Event::Message(msg, info) => {
+            println!("Message from {}", info.source.sender);
+        }
+        _ => {}
+    }
+}
+```
+
+This is particularly useful for:
+
+- **Testing** — assert on specific event sequences without closures
+- **Custom event loops** — process events in your own async task with full control over ordering
+- **Runtime-agnostic code** — no dependency on Tokio's `mpsc` channels
+
+<Note>
+`ChannelEventHandler::new()` returns `(Arc<ChannelEventHandler>, async_channel::Receiver<Arc<Event>>)`. The handler is already wrapped in `Arc` for direct use with `client.register_handler()`. The receiver yields `Arc<Event>`, so use `&*event` or `event.as_ref()` to pattern-match.
+</Note>
+
+### Custom async event handlers
+
+For custom channel-based patterns, you can implement `EventHandler` directly:
+
+```rust
+use tokio::sync::mpsc;
+use std::sync::Arc;
+
+let (tx, mut rx) = mpsc::unbounded_channel();
+
+struct AsyncHandler {
+    tx: mpsc::UnboundedSender<Arc<Event>>,
+}
+
+impl EventHandler for AsyncHandler {
+    fn handle_event(&self, event: Arc<Event>) {
+        let _ = self.tx.send(event);
+    }
+}
+
+client.register_handler(Arc::new(AsyncHandler { tx }));
+
+// Process events asynchronously
+tokio::spawn(async move {
+    while let Some(event) = rx.recv().await {
+        // event is Arc<Event> — no cloning needed
+    }
+});
+```
+
+Since events are dispatched as `Arc<Event>`, you can forward them to channels without any cloning overhead.
+
+## Performance Optimization
+
+### `LazyHistorySync`
+
+**Purpose:** Avoid parsing large protobuf blobs unless needed. The compressed payload is stored as reference-counted `Bytes`, and full protobuf decoding only happens if your code calls `get()`. See the [HistorySync event reference](#lazyhistorysync) for the complete API.
+
+```rust
+pub struct LazyHistorySync {
+    compressed: Bytes,         // Original zlib payload (reference-counted, ~10× smaller than decompressed)
+    decompressed_size: usize,  // Exact inflated byte count
+    sync_type: i32,            // Cheap metadata
+    chunk_order: Option<u32>,
+    progress: Option<u32>,
+    peer_data_request_session_id: Option<String>,   // Set only on ON_DEMAND syncs
+    parsed: OnceLock<Option<Box<wa::HistorySync>>>, // Decoded on first access
+}
+```
+
+**Cloning:** `Clone` is a refcount bump on the compressed buffer. No decode cache is carried over — each clone re-inflates independently on demand.
+
+**Usage:**
+```rust
+Event::HistorySync(lazy_sync) => {
+    // Metadata is always available without decoding
+    let sync_type = lazy_sync.sync_type();
+    let progress = lazy_sync.progress();
+
+    // Full decode (cached after first call)
+    if let Some(history) = lazy_sync.get() {
+        for conv in &history.conversations {
+            process_conversation(conv);
+        }
+    }
+
+    // Streaming: memory-bounded, one conversation at a time
+    let mut stream = lazy_sync.stream();
+    while let Some(conv) = stream.next_conversation()? { /* … */ }
+
+    // One-shot inflate for custom parsing
+    let bytes = lazy_sync.decompress()?;
+}
+```
+
+### Arc\<Event\> dispatch
+
+With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Message(Arc<wa::Message>, Arc<MessageInfo>)`. Both the `wa::Message` body and the `MessageInfo` are `Arc`-wrapped, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
+
+Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_sync.get()` triggers the decode, and subsequent handlers reuse the cached result.
+
+## Best Practices
+
+### Event Filtering
+
+```rust
+.on_event(|event, client| async move {
+    // Only handle events you care about
+    match &*event {
+        Event::Message(msg, info) if !info.source.is_from_me => {
+            // Only handle messages from others
+        }
+        Event::Message(msg, info) if info.source.is_group => {
+            // Only handle group messages
+        }
+        _ => {}
+    }
+})
+```
+
+### Error Handling
+
+```rust
+.on_event(|event, client| async move {
+    if let Err(e) = handle_event(&event, client).await {
+        eprintln!("Event handler error: {}", e);
+    }
+})
+
+async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
+    match event {
+        Event::Message(msg, info) => {
+            process_message(msg, info, client).await?
+        }
+        _ => {}
+    }
+    Ok(())
+}
+```
+
+### Spawning Tasks
+
+```rust
+.on_event(|event, client| async move {
+    if let Event::Message(msg, info) = &*event {
+        let client = client.clone();
+        let event = event.clone(); // Arc clone — O(1)
+
+        tokio::spawn(async move {
+            if let Event::Message(msg, info) = &*event {
+                process_message(msg, info, &client).await;
+            }
+        });
+    }
+})
+```
+
+## Related Sections
 
 <CardGroup cols={2}>
-  <Card title="Receiving messages" icon="inbox" href="/guides/receiving-messages">
-    Guide to handling incoming messages
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the event bus system
   </Card>
-  <Card title="Sending messages" icon="paper-plane" href="/guides/sending-messages">
+  <Card title="Authentication" icon="key" href="/concepts/authentication">
+    Learn about pairing events
+  </Card>
+  <Card title="Sending messages" icon="message" href="/guides/sending-messages">
     Sending and receiving messages
   </Card>
   <Card title="Client API" icon="code" href="/api/client">

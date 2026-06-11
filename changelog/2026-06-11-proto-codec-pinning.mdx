@@ -31,7 +31,7 @@ The `#[inline(never)]` attribute prevents MIR inlining from re-expanding the bod
 - `Message::encode_raw`: 3 copies → 1
 - Cross-crate duplicate-symbol waste: 2,528 KiB → 1,480 KiB
 
-**Protobuf field-number constants** in `wacore::messages` are now sourced from `waproto::tags::*` (generated from the `.proto` schema) instead of hand-written literals. A `.proto` field renumber now fails at compile time rather than silently changing the wire payload.
+**Protobuf field-number constants** in `wacore::messages` are now sourced from `waproto::tags::*` (generated from the `.proto` schema) instead of hand-written literals. A `.proto` field rename or removal now fails to compile. Previously, a hand-written literal would have silently diverged if the schema changed without a matching update to the constant.
 
 Test-only call sites retain direct `prost::Message` use and are unaffected.
 

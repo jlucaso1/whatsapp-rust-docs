@@ -74,10 +74,11 @@ wacore/
 
 **Build Process:**
 
-The generated code (`whatsapp.rs`) is checked into version control. The `prost-build` dependency is gated behind an optional `generate` feature, so `build.rs` is a no-op during normal builds. To regenerate after modifying the `.proto` file:
+`build.rs` always runs, reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256, and writes `whatsapp.rs` and `tags.rs` into `OUT_DIR`. Neither generated file is committed. To regenerate after modifying `whatsapp.proto`:
 
 ```bash
-cargo build -p waproto --features generate
+scripts/regenerate-proto-desc.sh   # updates whatsapp.desc + .sha256
+cargo build -p waproto
 ```
 
 **Generated Types:**
@@ -496,6 +497,8 @@ graph LR
 5. **Bounded channel streaming** — an `async_channel::bounded::<Bytes>(4)` streams conversation bytes from the blocking parser thread to the async event dispatcher, providing backpressure with only ~4 conversations in-flight
 6. **`LazyHistorySync` wrapper** — the decompressed blob is wrapped in a `LazyHistorySync` with cheap metadata (sync type, chunk order, progress) available without decoding. Full protobuf decoding only happens if the event handler calls `.get()`. Each clone parses independently (plain `OnceLock`, not `Arc`-wrapped) since the common case is a single handler. Consumers can use `.raw_bytes()` to access the raw protobuf bytes for custom partial decoding
 7. **Compile-time callback elimination** — when no event handlers are registered, the callback is `None`, causing the parser to skip conversation extraction entirely at the protobuf level
+8. **Secret-presence pre-scan** — before running prost decode on each `HistorySyncMsg`, a shallow varint walk checks whether the message carries `message_secret` at any level (`WebMessageInfo.message_secret` or `Message.message_context_info.message_secret`). Messages without a secret (the majority in production blobs) are discarded immediately — no struct decode, no allocation. The scan mirrors prost merge semantics so repeated field occurrences and malformed bytes are handled identically to a full decode
+9. **Shared conversation id** — `HistoryMsgSecretRecord.chat_id` is `Arc<str>`, allocated once per conversation and reference-counted into every record within that conversation (10k clones → 500 on the bench fixture). `msg_id` uses `CompactString` (inline for typical 20–22 char WA IDs) and `secret` uses `SecretBytes` (inline for secrets ≤32 bytes)
 
 ### Skip mode
 

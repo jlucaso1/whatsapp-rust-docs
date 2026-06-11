@@ -1056,7 +1056,7 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:822-827`
 
 The protocol layer follows strict rules about what cryptographic material appears in logs and at which level:
 
-- **No private keys or secrets are ever logged** — `ChainKey`, `MessageKeys`, and `RootKey` types do not expose their key bytes through logging
+- **No private keys or secrets are ever logged** — `ChainKey`, `MessageKeys`, `RootKey`, and `SenderKeyState` do not expose private key bytes through logging; `SenderKeyState` has a manual `Debug` impl that shows only structural metadata and redacts the signing key as `"<redacted>"`
 - **Public keys appear only at `warn`/`error` levels** — and only when something has gone wrong (untrusted identity, MAC failure)
 - **MAC key fingerprints are truncated** — only the first 4 bytes (8 hex chars) are logged during MAC verification failures, not the full key:
   ```rust
@@ -1429,6 +1429,32 @@ sort_dedup_by_device(&mut resolved_list);
 ```
 
 Location: `wacore/src/types/jid.rs:33-51`
+
+### Sender key signing cache
+
+`SenderKeyState` memoizes the parsed signing `PrivateKey` in a `OnceLock<PrivateKey>` field alongside the protobuf state. The key is pre-warmed via `PrivateKey::precompute_signing_cache()` before memoization — clones of an initialized `OnceLock` carry its contents, so every caller receives a warm clone and skips the XEdDSA scalar + Edwards basepoint re-derivation.
+
+**Population points:**
+
+- **`SenderKeyState::new`** — the caller-supplied key is inserted directly; no re-deserialization
+- **`signing_key_private()` on first call after a cold load** — the key is deserialized, warmed, then memoized; a benign concurrent-first race computes equal values and `OnceLock` discards the loser silently
+
+The memo is never serialized (protobuf surface unchanged). After a cold database load the memo is absent and rebuilds on the first `signing_key_private()` call. Since the moka record cache writes the live `SenderKeyState` back after every send, the warm memo effectively persists for the cache lifetime.
+
+**New public entry point:** `PrivateKey::precompute_signing_cache()` — side-effect-only; pre-derives the XEdDSA scalar and Edwards basepoint. Clones of a pre-warmed key carry the warm cache.
+
+**Measured impact (2000-iteration `group_encrypt` loop, core-pinned `perf stat`):**
+
+| Metric | Before | After |
+|---|---|---|
+| Wall time per send | 24.7 µs | 14.0 µs (−43%) |
+| Instructions (whole loop) | 868.1M | 460.9M (−47%) |
+
+This optimization is exclusive to sender-key (group) sends. `group_decrypt` verifies with the public key and is unaffected; session (DM) messages authenticate via HMAC, not per-message XEdDSA.
+
+**Security:** `SenderKeyState` previously used `#[derive(Debug)]`, printing the raw private signing key bytes into any `{:?}` log or panic message. It now has a manual `Debug` impl that shows `chain_id`, `chain_iteration`, and `message_keys` count with `signing_key: "<redacted>"`.
+
+Location: `wacore/libsignal/src/core/curve.rs`, `wacore/libsignal/src/protocol/sender_keys.rs`
 
 ### Take/Restore Pattern
 

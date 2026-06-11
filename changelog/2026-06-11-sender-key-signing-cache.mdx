@@ -1,0 +1,35 @@
+---
+title: "June 11, 2026 — Sender key signing: memoized XEdDSA cache"
+description: "SenderKeyState now memoizes the parsed signing PrivateKey with a pre-warmed XEdDSA cache, cutting warm group-send wall time by 43% and instruction count by 47%. The Debug impl now redacts the private signing key."
+---
+
+## Performance
+
+**Sender key signing: memoized XEdDSA cache ([#838](https://github.com/oxidezap/whatsapp-rust/pull/838))**
+
+`group_encrypt` calls `SenderKeyState::signing_key_private()` on every group message. Previously this re-deserialized the private key from protobuf bytes on each call, producing a fresh `PrivateKey` with a cold XEdDSA cache. The signature path then re-derived the cache (scalar reduction + a full Edwards basepoint multiplication) for every single send. The moka record cache kept the `SenderKeyRecord` alive across sends, but the warm key never survived because it was rebuilt from bytes each call.
+
+**Change.** `SenderKeyState` now holds a `OnceLock<PrivateKey>` memo. The key is pre-warmed via `PrivateKey::precompute_signing_cache()` **before** being stored — clones of an initialized `OnceLock` carry its contents, so subsequent callers receive a warm clone and skip the basepoint multiplication. Population happens at two points:
+
+- **`SenderKeyState::new`** — the already-parsed key is inserted directly; no extra deserialization.
+- **`signing_key_private()` on first call after a cold load** — the key is deserialized, warmed, then memoized before the clone is returned. A benign concurrent-first race computes equal values; `OnceLock::set` discards the loser silently.
+
+The memo is never serialized (protobuf surface unchanged). After a cold load from the database the memo is absent; it is rebuilt on the first `signing_key_private()` call. Since the record cache stores the live `SenderKeyState` back after every send, the memo effectively persists for the cache lifetime.
+
+**Measurements (2000-iteration `group_encrypt` loop, core-pinned `perf stat`):**
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| Wall time per send | 24.7 µs | 14.0 µs | −43% |
+| Instructions (whole loop) | 868.1M | 460.9M | −47% |
+
+The Edwards re-derivation accounted for nearly half of a warm group encrypt. `bench_group_send_*` and `skdm_*` CodSpeed benchmarks will reflect these improvements.
+
+**Scope.** `group_decrypt` verifies with the public key and is unaffected. Session (DM) messages authenticate via HMAC, not per-message XEdDSA, so this optimization is exclusive to sender-key (group) sends.
+
+**New public item:**
+- `PrivateKey::precompute_signing_cache()` — side-effect-only; pre-derives the XEdDSA scalar and Edwards basepoint. Clones of a pre-warmed key carry the warm cache. No-op if already warm.
+
+**Security note.** `SenderKeyState` previously used `#[derive(Debug)]`, which printed the raw private signing key bytes into any `{:?}` log or panic message. It now has a manual `Debug` impl that shows `chain_id`, `chain_iteration`, and `message_keys` count, with `signing_key: "<redacted>"`. The protobuf wire format is unchanged.
+
+**No breaking changes** — `SenderKeyState`, `group_encrypt`, and `group_decrypt` keep their existing public signatures.

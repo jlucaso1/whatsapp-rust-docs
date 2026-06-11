@@ -11,30 +11,49 @@ This guide covers message event handling, decryption, and receipt management in 
 
 ### Subscribing to Events
 
-Use the Bot API to handle events:
+Use the typed registrars on `BotBuilder` — they extract the relevant payload before calling your handler, so you never pattern-match on `Arc<Event>` for the common cases:
 
 ```rust
-use whatsapp_rust::bot::Bot;
-use wacore::types::events::Event;
+use whatsapp_rust::prelude::*;
 
 let bot = Bot::builder()
-    .with_backend(backend)
-    .with_transport_factory(transport_factory)
-    .with_http_client(http_client)
-    .on_event(|event, client| async move {
-        match &*event {
-            Event::Message(message, info) => {
-                println!("📨 Message from: {}", info.source.sender);
-                println!("💬 Text: {:?}", message.text_content());
-            }
-            Event::Connected(_) => {
-                println!("✅ Connected!");
-            }
-            _ => {}
-        }
+    .with_backend(SqliteStore::new("whatsapp.db").await?)
+    .on_qr_code(|code, _timeout| async move {
+        println!("Scan to pair:\n{code}");
+    })
+    .on_message(|ctx| async move {
+        println!("📨 Message from: {}", ctx.info.source.sender);
+        println!("💬 Text: {:?}", ctx.message.text_content());
+    })
+    .on_connected(|_client| async {
+        println!("✅ Connected!");
+    })
+    .on_logged_out(|_info| async {
+        eprintln!("Logged out!");
     })
     .build()
     .await?;
+```
+
+Available typed registrars: `on_message`, `on_qr_code`, `on_pair_code`, `on_connected`, `on_logged_out`. All handlers accumulate — registering a second one no longer silently replaces the first.
+
+For events without a typed registrar, use the catch-all `on_event` / `on_event_for`:
+
+```rust
+.on_event(|event, client| async move {
+    match &*event {
+        Event::Receipt(receipt) => {
+            println!("Receipt for: {:?}", receipt.message_ids);
+        }
+        _ => {}
+    }
+})
+```
+
+For stateful handlers that hold shared state in `&self`, register a struct implementing `EventHandler` directly:
+
+```rust
+.with_event_handler(my_stateful_handler)
 ```
 
 See [Bot API reference](/api/bot#event-handling) for full details.
@@ -565,30 +584,25 @@ See [Client API reference](/api/client) for handler registration details.
 
 ### Filtering Messages
 
-Use the type-safe JID methods (`is_group()`, `is_broadcast_list()`, `is_status_broadcast()`) to classify messages by chat type:
+Use the type-safe JID methods (`is_group()`, `is_broadcast_list()`, `is_status_broadcast()`) to classify messages by chat type. With `on_message`, the `MessageContext` is already available:
 
 ```rust
-use wacore_binary::jid::JidExt;
+use whatsapp_rust::prelude::*;
 
-.on_event(|event, _client| async move {
-    match &*event {
-        Event::Message(message, info) => {
-            // Ignore own messages
-            if info.source.is_from_me {
-                return;
-            }
-            
-            // Only handle group messages
-            if !info.source.chat.is_group() {
-                return;
-            }
-            
-            // Only handle text messages
-            if let Some(text) = message.text_content() {
-                println!("Group text: {}", text);
-            }
-        }
-        _ => {}
+.on_message(|ctx| async move {
+    // Ignore own messages
+    if ctx.info.source.is_from_me {
+        return;
+    }
+
+    // Only handle group messages
+    if !ctx.info.source.chat.is_group() {
+        return;
+    }
+
+    // Only handle text messages
+    if let Some(text) = ctx.message.text_content() {
+        println!("Group text: {text}");
     }
 })
 ```

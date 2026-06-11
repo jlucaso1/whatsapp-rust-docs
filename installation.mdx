@@ -16,18 +16,41 @@ Before installing whatsapp-rust, ensure you have:
 
 ## Add to your project
 
-Add whatsapp-rust and its required dependencies to your `Cargo.toml`:
+`whatsapp-rust` re-exports the entire stack (`wacore`, `wacore_binary`, `waproto`, and all bundled implementations), so **one dependency line is enough** for most projects:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = "0.6"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+Every sub-crate path is reachable through the main crate:
+
+- `whatsapp_rust::waproto::whatsapp` (aliased as `wa` in `prelude`)
+- `whatsapp_rust::wacore`, `whatsapp_rust::wacore_binary`
+- `whatsapp_rust::store::SqliteStore`, `whatsapp_rust::http::UreqHttpClient`, `whatsapp_rust::transport::TokioWebSocketTransportFactory`
+
+The same holds for git consumers — no need to pin every sibling crate:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+If you need to declare a sibling crate explicitly (for example to enable a crate-specific feature flag), you can still add it individually. The full multi-crate form:
 
 <CodeGroup>
 
 ```toml Nightly (default)
 [dependencies]
 whatsapp-rust = "0.6"
-whatsapp-rust-sqlite-storage = "0.6"
-whatsapp-rust-tokio-transport = "0.6"
-whatsapp-rust-ureq-http-client = "0.6"
-wacore = "0.6"
-waproto = "0.6"
+# Only needed for crate-specific features not exposed through whatsapp-rust:
+# whatsapp-rust-sqlite-storage = "0.6"
+# whatsapp-rust-tokio-transport = "0.6"
+# whatsapp-rust-ureq-http-client = "0.6"
+# wacore = "0.6"
+# waproto = "0.6"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -42,11 +65,7 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
     "signal",
     "moka-cache",
 ] }
-whatsapp-rust-sqlite-storage = "0.6"
-whatsapp-rust-tokio-transport = "0.6"
-whatsapp-rust-ureq-http-client = "0.6"
 wacore = { version = "0.6", default-features = false }
-waproto = "0.6"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 

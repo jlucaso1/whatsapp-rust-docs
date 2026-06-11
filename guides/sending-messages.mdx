@@ -7,11 +7,53 @@ description: Learn how to send text messages, reactions, channel comments, quote
 
 This guide covers sending messages, including text, reactions, channel comments, quotes, album messages (grouped media), sticker packs, and message editing operations using the whatsapp-rust library.
 
+## Text message shortcuts
+
+For the common case of sending or replying with plain text, prefer the high-level helpers:
+
+### `MessageContext` reply helpers (inside event handlers)
+
+When you're already inside an `on_message` handler:
+
+```rust
+.on_message(|ctx| async move {
+    // Reply without quoting
+    ctx.reply("pong").await?;
+
+    // Reply quoting the received message
+    ctx.reply_quoting("pong").await?;
+})
+```
+
+### `Client::send_text` (from any `Client` reference)
+
+```rust
+client.send_text(&chat_jid, "Hello from whatsapp-rust!").await?;
+```
+
+### `wa::Message::text` / `wa::Message::text_with_context`
+
+Build a text message without hand-assembling the protobuf struct:
+
+```rust
+use whatsapp_rust::prelude::*; // re-exports MessageBuilderExt
+
+// Plain text — WA Web sends this as `conversation`
+let msg = wa::Message::text("Hello!");
+
+// Text with a quote/context — switches to `extendedTextMessage` internally
+let msg_with_quote = wa::Message::text_with_context("Replying!", ctx.build_quote_context());
+```
+
+These are equivalent to building `wa::Message { conversation: Some(...) }` and `wa::Message { extended_text_message: Some(...) }` by hand, but less verbose.
+
+---
+
 ## Sending text messages
 
 ### Simple text message
 
-Use the `conversation` field for plain text messages:
+Use the `conversation` field for plain text messages, or `wa::Message::text("...")` for shorter syntax:
 
 ```rust
 use waproto::whatsapp as wa;

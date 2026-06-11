@@ -7,44 +7,34 @@ This guide will help you create a simple WhatsApp bot that responds to messages.
 
 ## Basic example
 
+Add the dependencies — one crate is enough; `whatsapp-rust` re-exports the entire stack:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = "0.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Here's a minimal bot that responds to "ping" messages:
 
 ```rust src/main.rs
-use std::sync::Arc;
-use whatsapp_rust::bot::Bot;
-use whatsapp_rust::TokioRuntime;
-use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
-use whatsapp_rust_ureq_http_client::UreqHttpClient;
-use wacore::types::events::Event;
+use whatsapp_rust::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize storage backend
-    let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
-
-    // Build the bot
-    let mut bot = Bot::builder()
-        .with_backend(backend)
-        .with_transport_factory(TokioWebSocketTransportFactory::new())
-        .with_http_client(UreqHttpClient::new())
-        .with_runtime(TokioRuntime)
-        .on_event(|event, client| async move {
-            match &*event {
-                Event::PairingQrCode { code, .. } => {
-                    println!("Scan this QR code with WhatsApp:\n{}", code);
-                }
-                Event::Message(msg, info) => {
-                    println!("Message from {}: {:?}", info.source.sender, msg);
-                }
-                _ => {}
-            }
+    let bot = Bot::builder()
+        .with_backend(SqliteStore::new("whatsapp.db").await?)
+        .on_qr_code(|code, _timeout| async move {
+            println!("Scan this QR code with WhatsApp:\n{code}");
+        })
+        .on_message(|ctx| async move {
+            println!("Message from {}: {:?}", ctx.info.source.sender, ctx.message.text_content());
         })
         .build()
         .await?;
 
-    // Start the bot
-    bot.run().await?.await?;
+    // Runs until logout or client.disconnect() from another task.
+    bot.run().await;
     Ok(())
 }
 ```
@@ -57,51 +47,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   The bot needs persistent storage for session data, keys, and state:
 
   ```rust
-  let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+  let backend = SqliteStore::new("whatsapp.db").await?;
   ```
 
   This creates a SQLite database file named `whatsapp.db` in your current directory. The session will persist across restarts.
 </Step>
 
 <Step title="Configure the bot builder">
-  The `Bot::builder()` pattern lets you configure all required components:
+  The `Bot::builder()` pattern lets you configure all components:
 
   ```rust
-  let mut bot = Bot::builder()
+  let bot = Bot::builder()
       .with_backend(backend)
-      .with_transport_factory(TokioWebSocketTransportFactory::new())
-      .with_http_client(UreqHttpClient::new())
-      .with_runtime(TokioRuntime)
   ```
 
   <Note>
-    All four components (backend, transport, HTTP client, runtime) are required. The builder uses a typestate pattern — your code won't compile if any are missing.
+    With the default cargo features, only the backend is required. The Tokio WebSocket transport, ureq HTTP client, and Tokio runtime are pre-wired. Use `with_transport_factory`, `with_http_client`, and `with_runtime` to override any of them (for example when targeting WASM or a custom transport).
   </Note>
 </Step>
 
-<Step title="Handle events">
-  Use `.on_event()` to handle incoming events from WhatsApp:
+<Step title="Register event handlers">
+  Typed registrars cover the common cases — no `match &*event` needed:
 
   ```rust
-  .on_event(|event, client| async move {
-      match &*event {
-          Event::PairingQrCode { code, .. } => {
-              println!("QR Code:\n{}", code);
-          }
-          Event::Message(msg, info) => {
-              // Handle incoming message
-          }
-          Event::Connected(_) => {
-              println!("Connected successfully!");
-          }
-          _ => {}
-      }
+  .on_qr_code(|code, _timeout| async move {
+      println!("QR Code:\n{code}");
+  })
+  .on_message(|ctx| async move {
+      // ctx.message, ctx.info, ctx.reply(...), ctx.react(...)
+      println!("From {}: {:?}", ctx.info.source.sender, ctx.message.text_content());
+  })
+  .on_connected(|_client| async {
+      println!("Connected successfully!");
   })
   ```
 
-  The event handler receives two parameters:
-  - `event`: An `Arc<Event>` — use `&*event` or `event.as_ref()` to pattern-match on the inner event type
-  - `client`: An `Arc<Client>` you can use to send messages or call API methods
+  Available typed registrars: `on_message`, `on_qr_code`, `on_pair_code`, `on_connected`, `on_logged_out`. Use `on_event` or `on_event_for` as catch-alls for events without a typed registrar. Multiple handlers of any kind accumulate — registering a second one no longer silently replaces the first.
+
+  `on_message` delivers a ready [`MessageContext`](/api/bot#messagecontext) with `ctx.reply(text)`, `ctx.reply_quoting(text)`, `ctx.react(emoji)`, and `ctx.send_message(msg)` helpers.
 </Step>
 
 <Step title="Build and run the bot">
@@ -111,68 +94,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   .build()
   .await?;
 
-  bot.run().await?.await?;
+  bot.run().await;
   ```
 
-  The double `.await?` is intentional:
-  - First `.await?` starts the bot and returns a `BotHandle`
-  - Second `.await?` waits for the bot to finish running
+  `bot.run().await` runs the bot on the current task until it disconnects or logs out. To run in the background instead, use `bot.spawn()`, which returns a [`BotHandle`](/api/bot#bothandle) with `client()`, `shutdown()`, and `abort()`.
 </Step>
 
 </Steps>
 
 ## Responding to messages
 
-Let's extend the bot to respond to "ping" with "pong":
+Let's extend the bot to respond to "ping" with "pong" using the `on_message` helper and `ctx.reply`:
 
 ```rust
-use wacore::proto_helpers::MessageExt;
-use waproto::whatsapp as wa;
+use whatsapp_rust::prelude::*;
 
-.on_event(|event, client| async move {
-    match &*event {
-        Event::PairingQrCode { code, .. } => {
-            println!("QR Code:\n{}", code);
+.on_qr_code(|code, _timeout| async move {
+    println!("QR Code:\n{code}");
+})
+.on_message(|ctx| async move {
+    if ctx.message.text_content() == Some("ping") {
+        if let Err(e) = ctx.reply("pong").await {
+            eprintln!("Failed to send reply: {e}");
         }
-        Event::Message(msg, info) => {
-            // Check if message is a text message saying "ping"
-            if let Some(text) = msg.text_content() {
-                if text == "ping" {
-                    // Create reply message
-                    let reply = wa::Message {
-                        conversation: Some("pong".to_string()),
-                        ..Default::default()
-                    };
-
-                    // Send the reply
-                    if let Err(e) = client.send_message(info.source.chat.clone(), reply).await {
-                        eprintln!("Failed to send reply: {}", e);
-                    }
-                }
-            }
-        }
-        _ => {}
     }
 })
 ```
 
 ### Key methods
 
-- `msg.text_content()` - Extract text from any message type (conversation, extended text, etc.)
-- `client.send_message()` - Send a message to a chat
-- `info.source.chat` - The JID (identifier) of the chat where the message came from
-- `info.source.sender` - The JID of the user who sent the message
+- `msg.text_content()` — Extract text from any message type (conversation, extended text, etc.)
+- `ctx.reply(text)` — Send a plain-text reply in the same chat without quoting
+- `ctx.reply_quoting(text)` — Send a plain-text reply that quotes the received message
+- `ctx.react(emoji)` — React to the received message
+- `ctx.send_message(msg)` — Send an arbitrary `wa::Message` to the source chat
+- `client.send_text(jid, text)` — Send a plain-text message from a `Client` reference
+- `info.source.chat` — The JID (identifier) of the chat where the message came from
+- `info.source.sender` — The JID of the user who sent the message
+
+For raw protobuf access (advanced cases), build a `wa::Message` directly:
+
+```rust
+use whatsapp_rust::prelude::*;
+
+.on_message(|ctx| async move {
+    if ctx.message.text_content() == Some("ping") {
+        let reply = wa::Message {
+            conversation: Some("pong".to_string()),
+            ..Default::default()
+        };
+        if let Err(e) = ctx.send_message(reply).await {
+            eprintln!("Failed to send reply: {e}");
+        }
+    }
+})
+```
+
+Or with the `MessageBuilderExt` helpers:
+
+```rust
+use whatsapp_rust::prelude::*; // re-exports MessageBuilderExt
+
+let msg = wa::Message::text("pong");
+let msg_with_quote = wa::Message::text_with_context("pong", ctx.build_quote_context());
+```
 
 ## Authentication methods
 
 ### QR code pairing (default)
 
-The bot automatically generates QR codes when not authenticated. Scan with your phone to link:
+The bot automatically generates QR codes when not authenticated. Display them with `on_qr_code`:
 
 ```rust
-Event::PairingQrCode { code, .. } => {
-    println!("Scan this QR code:\n{}", code);
-}
+.on_qr_code(|code, timeout| async move {
+    println!("Scan this QR code (valid {}s):\n{code}", timeout.as_secs());
+})
 ```
 
 ### Pair code (phone number)
@@ -180,24 +176,17 @@ Event::PairingQrCode { code, .. } => {
 Alternatively, link using a phone number and 8-digit code:
 
 ```rust
+use whatsapp_rust::prelude::*;
 use whatsapp_rust::pair_code::PairCodeOptions;
 
-let mut bot = Bot::builder()
-    .with_backend(backend)
-    .with_transport_factory(TokioWebSocketTransportFactory::new())
-    .with_http_client(UreqHttpClient::new())
-    .with_runtime(TokioRuntime)
+let bot = Bot::builder()
+    .with_backend(SqliteStore::new("whatsapp.db").await?)
     .with_pair_code(PairCodeOptions {
         phone_number: "15551234567".to_string(),
         ..Default::default()
     })
-    .on_event(|event, client| async move {
-        match &*event {
-            Event::PairingCode { code, .. } => {
-                println!("Enter this code on your phone: {}", code);
-            }
-            _ => {}
-        }
+    .on_pair_code(|code, _timeout| async move {
+        println!("Enter this code on your phone: {code}");
     })
     .build()
     .await?;
@@ -279,35 +268,29 @@ The demo bot responds to `🦀ping` with a quoted `🏓 Pong!` reply, edits the 
 
 ## Using MessageContext
 
-For cleaner message handling, use `MessageContext` to wrap the message, metadata, and client together. This provides convenience methods like `send_message` (auto-targets the source chat), `build_quote_context`, `edit_message`, and `revoke_message`:
+`on_message` delivers a ready `MessageContext`, so you no longer need to extract it from `Arc<Event>` manually. Use typed handler functions for cleaner separation:
 
 ```rust
-use whatsapp_rust::bot::{Bot, MessageContext};
+use whatsapp_rust::prelude::*;
 
-.on_event(|event, client| async move {
-    if let Some(ctx) = MessageContext::from_event(&event, client) {
-        handle_message(&ctx).await;
-    }
+.on_message(|ctx| async move {
+    handle_message(ctx).await;
 })
 ```
 
 Then define focused handler functions:
 
 ```rust
-async fn handle_message(ctx: &MessageContext) {
-    if let Some(text) = ctx.message.text_content() {
-        if text == "ping" {
-            let reply = wa::Message {
-                conversation: Some("pong".to_string()),
-                ..Default::default()
-            };
-            if let Err(e) = ctx.send_message(reply).await {
-                eprintln!("Failed to send: {}", e);
-            }
+async fn handle_message(ctx: MessageContext) {
+    if ctx.message.text_content() == Some("ping") {
+        if let Err(e) = ctx.reply("pong").await {
+            eprintln!("Failed to send: {e}");
         }
     }
 }
 ```
+
+`MessageContext` provides convenience methods including `send_message` (auto-targets the source chat), `reply`, `reply_quoting`, `react`, `build_quote_context`, `edit_message`, and `revoke_message`.
 
 ### Media forwarding with CDN reuse
 
@@ -333,25 +316,45 @@ fn build_media_reply(message: &wa::Message) -> Option<wa::Message> {
 
 See the [media forwarding guide](/guides/media-handling#forwarding-media-via-cdn-reuse) for more details.
 
+## Background operation and graceful shutdown
+
+Use `spawn()` to run the bot in the background while your code continues, and `shutdown()` for a clean stop:
+
+```rust
+use whatsapp_rust::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let bot = Bot::builder()
+        .with_backend(SqliteStore::new("whatsapp.db").await?)
+        .on_message(|ctx| async move {
+            let _ = ctx.reply("hello").await;
+        })
+        .build()
+        .await?;
+
+    let handle = bot.spawn(); // bot runs in the background; client is available via handle.client()
+
+    tokio::signal::ctrl_c().await?;
+    handle.shutdown().await; // graceful: flushes pending state, then stops
+    Ok(())
+}
+```
+
+`BotHandle` also exposes `abort()` as an escape hatch (skips the flush). Awaiting the handle resolves to `()` once the run loop exits.
+
 ## Complete example with logging
 
 Here's a production-ready example with proper logging, reactions, message editing, and media CDN reuse:
 
 ```rust src/main.rs
-use chrono::{Local, Utc};
 use log::{error, info};
-use std::sync::Arc;
-use wacore::proto_helpers::MessageExt;
-use wacore::types::events::Event;
-use waproto::whatsapp as wa;
-use whatsapp_rust::bot::{Bot, MessageContext};
-use whatsapp_rust::TokioRuntime;
-use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
-use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use whatsapp_rust::prelude::*;
+use whatsapp_rust::pair_code::PairCodeOptions;
 
 const PING_TRIGGER: &str = "🦀ping";
 const PONG_TEXT: &str = "🏓 Pong!";
+const REACTION_EMOJI: &str = "🏓";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -361,7 +364,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(
                 buf,
                 "{} [{:<5}] [{}] - {}",
-                Local::now().format("%H:%M:%S"),
+                wacore::time::now_utc().format("%H:%M:%S"),
                 record.level(),
                 record.target(),
                 record.args()
@@ -369,59 +372,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .init();
 
-    let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+    let store = SqliteStore::new("whatsapp.db").await?;
     info!("SQLite backend initialized");
 
-    let mut bot = Bot::builder()
-        .with_backend(backend)
-        .with_transport_factory(TokioWebSocketTransportFactory::new())
-        .with_http_client(UreqHttpClient::new())
-        .with_runtime(TokioRuntime)
-        .on_event(|event, client| async move {
-            match &*event {
-                Event::PairingQrCode { code, .. } => {
-                    println!("\n{}", code);
-                }
-                Event::Message(msg, info) => {
-                    let ctx = MessageContext::from_parts(msg, info, client);
-                    handle_message(&ctx).await;
-                }
-                Event::Connected(_) => info!("Bot connected!"),
-                Event::LoggedOut(_) => error!("Bot was logged out!"),
-                _ => {}
-            }
+    let bot = Bot::builder()
+        .with_backend(store)
+        .on_qr_code(|code, _timeout| async move {
+            println!("\n{code}\n");
+        })
+        .on_connected(|_client| async {
+            info!("Bot connected!");
+        })
+        .on_logged_out(|_info| async {
+            error!("Bot was logged out!");
+        })
+        .on_message(|ctx| async move {
+            handle_message(ctx).await;
         })
         .build()
         .await?;
 
     info!("Starting bot...");
-    bot.run().await?.await?;
+    bot.run().await;
     Ok(())
 }
 
-async fn handle_message(ctx: &MessageContext) {
+async fn handle_message(ctx: MessageContext) {
     // Try CDN-reuse media reply first (instant, no download needed)
     if let Some(reply) = build_media_pong(&ctx.message) {
         if let Err(e) = ctx.send_message(reply).await {
-            error!("Failed to send media pong: {}", e);
+            error!("Failed to send media pong: {e}");
         }
         return;
     }
 
-    // Handle text ping
     if ctx.message.text_content() == Some(PING_TRIGGER) {
-        let context_info = ctx.build_quote_context();
-        let reply = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
-                text: Some(PONG_TEXT.to_string()),
-                context_info: Some(Box::new(context_info)),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-
-        if let Err(e) = ctx.send_message(reply).await {
-            error!("Failed to send pong: {}", e);
+        if let Err(e) = ctx.react(REACTION_EMOJI).await {
+            error!("Failed to send reaction: {e}");
+        }
+        if let Err(e) = ctx.reply_quoting(PONG_TEXT).await {
+            error!("Failed to send pong: {e}");
         }
     }
 }

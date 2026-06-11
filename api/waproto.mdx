@@ -700,7 +700,7 @@ The history-sync wire walkers use these constants internally, and compile-time `
 The build generates protobuf code — `build.rs` always runs. It reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256 against `src/whatsapp.desc.sha256`, and writes two files into `OUT_DIR`:
 
 - **`whatsapp.rs`** — full prost-generated structs and enums
-- **`tags.rs`** — `waproto::tags` field-number constants (see [waproto::tags](#waproto-tags) above)
+- **`tags.rs`** — `waproto::tags` field-number constants (see [waproto::tags](#waprototags) above)
 
 Neither generated file is committed. `prost-build`, `heck`, and `prost-types` are unconditional build dependencies.
 

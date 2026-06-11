@@ -139,6 +139,7 @@
                 "pages": [
                   "changelog/overview",
                   "changelog/2026-06-11-history-sync-secret-prescan",
+                  "changelog/2026-06-11-verify-edwards-cache",
                   "changelog/2026-06-10-jid-into-api-convention",
                   "changelog/2026-06-10-prekey-unupload-watermark",
                   "changelog/2026-06-10-cag-enc-reactions-comments",

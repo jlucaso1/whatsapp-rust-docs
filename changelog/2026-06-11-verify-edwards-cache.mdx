@@ -1,0 +1,35 @@
+---
+title: "June 11, 2026 — Group decrypt: cached XEdDSA verifier per sender key"
+description: "Incoming group messages skip two field inversions per signature. SenderKeyState now memoizes a PreparedVerifyingKey that caches the Montgomery-to-Edwards conversion and its compressed encoding across the lifetime of the in-memory record. group_decrypt is ~25% faster."
+---
+
+## Performance
+
+**Group decrypt: cache the verify-side Edwards derivations per sender key ([#839](https://github.com/oxidezap/whatsapp-rust/pull/839))**
+
+The receive-side twin of the signing-cache added in [#838](https://github.com/oxidezap/whatsapp-rust/pull/838). Every incoming `SenderKeyMessage` must verify an XEdDSA signature against the sender's public key. Two operations in that path derive solely from the public key and the signature's sign bit (which is fixed per signer): the Montgomery-to-Edwards conversion (`MontgomeryPoint::to_edwards`) and the compressed encoding of the resulting Edwards point. Together these account for roughly 24% of a verification, yet `group_decrypt` was rebuilding a fresh `PublicKey` from the record's protobuf bytes on every incoming message — re-deriving them from scratch each time.
+
+**`PreparedVerifyingKey`** is a new type in `core::curve` (re-exported from `protocol`) that wraps a Montgomery public key and caches `(-A, A_compressed)` for each sign bit behind `OnceLock`s. The cached entries are stored under an `Arc` so the many per-use clones of a memoizing holder share one allocation and one warm state — clones carry initialized entries without re-derivation.
+
+**`SenderKeyState` memoization.** A `verifying_key_memo` field sits alongside the existing `signing_key_memo` from #838. On receive-side creation (no private key present), the verifier is built eagerly and `precompute()` is called to warm both sign-bit slots at SKDM-processing time — once per sender rotation, not once per message. Send-side states (private key present) skip the allocation entirely; the memo builds lazily if `signing_key_verifier()` is ever called. After a cold load from protobuf, the memo starts empty and warms on first use, then persists for the record-cache lifetime.
+
+**`group_decrypt`** now calls `SenderKeyState::signing_key_verifier()` (a reference, no clone per message) and verifies via `SenderKeyMessage::verify_signature_prepared`. The plain `verify_signature(&PublicKey)` path remains for callers outside `group_decrypt`.
+
+**Shared verification core.** `verify_signature_prepared` is extracted as a `pub(crate)` function in `curve25519.rs`; `PrivateKey::verify_signature` derives its inputs and delegates. Both the cached and uncached paths share one implementation and cannot drift.
+
+**Measurements (2000-message `group_decrypt` loop, core-pinned `perf stat`):**
+
+| Metric | Before | After |
+|---|---|---|
+| Wall time per decrypt | 45.0 µs | 33.9 µs (−25%) |
+| Instructions per decrypt | 682K | 571K (−16.2%) |
+
+## New public items
+
+- **`PreparedVerifyingKey`** (`wacore::libsignal::protocol`) — verifying view of a `PublicKey` with cached Edwards derivations. Construct with `PreparedVerifyingKey::new(&public_key)` or `PreparedVerifyingKey::from(&public_key)`. Call `precompute()` to warm both sign-bit entries eagerly.
+- **`SenderKeyState::signing_key_verifier()`** — returns `&PreparedVerifyingKey` for the state's signing key, building and memoizing on first call.
+- **`SenderKeyMessage::verify_signature_prepared(&PreparedVerifyingKey)`** — verifies the message signature against a cached verifier, reusing the precomputed Edwards entries.
+
+## No breaking changes
+
+`SenderKeyMessage::verify_signature(&PublicKey)` and all existing `SenderKeyState` methods are unchanged.

@@ -3,7 +3,7 @@ title: "June 11, 2026 — Bot API overhaul (breaking)"
 description: "Lifecycle simplification, typed event registrars, single-dependency consumption, and messaging sugar ahead of 1.0."
 ---
 
-PR [#852](https://github.com/oxidezap/whatsapp-rust/pull/852) is a focused breaking-change pass over the public bot API while such changes are still cheap. Every consumer will need a migration, but the migration is mechanical. See the [breaking changes](#breaking-changes) section below.
+PR [#852](https://github.com/oxidezap/whatsapp-rust/pull/852) is a focused breaking-change pass over the public bot API while such changes are still cheap. You will need to migrate your code, but the migration is mechanical. See the [breaking changes](#breaking-changes) section below.
 
 ## New features
 
@@ -168,5 +168,5 @@ waproto = "0.6"
 
 # After (one line is enough)
 whatsapp-rust = "0.6"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 ```

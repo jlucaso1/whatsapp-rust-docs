@@ -255,6 +255,38 @@ On WASM targets (`target_arch = "wasm32"`), all `Send` bounds are automatically 
   </Card>
 </CardGroup>
 
+#### history_sync types
+
+`HistoryMsgSecretRecord` carries the per-message secret extracted by the history-sync pipeline for E2E key expansion.
+
+```rust
+pub struct HistoryMsgSecretRecord {
+    pub chat_id: Arc<str>,       // shared per conversation
+    pub msg_id: CompactString,   // inline for typical 20–22 char WA IDs
+    pub secret: SecretBytes,     // inline ≤32 bytes, heap for larger
+    pub is_forwarded: bool,
+    pub is_poll: bool,
+    pub is_bot: bool,
+}
+```
+
+`SecretBytes` avoids heap allocation for secrets ≤32 bytes (covering the typical 32-byte Signal message secret) and falls back to `Vec<u8>` for larger values.
+
+```rust
+pub enum SecretBytes {
+    Inline { len: u8, buf: [u8; 32] },
+    Heap(Vec<u8>),
+}
+
+impl SecretBytes {
+    pub const INLINE_CAP: usize = 32;
+    pub fn as_slice(&self) -> &[u8];
+    pub fn into_vec(self) -> Vec<u8>;
+}
+```
+
+Implements `Deref<Target=[u8]>`, `From<&[u8]>`, `From<Vec<u8>>`, `PartialEq`, `Eq`, and `Debug`. Use `as_slice()` or deref for reads; `into_vec()` to convert to `Vec<u8>`.
+
 ### Time
 
 ```rust
@@ -704,6 +736,8 @@ The library includes several allocation-reduction strategies that the integratio
 - **`Arc<str>` sharing in `LidPnEntry`** — `LidPnEntry.lid` and `.phone_number` are `Arc<str>` instead of `String`. `LidPnCache` reuses the entry's own `Arc`s as the map keys for both lookup directions, so each identifier is allocated once per mapping rather than once as key and again inside the entry. Because this cache is unbounded by design, the saving compounds over the contact base (~40–80 B per mapping, ~0.5–1 MB for 10k contacts). Constructors accept `impl Into<Arc<str>>`, so `String` and `&str` call sites are unaffected; direct field reads return `Arc<str>` — use `&*entry.lid` for `&str` comparisons. Wire/persistence format is unchanged.
 - **Pre-allocated buffers** — History sync decompression uses a `compressed_size_hint` with a 4x multiplier for buffer pre-allocation, reducing `Vec` reallocation during decompression
 - **Inline attribute storage** — `Attrs` uses `AttrsVec` (`SmallVec<[...; 2]>`) instead of `Vec`. Nodes with ≤2 attributes (the common per-recipient fanout shapes `to` and `enc`) keep their attributes on the stack alongside the node, eliminating the per-node allocation for attribute storage. Allocation count: −27% per DM stanza (15→11 allocs); −40% for group fanout with 800 participants (4012→2412 allocs)
+- **Secret-presence pre-scan in history sync** — before prost decodes a `HistorySyncMsg` (30+ fields, String allocations), a shallow varint walk checks whether the message carries `message_secret` at any level. Messages without a secret are skipped entirely. Bench (20k messages, secret-dense fixture): −29.5% allocations (56,020 → 39,520), −4.3% allocated bytes. Production blobs are secret-sparse so the saving is larger in practice
+- **Inline storage in `HistoryMsgSecretRecord`** — `chat_id` is `Arc<str>` (allocated once per conversation, shared across all records in that conversation), `msg_id` is `CompactString` (inline for typical 20–22 char WA IDs), and `secret` is `SecretBytes` (inline for secrets ≤32 bytes, heap for larger)
 
 ### CI integration
 

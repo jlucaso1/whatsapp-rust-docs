@@ -17,11 +17,14 @@ waproto = "0.6"
 ```
 waproto/
 ├── src/
-│   ├── lib.rs         # Module definition
-│   ├── whatsapp.rs    # Generated protobuf code (checked into git)
-│   └── whatsapp.proto # Source protobuf definitions
-└── build.rs           # prost-build script (no-op unless `generate` feature is enabled)
+│   ├── lib.rs               # Module definition + tags re-export
+│   ├── whatsapp.proto       # Source protobuf definitions
+│   ├── whatsapp.desc        # Binary FileDescriptorSet (committed)
+│   └── whatsapp.desc.sha256 # SHA-256 of descriptor and proto
+└── build.rs                 # Always-on: generates whatsapp.rs + tags.rs → OUT_DIR
 ```
+
+`whatsapp.rs` and `tags.rs` are written to `OUT_DIR` at build time and are not committed.
 
 ## Usage
 
@@ -609,9 +612,12 @@ pub mod video_message {
 
 | Feature | Description | Implies |
 |---|---|---|
-| `generate` | Enables `prost-build` as a build dependency and runs code generation from `whatsapp.proto`. Only needed when modifying the `.proto` file — normal builds use the checked-in `whatsapp.rs`. | — |
 | `serde-deserialize` | Adds `#[derive(serde::Deserialize)]` and `#[serde(default)]` to all types. Use when you need to parse protobuf types from JSON. | — |
 | `serde-snake-case` | Adds `#[serde(rename_all(deserialize = "snake_case"))]` to all types. Allows snake_case enum variant names during deserialization (prost generates PascalCase). Serialize output is unchanged. | `serde-deserialize` |
+
+<Note>
+The `generate` feature was removed in [#836](https://github.com/oxidezap/whatsapp-rust/pull/836). Code generation is now always-on — `prost-build`, `heck`, and `prost-types` are unconditional build dependencies. Remove `--features generate` from any build scripts.
+</Note>
 
 ## Serde support
 
@@ -672,20 +678,43 @@ let json = r#"{"account_type": "enterprise"}"#;
   The `serde-snake-case` feature is primarily useful for WASM bridge scenarios where JavaScript sends snake_case JSON to the Rust backend. For most Rust-only use cases, you only need the default `Serialize` support.
 </Note>
 
-## Code generation
+## waproto::tags
 
-The protobuf code is auto-generated but checked into version control. The `prost-build` dependency is gated behind the `generate` feature, so normal builds skip code generation entirely — `build.rs` is a no-op without this feature. This eliminates the heavy `prost-build` transitive dependency tree (protoc, tempfile, etc.) from regular compilations, improving build times.
+The `waproto::tags` module is generated from the compiled protobuf descriptor at build time. It contains one `pub mod` per proto message with one `pub const FIELD_NAME: u32 = N;` per field. Nested messages produce nested modules.
 
-**To regenerate after modifying `whatsapp.proto`:**
+```rust
+use waproto::tags;
 
-```bash
-cargo build -p waproto --features generate
+// Field numbers derived directly from whatsapp.proto
+let _ = tags::web_message_info::KEY;           // 1
+let _ = tags::web_message_info::MESSAGE;       // 2
+let _ = tags::message::MESSAGE_CONTEXT_INFO;   // 35
+let _ = tags::history_sync::CONVERSATIONS;     // 2
+let _ = tags::history_sync::PUSHNAMES;         // 7
 ```
 
-This runs `build.rs` which uses `prost-build` to compile `whatsapp.proto` into `whatsapp.rs`.
+These constants are used internally by `wacore`'s history-sync wire walkers and are pinned by compile-time `assert!` blocks in the hand-written mirror structs. If `whatsapp.proto` renumbers a field the consts update automatically on next build; if a field referenced by the walkers is renamed or removed, compilation fails rather than the decoder silently reading the wrong wire data.
+
+## Code generation
+
+Protobuf code is generated at build time — `build.rs` always runs. It reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256 against `src/whatsapp.desc.sha256`, and writes two files into `OUT_DIR`:
+
+- **`whatsapp.rs`** — full prost-generated structs and enums
+- **`tags.rs`** — `waproto::tags` field-number constants (see [waproto::tags](#waproto-tags) above)
+
+Neither generated file is committed. `prost-build`, `heck`, and `prost-types` are unconditional build dependencies.
+
+**To update after modifying `whatsapp.proto`:**
+
+```bash
+scripts/regenerate-proto-desc.sh   # writes waproto/src/whatsapp.desc + .sha256
+cargo build -p waproto             # regenerates whatsapp.rs and tags.rs
+```
+
+The build aborts with a clear message if the descriptor SHA-256 does not match.
 
 <Note>
-  You only need the `generate` feature when you've changed the `.proto` file. The generated `whatsapp.rs` is committed to the repository, so all other builds use it directly.
+The `generate` feature flag was removed. Code generation is now always-on and does not require any feature flags. Remove `--features generate` from any existing build scripts.
 </Note>
 
 ## Usage Examples

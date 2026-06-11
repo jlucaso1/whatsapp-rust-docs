@@ -7,7 +7,7 @@ description: "A new waproto::codec module with #[inline(never)] non-generic entr
 
 **`waproto::codec`: pinned non-generic codec entry points ([#842](https://github.com/oxidezap/whatsapp-rust/pull/842))**
 
-A `cargo-bloat` audit of the release binary (fat LTO, `codegen-units=1`) found that 2.5 MiB of the 13.1 MiB `.text` section was duplicate monomorphization. Because prost's `Message` methods are generic, rustc instantiates them in every crate that calls them, and each crate's copy carries a distinct instantiating-crate symbol hash that LTO cannot merge. `whatsapp::Message::encode_raw` alone appeared as three full copies at ~160 KiB each; the decode side split further by buffer type.
+A `cargo-bloat` audit of the release binary (fat LTO, `codegen-units=1`) found that 2.5 MiB of the 13.1 MiB `.text` section was duplicate monomorphization. Prost's `Message` methods are generic, so rustc instantiates them in every crate that calls them. Each crate's copy carries a distinct instantiating-crate symbol hash that LTO cannot merge. For example, `whatsapp::Message::encode_raw` alone appeared as three full copies at ~160 KiB each. The decode side split further by buffer type.
 
 **New `waproto::codec` module.** All production call sites in `wacore` and the main crate now route through `#[inline(never)]` wrappers:
 
@@ -23,7 +23,7 @@ A `cargo-bloat` audit of the release binary (fat LTO, `codegen-units=1`) found t
 | `message_context_info_encode_into` | `&MessageContextInfo, &mut Vec<u8>` |
 | `message_context_info_to_vec` | `&MessageContextInfo → Vec<u8>` |
 
-The `#[inline(never)]` attribute prevents MIR inlining from re-expanding the bodies at call sites, which would silently reintroduce per-crate copies. All decode helpers take `&[u8]` and use `&mut &[u8]` internally — the single buffer shape already instantiated across the workspace — so no second buffer-type tree is created.
+The `#[inline(never)]` attribute prevents MIR inlining from re-expanding the bodies at call sites. Without it, rustc would silently reintroduce per-crate copies. All decode helpers take `&[u8]` and use `&mut &[u8]` internally. This single buffer shape is already instantiated across the workspace, so no second buffer-type tree is created.
 
 **Measured impact (release binary, same LTO flags as shipping profile):**
 

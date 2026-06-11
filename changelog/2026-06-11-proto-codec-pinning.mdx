@@ -1,0 +1,40 @@
+---
+title: "June 11, 2026 — waproto: pinned codec module eliminates duplicate protobuf codegen"
+description: "A new waproto::codec module with #[inline(never)] non-generic entry points pins a single instantiation of the protobuf encode/decode trees in the defining crate, removing ~1.2 MiB of duplicate symbol bloat from the release binary."
+---
+
+## Performance
+
+**`waproto::codec`: pinned non-generic codec entry points ([#842](https://github.com/oxidezap/whatsapp-rust/pull/842))**
+
+A `cargo-bloat` audit of the release binary (fat LTO, `codegen-units=1`) found that 2.5 MiB of the 13.1 MiB `.text` section was duplicate monomorphization. Because prost's `Message` methods are generic, rustc instantiates them in every crate that calls them, and each crate's copy carries a distinct instantiating-crate symbol hash that LTO cannot merge. `whatsapp::Message::encode_raw` alone appeared as three full copies at ~160 KiB each; the decode side split further by buffer type.
+
+**New `waproto::codec` module.** All production call sites in `wacore` and the main crate now route through `#[inline(never)]` wrappers:
+
+| Function | Type |
+|---|---|
+| `message_encoded_len` | `&Message → usize` |
+| `message_encode_into` | `&Message, &mut Vec<u8>` |
+| `message_to_vec` | `&Message → Vec<u8>` |
+| `message_decode` | `&[u8] → Result<Message>` |
+| `web_message_info_decode` | `&[u8] → Result<WebMessageInfo>` |
+| `history_sync_decode` | `&[u8] → Result<HistorySync>` |
+| `message_context_info_encoded_len` | `&MessageContextInfo → usize` |
+| `message_context_info_encode_into` | `&MessageContextInfo, &mut Vec<u8>` |
+| `message_context_info_to_vec` | `&MessageContextInfo → Vec<u8>` |
+
+The `#[inline(never)]` attribute prevents MIR inlining from re-expanding the bodies at call sites, which would silently reintroduce per-crate copies. All decode helpers take `&[u8]` and use `&mut &[u8]` internally — the single buffer shape already instantiated across the workspace — so no second buffer-type tree is created.
+
+**Measured impact (release binary, same LTO flags as shipping profile):**
+
+- `.text`: 13.03 MiB → 11.85 MiB (**−1,208 KiB, −9.1%**)
+- `Message::encode_raw`: 3 copies → 1
+- Cross-crate duplicate-symbol waste: 2,528 KiB → 1,480 KiB
+
+**Protobuf field-number constants** in `wacore::messages` are now sourced from `waproto::tags::*` (generated from the `.proto` schema) instead of hand-written literals. A `.proto` field renumber now fails at compile time rather than silently changing the wire payload.
+
+Test-only call sites retain direct `prost::Message` use and are unaffected.
+
+## No breaking changes
+
+`waproto::codec` is additive. Existing code calling prost's `Message` trait methods directly continues to compile; the new functions are an alternative, not a replacement, for downstream crates.

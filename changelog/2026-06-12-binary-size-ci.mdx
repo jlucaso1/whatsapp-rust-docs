@@ -3,20 +3,20 @@ title: "June 12, 2026 — Binary size CI: per-PR budget gate and historical trac
 description: "Every PR now runs a release build and checks stripped size and .text growth against an absolute budget. A Chart.js series on gh-pages tracks every main merge over time."
 ---
 
-PR [#859](https://github.com/oxidezap/whatsapp-rust/pull/859) adds a `Binary Size` GitHub Actions workflow that gates PRs on binary growth and keeps a historical size series, closing the feedback loop that let dependency bloat and cross-crate monomorphization creep go undetected between audits.
+PR [#859](https://github.com/oxidezap/whatsapp-rust/pull/859) adds a `Binary Size` GitHub Actions workflow. It gates PRs on binary growth and keeps a historical size series. This closes the feedback loop that previously allowed dependency bloat and cross-crate monomorphization creep to go undetected between audits.
 
 ## What is tracked
 
-All metrics come from a single release build (`fat LTO`, `codegen-units=1`, symbols kept so `cargo bloat` reuses it without recompiling):
+All metrics come from a single release build. This build uses `fat LTO`, `codegen-units=1`, and keeps symbols so `cargo bloat` can reuse it without recompiling.
 
 | Metric | Signal |
 |--------|--------|
-| **Stripped file size** | Shipping-size proxy |
-| **`.text` section** | Monomorphization bloat — invariant to strip |
-| **Allocated size** (`text+data+bss`) | Static data tables that never appear in `.text` |
-| **`.text` per crate** (`cargo bloat --crates`) | Individual workspace crates + `std`; everything else as "other deps" |
-| **LLVM IR lines/copies** (`cargo llvm-lines`) | Pre-link monomorphization growth, cheap to compute |
-| **Crate count** (`Cargo.lock`) | New-dependency canary |
+| **Stripped file size** | Shows how much the shipping binary grew |
+| **`.text` section** | Measures code bloat from generic instantiation that persists even in stripped builds |
+| **Allocated size** (`text+data+bss`) | Catches static data tables that never appear in `.text` |
+| **`.text` per crate** (`cargo bloat --crates`) | Attributes `.text` growth to individual workspace crates and `std`; everything else appears as "other deps" |
+| **LLVM IR lines/copies** (`cargo llvm-lines`) | Detects monomorphization growth before linking, cheaply |
+| **Crate count** (`Cargo.lock`) | Signals when a new dependency was added |
 
 ## PR gate
 
@@ -27,14 +27,14 @@ Every PR gets a sticky comment with all metric deltas and a per-crate top-movers
 | Δ stripped size | ≤ 64 KiB |
 | Δ `.text` | ≤ 32 KiB |
 
-Budgets are absolute rather than percentage-based: on a multi-MiB binary a 1% threshold hides real regressions. Sizes are deterministic for the pinned toolchain, so deltas carry no statistical noise.
+Absolute budgets catch real regressions on large binaries that percentage thresholds would hide. Sizes are deterministic across the pinned toolchain, so deltas are noise-free.
 
 ## Escape hatch
 
 Add the **`size-increase-ok`** label to a PR and re-run the failed job to downgrade the gate to a warning. Use this for expected jumps such as toolchain bumps, accepted new dependencies, or deliberate feature additions. The size increase still lands in the historical series.
 
 <Note>
-The label is queried live at gate time, not frozen in the event payload, so label + re-run always works even after the workflow has already triggered.
+The workflow queries the label live at gate time (not from the frozen event payload), so adding the label and re-running always works, even after the workflow has already triggered.
 </Note>
 
 ## Historical series
@@ -45,7 +45,7 @@ Charts: [https://oxidezap.github.io/whatsapp-rust/dev/binary-size/](https://oxid
 
 ## Baseline semantics
 
-The PR baseline is the `size-metrics` artifact from the **latest successful main run**, not the merge-base commit. A long-lived stale PR can therefore show deltas inherited from main merges that happened while it sat open — rebase to clear them.
+The PR baseline is the `size-metrics` artifact from the **latest successful main run**, not the `merge-base` commit. A long-lived stale PR can therefore show deltas inherited from main merges that happened while it sat open — rebase to clear them.
 
 ## Fork PRs
 

@@ -1,0 +1,52 @@
+---
+title: "June 12, 2026 — Binary size CI: per-PR budget gate and historical tracking"
+description: "Every PR now runs a release build and checks stripped size and .text growth against an absolute budget. A Chart.js series on gh-pages tracks every main merge over time."
+---
+
+PR [#859](https://github.com/oxidezap/whatsapp-rust/pull/859) adds a `Binary Size` GitHub Actions workflow that gates PRs on binary growth and keeps a historical size series, closing the feedback loop that let dependency bloat and cross-crate monomorphization creep go undetected between audits.
+
+## What is tracked
+
+All metrics come from a single release build (`fat LTO`, `codegen-units=1`, symbols kept so `cargo bloat` reuses it without recompiling):
+
+| Metric | Signal |
+|--------|--------|
+| **Stripped file size** | Shipping-size proxy |
+| **`.text` section** | Monomorphization bloat — invariant to strip |
+| **Allocated size** (`text+data+bss`) | Static data tables that never appear in `.text` |
+| **`.text` per crate** (`cargo bloat --crates`) | Individual workspace crates + `std`; everything else as "other deps" |
+| **LLVM IR lines/copies** (`cargo llvm-lines`) | Pre-link monomorphization growth, cheap to compute |
+| **Crate count** (`Cargo.lock`) | New-dependency canary |
+
+## PR gate
+
+Every PR gets a sticky comment with all metric deltas and a per-crate top-movers table. The job **fails** when either of the two gated metrics exceeds its absolute per-PR budget:
+
+| Metric | Budget |
+|--------|--------|
+| Δ stripped size | ≤ 64 KiB |
+| Δ `.text` | ≤ 32 KiB |
+
+Budgets are absolute rather than percentage-based: on a multi-MiB binary a 1% threshold hides real regressions. Sizes are deterministic for the pinned toolchain, so deltas carry no statistical noise.
+
+## Escape hatch
+
+Add the **`size-increase-ok`** label to a PR and re-run the failed job to downgrade the gate to a warning. Use this for expected jumps such as toolchain bumps, accepted new dependencies, or deliberate feature additions. The size increase still lands in the historical series.
+
+<Note>
+The label is queried live at gate time, not frozen in the event payload, so label + re-run always works even after the workflow has already triggered.
+</Note>
+
+## Historical series
+
+The push job stores every main-branch measurement at `dev/binary-size` on gh-pages via [`github-action-benchmark`](https://github.com/benchmark-action/github-action-benchmark). A `102%` alert threshold posts a comment on the offending commit as a post-merge safety net for regressions that slipped through the PR gate (e.g. via the label).
+
+Charts: [https://oxidezap.github.io/whatsapp-rust/dev/binary-size/](https://oxidezap.github.io/whatsapp-rust/dev/binary-size/)
+
+## Baseline semantics
+
+The PR baseline is the `size-metrics` artifact from the **latest successful main run**, not the merge-base commit. A long-lived stale PR can therefore show deltas inherited from main merges that happened while it sat open — rebase to clear them.
+
+## Fork PRs
+
+Fork PRs run with a read-only token and receive the job summary and gate result but no PR comment.

@@ -1,0 +1,31 @@
+---
+title: "June 13, 2026 — IQ waiter: de-monomorphize via boxed send future"
+description: "send_and_wait_iq is no longer generic over its send future, collapsing ~15 per-IqSpec monomorphized copies into one and cutting ~103 KiB from .text."
+---
+
+## Performance
+
+**IQ waiter: type-erase send future to eliminate monomorphization bloat ([#862](https://github.com/oxidezap/whatsapp-rust/pull/862))**
+
+`Client::send_and_wait_iq` previously accepted a generic parameter `F: Future`. Because `execute` is generic per `IqSpec` and the send closure (`async { self.send_raw_bytes(buf).await }`) has a **distinct type for each `IqSpec` instantiation**, the compiler stamped out the entire waiter-registration + `select!` + timeout body once per spec — roughly 15 copies at ~951 LLVM-IR lines each, plus matching `drop_in_place` copies (~335 lines each).
+
+`send_and_wait_iq` now accepts a type-erased `IqSendFuture<'_>`:
+
+```rust
+#[cfg(not(target_arch = "wasm32"))]
+type IqSendFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(), ClientError>> + Send + 'a>>;
+```
+
+The two call sites (`send_iq`, `execute`) wrap their send closure in `Box::pin(...)`. The function now compiles to a **single** instantiation regardless of how many `IqSpec` types exist.
+
+**Measured impact** (fat-LTO release build, symbols kept for `cargo bloat`, then stripped):
+
+| Metric | `main` | this branch | delta |
+|--------|--------|-------------|-------|
+| `.text` | 11,856,758 B | 11,751,222 B | **−105,536 B (~103 KiB)** |
+| Stripped binary | 13,996,056 B | 13,889,080 B | **−106,976 B (~104.5 KiB)** |
+
+The cost is one `Box` allocation per IQ request. IQs are control-plane operations — prekey fetch, group queries, privacy sync, usync — that each already block on a network round-trip. The single allocation per call is unmeasurable against that latency, and the per-message encryption hot path is unaffected.
+
+This follows the same de-monomorphization pattern as [#861](https://github.com/oxidezap/whatsapp-rust/pull/861). No public API changes.

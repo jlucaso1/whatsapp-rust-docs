@@ -7,7 +7,11 @@ description: "send_and_wait_iq is no longer generic over its send future, collap
 
 **IQ waiter: type-erase send future to eliminate monomorphization bloat ([#862](https://github.com/oxidezap/whatsapp-rust/pull/862))**
 
-`Client::send_and_wait_iq` previously accepted a generic parameter `F: Future`. Because `execute` is generic per `IqSpec` and the send closure (`async { self.send_raw_bytes(buf).await }`) has a **distinct type for each `IqSpec` instantiation**, the compiler stamped out the entire waiter-registration + `select!` + timeout body once per spec — roughly 15 copies at ~951 LLVM-IR lines each, plus matching `drop_in_place` copies (~335 lines each).
+`Client::send_and_wait_iq` previously accepted a generic parameter `F: Future`.
+
+Because `execute` is generic per `IqSpec`, each `IqSpec` instantiation produces a send closure with a **distinct type**. The compiler therefore generated a separate copy of the entire waiter-registration + `select!` + timeout body for each spec.
+
+This resulted in roughly 15 monomorphized copies at ~951 LLVM-IR lines each, plus matching `drop_in_place` copies (~335 lines each).
 
 `send_and_wait_iq` now accepts a type-erased `IqSendFuture<'_>`:
 

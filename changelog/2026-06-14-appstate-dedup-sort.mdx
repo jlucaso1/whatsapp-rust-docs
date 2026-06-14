@@ -1,0 +1,32 @@
+---
+title: "June 14, 2026 — App state sync: adaptive index-MAC dedup is 10× faster at large patch sizes"
+description: "collect_unique_index_macs switches from an O(n²) linear scan to an O(n log n) index sort above 64 mutations, cutting resume-sync time at N=1000 from 5.7 ms to 550 µs with only ~4 KB of extra scratch."
+---
+
+## Performance
+
+**App state sync: adaptive dedup in `collect_unique_index_macs` ([#868](https://github.com/oxidezap/whatsapp-rust/pull/868))**
+
+`collect_unique_index_macs` deduplicates a patch's index MACs in first-seen order before the batched previous-value-MAC backend lookup. It previously used an O(n²) linear scan — one 32-byte equality pass per element over the already-collected output. At N=1000 (the resume-sync patch ceiling) ~87% of the 5.7 ms was consumed by that scan alone (~500 K byte-slice comparisons).
+
+**Adaptive two-path strategy.** The linear scan is now only used for patches with ≤ 64 mutations, where it is cache-friendly and avoids any extra allocation. Above that threshold dedup runs through an O(n log n) index sort:
+
+1. Collect positions of mutations that carry an index MAC into a single pre-sized `Vec<u32>`.
+2. Sort those positions by MAC content (ties broken by position, so each run's first element leads).
+3. Drop non-leaders via `dedup_by`.
+4. Re-sort positions numerically to restore first-seen order.
+5. Emit MACs in that order.
+
+The only scratch allocation is the `Vec<u32>` of positions (~4 KB for N=1000), far cheaper than the `HashSet<&[u8]>` (×17 faster but ~34 KB of transient allocation that tripped CodSpeed's memory gate).
+
+**Benchmark results (CodSpeed, `fd6c7ff` vs `main`):**
+
+| Benchmark | Before | After | Change |
+|---|---|---|---|
+| `bench_collect_unique_index_macs[1000]` | 5,678 µs | 550.8 µs | **×10 faster** |
+
+1 benchmark improved, 0 regressed, 171 untouched. No memory regression. Binary size +13 KiB stripped (std sort/dedup monomorphization), within the 64 KiB per-PR budget.
+
+**Correctness.** First-seen order is preserved on both paths. New `dedup_tests` assert that the scan and sort paths produce identical results across `n = 8, 64, 65, 1000`, that mutations without an index MAC blob are skipped, and — specifically targeting the order-restoration step — that the sort path restores first-seen order even when appearances run opposite to byte-sort order.
+
+**No public API or wire changes.**

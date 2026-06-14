@@ -41,8 +41,8 @@ The following fields on `wa::Message` are now `Option<Box<T>>` instead of `Optio
 `status_quoted_message`, `status_question_answer_message`,
 `status_sticker_interaction_message`, `sticker_sync_rmr_message`,
 `scheduled_call_creation_message`, `scheduled_call_edit_message`,
-`bcall_message`, `call_log_messsage`, `group_root_key_share`,
-`root_secret_distribute_message`, `chat`.
+`bcall_message`, `call_log_messsage` (three s's — upstream proto typo preserved),
+`group_root_key_share`, `root_secret_distribute_message`, `chat`.
 
 **Field reads are transparent** — `Box<T>` auto-derefs so any code that only reads these fields compiles without changes.
 

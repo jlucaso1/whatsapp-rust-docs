@@ -9,7 +9,7 @@ PR [#863](https://github.com/oxidezap/whatsapp-rust/pull/863) optimizes the mess
 
 `MessageKeys::derive_keys` always calls HKDF with no salt, so its extract step is always `HMAC-SHA256(zero_block, ikm)`. The ipad/opad key schedule for a 32-byte zero key is a constant. However, `Hkdf::new(None, ikm)` was recomputing those two SHA-256 compressions on every call regardless. This occurs once per device in group SKDM fan-out and on every pairwise encrypt/decrypt.
 
-A `LazyLock<Hmac<Sha256>>` now caches that keyed HMAC state once at process startup. Each `derive_keys(ikm, None, counter)` call clones the cached state, feeds the IKM to obtain the PRK, and passes it to `Hkdf::from_prk` for the expand step.
+A `LazyLock<Hmac<Sha256>>` now caches that keyed HMAC state on first access. Each `derive_keys(ikm, None, counter)` call clones the cached state, feeds the IKM to obtain the PRK, and passes it to `Hkdf::from_prk` for the expand step.
 
 The `Some(salt)` branch (used by the DH ratchet step) is unchanged and still calls `Hkdf::new(Some(salt), ikm)` directly.
 

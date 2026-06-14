@@ -3,11 +3,11 @@ title: "June 14, 2026 — Send: SignalStores de-monomorphized to dyn dispatch"
 description: "SignalStores is no longer generic over its store types. The encrypt fan-out now uses type-erased dyn fields, removing ~16 KiB from the .text section. Two new blanket-impl'd traits — CloneableSessionStore and CloneableIdentityStore — replace the Clone bounds."
 ---
 
-## Breaking Change
+## Breaking change
 
 **`wacore::send::SignalStores` is now non-generic ([#861](https://github.com/oxidezap/whatsapp-rust/pull/861))**
 
-`SignalStores` previously carried four type parameters that propagated through every function in the encrypt tree:
+`SignalStores` used to carry four type parameters that propagated through every function in the encrypt tree:
 
 ```rust
 // Before
@@ -24,11 +24,11 @@ where
     SP: SignedPreKeyStore + Send + Sync,
 ```
 
-The struct and all functions that take it (`encrypt_for_devices`, `ensure_sessions_for_devices`, `encrypt_for_devices_with_sessions`, `prepare_dm_stanza`, `prepare_group_stanza`) are now non-generic:
+The struct and all functions that accept it (`encrypt_for_devices`, `ensure_sessions_for_devices`, `encrypt_for_devices_with_sessions`, `prepare_dm_stanza`, `prepare_group_stanza`) are now non-generic:
 
 ```rust
 // After
-pub struct SignalStores<'_> { ... }
+pub struct SignalStores<'a> { ... }
 
 pub async fn encrypt_for_devices(
     stores: &mut SignalStores<'_>,
@@ -40,12 +40,12 @@ The store fields are now `dyn` trait objects, so the entire encrypt + session-es
 
 ## Migration
 
-**Concrete adapters need no code changes.** The two `Clone` bounds on session and identity stores are now expressed via two new object-safe traits:
+**Your concrete adapters need no code changes.** The two `Clone` bounds on session and identity stores are now expressed via two new object-safe traits:
 
 - `wacore::send::encrypt::CloneableSessionStore` — blanket-impl'd for every `T: SessionStore + Clone + Send + Sync + 'static`
 - `wacore::send::encrypt::CloneableIdentityStore` — blanket-impl'd for every `T: IdentityKeyStore + Clone + Send + Sync + 'static`
 
-If you construct `SignalStores` directly (e.g. in a custom `wacore` integration), update any explicit type annotation:
+If you construct `SignalStores` directly (e.g. in a custom `wacore` integration), drop the type parameters from any explicit annotation:
 
 ```rust
 // Before
@@ -55,11 +55,11 @@ let stores: SignalStores<'_, SessionAdapter, IdentityAdapter, PreKeyAdapter, Sig
 let stores: SignalStores<'_> = ...;
 ```
 
-The field assignment is identical — just remove the type parameters. The `.clone()` calls in the fan-out become `.clone_box()` internally; callers are unaffected.
+The field assignment is identical — just remove the type parameters. The `.clone()` calls in the fan-out become `.clone_box()` internally; you don't need to change call sites.
 
 ## Performance
 
-Removed **~16 KiB** from the `.text` section (fat-LTO release build, stripped binary −13.6 KiB). In production, where a single concrete adapter set is in use, most of the duplicate instantiations were already folded by the linker, so the reduction is modest but real and zero-risk.
+This change removes **~16 KiB** from the `.text` section (fat-LTO release build, stripped binary −13.6 KiB). In production, where a single concrete adapter set is in use, most duplicate instantiations were already folded by the linker, so the reduction is modest but real and zero-risk.
 
 | Metric | Before | After | Delta |
 |--------|--------|-------|-------|

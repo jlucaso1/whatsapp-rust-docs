@@ -827,9 +827,9 @@ let key = proto_helpers::message_key(&jid, &message_id, from_me);
 
 // Build delete message
 let delete = wa::Message {
-    protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+    protocol_message: Some(Box::new(wa::ProtocolMessage {
         key: Some(key),
-        r#type: Some(wa::message::protocol_message::Type::Delete as i32),
+        r#type: Some(wa::protocol_message::Type::Delete as i32),
         ..Default::default()
     })),
     ..Default::default()

@@ -31,17 +31,18 @@ Boxing a field that is only ever used boxed makes prost emit the `Box` decode/en
 
 The following fields on `wa::Message` are now `Option<Box<T>>` instead of `Option<T>`:
 
-`reactionMessage`, `keepInChatMessage`, `pinInChatMessage`, `pollUpdateMessage`,
-`pollAddOptionMessage`, `encReactionMessage`, `encCommentMessage`,
-`encEventResponseMessage`, `secretEncryptedMessage`, `conditionalRevealMessage`,
-`declinePaymentRequestMessage`, `cancelPaymentRequestMessage`,
-`paymentInviteMessage`, `paymentReminderMessage`, `invoiceMessage`,
-`placeholderMessage`, `questionResponseMessage`, `statusNotificationMessage`,
-`statusQuotedMessage`, `statusQuestionAnswerMessage`,
-`statusStickerInteractionMessage`, `stickerSyncRmrMessage`,
-`scheduledCallCreationMessage`, `scheduledCallEditMessage`,
-`bcallMessage`, `callLogMesssage`, `groupRootKeyShare`,
-`rootSecretDistributeMessage`, `chat`.
+`reaction_message`, `keep_in_chat_message`, `pin_in_chat_message`,
+`poll_update_message`, `poll_add_option_message`, `enc_reaction_message`,
+`enc_comment_message`, `enc_event_response_message`, `secret_encrypted_message`,
+`conditional_reveal_message`, `decline_payment_request_message`,
+`cancel_payment_request_message`, `payment_invite_message`,
+`payment_reminder_message`, `invoice_message`, `placeholder_message`,
+`question_response_message`, `status_notification_message`,
+`status_quoted_message`, `status_question_answer_message`,
+`status_sticker_interaction_message`, `sticker_sync_rmr_message`,
+`scheduled_call_creation_message`, `scheduled_call_edit_message`,
+`bcall_message`, `call_log_messsage`, `group_root_key_share`,
+`root_secret_distribute_message`, `chat`.
 
 **Field reads are transparent** — `Box<T>` auto-derefs so any code that only reads these fields compiles without changes.
 

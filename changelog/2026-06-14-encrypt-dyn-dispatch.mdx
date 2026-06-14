@@ -42,8 +42,8 @@ The store fields are now `dyn` trait objects, so the entire encrypt + session-es
 
 **Your concrete adapters need no code changes.** The two `Clone` bounds on session and identity stores are now expressed via two new object-safe traits:
 
-- `wacore::send::encrypt::CloneableSessionStore` — blanket-impl'd for every `T: SessionStore + Clone + Send + Sync + 'static`
-- `wacore::send::encrypt::CloneableIdentityStore` — blanket-impl'd for every `T: IdentityKeyStore + Clone + Send + Sync + 'static`
+- `wacore::send::CloneableSessionStore` — blanket-impl'd for every `T: SessionStore + Clone + Send + Sync + 'static`
+- `wacore::send::CloneableIdentityStore` — blanket-impl'd for every `T: IdentityKeyStore + Clone + Send + Sync + 'static`
 
 If you construct `SignalStores` directly (e.g. in a custom `wacore` integration), drop the type parameters from any explicit annotation:
 

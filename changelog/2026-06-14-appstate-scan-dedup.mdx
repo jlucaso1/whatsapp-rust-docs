@@ -1,0 +1,27 @@
+---
+title: "June 14, 2026 — App state: linear scan replaces HashSet for index-mac dedup"
+description: "detect_duplicate_index_in_patch and HashState::update_hash now use Vec linear scans instead of HashSet for index_mac dedup, reducing wacore_appstate .text by −1.1 KiB (−3.03%) and eliminating one HashSet allocation per patch."
+---
+
+## Internal / Binary size
+
+**App state: `Vec` linear scan replaces `HashSet` for `index_mac` dedup ([#865](https://github.com/oxidezap/whatsapp-rust/pull/865))**
+
+Two `HashSet<&[u8]>` usages in the patch-validation path are replaced with linear-scan `Vec<&[u8]>`:
+
+1. `detect_duplicate_index_in_patch` (`processor.rs`) — the in-patch duplicate-index guard, tracking Set and Remove independently.
+2. `HashState::update_hash`'s `removed_in_patch` (`hash.rs`) — the membership set that gates the SET-also-REMOVEd double-subtract.
+
+`index_mac` blobs are HMAC outputs — uniformly random bytes — so SipHash's distribution properties buy nothing over a byte compare; the only cost was per-key hash setup and a `HashMap` table allocation. This is the same trade-off measured for `collect_unique_index_macs` in #856, where `HashSet` was **6–120% slower** than linear scan at patch sizes seen in practice (N≈10–50).
+
+**Binary size impact (`wacore_appstate` `.text`):**
+
+| Before | After | Δ |
+|---:|---:|---:|
+| ~36.3 KiB | ~35.2 KiB | **−1.1 KiB (−3.03%)** |
+
+The reduction comes from dropping the monomorphized `HashSet`/SipHash machinery from the compiled output. CodSpeed reports no performance change across all 172 benchmarks — the dedup is microscopic next to the crypto operations (SHA-256 `compress256`, lthash HKDF) that dominate the patch benchmark.
+
+## Breaking changes
+
+None. Behaviour is byte-for-byte identical; the existing tests (`process_patch_rejects_duplicate_set_index`, `process_patch_allows_same_index_across_set_and_remove`, and the `update_hash` index-mode tests) cover both paths and are unchanged.

@@ -1,0 +1,18 @@
+---
+title: "June 14, 2026 — Reporting-token key derivation: cache zero-salt HKDF extract"
+description: "derive_reporting_token_key avoids recomputing two constant SHA-256 compressions per send by caching the zero-keyed HMAC state in a LazyLock."
+---
+
+## Performance
+
+**Reporting-token key derivation: cache zero-salt HKDF extract ([#864](https://github.com/oxidezap/whatsapp-rust/pull/864))**
+
+`derive_reporting_token_key` runs once per outgoing message to derive the reporting-token key via HKDF with no salt. The no-salt extract step is `HMAC-SHA256(zero_block, ikm)`, meaning the ipad/opad key schedule for the zero key is constant across every call — yet the previous code recomputed those two SHA-256 compressions on every send.
+
+The zero-keyed HMAC state is now initialized once in a `LazyLock<Hmac<Sha256>>` and cloned per derivation. The clone copies the keyed PRF state without re-running the key schedule. The per-message secret is then fed into the cloned HMAC, and `Hkdf::from_prk` picks up from the resulting PRK — output is byte-identical to `Hkdf::new(None, message_secret)`.
+
+This is the same `LazyLock + from_prk` pattern already applied to the libsignal message-key extract (#863) and the appstate ltHash extract (#847).
+
+**Correctness.** A new test (`derive_key_matches_plain_hkdf_extract`) pins the cached path against `Hkdf::new(None, secret)` byte-for-byte across 32 distinct secrets.
+
+**No API or behavior changes.** The public signature of `derive_reporting_token_key` is unchanged and output is byte-identical.

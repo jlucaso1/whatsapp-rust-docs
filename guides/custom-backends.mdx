@@ -941,7 +941,7 @@ let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
 
 ## Custom cache store
 
-The pluggable cache store adapter lets you replace the default in-process moka caches with an external backend like Redis or Memcached. This is useful for sharing cache state across multiple client instances or for deployments where in-process memory is limited.
+The pluggable cache store adapter lets you replace the default in-process caches with an external backend like Redis or Memcached. This is useful for sharing cache state across multiple client instances or for deployments where in-process memory is limited.
 
 ### The CacheStore trait
 
@@ -1119,7 +1119,7 @@ The following namespaces are used internally by the client:
 ### Design considerations
 
 - **Error handling is best-effort.** Cache misses and failures are logged as warnings but don't break the client — it falls back to fetching from the authoritative source.
-- **Serialization uses `serde_json`.** Values are serialized to JSON bytes on the custom-store path. The moka path has zero serialization overhead.
+- **Serialization uses `serde_json`.** Values are serialized to JSON bytes on the custom-store path. The in-process path has zero serialization overhead.
 - **TTL is forwarded from `CacheEntryConfig`.** Your implementation receives the same TTL configured in `CacheConfig`.
 - **Coordination caches cannot be externalized.** Session locks, message queues, and enqueue locks hold live Rust objects (mutexes, channels) and always stay in-process.
 - **`invalidate_all()` requires `tokio-runtime`.** The synchronous `invalidate_all()` method on `TypedCache` spawns a fire-and-forget task via Tokio for custom backends. Without the `tokio-runtime` feature, the clear is skipped with a warning. Use the async `clear()` method instead if you disable `tokio-runtime`.

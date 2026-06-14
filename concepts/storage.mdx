@@ -476,7 +476,7 @@ pub struct LidPnCache {
 
 **Defaults match `WAWebLidPnCache`:**
 - **Time-based expiry**: none — entries do not idle out
-- **Capacity**: effectively unbounded (`u64::MAX`; moka has no `unbounded()` builder)
+- **Capacity**: effectively unbounded (`u64::MAX`; no dedicated `unbounded()` builder)
 
 A custom `CacheEntryConfig` can impose a capacity bound if memory pressure requires it. Be aware that capacity-LRU eviction silently downgrades Signal addresses from `@lid` (or `@hosted.lid`) back to `@c.us`, which can cause `SessionNotFound` decryption failures. Notably, this keeps `status@broadcast` participants resolving to `@lid` for the entire session, matching WA Web behavior.
 
@@ -1030,39 +1030,26 @@ snapshots/
 
 ### Overview
 
-By default, whatsapp-rust uses in-process [moka](https://github.com/moka-rs/moka) caches for group metadata, device lists, device registry, and LID-PN mappings. The pluggable cache store adapter lets you replace any of these with an external backend (Redis, Memcached, etc.) by implementing the `CacheStore` trait.
+By default, whatsapp-rust uses in-process `PortableCache` caches for group metadata, device lists, device registry, and LID-PN mappings. The pluggable cache store adapter lets you replace any of these with an external backend (Redis, Memcached, etc.) by implementing the `CacheStore` trait.
 
-### PortableCache (WASM-compatible alternative)
+### PortableCache
 
-When the `moka-cache` feature is disabled, whatsapp-rust automatically switches to `PortableCache` — a platform-agnostic, runtime-independent cache implementation suitable for WASM and other non-standard runtimes. It mirrors the moka `Cache` API surface so call-sites can switch transparently.
+`PortableCache` is the client's sole in-process cache backend on every target, including wasm32. It is a platform-agnostic, runtime-independent implementation.
 
 `PortableCache` supports:
-- **Maximum capacity** with oldest-inserted eviction
+- **Maximum capacity** with oldest-inserted (FIFO) eviction
 - **Time-to-live (TTL)** — entries expire a fixed duration after insertion
 - **Time-to-idle (TTI)** — entries expire after a fixed duration of no access
+- **Monotonic expiry** — TTL/TTI use `wacore::time::Instant` (not the wall clock), so system-clock jumps cannot expire entries early
 - **Single-flight `get_with`** — concurrent initializations for the same key coalesce into a single call, which is critical for caches storing coordination primitives (mutexes, channels)
-- **Eager `iter()` snapshot** — `PortableCache::iter()` mirrors `moka::Cache::iter()` and yields `(Arc<K>, V)` pairs. Unlike moka's lazy iterator, the snapshot is captured up front (so it survives concurrent mutations) and may include entries that are expired but not yet evicted, matching moka's semantics.
-
-All time checks use `wacore::time::now_millis` instead of `std::time::Instant`, making it compatible with environments where monotonic clocks are unavailable.
-
-```toml
-# Disable moka to use PortableCache (e.g., for WASM targets)
-[dependencies]
-whatsapp-rust = { version = "0.6", default-features = false, features = [
-    "sqlite-storage",
-    "tokio-transport",
-    "tokio-runtime",
-    "ureq-client",
-    "tokio-native",
-    "signal",
-    # "moka-cache" omitted — PortableCache is used instead
-] }
-```
+- **Eager init-lock reclamation** — `get_with`/`get_with_by_ref` drop a key's init lock once no other caller holds it, preventing unbounded `init_locks` growth in high-cardinality caches (session locks, chat lanes, dedup)
+- **Reliable async `clear()`** — awaits the write lock; prefer this over the best-effort sync `invalidate_all()` in async contexts
+- **`snapshot_entries()`** — reliable awaited snapshot of `(Arc<K>, V)` pairs for invalidation passes; `iter()` is a best-effort sync spin that can yield an empty snapshot under write contention
 
 ```mermaid
 graph TB
     A[Client] --> B[TypedCache]
-    B -->|Default| C[Moka In-Process]
+    B -->|Default| C[PortableCache In-Process]
     B -->|Custom| D[CacheStore Trait]
     D --> E[Redis]
     D --> F[Memcached]
@@ -1088,17 +1075,17 @@ Cache operations are best-effort. The client falls back gracefully when cache re
 
 ### TypedCache
 
-`TypedCache<K, V>` is a generic wrapper that dispatches to either moka or a custom `CacheStore` backend. The moka path has zero extra overhead — values are stored in-process without any serialization. The custom-store path serializes values with `serde_json` and keys via `Display`.
+`TypedCache<K, V>` is a generic wrapper that dispatches to either the in-process `PortableCache` or a custom `CacheStore` backend. The in-process path has zero extra overhead — values are stored in memory without any serialization. The custom-store path serializes values with `serde_json` and keys via `Display`.
 
 ```rust
-// Moka path (zero overhead)
-let cache = TypedCache::from_moka(moka_cache);
+// In-process path (zero overhead)
+let cache = TypedCache::from_local(portable_cache);
 
 // Custom store path (serde_json serialization)
 let cache = TypedCache::from_store(store, "group", Some(Duration::from_secs(3600)));
 ```
 
-`CacheEntryConfig` provides a `build_typed_ttl` convenience method that automatically selects the right backend: if a custom `CacheStore` is provided, it creates a `TypedCache` backed by the store; otherwise it falls back to an in-process moka cache.
+`CacheEntryConfig` provides a `build_typed_ttl` convenience method that automatically selects the right backend: if a custom `CacheStore` is provided, it creates a `TypedCache` backed by the store; otherwise it falls back to an in-process `PortableCache`.
 
 ```rust
 let cache: TypedCache<Jid, Arc<GroupInfo>> = config.group_cache.build_typed_ttl(
@@ -1113,7 +1100,7 @@ The group cache stores `Arc<GroupInfo>` so that warm sends and repeated `query_i
 
 `TypedCache` provides two ways to remove all entries:
 
-- **`invalidate_all()`** — synchronous. For moka backends this works immediately. For custom `CacheStore` backends, it spawns a fire-and-forget task via `tokio::runtime::Handle::try_current()`, which **requires the `tokio-runtime` feature**. Without `tokio-runtime` enabled, the clear is skipped and a warning is logged.
+- **`invalidate_all()`** — synchronous. For the in-process backend this is a best-effort spin; under sustained write contention it can silently skip the clear. For custom `CacheStore` backends, it spawns a fire-and-forget task via `tokio::runtime::Handle::try_current()`, which **requires the `tokio-runtime` feature**. Without `tokio-runtime` enabled, the clear is skipped and a warning is logged.
 - **`clear()`** — async. Awaits completion for custom backends and is the recommended approach when you need to ensure all entries are removed.
 
 <Warning>
@@ -1132,7 +1119,7 @@ pub struct CacheStores {
 }
 ```
 
-Fields left as `None` keep the default moka behavior. Use `CacheStores::all(store)` to set the same backend for all pluggable caches at once.
+Fields left as `None` keep the default in-process `PortableCache` behaviour. Use `CacheStores::all(store)` to set the same backend for all pluggable caches at once.
 
 <Note>
 Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects (mutexes, channel senders) that cannot be serialized to an external store.

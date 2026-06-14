@@ -956,7 +956,7 @@ let config = CacheConfig {
 };
 ```
 
-Fields left as `None` keep the default in-process moka behavior. See [Custom backends — cache store](/guides/custom-backends#custom-cache-store) for a full implementation guide.
+Fields left as `None` keep the default in-process `PortableCache` behaviour. See [Custom backends — cache store](/guides/custom-backends#custom-cache-store) for a full implementation guide.
 
 <Note>
 Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects that cannot be serialized to an external store.

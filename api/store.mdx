@@ -484,7 +484,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## CacheStore Trait
 
-The `CacheStore` trait enables pluggable cache backends for the client's data caches. By default, caches use in-process moka; implementing this trait lets you use Redis, Memcached, or any other external cache.
+The `CacheStore` trait enables pluggable cache backends for the client's data caches. By default, caches use the in-process `PortableCache`; implementing this trait lets you use Redis, Memcached, or any other external cache.
 
 **Location:** `wacore/src/store/cache.rs`
 
@@ -557,20 +557,20 @@ See [Custom backends — cache store](/guides/custom-backends#custom-cache-store
 
 ## TypedCache
 
-`TypedCache<K, V>` is a generic wrapper that dispatches to either moka or a custom `CacheStore` backend.
+`TypedCache<K, V>` is a generic wrapper that dispatches to either the in-process `PortableCache` or a custom `CacheStore` backend.
 
 **Location:** `src/cache_store.rs`
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `from_moka` | `fn from_moka(cache: Cache<K, V>) -> Self` | Wrap an existing moka cache (zero overhead) |
+| `from_local` | `fn from_local(cache: Cache<K, V>) -> Self` | Wrap an in-process `PortableCache` (zero overhead) |
 | `from_store` | `fn from_store(store: Arc<dyn CacheStore>, namespace: &'static str, ttl: Option<Duration>) -> Self` | Create a cache backed by a custom store |
 | `get` | `async fn get<Q>(&self, key: &Q) -> Option<V>` | Look up a value. Misses and deserialization failures return `None` |
 | `insert` | `async fn insert(&self, key: K, value: V)` | Insert or update a value |
 | `invalidate` | `async fn invalidate<Q>(&self, key: &Q)` | Remove a single key |
-| `invalidate_all` | `fn invalidate_all(&self)` | Remove all entries (sync). Requires `tokio-runtime` for custom backends |
-| `clear` | `async fn clear(&self)` | Remove all entries (async). Awaits completion for custom backends |
-| `run_pending_tasks` | `async fn run_pending_tasks(&self)` | Run internal housekeeping (moka only) |
+| `invalidate_all` | `fn invalidate_all(&self)` | Remove all entries (sync). Best-effort for in-process backend; requires `tokio-runtime` for custom backends |
+| `clear` | `async fn clear(&self)` | Remove all entries (async). Awaits the write lock for in-process backend; awaits completion for custom backends |
+| `run_pending_tasks` | `async fn run_pending_tasks(&self)` | Evict expired entries (in-process backend only; no-op for custom backends) |
 | `entry_count` | `fn entry_count(&self) -> u64` | Approximate entry count (sync). Returns `0` for custom backends |
 | `entry_count_async` | `async fn entry_count_async(&self) -> u64` | Approximate entry count, delegating to custom backend if available |
 

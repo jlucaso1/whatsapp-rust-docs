@@ -381,9 +381,9 @@ pub struct Client {
 }
 ```
 
-Both use [moka](https://github.com/moka-rs/moka) `Cache` with capacity-based eviction (configurable via `CacheConfig`), so stale entries are automatically cleaned up.
+Both use `PortableCache` with capacity-based eviction (configurable via `CacheConfig`), so stale entries are automatically cleaned up.
 
-On disconnect, `chat_lanes` is explicitly invalidated via `invalidate_all()` to drop per-chat queue senders. This causes worker tasks from the old connection to exit via channel close, preventing them from surviving reconnects with outdated Signal session state that would cause decryption failures. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources reset on disconnect.
+On disconnect, `chat_lanes` is cleared via the async `clear()` to drop per-chat queue senders. This causes worker tasks from the old connection to exit via channel close, preventing them from surviving reconnects with outdated Signal session state that would cause decryption failures. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources reset on disconnect.
 
 Location: `src/client.rs`
 

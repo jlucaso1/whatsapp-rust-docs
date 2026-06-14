@@ -40,7 +40,6 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
     "ureq-client",
     "tokio-native",
     "signal",
-    "moka-cache",
 ] }
 whatsapp-rust-sqlite-storage = "0.6"
 whatsapp-rust-tokio-transport = "0.6"
@@ -63,7 +62,6 @@ whatsapp-rust suporta diversas features opcionais:
 | `tokio-transport` | Transporte WebSocket Tokio | ✅ Sim |
 | `ureq-client` | Cliente HTTP Ureq | ✅ Sim |
 | `sqlite-storage` | Backend de armazenamento SQLite | ✅ Sim |
-| `moka-cache` | Cache em memória Moka | ✅ Sim |
 | `simd` | Codificação/decodificação do protocolo binário otimizada com SIMD (**requer Rust nightly**) | ✅ Sim |
 | `signal` | Manipulação de sinais Unix (desligamento gracioso em SIGTERM/Ctrl+C) | ✅ Sim |
 | `danger-skip-tls-verify` | Pula a verificação TLS (inseguro) | ❌ Não |
@@ -134,7 +132,6 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
     "ureq-client",
     "tokio-native",
     "signal",
-    "moka-cache",
 ] }
 # wacore também precisa de default-features = false para evitar que
 # a unificação de features reabilite simd

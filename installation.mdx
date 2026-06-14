@@ -63,7 +63,6 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
     "ureq-client",
     "tokio-native",
     "signal",
-    "moka-cache",
 ] }
 wacore = { version = "0.6", default-features = false }
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
@@ -82,7 +81,6 @@ whatsapp-rust supports several optional features:
 | `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
 | `ureq-client` | Ureq HTTP client | ✅ Yes |
 | `sqlite-storage` | SQLite storage backend | ✅ Yes |
-| `moka-cache` | Moka in-memory cache | ✅ Yes |
 | `simd` | SIMD-optimized binary protocol encoding/decoding (**requires nightly Rust**) | ✅ Yes |
 | `signal` | Unix signal handling (graceful shutdown on SIGTERM/Ctrl+C) | ✅ Yes |
 | `tracing` | Emit `tracing` spans/events across connect, send, receive, IQ, app state, pairing, media, and session flows. See [Observability](/advanced/observability) | ❌ No |
@@ -156,7 +154,6 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
     "ureq-client",
     "tokio-native",
     "signal",
-    "moka-cache",
 ] }
 # wacore also needs default-features = false to prevent feature unification
 # from re-enabling simd

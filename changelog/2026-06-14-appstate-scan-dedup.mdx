@@ -10,7 +10,7 @@ description: "detect_duplicate_index_in_patch and HashState::update_hash now use
 Two `HashSet<&[u8]>` usages in the patch-validation path are replaced with linear-scan `Vec<&[u8]>`:
 
 1. `detect_duplicate_index_in_patch` (`processor.rs`) — the in-patch duplicate-index guard, tracking Set and Remove independently.
-2. `HashState::update_hash`'s `removed_in_patch` (`hash.rs`) — the membership set that gates the SET-also-REMOVEd double-subtract.
+2. `HashState::update_hash`'s `removed_in_patch` (`hash.rs`) — the membership set that gates the SET-also-REMOVED double-subtract.
 
 `index_mac` blobs are HMAC outputs — uniformly random bytes — so SipHash's distribution properties buy nothing over a byte compare; the only cost was per-key hash setup and a `HashMap` table allocation. This is the same trade-off measured for `collect_unique_index_macs` in #856, where `HashSet` was **6–120% slower** than linear scan at patch sizes seen in practice (N≈10–50).
 

@@ -1,0 +1,26 @@
+---
+title: "June 14, 2026 — Signal ratchet: pre-computed zero-salt HKDF extract for message-key derivation"
+description: "Caches the HMAC-SHA256 keyed state for the zero-salt HKDF extract step in MessageKeys::derive_keys. Each derivation clones the pre-computed ipad/opad schedule instead of recomputing it, saving two SHA-256 compressions per derived message key."
+---
+
+PR [#863](https://github.com/oxidezap/whatsapp-rust/pull/863) optimizes the message-key derivation hot path in the Signal ratchet.
+
+## What changed
+
+`MessageKeys::derive_keys` always calls HKDF with no salt, so its extract step is always `HMAC-SHA256(zero_block, ikm)`. The ipad/opad key schedule for a 32-byte zero key is a constant, but `Hkdf::new(None, ikm)` was recomputing those two SHA-256 compressions on every call — once per device in group SKDM fan-out and on every pairwise encrypt/decrypt.
+
+A `LazyLock<Hmac<Sha256>>` now caches that keyed HMAC state once at process startup. Each `derive_keys(ikm, None, counter)` call clones the cached state, feeds the IKM to obtain the PRK, and passes it to `Hkdf::from_prk` for the expand step.
+
+The `Some(salt)` branch (used by the DH ratchet step) is unchanged and still calls `Hkdf::new(Some(salt), ikm)` directly.
+
+This is the same technique used for the appstate ltHash extract in `wacore/appstate/src/lthash.rs`.
+
+## Correctness
+
+Output is byte-identical to `Hkdf::new(None, ikm)`. A new test pins this across empty, short, 32-byte, and 64-byte IKMs. The existing `session_divergence` round-trip suite continues to pass — a derivation divergence would immediately fail the MAC on decrypt.
+
+## Performance note
+
+This is primarily a CodSpeed (instruction-count) metric win on the `bench_group_send_skdm_256` benchmark. CodSpeed runs without SHA-NI, so SHA-256 dominates that benchmark's profile. On production hardware with SHA extensions the hash cost is low and the wall-clock impact is negligible.
+
+No public API changes.

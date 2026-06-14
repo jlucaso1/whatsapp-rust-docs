@@ -77,9 +77,9 @@ pub struct Message {
     pub view_once_message_v2_extension: Option<Box<FutureProofMessage>>,
     
     // Reactions and interactions
-    pub reaction_message: Option<ReactionMessage>,
+    pub reaction_message: Option<Box<ReactionMessage>>,
     pub edited_message: Option<Box<FutureProofMessage>>,
-    pub keep_in_chat_message: Option<KeepInChatMessage>,
+    pub keep_in_chat_message: Option<Box<KeepInChatMessage>>,
     
     // Album (grouped media)
     pub album_message: Option<Box<AlbumMessage>>,
@@ -90,6 +90,10 @@ pub struct Message {
     // ... and many more
 }
 ```
+
+<Note>
+As of [PR #866](https://github.com/oxidezap/whatsapp-rust/pull/866), all inline content variant fields on `wa::Message` that were not already boxed are now `Option<Box<T>>`. This shrinks the struct from 3784 → 952 bytes (−75%). Field **reads** are transparent (auto-deref); only **construction sites** need `Box::new(...)`. See the [changelog entry](/changelog/2026-06-14-wa-message-boxing) for the full list and migration examples.
+</Note>
 
 **Usage in main library:**
 
@@ -823,11 +827,11 @@ let key = proto_helpers::message_key(&jid, &message_id, from_me);
 
 // Build delete message
 let delete = wa::Message {
-    protocol_message: Some(wa::ProtocolMessage {
+    protocol_message: Some(Box::new(wa::message::ProtocolMessage {
         key: Some(key),
-        r#type: Some(wa::protocol_message::Type::Delete as i32),
+        r#type: Some(wa::message::protocol_message::Type::Delete as i32),
         ..Default::default()
-    }),
+    })),
     ..Default::default()
 };
 ```

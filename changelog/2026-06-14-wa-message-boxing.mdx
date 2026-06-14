@@ -1,0 +1,88 @@
+---
+title: "June 14, 2026 — wa::Message shrunk ~75% by boxing content variant fields"
+description: "Breaking: content fields on wa::Message are now Option<Box<T>>. Construction sites need Box::new(); field reads are unchanged. wa::Message drops from 3784 → 952 bytes, making every Arc<Message> event and every clone/decode cheaper."
+---
+
+PR [#866](https://github.com/oxidezap/whatsapp-rust/pull/866) shrinks `wa::Message` from **3784 → 952 bytes (−75%)** by boxing its remaining inline content variant fields.
+
+## Why
+
+`wa::Message` carries ~110 optional content fields and exactly one is ever set per message, yet it was laid out as the **sum** of all of them (~3.8 KiB). prost already boxes the variants caught in recursion cycles (image, video, template, …); this PR boxes the remaining inline message-typed fields.
+
+Shrinking the struct is a win across the board:
+
+- **Every `Arc<Message>` delivered to library users is ~4× cheaper to allocate and hold** — a direct benefit for high-throughput consumers.
+- Decode moves and drops a far smaller struct.
+- The retry-cache and reporting-token paths clone less.
+
+The two `SenderKeyDistribution` fields stay inline (small, on the group-send hot path).
+
+## Binary size: unchanged
+
+Boxing a field that is only ever used boxed makes prost emit the `Box` decode/encode tree *instead of* the inline one — so the code size barely moves:
+
+| Metric | before | after |
+|---|---:|---:|
+| `wa::Message` size (bytes) | 3784 | 952 |
+| `waproto+prost .text` | 1,736,322 B | 1,729,838 B |
+| `Message::merge_field` instantiations | 16 | 16 |
+
+## Breaking change
+
+The following fields on `wa::Message` are now `Option<Box<T>>` instead of `Option<T>`:
+
+`reactionMessage`, `keepInChatMessage`, `pinInChatMessage`, `pollUpdateMessage`,
+`pollAddOptionMessage`, `encReactionMessage`, `encCommentMessage`,
+`encEventResponseMessage`, `secretEncryptedMessage`, `conditionalRevealMessage`,
+`declinePaymentRequestMessage`, `cancelPaymentRequestMessage`,
+`paymentInviteMessage`, `paymentReminderMessage`, `invoiceMessage`,
+`placeholderMessage`, `questionResponseMessage`, `statusNotificationMessage`,
+`statusQuotedMessage`, `statusQuestionAnswerMessage`,
+`statusStickerInteractionMessage`, `stickerSyncRmrMessage`,
+`scheduledCallCreationMessage`, `scheduledCallEditMessage`,
+`bcallMessage`, `callLogMesssage`, `groupRootKeyShare`,
+`rootSecretDistributeMessage`, `chat`.
+
+**Field reads are transparent** — `Box<T>` auto-derefs so any code that only reads these fields compiles without changes.
+
+**Construction sites must wrap with `Box::new(...)`:**
+
+```rust
+// Before
+let msg = wa::Message {
+    reaction_message: Some(wa::message::ReactionMessage {
+        text: Some("👍".to_string()),
+        ..Default::default()
+    }),
+    ..Default::default()
+};
+
+// After
+let msg = wa::Message {
+    reaction_message: Some(Box::new(wa::message::ReactionMessage {
+        text: Some("👍".to_string()),
+        ..Default::default()
+    })),
+    ..Default::default()
+};
+```
+
+For default-only construction you can use `Box::default()` shorthand:
+
+```rust
+// Before
+let msg = wa::Message {
+    poll_update_message: Some(wa::message::PollUpdateMessage::default()),
+    ..Default::default()
+};
+
+// After
+let msg = wa::Message {
+    poll_update_message: Some(Box::default()),
+    ..Default::default()
+};
+```
+
+<Note>
+High-level helpers (`client.send_reaction()`, `build_reaction_message()`, `build_keep_in_chat_message()`, etc.) were updated in this PR and require no call-site changes. Only code that constructs these `wa::Message` variants by hand is affected.
+</Note>

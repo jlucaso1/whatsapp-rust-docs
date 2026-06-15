@@ -1484,7 +1484,7 @@ fn get_buffer(&mut self) -> &mut Vec<u8> {
 
 // Additionally, message_encrypt releases the buffer immediately after a send
 // if it grew beyond MAX_CAPACITY, rather than waiting for the periodic shrink.
-// This prevents a single large plaintext from pinning ~32 KiB per worker thread.
+// This prevents a single large plaintext from pinning ~16 KiB per worker thread.
 ```
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`

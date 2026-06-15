@@ -1,0 +1,27 @@
+---
+title: "June 15, 2026 — Signal decrypt: fast-path rollback for in-order messages"
+description: "In-order message decryption no longer clones the full session snapshot before every decrypt, eliminating ~9 allocs/msg of heap churn on the common receive path."
+---
+
+## Performance
+
+**Signal decrypt: fast-path rollback skips the full snapshot clone for in-order messages ([#877](https://github.com/oxidezap/whatsapp-rust/pull/877))**
+
+`decrypt_message_with_state` previously called `decrypt_snapshot()` before every decrypt — cloning `receiver_chains`, `sender_chain`, and `root_key` — purely so a MAC or decrypt failure could roll the ratchet back to an uncorrupted state. On success that clone was dropped unused, which is the case for the overwhelming majority of messages.
+
+**Fast path.** For the common in-order message on an existing receiver chain (`counter == chain.index`), the only mutation is a single `set_receiver_chain_key` advance — no DH ratchet step, no skipped-key caching, no chain eviction. Saving the old `ChainKey` (which is `Copy`) is a provably complete rollback. The fast path saves only that one chain key and skips the snapshot clone entirely. On failure, the saved chain key is restored; on success, it is dropped. Every other case (new DH ratchet chain, skip-ahead, out-of-order cached-key removal) and any lookup error still fall through to the existing full `decrypt_snapshot()`, unchanged.
+
+**Why it is safe.** The rollback guarantee is identical to the full-snapshot path — the fast path only triggers where the mutation set is provably `{one chain key advance}`. This matters because `store_session` runs unconditionally after the decrypt (even on failure), so a failed decrypt that mutated the session would otherwise be persisted; the rollback protects durability, not just in-memory state.
+
+**Heap profile (dhat, 5,000-message in-order pingpong flood):**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Allocations per message | 9.12 | 0.04 |
+| Bytes allocated per message | 824 B | 3 B |
+
+The residual 0.04 allocs/msg is the new-chain messages that still take the full snapshot, exactly as intended.
+
+**Test coverage.** A new test `inorder_macfail_rolls_back_chain_and_recovers` verifies that a MAC failure on an in-order message (the fast-path rollback) leaves the receiver chain in a state where the next legitimate message still decrypts. A regressed rollback would surface `DuplicatedMessage` on the following decrypt.
+
+**No breaking changes.** The optimization is entirely internal to `decrypt_message_with_state`; public decryption APIs, error types, and session semantics are unchanged.

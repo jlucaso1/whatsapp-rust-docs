@@ -136,7 +136,7 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
 6. Promote successful session to current if needed
 
 <Note>
-  The implementation optimizes memory by using take/restore patterns to avoid cloning session states during decryption attempts (see `session_cipher.rs:495-619`).
+  Two allocation-avoiding patterns work together here. The outer **take/restore** pattern moves the `SessionState` out of the record instead of cloning it (see `session_cipher.rs:495-619`). Inside `decrypt_message_with_state`, an **in-order fast-path rollback** saves only the single `ChainKey` (a `Copy` value) for the common case, skipping the full `decrypt_snapshot()` clone (see [In-order decrypt fast-path rollback](#in-order-decrypt-fast-path-rollback)).
 </Note>
 
 ### Chain key ratcheting
@@ -1451,6 +1451,23 @@ if let Some(mut current_state) = record.take_session_state() {
 ```
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:495-564`
+
+### In-order decrypt fast-path rollback
+
+`decrypt_message_with_state` previously called `decrypt_snapshot()` before every decrypt — cloning `receiver_chains`, `sender_chain`, and `root_key` — so a MAC or decrypt failure could roll the ratchet back. On success the clone was dropped unused, which covers the vast majority of messages.
+
+For the common in-order message on an existing receiver chain (counter == chain's current index), the only mutation is a single `set_receiver_chain_key` advance — no DH ratchet step, no skipped-key caching, no chain eviction. Saving the old `ChainKey` (which is `Copy`) is a provably complete rollback. The fast path saves only that chain key and skips the snapshot clone. On failure, only that chain key is restored; on success, it is dropped. All other cases (new DH ratchet chain, skip-ahead, out-of-order cached-key removal) and any lookup error still fall through to the full `decrypt_snapshot()`.
+
+**Heap profile (dhat, 5,000-message in-order pingpong flood):**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Allocations per message | 9.12 | 0.04 |
+| Bytes allocated per message | 824 B | 3 B |
+
+The residual 0.04 allocs/msg comes from new-chain messages that still take the full snapshot, as intended. Steady-state and end-of-run heap are unchanged — this is pure allocation churn reduction, not a memory footprint change.
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs` (`decrypt_message_with_state`)
 
 ### Buffer Reuse
 

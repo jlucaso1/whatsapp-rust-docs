@@ -24,7 +24,7 @@ The merge semantics are unchanged (later-set fields win). This is a cold path �
 
 ## Runtime: hoist ephemeral expiration lookup in dispatch
 
-In `dispatch_parsed_message`, `msg.get_base_message().get_ephemeral_expiration()` was called **twice** per inbound message — once in the `if` condition, once in the assignment. Each call walks the wrapper chain and iterates the ~28-variant message content list. A let-chain now binds the result once:
+In `dispatch_parsed_message`, `msg.get_base_message().get_ephemeral_expiration()` was called **twice** when ephemeral expiration was present but not yet set on the message info — once in the `if` condition, once in the assignment. Each call walks the wrapper chain and iterates the ~28-variant message content list. A let-chain now binds the result once:
 
 ```rust
 // Before
@@ -43,7 +43,7 @@ if info.ephemeral_expiration.is_none()
 }
 ```
 
-This path runs on every inbound message, so the saving is unconditional.
+The redundant traversal is avoided on messages where ephemeral expiration is set but not yet recorded in the dispatch info.
 
 ## No breaking changes
 

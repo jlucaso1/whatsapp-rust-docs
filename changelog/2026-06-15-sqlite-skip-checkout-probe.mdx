@@ -17,7 +17,7 @@ For a local embedded SQLite file, pooled connections do not spontaneously drop, 
 
 Setting `.test_on_check_out(false)` removes a cached `SELECT 1` (reset + step) from every checkout.
 
-**Measured overhead removed:**
+## Measured overhead removed
 
 | Condition | Cost |
 |---|---:|
@@ -27,4 +27,6 @@ Setting `.test_on_check_out(false)` removes a cached `SELECT 1` (reset + step) f
 
 In context, a full `SqliteStore` operation (`get_session`/`put_session`) takes ~9–11 µs, dominated by `spawn_blocking` dispatch and WAL frame writes. The ~93 ns probe is ~1% of a real store op — below run-to-run variance — but represents provable wasted work on every checkout.
 
-**No behavior change** for local SQLite. One line change, no new dependencies, no `.text` growth.
+## No behavior change
+
+For local SQLite, there is no behavior change. One line change, no new dependencies, no `.text` growth.

@@ -1105,6 +1105,56 @@ pub fn wanted_pre_key_count(&self) -> usize
 
 Returns the currently configured pre-key upload batch size.
 
+### set_resend_rate_limit
+
+```rust
+pub fn set_resend_rate_limit(&self, burst: u32, refill_per_min: u32)
+```
+
+Retunes the per-chat outbound resend rate limiter live, without reconnecting.
+
+Outbound retry resends to a group are bounded by a token bucket keyed on the chat JID. `burst` is the instantaneous allowance; `refill_per_min` is the sustained per-chat ceiling. This caps the aggregate resend rate WhatsApp's anti-abuse penalizes during a PN-to-LID migration fan-out. Takes effect on each chat's next retry; a lowered `burst` clamps a live bucket on its next access. A `burst` of `0` disables the limiter entirely.
+
+<ParamField path="burst" type="u32" required>
+  Instantaneous token allowance per chat. Set to `0` to disable.
+</ParamField>
+
+<ParamField path="refill_per_min" type="u32" required>
+  Tokens replenished per minute per chat.
+</ParamField>
+
+**Example:**
+```rust
+// Tighten during an observed fan-out storm
+client.set_resend_rate_limit(5, 3);
+
+// Restore defaults
+client.set_resend_rate_limit(20, 10);
+
+// Disable entirely
+client.set_resend_rate_limit(0, 0);
+```
+
+<Tip>
+Configure at build time via [`BotBuilder::with_resend_rate_limit`](/api/bot#with-resend-rate-limit). Use this method only to tune live without restarting.
+</Tip>
+
+### resends_throttled_total
+
+```rust
+pub fn resends_throttled_total(&self) -> u64
+```
+
+Returns the total number of outbound resends dropped by the per-chat rate limiter since the client started. A rising value indicates an active retry storm is being throttled. Available without the `debug-diagnostics` feature.
+
+**Example:**
+```rust
+let dropped = client.resends_throttled_total();
+if dropped > 0 {
+    tracing::warn!("Resend storm: {} resends throttled by rate limiter", dropped);
+}
+```
+
 ### set_force_active_delivery_receipts
 
 ```rust
@@ -1825,6 +1875,8 @@ Returns a snapshot of all internal collection sizes for memory leak detection. M
 | `sender_key_device_cache` | `u64` | Per-group sender key device tracking cache |
 | `session_locks` | `u64` | Per-device session locks |
 | `chat_lanes` | `u64` | Per-chat lanes (combined enqueue lock + message queue) |
+| `resend_rate_limiter_chats` | `u64` | Active per-chat resend rate-limiter token buckets |
+| `resends_throttled_total` | `u64` | Total outbound resends dropped by the rate limiter since start |
 | `response_waiters` | `usize` | Active IQ response waiters |
 | `node_waiters` | `usize` | Active node waiters |
 | `pending_retries` | `usize` | Pending message retries |

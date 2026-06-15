@@ -1,0 +1,24 @@
+---
+title: "June 15, 2026 — Read loop: reuse the shutdown listener"
+description: "The message read loop no longer allocates an event_listener on every inbound frame. The shutdown future is created once and pinned across iterations, eliminating ~3.84 allocations per message."
+---
+
+## Performance
+
+**Reuse shutdown listener across read loop iterations ([#876](https://github.com/oxidezap/whatsapp-rust/pull/876))**
+
+`read_messages_loop` previously called `wait_for_shutdown(&shutdown).fuse()` inside `select_biased!` on every iteration. Each call allocates an `event_listener`, so the client paid one heap allocation per inbound frame to resubscribe to a signal that never changes during a connection.
+
+The subscription is now hoisted out of the loop: the future is created once, pinned with `futures::pin_mut!`, and polled via `&mut shutdown_fut` on each iteration. Because the connection shutdown signal is one-shot, a single pinned listener still catches a firing that occurs mid-loop. The pre-subscribe race that `wait_for_shutdown` already guards against is preserved.
+
+**No behavior change.** Shutdown exits the read loop identically; the only difference is when the listener is allocated.
+
+### Measurements (dhat, pingpong, 5 000 msgs)
+
+| Site | Before | After |
+|---|---:|---:|
+| `event_listener::listen` in `read_messages_loop` | 3.41 allocs/msg · 191 B/msg | eliminated |
+| Total heap churn | 1,371,532 blocks | 1,352,320 blocks |
+| Δ total | — | **−3.84 allocs/msg** |
+
+Steady-state heap is unchanged at ~2.85 MB; there is no leak before or after.

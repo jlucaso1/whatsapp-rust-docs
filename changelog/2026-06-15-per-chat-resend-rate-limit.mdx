@@ -7,7 +7,11 @@ PR [#871](https://github.com/oxidezap/whatsapp-rust/pull/871) adds a per-chat to
 
 ## Problem
 
-During a mass PN-to-LID migration, hundreds of distinct devices each fail to decrypt the same group messages and each send a retry receipt. The library pairwise-resends to every device, and WhatsApp's anti-abuse system penalizes the **aggregate per-chat resend rate** — not any single device's depth. The existing `MAX_RETRY_COUNT=5` guard trusts the peer-echoed `count` field, which stays at `1` during a fan-out, so it never fires. The result is an `AccountLocked` error under sustained fan-out conditions.
+During a mass PN-to-LID migration, many devices fail to decrypt the same group messages.
+Each device sends a retry receipt, and the library pairwise-resends to every device.
+WhatsApp's anti-abuse system penalizes the **aggregate per-chat resend rate** — not any single device's depth.
+The existing `MAX_RETRY_COUNT=5` guard trusts the peer-echoed `count` field, which stays at `1` during a fan-out, so it never fires.
+The result is an `AccountLocked` error under sustained fan-out conditions.
 
 ## Fix
 
@@ -30,7 +34,7 @@ The defaults are conservative: well under the rate observed to trip `AccountLock
 
 ## New API
 
-### `BotBuilder::with_resend_rate_limit`
+**`BotBuilder::with_resend_rate_limit`**
 
 Configure the limiter at build time:
 
@@ -42,7 +46,7 @@ Bot::builder()
     .await?
 ```
 
-### `Client::set_resend_rate_limit`
+**`Client::set_resend_rate_limit`**
 
 Retune live without reconnecting:
 
@@ -54,7 +58,7 @@ client.set_resend_rate_limit(5, 3);
 client.set_resend_rate_limit(0, 0);
 ```
 
-### `Client::resends_throttled_total`
+**`Client::resends_throttled_total`**
 
 Surfaces storm activity without the `debug-diagnostics` feature:
 
@@ -65,11 +69,11 @@ if dropped > 0 {
 }
 ```
 
-### `CacheConfig::resend_rate_limiter_capacity`
+**`CacheConfig::resend_rate_limiter_capacity`**
 
 Controls the per-chat bucket cache capacity (default: 4096). Keep this above the count of groups concurrently driving retry storms. Eviction is fail-open.
 
-### `MemoryDiagnostics` new fields
+**`MemoryDiagnostics` new fields**
 
 Two new fields are available in the snapshot returned by `client.memory_diagnostics()`:
 

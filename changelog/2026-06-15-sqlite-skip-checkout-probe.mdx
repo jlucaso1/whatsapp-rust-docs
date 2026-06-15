@@ -1,0 +1,30 @@
+---
+title: "June 15, 2026 — SQLite: skip per-checkout liveness probe"
+description: "Sets test_on_check_out(false) on the r2d2 pool, removing a SELECT 1 round-trip on every store checkout (~93 ns, 37% of bare checkout cost)."
+---
+
+PR [#874](https://github.com/oxidezap/whatsapp-rust/pull/874) sets `.test_on_check_out(false)` on the r2d2 SQLite pool builder.
+
+## Performance
+
+r2d2 0.8.10 defaults `test_on_check_out` to `true`, which runs `SELECT 1` via Diesel's `is_valid()` on every `pool.get()`. With the SQLite pool at `pool_size=2` behind a `db_semaphore`, essentially every store operation (Signal session/identity/sender-key/prekey writes and write-behind flush drains) paid this probe.
+
+For a local embedded SQLite file, pooled connections do not spontaneously drop, so the probe is pure overhead:
+
+- Real I/O failures (disk full, corruption) surface as `StoreError` on the next actual query regardless.
+- Dirty transaction state is still caught at check-in via r2d2's `has_broken`.
+- New connections are still exercised at creation via the `ConnectionOptions` customizer (`PRAGMA journal_mode=WAL` etc.).
+
+Setting `.test_on_check_out(false)` removes a cached `SELECT 1` (reset + step) from every checkout.
+
+**Measured overhead removed:**
+
+| Condition | Cost |
+|---|---:|
+| Probe ON | 253.5 ns/checkout |
+| Probe OFF | 160.7 ns/checkout |
+| Probe cost removed | **~93 ns (36.6%)** |
+
+In context, a full `SqliteStore` operation (`get_session`/`put_session`) takes ~9–11 µs, dominated by `spawn_blocking` dispatch and WAL frame writes. The ~93 ns probe is ~1% of a real store op — below run-to-run variance — but represents provable wasted work on every checkout.
+
+**No behavior change** for local SQLite. One line change, no new dependencies, no `.text` growth.

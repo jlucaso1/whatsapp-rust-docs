@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-15-sqlite-skip-checkout-probe",
                   "changelog/2026-06-14-drop-moka-portable-cache",
                   "changelog/2026-06-12-binary-size-ci",
                   "changelog/2026-06-11-bot-api-overhaul",

@@ -544,6 +544,37 @@ Leave this at the default unless you have a specific reason to change it. Embedd
 The floor of 5 prevents an empty-but-flagged pool and a re-upload loop (the count guard never clears below the trigger threshold). The ceiling of 65,535 is the wire-format limit — the upload IQ encodes the pre-key list length as a `u16`, so a larger batch would generate and store keys locally and then fail to encode.
 </Warning>
 
+### with_resend_rate_limit
+
+```rust
+pub fn with_resend_rate_limit(self, burst: u32, refill_per_min: u32) -> Self
+```
+
+Tunes the per-chat outbound resend rate limiter at build time.
+
+Outbound retry resends to a group are bounded by a token bucket keyed on the chat JID. `burst` is the instantaneous allowance; `refill_per_min` is the sustained per-chat ceiling. This caps the aggregate resend rate WhatsApp's anti-abuse penalizes during a PN-to-LID migration fan-out, where many distinct devices retry the same messages concurrently. A `burst` of `0` disables the limiter.
+
+Defaults apply without calling this method (burst 20, refill 10/min). Can also be retuned live after build via [`Client::set_resend_rate_limit`](/api/client#set_resend_rate_limit).
+
+<ParamField path="burst" type="u32" required>
+  Instantaneous token allowance per chat. Set to `0` to disable the limiter.
+</ParamField>
+
+<ParamField path="refill_per_min" type="u32" required>
+  Tokens replenished per minute per chat (sustained ceiling).
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_resend_rate_limit(30, 15) // larger burst for busy groups
+    // ...
+```
+
+<Tip>
+The conservative defaults (burst 20, refill 10/min) are safe for most deployments. Only tune upward if legitimate retry traffic exceeds the default budget, or downward if you see `AccountLocked` errors from an active fan-out storm.
+</Tip>
+
 ---
 
 ## Building and Running
@@ -860,6 +891,7 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 |---------|---------|-------------|
 | `session_locks_capacity` | 10,000 | Per-device Signal session lock capacity |
 | `chat_lanes_capacity` | 5,000 | Per-chat lane capacity (combined enqueue lock + message queue) |
+| `resend_rate_limiter_capacity` | 4,096 | Per-chat resend rate-limiter bucket capacity. Eviction is fail-open (evicted bucket recreates full). Keep above the count of groups concurrently driving retry storms. |
 
 #### Sent message DB cleanup
 

@@ -1,0 +1,50 @@
+---
+title: "June 15, 2026 — Prost codec dedup: −67 KiB .text + ephemeral dispatch hoist"
+description: "Two no-drawback perf cleanups: route MessageContextInfo merge through a pinned codec helper to eliminate a duplicate BotMetadata decode subtree (~67 KiB .text), and bind get_ephemeral_expiration() once per inbound message instead of twice."
+---
+
+PR [#869](https://github.com/oxidezap/whatsapp-rust/pull/869) removes two sources of waste found during a binary-bloat audit following the appstate dedup PR (#868).
+
+## Binary: deduplicate the MessageContextInfo prost decode tree (~67 KiB .text)
+
+`MessageUtils::encode_dm_plaintexts` merges reporting context into a message's `MessageContextInfo` by calling `ctx.merge(vec.as_slice())`. The bare `&[u8]` buffer caused prost to monomorphize the full `MessageContextInfo` → `BotMetadata` decode subtree in a **distinct** buffer-type shape — separate from the `&mut &mut &[u8]` tree that `Message::decode` already instantiates — shipping a second copy of that subtree in the binary.
+
+The fix routes the merge through a new pinned helper `waproto::codec::message_context_info_merge`, which merges via `&mut &mut &[u8]` to match the shape the rest of the workspace decodes with. The `waproto::codec` module already exists for exactly this "pin one instantiation" purpose.
+
+| Symbol | Before | After |
+|---|---|---|
+| `BotMetadata::merge_field` | 2 copies | **1** |
+| `MessageContextInfo::merge_field` | 2 copies | **1** |
+| `ContextInfo::merge_field` | 2 copies | **1** |
+
+The merge semantics are unchanged (later-set fields win). This is a cold path — only triggered when a message already carries a top-level `message_context_info`.
+
+**New internal API** (not public beyond `waproto::codec`):
+- `waproto::codec::message_context_info_merge(mci, bytes)` — merges wire bytes into an existing `MessageContextInfo` through the canonical buffer-type shape.
+
+## Runtime: hoist ephemeral expiration lookup in dispatch
+
+In `dispatch_parsed_message`, `msg.get_base_message().get_ephemeral_expiration()` was called **twice** per inbound message — once in the `if` condition, once in the assignment. Each call walks the wrapper chain and iterates the ~28-variant message content list. A let-chain now binds the result once:
+
+```rust
+// Before
+if info.ephemeral_expiration.is_none()
+    && msg.get_base_message().get_ephemeral_expiration().is_some()
+{
+    Arc::make_mut(&mut info).ephemeral_expiration =
+        msg.get_base_message().get_ephemeral_expiration();
+}
+
+// After
+if info.ephemeral_expiration.is_none()
+    && let Some(exp) = msg.get_base_message().get_ephemeral_expiration()
+{
+    Arc::make_mut(&mut info).ephemeral_expiration = Some(exp);
+}
+```
+
+This path runs on every inbound message, so the saving is unconditional.
+
+## No breaking changes
+
+Both changes are purely internal. No public API was added, removed, or modified.

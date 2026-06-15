@@ -1,0 +1,79 @@
+---
+title: "June 15, 2026 — Per-chat outbound resend rate limiter"
+description: "Adds a token-bucket rate limiter on group retry resends to prevent AccountLocked during PN-to-LID migration fan-outs. Tunable via BotBuilder::with_resend_rate_limit and Client::set_resend_rate_limit."
+---
+
+PR [#871](https://github.com/oxidezap/whatsapp-rust/pull/871) adds a per-chat token-bucket rate limiter on outbound retry resends to protect against the `AccountLocked` error produced by high-volume PN-to-LID migration fan-outs.
+
+## Problem
+
+During a mass PN-to-LID migration, hundreds of distinct devices each fail to decrypt the same group messages and each send a retry receipt. The library pairwise-resends to every device, and WhatsApp's anti-abuse system penalizes the **aggregate per-chat resend rate** — not any single device's depth. The existing `MAX_RETRY_COUNT=5` guard trusts the peer-echoed `count` field, which stays at `1` during a fan-out, so it never fires. The result is an `AccountLocked` error under sustained fan-out conditions.
+
+## Fix
+
+A per-chat token-bucket rate limiter applied to every outbound group retry resend:
+
+- **Keyed by chat JID**: bounds the aggregate resend rate regardless of how many distinct devices drive it.
+- **Drop, don't queue**: throttled devices are already marked for fresh SKDM earlier in the retry path — they recover on the next normal group send without any timer or queued work. The hot path stays allocation-free.
+- **Lazy refill off the monotonic clock**: correct over long sessions, immune to wall-clock jumps, no background task required.
+- **Capacity-only cache**: bounds memory; eviction is fail-open (an evicted bucket recreates full), so undersizing only forgives rate, never over-throttles.
+- **Group-only**: DMs have no SKDM fallback, so they keep the unconditional resend (bounded by `MAX_RETRY_COUNT`) to avoid dropped deliveries.
+
+## Defaults
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Burst | 20 | Instantaneous allowance per chat |
+| Refill rate | 10 / min | Sustained per-chat ceiling |
+
+The defaults are conservative: well under the rate observed to trip `AccountLocked`, yet above any healthy chat's steady resend need. A burst of `0` disables the limiter entirely.
+
+## New API
+
+### `BotBuilder::with_resend_rate_limit`
+
+Configure the limiter at build time:
+
+```rust
+Bot::builder()
+    // ...
+    .with_resend_rate_limit(30, 15) // burst 30, refill 15/min
+    .build()
+    .await?
+```
+
+### `Client::set_resend_rate_limit`
+
+Retune live without reconnecting:
+
+```rust
+// Tighten during an observed fan-out storm
+client.set_resend_rate_limit(5, 3);
+
+// Disable entirely
+client.set_resend_rate_limit(0, 0);
+```
+
+### `Client::resends_throttled_total`
+
+Surfaces storm activity without the `debug-diagnostics` feature:
+
+```rust
+let dropped = client.resends_throttled_total();
+if dropped > 0 {
+    tracing::warn!("Resend storm: {} resends dropped by rate limiter", dropped);
+}
+```
+
+### `CacheConfig::resend_rate_limiter_capacity`
+
+Controls the per-chat bucket cache capacity (default: 4096). Keep this above the count of groups concurrently driving retry storms. Eviction is fail-open.
+
+### `MemoryDiagnostics` new fields
+
+Two new fields are available in the snapshot returned by `client.memory_diagnostics()`:
+
+| Field | Description |
+|-------|-------------|
+| `resend_rate_limiter_chats` | Active per-chat token buckets |
+| `resends_throttled_total` | Total resends dropped since start |

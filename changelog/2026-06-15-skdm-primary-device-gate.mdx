@@ -1,0 +1,54 @@
+---
+title: "June 15, 2026 — SKDM redistribution now uses a primary-device gate (WA Web parity)"
+description: "Fixes over-broad SKDM redistribution during PN→LID retry storms. A device is now warm only when it AND its primary (device 0) hold the key, matching WA Web's ParticipantStore.js behavior. Removes the is_user_forgotten predicate."
+---
+
+PR [#872](https://github.com/oxidezap/whatsapp-rust/pull/872) corrects the Sender Key Distribution Message (SKDM) filter to match WhatsApp Web's `getGroupSenderKeyListFromParticipantRecord` in `ParticipantStore.js`.
+
+## Problem
+
+During a PN→LID retry storm, each retrying companion device is marked `has_key=false` individually. The previous filter used a per-user `is_user_forgotten` clause — if **any** device for a user was cold, the entire user's device list received a fresh SKDM. This caused extra outbound SKDM volume during exactly the storms that risk `AccountLocked`, and diverged from WhatsApp Web's behavior.
+
+## Fix: primary-device gate
+
+A device is now considered **warm** (skip SKDM) only when **both** the device itself **and** its primary device (device ID 0) hold the key. The filter predicate is:
+
+```
+needs SKDM ← device is cold  OR  primary device (device 0) is cold
+```
+
+This is strictly more correct than the three alternatives:
+
+| Predicate | Behavior |
+|---|---|
+| Old (`is_user_forgotten`) | One cold companion redistributes the **whole user**. Broader than WA Web. |
+| Naive per-device | A cold primary would leave warm companions without SKDM. Narrower than WA Web (drops a needed redistribution). |
+| **Primary-gate (this PR)** | Cold companion → only that device. Cold primary → whole user. **Exact WA Web parity.** |
+
+A missing primary row (`None`) is treated as cold, matching WA Web's `?? false` default.
+
+## `SenderKeyDeviceMap` changes
+
+The `forgotten_users: HashSet<Arc<str>>` field and the `is_user_forgotten()` method have been removed from `SenderKeyDeviceMap`. The primary-device check is now expressed directly as:
+
+```rust
+!cached_map.device_has_key(&device.user, device.device).unwrap_or(false)
+    || !cached_map.device_has_key(&device.user, 0).unwrap_or(false)
+```
+
+`from_db_rows` is simpler: it no longer maintains a second `HashSet` alongside the devices map.
+
+## Impact
+
+- **Reduced SKDM volume during retry storms.** Only the actually-cold device (or all of a user's devices when the primary is cold) receives a fresh SKDM, instead of the entire user's device set for every cold companion.
+- **Lower `AccountLocked` risk.** Retry storms generate less outbound traffic, reducing exposure to WhatsApp's rate limits.
+- **No change to warm sends.** When all devices (including device 0) already hold the key, the behavior is identical to before.
+
+## Behavioral cases
+
+| Primary (device 0) | Companion | Result |
+|---|---|---|
+| warm (`has_key=true`) | cold (`has_key=false`) | Only the cold companion receives SKDM |
+| cold (`has_key=false`) | warm (`has_key=true`) | Both devices receive SKDM (primary gate fails) |
+| absent (`None`) | warm (`has_key=true`) | Companion receives SKDM (absent primary treated as cold) |
+| warm | warm | No SKDM for either device |

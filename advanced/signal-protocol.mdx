@@ -600,7 +600,7 @@ pub struct PreparedGroupStanza {
 Rather than distributing the sender key to all group devices on every message, the client:
 1. Loads the per-device sender key map — first checking the in-memory cache, falling back to the database via `get_sender_key_devices`
 2. Resolves all current group participant devices
-3. Computes the diff — only devices with `has_key=false` or not yet tracked receive the SKDM
+3. Computes the diff using a **primary-device gate** (matching WA Web's `ParticipantStore.js getGroupSenderKeyListFromParticipantRecord`): a device receives SKDM when it is cold (`has_key=false`) **or** its primary device (device 0) is cold. A cold primary redistributes the whole user; a cold companion redistributes only itself. A missing primary row is treated as cold.
 4. Passes the targeted device list to `prepare_group_stanza` via the `skdm_target_devices` parameter
 
 <Note>
@@ -664,8 +664,6 @@ The `SenderKeyDeviceMap` pre-parses JID strings from the database into a user-to
 pub(crate) struct SenderKeyDeviceMap {
     /// user → (device_id → has_key)
     devices: HashMap<Arc<str>, HashMap<u16, bool>>,
-    /// Users with at least one has_key=false device
-    forgotten_users: HashSet<Arc<str>>,
 }
 ```
 

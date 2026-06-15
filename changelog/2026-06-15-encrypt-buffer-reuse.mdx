@@ -1,0 +1,28 @@
+---
+title: "June 15, 2026 — Signal encrypt: thread-local buffer actually reused"
+description: "The AES encrypt buffer is now borrowed through SignalMessage::new instead of being taken and reallocated on every send, saving ~1.2 allocations and ~2.2 KB per message."
+---
+
+## Performance
+
+**Signal encrypt: thread-local buffer is now truly reused across sends ([#879](https://github.com/oxidezap/whatsapp-rust/pull/879))**
+
+`message_encrypt` used a thread-local `Vec` as an AES ciphertext buffer, but the previous implementation called `mem::take` to extract it and then immediately `reserve`'d a replacement — allocating a fresh ~1 KiB on every single send. The buffer was local, but not reused.
+
+**The fix** builds `SignalMessage` while still borrowing the buffer as a `&[u8]` slice. `SignalMessage::new` copies the ciphertext into its protobuf body regardless, so no owned intermediate `Vec` is needed. After the message is built, the buffer is `clear()`'d (capacity retained) and left in thread-local storage for the next call.
+
+**Oversized buffer release.** If a single unusually large plaintext causes the buffer to grow beyond `MAX_CAPACITY` (16 KiB), the buffer is replaced with a fresh `Vec::with_capacity(INITIAL_CAPACITY)` immediately after the message is built, rather than pinning that large allocation on the worker thread. The old `take` + `realloc` path discharged this implicitly; the new path does it explicitly with a one-line check.
+
+The decrypt buffer is unchanged: its output *is* the returned plaintext (it escapes to the caller), so `take` there remains the correct approach.
+
+**Measurement (dhat, 5000-message pingpong):**
+
+| Metric | Before | After | Delta |
+|---|---|---|---|
+| Allocations/msg | 262.8 | 261.6 | **−1.2** |
+| Heap traffic/msg | 73.8 KB | 71.6 KB | **−2.2 KB** |
+| End-of-run heap | ~2.86 MB | ~2.86 MB | unchanged |
+
+`bench_dm_send` on CodSpeed now tracks the per-send allocation delta precisely (memory mode).
+
+**No breaking changes.** Wire format, protocol behavior, and public API are all unchanged.

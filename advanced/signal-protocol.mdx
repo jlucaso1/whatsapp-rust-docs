@@ -767,15 +767,21 @@ thread_local! {
     static DECRYPTION_BUFFER: RefCell<EncryptionBuffer> = ...;
 }
 
-// Usage in session_cipher.rs:99-111
-let ctext = ENCRYPTION_BUFFER.with(|buffer| {
+// Usage in session_cipher.rs — buffer is cleared, borrowed, then retained
+let message = ENCRYPTION_BUFFER.with(|buffer| {
     let mut buf_wrapper = buffer.borrow_mut();
     let buf = buf_wrapper.get_buffer();
-    aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(), 
+    buf.clear();
+    aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(),
                             message_keys.iv(), buf)?;
-    let result = std::mem::take(buf);
-    buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
-    Ok::<Vec<u8>, SignalProtocolError>(result)
+    let ctext = buf.as_slice(); // borrow — no allocation
+    let message = SignalMessage::new(..., ctext, ...)?;
+    // Release oversized buffers immediately rather than waiting for the
+    // periodic shrink in get_buffer (prevents pinning per worker thread).
+    if buf.capacity() > EncryptionBuffer::MAX_CAPACITY {
+        *buf = Vec::with_capacity(EncryptionBuffer::INITIAL_CAPACITY);
+    }
+    Ok::<CiphertextMessage, SignalProtocolError>(message)
 })?;
 ```
 
@@ -1475,6 +1481,10 @@ fn get_buffer(&mut self) -> &mut Vec<u8> {
     }
     &mut self.buffer
 }
+
+// Additionally, message_encrypt releases the buffer immediately after a send
+// if it grew beyond MAX_CAPACITY, rather than waiting for the periodic shrink.
+// This prevents a single large plaintext from pinning ~32 KiB per worker thread.
 ```
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`

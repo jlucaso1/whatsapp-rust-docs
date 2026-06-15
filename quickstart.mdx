@@ -268,7 +268,7 @@ cargo run -- -p 15551234567 --code MYCODE12    # Custom 8-char pair code
 cargo run -- -p 15551234567 -c MYCODE12        # Short form
 ```
 
-The demo bot responds to `🦀ping` with a quoted `🏓 Pong!` reply, edits the reply to append the send latency, and supports media ping/pong via CDN reuse.
+The demo bot responds to `🦀ping` with a quoted `🏓 Pong!` reply and supports media ping/pong via CDN reuse. It also handles `🦀send <jid> <text>`, which relays a plain-text message to any group or DM JID and reports the send latency back to the originating chat.
 
 ## Using MessageContext
 
@@ -349,7 +349,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Complete example with logging
 
-Here's a production-ready example with proper logging, reactions, message editing, and media CDN reuse:
+Here's a production-ready example with proper logging, reactions, message editing, media CDN reuse, and the `🦀send` relay command:
 
 ```rust src/main.rs
 use log::{error, info};
@@ -357,6 +357,7 @@ use whatsapp_rust::prelude::*;
 use whatsapp_rust::pair_code::PairCodeOptions;
 
 const PING_TRIGGER: &str = "🦀ping";
+const SEND_TRIGGER: &str = "🦀send";
 const PONG_TEXT: &str = "🏓 Pong!";
 const REACTION_EMOJI: &str = "🏓";
 
@@ -410,13 +411,54 @@ async fn handle_message(ctx: MessageContext) {
         return;
     }
 
-    if ctx.message.text_content() == Some(PING_TRIGGER) {
+    let Some(text) = ctx.message.text_content() else {
+        return;
+    };
+    if text == PING_TRIGGER {
         if let Err(e) = ctx.react(REACTION_EMOJI).await {
             error!("Failed to send reaction: {e}");
         }
         if let Err(e) = ctx.reply_quoting(PONG_TEXT).await {
             error!("Failed to send pong: {e}");
         }
+    } else if let Some(args) = text.strip_prefix(SEND_TRIGGER) {
+        handle_send_command(&ctx, args).await;
+    }
+}
+
+/// Handles `🦀send <jid> <text>`, relaying text to an arbitrary group or DM JID.
+async fn handle_send_command(ctx: &MessageContext, args: &str) {
+    let Some((target, text)) = args.trim_start().split_once(char::is_whitespace) else {
+        error!("Usage: {SEND_TRIGGER} <jid> <text>");
+        return;
+    };
+    let text = text.trim_start();
+    if text.is_empty() {
+        error!("Usage: {SEND_TRIGGER} <jid> <text>");
+        return;
+    }
+    let jid: Jid = match target.parse() {
+        Ok(jid) => jid,
+        Err(e) => {
+            error!("Invalid JID '{target}': {e}");
+            return;
+        }
+    };
+    let start = wacore::time::Instant::now();
+    let sent = match ctx.client.send_message(jid, wa::Message::text(text)).await {
+        Ok(sent) => sent,
+        Err(e) => {
+            error!("Failed to send message: {e}");
+            return;
+        }
+    };
+    let duration = format!("{:.2?}", start.elapsed());
+    info!("Sent message {} to {} in {}", sent.message_id, sent.to, duration);
+    if let Err(e) = ctx
+        .reply_quoting(format!("✅ Sent to {}\n`{duration}`", sent.to))
+        .await
+    {
+        error!("Failed to send timing reply: {e}");
     }
 }
 

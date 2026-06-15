@@ -1,13 +1,13 @@
 ---
 title: "June 15, 2026 — Example bot: 🦀send command"
-description: "Adds a 🦀send <jid> <text> command to the demo bot that relays text to any group or DM JID and reports send latency back to the caller."
+description: "Adds a 🦀send <jid> <text> command that you can use in the demo bot to relay text to any group or DM JID and report send latency back to the originating chat."
 ---
 
-PR [#875](https://github.com/oxidezap/whatsapp-rust/pull/875) adds a `🦀send` command to the demo bot in `src/main.rs`.
+PR [`#875`](https://github.com/oxidezap/whatsapp-rust/pull/875) adds a `🦀send` command that you can use in the demo bot in `src/main.rs`.
 
 ## What changed
 
-The example bot now handles `🦀send <jid> <text>` in addition to `🦀ping`. Sending this command from any chat relays the given text to an arbitrary JID — a group (`...@g.us`) or DM (`...@s.whatsapp.net`) — then replies in the originating chat with the send latency via `ctx.reply_quoting`.
+The example bot now handles `🦀send <jid> <text>` in addition to `🦀ping`. When you send this command from any chat, the bot relays the text to an arbitrary JID — a group (`...@g.us`) or DM (`...@s.whatsapp.net`) — then replies in the originating chat with the send latency via `ctx.reply_quoting`.
 
 ```
 🦀send 1234567890@s.whatsapp.net Hello there!

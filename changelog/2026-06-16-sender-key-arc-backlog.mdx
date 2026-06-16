@@ -1,0 +1,32 @@
+---
+title: "June 16, 2026 — Group decrypt: sender-key backlog shared behind Arc"
+description: "SenderKeyState now keeps its skipped-message-key backlog in an Arc<Vec>, so loading a sender-key record is a refcount bump instead of a deep clone. In-order group decrypts with a large backlog are ~3x faster, and the per-decrypt allocation spike disappears."
+---
+
+## Performance
+
+**Group decrypt: sender-key message backlog behind `Arc` COW ([#881](https://github.com/oxidezap/whatsapp-rust/pull/881))**
+
+Every group decrypt calls `load_sender_key`, which clones the `SenderKeyRecord` out of the in-memory cache. `SenderKeyState` previously stored its skipped-message-key backlog (`sender_message_keys`) directly inside the protobuf struct, so each clone deep-copied the whole backlog — up to `MAX_MESSAGE_KEYS` entries (~82 KB at capacity).
+
+This cost is recurring: once a receiver falls behind and catches up, the backlog remains populated. Every subsequent in-order message pays the full allocation even though the in-order path never reads the backlog at all — it only advances the chain key.
+
+**What changed.** `SenderKeyState` now holds the backlog in a dedicated `Arc<Vec<SenderMessageKey>>` field. The protobuf struct's `sender_message_keys` list is kept empty in memory; it is only reassembled at serialization (`as_protobuf`). A `debug_assert` guards this invariant.
+
+- **In-order decrypt** (the hot path): clone = refcount bump. No allocation.
+- **Mutation** (skip-ahead caching or out-of-order removal): `Arc::make_mut` copies the Vec exactly once, leaving the cache's shared clone untouched.
+- **Serialization / persistence**: unchanged — `as_protobuf` reassembles the full list from the `Arc` before writing.
+
+**Benchmark results** (`bench_group_in_order_decrypt_with_backlog`, ~2000-key backlog, same machine A/B):
+
+| | Before | After |
+|---|---|---|
+| Median latency | 97 µs | 33 µs |
+| Mean latency | 110 µs | 33 µs |
+| Worst case | 600 µs | 38 µs |
+
+The ~3× median speedup and the elimination of the long allocator tail both come from the ~82 KB `Vec` allocation no longer occurring on every in-order decrypt. The out-of-order worst-case bench is flat (the load-time clone simply becomes one `make_mut` clone of the same size). The empty-backlog decrypt is unchanged.
+
+CodSpeed tracks the new `bench_group_in_order_decrypt_with_backlog` bench going forward.
+
+**No breaking changes.** No public API surface changed. No new dependencies added.

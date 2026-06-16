@@ -1,5 +1,5 @@
 ---
-title: "June 16, 2026 — Group decrypt: sender-key backlog shared behind arc"
+title: "June 16, 2026 — Group decrypt: sender-key backlog shared behind Arc"
 description: "SenderKeyState now keeps its skipped-message-key backlog in an Arc<Vec>, so loading a sender-key record is a refcount bump instead of a deep clone. In-order group decrypts with a large backlog are ~3x faster, and the per-decrypt allocation spike disappears."
 ---
 

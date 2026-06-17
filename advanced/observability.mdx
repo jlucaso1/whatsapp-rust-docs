@@ -96,7 +96,7 @@ Spans are grouped under a stable `wa.<area>.<op>` naming scheme so you can filte
 | `wa.pair.*` | QR code and pair code authentication |
 | `wa.media.*` | Upload, download, history sync, sticker packs, media conn refresh |
 | `wa.receipt.*` | Receipt processing (delivered, read, played) |
-| `wa.retry.*` | Retry receipt handling |
+| `wa.retry.*` | Retry receipt handling; `wa.retry.handle_receipt` records a `count` field (retry depth) so storm depth is aggregable per sender |
 | `wa.pdo.*` | Peer Data Operations (message recovery via primary device) |
 | `wa.notif.*` | Notification dispatch (group, devices, chatstate, identity change, privacy token) |
 | `wa.session.*` | Signal session establishment and crypto |

@@ -77,6 +77,10 @@ All metrics are prefixed with `wa_` and emitted at the same boundaries as the ma
 | `wa_recv_total` | `outcome` = `decrypted`, `duplicate`, `undecryptable`, `skmsg` | Inbound messages by decrypt outcome |
 | `wa_send_total` | `kind` = `dm`, `group`, `status` | Outgoing send attempts by kind |
 | `wa_retry_receipt_total` | `reason` | Retry receipts sent, by reason |
+| `wa_high_retry_total` | `reason` | Retry receipts sent at the high-retry watermark (count ≥ MAX), by reason |
+| `wa_retry_unknown_device_total` | `sender_type` = `primary`, `companion` | Retries from a device not in the registry, by sender type |
+| `wa_retry_refused_total` | — | Retries refused at the MAX_RETRY loop guard |
+| `wa_base_key_collision_total` | — | Base-key collisions that forced a fresh session |
 | `wa_iq_total` | `result` = `ok`, `timeout`, `error` | IQ requests by result |
 | `wa_reconnect_total` | — | Reconnect attempts |
 | `wa_stream_error_total` | — | Stream errors received |

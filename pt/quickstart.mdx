@@ -263,16 +263,16 @@ PairCodeOptions {
 
 </Steps>
 
-### Flags de CLI do binário de demonstração
+### Flags de CLI do exemplo de demonstração
 
-O repositório inclui um binário de bot de demonstração (`src/main.rs`) que suporta argumentos de CLI para autenticação:
+O repositório inclui um exemplo de bot de demonstração (`examples/demo.rs`) que suporta argumentos de CLI para autenticação:
 
 ```bash
-cargo run                                      # Pareamento somente por QR code
-cargo run -- --phone 15551234567               # Pair code + QR code (concorrentes)
-cargo run -- -p 15551234567                    # Forma curta
-cargo run -- -p 15551234567 --code MYCODE12    # Pair code personalizado de 8 caracteres
-cargo run -- -p 15551234567 -c MYCODE12        # Forma curta
+cargo run --example demo                                      # Pareamento somente por QR code
+cargo run --example demo -- --phone 15551234567               # Pair code + QR code (concorrentes)
+cargo run --example demo -- -p 15551234567                    # Forma curta
+cargo run --example demo -- -p 15551234567 --code MYCODE12    # Pair code personalizado de 8 caracteres
+cargo run --example demo -- -p 15551234567 -c MYCODE12        # Forma curta
 ```
 
 O bot de demonstração responde a `🦀ping` com uma resposta citada `🏓 Pong!`, edita a resposta para anexar a latência de envio e suporta ping/pong de mídia via reuso de CDN.

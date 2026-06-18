@@ -258,10 +258,8 @@ All methods return `Result<T, ContactError>`:
 pub enum ContactError {
     #[error(transparent)]
     Iq(#[from] IqError),
-    #[error("invalid contact request: {0}")]
-    InvalidRequest(String),
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+    #[error("unsupported contact JID: {0}")]
+    InvalidJid(String),
 }
 ```
 

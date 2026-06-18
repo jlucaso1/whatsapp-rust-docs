@@ -544,7 +544,7 @@ pub enum NewsletterError {
 use whatsapp_rust::NewsletterError;
 
 match client.newsletter().join(&newsletter_jid).await {
-    Ok(metadata) => println!("Joined: {}", metadata.id),
+    Ok(metadata) => println!("Joined: {}", metadata.jid),
     Err(NewsletterError::Mex(e)) => eprintln!("MEX error: {}", e),
     Err(NewsletterError::Iq(e)) => eprintln!("IQ error: {}", e),
     Err(e) => eprintln!("Error: {}", e),

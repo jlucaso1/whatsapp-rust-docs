@@ -423,10 +423,10 @@ pub enum CommunityError {
     Iq(#[from] IqError),
     #[error(transparent)]
     Mex(#[from] MexError),
+    #[error(transparent)]
+    Group(#[from] GroupError),
     #[error("invalid community request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
 }
 ```
 

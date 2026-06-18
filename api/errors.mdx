@@ -130,10 +130,10 @@ pub enum CommunityError {
     Iq(#[from] IqError),
     #[error(transparent)]
     Mex(#[from] MexError),
+    #[error(transparent)]
+    Group(#[from] GroupError),
     #[error("invalid community request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
 }
 ```
 
@@ -144,10 +144,8 @@ pub enum CommunityError {
 pub enum ContactError {
     #[error(transparent)]
     Iq(#[from] IqError),
-    #[error("invalid contact request: {0}")]
-    InvalidRequest(String),
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+    #[error("unsupported contact JID: {0}")]
+    InvalidJid(String),
 }
 ```
 
@@ -191,9 +189,11 @@ pub enum PollError {
 #[non_exhaustive]
 pub enum ProfileError {
     #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
     Client(#[from] ClientError),
-    #[error("invalid profile request: {0}")]
-    InvalidRequest(String),
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }

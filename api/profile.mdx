@@ -154,16 +154,19 @@ All methods return a `ProfileError`:
 #[non_exhaustive]
 pub enum ProfileError {
     #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
     Client(#[from] ClientError),
-    #[error("invalid profile request: {0}")]
-    InvalidRequest(String),
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
 ```
 
 Common errors:
-- `InvalidRequest` — e.g., empty push name
+- `InvalidArgument` — e.g., empty push name
+- `Iq` — server rejected the status text or picture IQ
 - `Client(ClientError::NotLoggedIn)` — not authenticated
 - `Internal` — network errors, encoding failures
 
@@ -172,7 +175,7 @@ use whatsapp_rust::ProfileError;
 
 match client.profile().set_push_name("").await {
     Ok(_) => println!("Name updated"),
-    Err(ProfileError::InvalidRequest(msg)) => eprintln!("Invalid: {}", msg),
+    Err(ProfileError::InvalidArgument(msg)) => eprintln!("Invalid: {}", msg),
     Err(e) => eprintln!("Failed: {}", e),
 }
 ```

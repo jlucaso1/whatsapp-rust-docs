@@ -423,7 +423,7 @@ pub enum PollError {
 ```rust
 use whatsapp_rust::PollError;
 
-match client.polls().create(jid, "Question?", options, false).await {
+match client.polls().create(jid, "Question?", &options, 1).await {
     Ok((result, secret)) => println!("Poll created: {}", result.message_id),
     Err(PollError::InvalidPoll(msg)) => eprintln!("Invalid poll: {}", msg),
     Err(PollError::Send(e)) => eprintln!("Send failed: {}", e),

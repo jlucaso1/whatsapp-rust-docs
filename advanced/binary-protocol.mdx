@@ -1039,10 +1039,10 @@ The test in `wacore/binary/tests/roundtrip_proptest.rs` generates random `Node` 
 - Strings containing `@` and ≤48 bytes are parsed as JIDs on decode (ambiguous), so no generated string contains `@`.
 - `String` content that is not a protocol token and not nibble/hex-packable re-decodes as `NodeContent::Bytes`. String content is therefore restricted to the nibble alphabet (`[0-9.-]`), which stays `String` on decode; arbitrary byte payloads go through `NodeContent::Bytes`, which is always lossless.
 
-The tests also run cleanly under `--no-default-features`, exercising the non-SIMD decode path:
+To verify the roundtrip proptest specifically on the non-SIMD decode path:
 
 ```bash
-cargo test -p wacore-binary --no-default-features --lib
+cargo test -p wacore-binary --no-default-features --test roundtrip_proptest
 ```
 
 ### Fuzz target

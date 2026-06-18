@@ -8,25 +8,30 @@ As of PR #893, all feature-domain APIs return a typed, domain-specific error ins
 ## Error hierarchy
 
 ```
-ClientError          (transport/connection base — embedded by all domain errors)
+ClientError          (transport/connection base — embedded by select domain errors)
   ├── NotConnected
+  ├── Socket(SocketError)
+  ├── EncryptSend(EncryptSendError)
   ├── AlreadyConnected
   ├── NotLoggedIn
   ├── Iq(IqError)
   └── Internal(anyhow::Error)
 
 IqError              (IQ request failures — embedded by most domain errors)
-  ├── NotConnected
   ├── Timeout
-  ├── EncryptSend
+  ├── NotConnected
+  ├── Socket(SocketError)
+  ├── EncryptSend(EncryptSendError)
   ├── ClientState(Box<ClientError>)
   ├── Disconnected
   ├── ServerError
+  ├── UnexpectedResponseType
+  ├── InternalChannelClosed
   ├── EncodeError
-  └── DecodeError
+  └── ParseError
 ```
 
-Domain errors embed `IqError` and/or `ClientError` via `#[from]`, so `?` on an IQ call inside a domain function propagates automatically.
+Domain errors that embed `IqError` or `ClientError` via `#[from]` propagate those failures automatically via `?`. Some errors (e.g. `AppStateError`, `SignalError`) use internal `anyhow::Error` wrapping instead and do not have `Iq` or `Client` variants.
 
 ## Domain error types
 

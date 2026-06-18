@@ -138,6 +138,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-06-18-flush-signal-cache-readlock",
                   "changelog/2026-06-15-token-tiny-map",
                   "changelog/2026-06-14-drop-moka-portable-cache",
                   "changelog/2026-06-12-binary-size-ci",

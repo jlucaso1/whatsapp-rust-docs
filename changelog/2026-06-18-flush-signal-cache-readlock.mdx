@@ -1,0 +1,14 @@
+---
+title: "June 18, 2026 — Signal cache flush: device read-lock released before SQLite write"
+description: "flush_signal_cache no longer holds the Device read guard across the batched SQLite write. The backend Arc is cloned out of the snapshot before flushing, eliminating read↔write lock contention on the per-message hot path."
+---
+
+## Performance
+
+**Signal cache flush: device read-lock released before SQLite write ([#888](https://github.com/oxidezap/whatsapp-rust/pull/888))**
+
+`flush_signal_cache` runs once per decrypted message and on most outgoing sends. Previously it called `get_device_arc().read()` and held the resulting read guard across the entire `signal_cache.flush(...)` call — a batched SQLite write. Any concurrent `modify_device` or `process_command` (both of which require a Device write lock) would block for the full flush duration, creating read↔write contention on the per-message hot path.
+
+The fix clones the `backend` `Arc` out of `get_device_snapshot()` and drops the guard immediately. The batched SQLite write now runs holding no device lock at all. This mirrors the existing pattern in `prekeys.rs`, which already used `get_device_snapshot().backend.clone()` for the same reason.
+
+**No breaking changes.** `flush_signal_cache` is a `pub(crate)` internal method; its signature and observed behavior are unchanged.

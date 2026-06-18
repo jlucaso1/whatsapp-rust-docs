@@ -268,6 +268,10 @@ pub enum ClientError {
     AlreadyConnected,
     #[error("client is not logged in")]
     NotLoggedIn,
+    #[error("socket error: {0}")]
+    Socket(SocketError),
+    #[error("encrypt/send error: {0}")]
+    EncryptSend(EncryptSendError),
     #[error("IQ request failed: {0}")]
     Iq(#[from] IqError),
     #[error(transparent)]
@@ -280,14 +284,28 @@ pub enum ClientError {
 ```rust
 #[non_exhaustive]
 pub enum IqError {
-    NotConnected,
+    #[error("IQ request timed out")]
     Timeout,
-    EncryptSend,
+    #[error("client is not connected")]
+    NotConnected,
+    #[error("socket error")]
+    Socket(SocketError),
+    #[error("encrypted send pipeline failed")]
+    EncryptSend(EncryptSendError),
+    #[error("client state prevented send")]
     ClientState(Box<ClientError>),  // boxed to break the ClientError<->IqError cycle
+    #[error("received disconnect node during IQ wait")]
     Disconnected,
-    ServerError,
-    EncodeError,
-    DecodeError,
+    #[error("received a server error response: code={code}, text='{text}'")]
+    ServerError { code: u16, text: String, error_type: Option<String>, backoff: Option<u32> },
+    #[error("received unexpected IQ response type")]
+    UnexpectedResponseType { got: Option<String> },
+    #[error("internal channel closed unexpectedly")]
+    InternalChannelClosed,
+    #[error("failed to encode IQ request")]
+    EncodeError(anyhow::Error),
+    #[error("failed to parse IQ response")]
+    ParseError(anyhow::Error),
 }
 ```
 

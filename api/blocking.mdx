@@ -27,7 +27,7 @@ pub async fn block(&self, jid: &Jid) -> Result<(), BlockingError>
 - `jid` - Contact JID to block (LID or PN)
 
 **Requirements:**
-- A LID↔PN mapping for the target must exist in the client's mapping store. If no mapping is available, the call returns `BlockingError::Iq(IqError::EncodeError)`.
+- A LID↔PN mapping for the target must exist in the client's mapping store. If no mapping is available, the call returns `BlockingError::InvalidJid`.
 
 **Effects:**
 - Contact will not be able to message you

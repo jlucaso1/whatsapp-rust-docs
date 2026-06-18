@@ -417,6 +417,7 @@ let gtype = group_type(&metadata);
 All community methods return `Result<T, CommunityError>`:
 
 ```rust
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CommunityError {
     #[error(transparent)]

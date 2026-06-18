@@ -1445,11 +1445,12 @@ pub enum InviteInfoError {
 
 ## Error types
 
-### GroupError
+### `GroupError`
 
 All group methods return `Result<T, GroupError>`:
 
 ```rust
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum GroupError {
     #[error(transparent)]

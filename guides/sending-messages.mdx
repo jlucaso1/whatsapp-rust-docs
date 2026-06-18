@@ -876,13 +876,14 @@ See [WAProto API reference](/api/waproto) for message type details.
 All send-path methods return `Result<T, SendError>`. Callers using `?` into an `anyhow` context compile unchanged — `SendError` implements `Into<anyhow::Error>`.
 
 ```rust
+use anyhow::Result;
 use whatsapp_rust::SendError;
 
-async fn send_with_retry(
+async fn send_and_return_id(
     client: &Client,
     jid: Jid,
     message: wa::Message,
-) -> Result<String, SendError> {
+) -> Result<String> {
     let result = client.send_message(jid.clone(), message).await?;
     Ok(result.message_id)
 }

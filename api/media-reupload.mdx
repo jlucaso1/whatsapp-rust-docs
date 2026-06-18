@@ -135,6 +135,7 @@ pub enum MediaReuploadError {
 - `InvalidRequest` — Newsletter messages are not supported for media reupload
 - `Timeout` — The server did not respond within 30 seconds
 - `Internal` — Encryption failure or other internal error
+- `Client` — wraps `ClientError` (transport/client-layer failures)
 
 ```rust
 use whatsapp_rust::MediaReuploadError;

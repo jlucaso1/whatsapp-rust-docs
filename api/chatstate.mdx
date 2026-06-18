@@ -32,7 +32,7 @@ pub async fn send(
 - `state: ChatStateType` - Type of chat state to send
 
 **Returns:**
-- `Result<(), ChatStateError>` - Success or client error
+- `Result<(), ChatStateError>` — `Ok(())` on success; a `ChatStateError` if the client is disconnected or the JID is invalid
 
 **Example:**
 ```rust
@@ -349,11 +349,11 @@ client.send_message(group_jid.clone(), message).await?;
 
 ## Error Handling
 
-All methods return `Result<(), ChatStateError>`. Common errors:
+All methods return `Result<(), ChatStateError>`. You'll encounter these most often:
 
-- **Not connected**: Client not connected to WhatsApp
-- **Invalid JID**: Malformed recipient JID
-- **Network errors**: Connection issues
+- **Not connected** — you are not connected to WhatsApp
+- **Invalid JID** — the recipient JID is malformed
+- **Network errors** — connection dropped mid-send
 
 ```rust
 use whatsapp_rust::ChatStateError;

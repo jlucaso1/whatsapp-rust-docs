@@ -1226,11 +1226,12 @@ let message = wa::Message {
 
 ## Error types
 
-### SendError
+### `SendError`
 
 All send-path methods return `Result<T, SendError>`:
 
 ```rust
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SendError {
     #[error(transparent)]

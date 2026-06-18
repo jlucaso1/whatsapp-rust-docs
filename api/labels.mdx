@@ -159,7 +159,7 @@ App state sync requires the relevant encryption keys, which arrive during initia
 
 ## Error handling
 
-All methods return `Result<(), AppStateError>`. Empty `label_id` (and empty `name` for `create_label`) is rejected before any network work with `AppStateError::InvalidRequest`.
+All methods return `Result<(), AppStateError>`. If you pass an empty `label_id` (or an empty `name` to `create_label`), the call fails immediately with `AppStateError::InvalidRequest` before any network work is done.
 
 ```rust
 use whatsapp_rust::AppStateError;

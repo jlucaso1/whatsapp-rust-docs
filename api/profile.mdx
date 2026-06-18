@@ -148,7 +148,7 @@ async fn setup_profile(client: &Arc<Client>) -> anyhow::Result<()> {
 
 ## Error handling
 
-All methods return a `ProfileError`:
+All methods return `Result<T, ProfileError>`:
 
 ```rust
 #[non_exhaustive]

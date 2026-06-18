@@ -595,6 +595,7 @@ use wacore::types::events::Event;
 All methods return `Result<(), AppStateError>`:
 
 ```rust
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AppStateError {
     #[error("invalid app-state request: {0}")]
@@ -604,9 +605,9 @@ pub enum AppStateError {
 }
 ```
 
-Common errors:
-- `InvalidRequest` — invalid timestamp for `mute_chat_until`, missing `participant_jid` for group operations
-- `Internal` — no app state sync key available (sync not complete), network errors
+You'll encounter these most often:
+- `InvalidRequest` — you passed an invalid timestamp to `mute_chat_until` or omitted `participant_jid` for a group operation
+- `Internal` — no app state sync key is available yet (sync not complete), or a network error occurred
 
 ```rust
 use whatsapp_rust::AppStateError;

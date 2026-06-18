@@ -255,7 +255,7 @@ pub enum PresenceError {
 
 **Variants:**
 - `PushNameEmpty` - Push name must be set before sending presence
-- `Client` — wraps a `ClientError` (connection errors from `subscribe`/`unsubscribe`)
+- `Client` — wraps a `ClientError` (connection errors from `set`, `set_available`, `set_unavailable`, `subscribe`, and `unsubscribe`)
 - `Other` - Wraps any other error (network, connection, etc.)
 
 ## Error handling

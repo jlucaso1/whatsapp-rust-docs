@@ -131,11 +131,11 @@ pub enum MediaReuploadError {
 }
 ```
 
+- `Client` — wraps `ClientError` (transport/client-layer failures)
 - `NotLoggedIn` — Cannot determine own JID
 - `InvalidRequest` — Newsletter messages are not supported for media reupload
 - `Timeout` — The server did not respond within 30 seconds
 - `Internal` — Encryption failure or other internal error
-- `Client` — wraps `ClientError` (transport/client-layer failures)
 
 ```rust
 use whatsapp_rust::MediaReuploadError;

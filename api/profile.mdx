@@ -151,6 +151,7 @@ async fn setup_profile(client: &Arc<Client>) -> anyhow::Result<()> {
 All methods return `Result<T, ProfileError>`:
 
 ```rust
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ProfileError {
     #[error(transparent)]

@@ -122,7 +122,7 @@ for jid in jids {
 
 ## Error handling
 
-All methods return `Result<T, TcTokenError>`:
+Each method returns `Result<T, TcTokenError>`:
 
 ```rust
 #[non_exhaustive]
@@ -135,8 +135,8 @@ pub enum TcTokenError {
 ```
 
 **Variants:**
-- `Iq` — The IQ requesting tokens from the server failed (timeout, server error, etc.)
-- `Store` — A token store (persistence) operation failed
+- `Iq` — the server token request failed (timeout, server error, etc.)
+- `Store` — token persistence failed
 
 **Example:**
 ```rust

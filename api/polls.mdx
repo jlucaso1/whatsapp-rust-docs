@@ -404,7 +404,7 @@ The `EncryptedEdit` type from v0.5 still exists as a `MessageEdit`-specific faç
 
 ## Error handling
 
-All poll methods — `create`, `create_quiz`, `vote`, `decrypt_vote`, and `aggregate_votes` — return `Result<T, PollError>`:
+All five poll methods (`create`, `create_quiz`, `vote`, `decrypt_vote`, and `aggregate_votes`) return `Result<T, PollError>`:
 
 ```rust
 #[non_exhaustive]

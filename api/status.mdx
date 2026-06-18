@@ -213,7 +213,7 @@ client.status()
 
 ### send_reaction
 
-React to a status update with an emoji. Status reactions are sent via `Client::send_reaction` (not `client.status()`) using `status@broadcast` as the chat JID and a `wa::MessageKey` whose `participant` field identifies the status owner.
+React to a status update with an emoji. You send status reactions via `Client::send_reaction` (not `client.status()`) using `status@broadcast` as the chat JID and a `wa::MessageKey` whose `participant` field identifies the status owner.
 
 ```rust
 pub async fn send_reaction(

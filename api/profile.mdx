@@ -20,7 +20,7 @@ let profile = client.profile();
 Set your display name (push name).
 
 ```rust
-pub async fn set_push_name(&self, name: &str) -> Result<()>
+pub async fn set_push_name(&self, name: &str) -> Result<(), ProfileError>
 ```
 
 **Parameters:**
@@ -42,7 +42,7 @@ The push name change takes effect immediately via presence, but app state sync m
 Set your status text (about).
 
 ```rust
-pub async fn set_status_text(&self, text: &str) -> Result<()>
+pub async fn set_status_text(&self, text: &str) -> Result<(), ProfileError>
 ```
 
 **Parameters:**
@@ -63,7 +63,7 @@ Set your profile picture.
 pub async fn set_profile_picture(
     &self,
     image_data: Vec<u8>
-) -> Result<SetProfilePictureResponse>
+) -> Result<SetProfilePictureResponse, ProfileError>
 ```
 
 **Parameters:**
@@ -92,7 +92,7 @@ The image must be a valid JPEG. Other formats are not supported.
 Remove your profile picture.
 
 ```rust
-pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse>
+pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse, ProfileError>
 ```
 
 **Returns:**
@@ -148,17 +148,32 @@ async fn setup_profile(client: &Arc<Client>) -> anyhow::Result<()> {
 
 ## Error handling
 
-All methods return `Result<T, anyhow::Error>`. Common errors:
-
-- Empty push name
-- Invalid image format
-- Network errors
-- Not authenticated
+All methods return a `ProfileError`:
 
 ```rust
+#[non_exhaustive]
+pub enum ProfileError {
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error("invalid profile request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+Common errors:
+- `InvalidRequest` — e.g., empty push name
+- `Client(ClientError::NotLoggedIn)` — not authenticated
+- `Internal` — network errors, encoding failures
+
+```rust
+use whatsapp_rust::ProfileError;
+
 match client.profile().set_push_name("").await {
     Ok(_) => println!("Name updated"),
-    Err(e) => eprintln!("Failed: {}", e), // "Push name cannot be empty"
+    Err(ProfileError::InvalidRequest(msg)) => eprintln!("Invalid: {}", msg),
+    Err(e) => eprintln!("Failed: {}", e),
 }
 ```
 

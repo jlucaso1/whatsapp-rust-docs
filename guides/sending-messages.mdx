@@ -873,31 +873,42 @@ See [WAProto API reference](/api/waproto) for message type details.
 
 ## Error Handling
 
+All send-path methods return `Result<T, SendError>`. Callers using `?` into an `anyhow` context compile unchanged — `SendError` implements `Into<anyhow::Error>`.
+
 ```rust
-use anyhow::Result;
+use whatsapp_rust::SendError;
 
-async fn send_safe_message(
+async fn send_with_retry(
     client: &Client,
-    to: Jid,
-    text: &str,
-) -> Result<String> {
-    let message = wa::Message {
-        conversation: Some(text.to_string()),
-        ..Default::default()
-    };
-
-    match client.send_message(&to, message).await {
-        Ok(result) => {
-            println!("✅ Message sent: {}", result.message_id);
-            Ok(result.message_id)
-        }
-        Err(e) => {
-            eprintln!("❌ Failed to send: {:?}", e);
-            Err(e)
-        }
-    }
+    jid: Jid,
+    message: wa::Message,
+) -> Result<String, SendError> {
+    let result = client.send_message(jid.clone(), message).await?;
+    Ok(result.message_id)
 }
 ```
+
+For typed error matching:
+
+```rust
+use whatsapp_rust::SendError;
+
+match client.send_message(jid.clone(), message).await {
+    Ok(result) => println!("Sent: {}", result.message_id),
+    Err(SendError::NotLoggedIn) => {
+        eprintln!("Not authenticated — reconnect first");
+    }
+    Err(SendError::Iq(e)) => {
+        eprintln!("Server rejected the send: {}", e);
+    }
+    Err(SendError::InvalidRequest(msg)) => {
+        eprintln!("Malformed request: {}", msg);
+    }
+    Err(e) => eprintln!("Send error: {}", e),
+}
+```
+
+See the [Error Types reference](/api/errors) for the complete `SendError` definition and all domain error types.
 
 ## Best Practices
 

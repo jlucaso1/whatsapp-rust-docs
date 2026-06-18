@@ -24,7 +24,7 @@ pub async fn send(
     &self,
     to: &Jid,
     state: ChatStateType,
-) -> Result<(), ClientError>
+) -> Result<(), ChatStateError>
 ```
 
 **Parameters:**
@@ -32,7 +32,7 @@ pub async fn send(
 - `state: ChatStateType` - Type of chat state to send
 
 **Returns:**
-- `Result<(), ClientError>` - Success or client error
+- `Result<(), ChatStateError>` - Success or client error
 
 **Example:**
 ```rust
@@ -55,7 +55,7 @@ client.chatstate().send(&recipient, ChatStateType::Paused).await?;
 Convenience method to send typing indicator.
 
 ```rust
-pub async fn send_composing(&self, to: &Jid) -> Result<(), ClientError>
+pub async fn send_composing(&self, to: &Jid) -> Result<(), ChatStateError>
 ```
 
 **Example:**
@@ -69,7 +69,7 @@ client.chatstate().send_composing(&recipient).await?;
 Convenience method to send audio recording indicator.
 
 ```rust
-pub async fn send_recording(&self, to: &Jid) -> Result<(), ClientError>
+pub async fn send_recording(&self, to: &Jid) -> Result<(), ChatStateError>
 ```
 
 **Example:**
@@ -84,7 +84,7 @@ println!("Showing 'recording audio' indicator");
 Convenience method to send paused/stopped typing indicator.
 
 ```rust
-pub async fn send_paused(&self, to: &Jid) -> Result<(), ClientError>
+pub async fn send_paused(&self, to: &Jid) -> Result<(), ChatStateError>
 ```
 
 **Example:**
@@ -349,21 +349,21 @@ client.send_message(group_jid.clone(), message).await?;
 
 ## Error Handling
 
-All methods return `Result<(), ClientError>`. Common errors:
+All methods return `Result<(), ChatStateError>`. Common errors:
 
 - **Not connected**: Client not connected to WhatsApp
 - **Invalid JID**: Malformed recipient JID
 - **Network errors**: Connection issues
 
 ```rust
-use whatsapp_rust::client::ClientError;
+use whatsapp_rust::ChatStateError;
 
 let recipient: Jid = "15551234567@s.whatsapp.net".parse()?;
 
 match client.chatstate().send_composing(&recipient).await {
     Ok(_) => println!("Sent typing indicator"),
-    Err(ClientError::NotConnected) => {
-        eprintln!("Not connected to WhatsApp");
+    Err(ChatStateError::Client(e)) => {
+        eprintln!("Client error: {}", e);
     }
     Err(e) => eprintln!("Error: {}", e),
 }

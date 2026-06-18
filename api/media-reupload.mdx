@@ -23,7 +23,7 @@ Request the server to re-upload media for a message with an expired URL.
 pub async fn request(
     &self,
     req: &MediaReuploadRequest<'_>,
-) -> Result<MediaRetryResult>
+) -> Result<MediaRetryResult, MediaReuploadError>
 ```
 
 <ParamField path="req" type="&MediaReuploadRequest" required>
@@ -113,20 +113,44 @@ pub enum MediaRetryResult {
 
 ## Error handling
 
-The method returns `Result<MediaRetryResult>`. The `MediaRetryResult` enum itself distinguishes between server-side success and failure. Additional errors can occur for:
-
-- **Newsletter messages** — Media reupload is not supported for newsletter messages
-- **Timeout** — The server did not respond within 30 seconds
-- **Encryption failure** — Failed to encrypt the retry request
-- **Not logged in** — Cannot determine own JID
+The method returns `Result<MediaRetryResult, MediaReuploadError>`. The `MediaRetryResult` enum itself distinguishes between server-side success and failure; `MediaReuploadError` covers transport and validation failures:
 
 ```rust
+#[non_exhaustive]
+pub enum MediaReuploadError {
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error("client is not logged in")]
+    NotLoggedIn,
+    #[error("invalid media reupload request: {0}")]
+    InvalidRequest(String),
+    #[error("media retry notification timed out")]
+    Timeout,
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+- `NotLoggedIn` — Cannot determine own JID
+- `InvalidRequest` — Newsletter messages are not supported for media reupload
+- `Timeout` — The server did not respond within 30 seconds
+- `Internal` — Encryption failure or other internal error
+
+```rust
+use whatsapp_rust::MediaReuploadError;
+
 match client.media_reupload().request(&req).await {
     Ok(MediaRetryResult::Success { direct_path }) => {
         // Re-download using new path
     }
     Ok(other) => {
         eprintln!("Reupload failed: {:?}", other);
+    }
+    Err(MediaReuploadError::Timeout) => {
+        eprintln!("Request timed out");
+    }
+    Err(MediaReuploadError::NotLoggedIn) => {
+        eprintln!("Not authenticated");
     }
     Err(e) => {
         eprintln!("Request error: {}", e);

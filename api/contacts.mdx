@@ -23,7 +23,7 @@ Check if JIDs are registered on WhatsApp. Accepts both PN JIDs and LID JIDs.
 pub async fn is_on_whatsapp(
     &self,
     jids: &[Jid],
-) -> Result<Vec<IsOnWhatsAppResult>, anyhow::Error>
+) -> Result<Vec<IsOnWhatsAppResult>, ContactError>
 ```
 
 **Parameters:**
@@ -104,7 +104,7 @@ pub async fn get_profile_picture(
     &self,
     jid: &Jid,
     preview: bool,
-) -> Result<Option<ProfilePicture>, anyhow::Error>
+) -> Result<Option<ProfilePicture>, ContactError>
 ```
 
 **Parameters:**
@@ -161,7 +161,7 @@ Get user information by JID.
 pub async fn get_user_info(
     &self,
     jids: &[Jid],
-) -> Result<HashMap<Jid, UserInfo>, anyhow::Error>
+) -> Result<HashMap<Jid, UserInfo>, ContactError>
 ```
 
 **Parameters:**
@@ -251,21 +251,27 @@ The implementation automatically:
 
 ## Error handling
 
-All methods return `Result<T, anyhow::Error>`. Common errors:
-
-- Passing an unsupported JID type to `is_on_whatsapp` (only PN and LID JIDs are accepted)
-- Invalid JID format
-- Network errors
-- Rate limiting
+All methods return `Result<T, ContactError>`:
 
 ```rust
-match client.contacts().is_on_whatsapp(&[Jid::pn("15551234567")]).await {
-    Ok(results) => {
-        for result in results {
-            println!("Registered: {}", result.is_registered);
-        }
-    }
-    Err(e) => eprintln!("Failed to check registration: {}", e),
+#[non_exhaustive]
+pub enum ContactError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error("invalid contact request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+```rust
+use whatsapp_rust::ContactError;
+
+match client.contacts().is_on_whatsapp(&[jid]).await {
+    Ok(results) => { /* ... */ }
+    Err(ContactError::Iq(e)) => eprintln!("Server error: {}", e),
+    Err(e) => eprintln!("Error: {}", e),
 }
 ```
 

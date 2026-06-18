@@ -23,7 +23,7 @@ Create a new community.
 pub async fn create(
     &self,
     options: CreateCommunityOptions,
-) -> Result<CreateCommunityResult, anyhow::Error>
+) -> Result<CreateCommunityResult, CommunityError>
 ```
 
 **Parameters:**
@@ -56,7 +56,7 @@ Since v0.6, `community().create()` returns the full `GroupMetadata` instead of j
 Deactivate (delete) a community. Subgroups are unlinked but not deleted.
 
 ```rust
-pub async fn deactivate(&self, community_jid: &Jid) -> Result<(), anyhow::Error>
+pub async fn deactivate(&self, community_jid: &Jid) -> Result<(), CommunityError>
 ```
 
 **Parameters:**
@@ -76,7 +76,7 @@ pub async fn link_subgroups(
     &self,
     community_jid: &Jid,
     subgroup_jids: &[Jid],
-) -> Result<LinkSubgroupsResult, anyhow::Error>
+) -> Result<LinkSubgroupsResult, CommunityError>
 ```
 
 **Parameters:**
@@ -113,7 +113,7 @@ pub async fn unlink_subgroups(
     community_jid: &Jid,
     subgroup_jids: &[Jid],
     remove_orphan_members: bool,
-) -> Result<UnlinkSubgroupsResult, anyhow::Error>
+) -> Result<UnlinkSubgroupsResult, CommunityError>
 ```
 
 **Parameters:**
@@ -141,7 +141,7 @@ Fetch all subgroups of a community via MEX (GraphQL).
 pub async fn get_subgroups(
     &self,
     community_jid: &Jid,
-) -> Result<Vec<CommunitySubgroup>, MexError>
+) -> Result<Vec<CommunitySubgroup>, CommunityError>
 ```
 
 **Parameters:**
@@ -170,7 +170,7 @@ Fetch participant counts per subgroup via MEX (GraphQL).
 pub async fn get_subgroup_participant_counts(
     &self,
     community_jid: &Jid,
-) -> Result<Vec<(Jid, u32)>, MexError>
+) -> Result<Vec<(Jid, u32)>, CommunityError>
 ```
 
 **Parameters:**
@@ -199,7 +199,7 @@ pub async fn query_linked_group(
     &self,
     community_jid: &Jid,
     subgroup_jid: &Jid,
-) -> Result<GroupMetadata, anyhow::Error>
+) -> Result<GroupMetadata, CommunityError>
 ```
 
 **Parameters:**
@@ -227,7 +227,7 @@ pub async fn join_subgroup(
     &self,
     community_jid: &Jid,
     subgroup_jid: &Jid,
-) -> Result<GroupMetadata, anyhow::Error>
+) -> Result<GroupMetadata, CommunityError>
 ```
 
 **Parameters:**
@@ -254,7 +254,7 @@ Get all participants across all linked groups of a community.
 pub async fn get_linked_groups_participants(
     &self,
     community_jid: &Jid,
-) -> Result<Vec<GroupParticipant>, anyhow::Error>
+) -> Result<Vec<GroupParticipant>, CommunityError>
 ```
 
 **Parameters:**
@@ -414,18 +414,29 @@ let gtype = group_type(&metadata);
 
 ## Error handling
 
-Mutation methods (`create`, `deactivate`, `link_subgroups`, `unlink_subgroups`, `query_linked_group`, `join_subgroup`, `get_linked_groups_participants`) return `anyhow::Error`.
-
-MEX-based query methods (`get_subgroups`, `get_subgroup_participant_counts`) return `MexError`:
+All community methods return `Result<T, CommunityError>`:
 
 ```rust
-use whatsapp_rust::features::mex::MexError;
+#[non_exhaustive]
+pub enum CommunityError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Mex(#[from] MexError),
+    #[error("invalid community request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
 
-match client.community().get_subgroups(&community_jid).await {
-    Ok(subgroups) => println!("Found {} subgroups", subgroups.len()),
-    Err(MexError::PayloadParsing(msg)) => {
-        eprintln!("Parse error: {}", msg);
-    }
+```rust
+use whatsapp_rust::CommunityError;
+
+match client.community().deactivate(&community_jid).await {
+    Ok(_) => println!("Community deactivated"),
+    Err(CommunityError::Iq(e)) => eprintln!("Server error: {}", e),
+    Err(CommunityError::Mex(e)) => eprintln!("MEX error: {}", e),
     Err(e) => eprintln!("Error: {}", e),
 }
 ```

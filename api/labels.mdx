@@ -159,11 +159,13 @@ App state sync requires the relevant encryption keys, which arrive during initia
 
 ## Error handling
 
-All methods return `Result<(), anyhow::Error>`. Empty `label_id` (and empty `name` for `create_label`) is rejected before any network work.
+All methods return `Result<(), AppStateError>`. Empty `label_id` (and empty `name` for `create_label`) is rejected before any network work with `AppStateError::InvalidRequest`.
 
 ```rust
-if let Err(e) = client.labels().create_label("", "Work", 0).await {
-    eprintln!("Validation failed: {e}"); // "label_id cannot be empty"
+use whatsapp_rust::AppStateError;
+
+if let Err(AppStateError::InvalidRequest(msg)) = client.labels().create_label("", "Work", 0).await {
+    eprintln!("Validation failed: {msg}"); // "label_id cannot be empty"
 }
 ```
 

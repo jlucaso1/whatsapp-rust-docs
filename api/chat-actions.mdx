@@ -592,17 +592,29 @@ use wacore::types::events::Event;
 
 ## Error handling
 
-All methods return `Result<(), anyhow::Error>`. Common errors:
-
-- No app state sync key available (sync not complete)
-- Invalid timestamp for `mute_chat_until`
-- Missing `participant_jid` for group star/delete operations
-- Network errors
+All methods return `Result<(), AppStateError>`:
 
 ```rust
+#[non_exhaustive]
+pub enum AppStateError {
+    #[error("invalid app-state request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+Common errors:
+- `InvalidRequest` — invalid timestamp for `mute_chat_until`, missing `participant_jid` for group operations
+- `Internal` — no app state sync key available (sync not complete), network errors
+
+```rust
+use whatsapp_rust::AppStateError;
+
 match client.chat_actions().mute_chat_until(&jid, 0).await {
     Ok(_) => println!("Muted"),
-    Err(e) => eprintln!("Failed: {}", e), // Timestamp validation error
+    Err(AppStateError::InvalidRequest(msg)) => eprintln!("Validation error: {}", msg),
+    Err(e) => eprintln!("Failed: {}", e),
 }
 ```
 

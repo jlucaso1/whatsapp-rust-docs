@@ -26,7 +26,7 @@ let newsletter = client.newsletter();
 List all newsletters the user is subscribed to.
 
 ```rust
-pub async fn list_subscribed(&self) -> Result<Vec<NewsletterMetadata>, MexError>
+pub async fn list_subscribed(&self) -> Result<Vec<NewsletterMetadata>, NewsletterError>
 ```
 
 **Returns:**
@@ -46,7 +46,7 @@ for nl in &newsletters {
 Fetch metadata for a newsletter by its JID.
 
 ```rust
-pub async fn get_metadata(&self, jid: &Jid) -> Result<NewsletterMetadata, MexError>
+pub async fn get_metadata(&self, jid: &Jid) -> Result<NewsletterMetadata, NewsletterError>
 ```
 
 **Parameters:**
@@ -72,7 +72,7 @@ Fetch metadata for a newsletter by its invite code.
 pub async fn get_metadata_by_invite(
     &self,
     invite_code: &str,
-) -> Result<NewsletterMetadata, MexError>
+) -> Result<NewsletterMetadata, NewsletterError>
 ```
 
 **Parameters:**
@@ -99,7 +99,7 @@ pub async fn create(
     &self,
     name: &str,
     description: Option<&str>,
-) -> Result<NewsletterMetadata, MexError>
+) -> Result<NewsletterMetadata, NewsletterError>
 ```
 
 **Parameters:**
@@ -123,7 +123,7 @@ println!("Created: {} ({})", created.name, created.jid);
 Join (subscribe to) a newsletter.
 
 ```rust
-pub async fn join(&self, jid: &Jid) -> Result<NewsletterMetadata, MexError>
+pub async fn join(&self, jid: &Jid) -> Result<NewsletterMetadata, NewsletterError>
 ```
 
 **Parameters:**
@@ -144,7 +144,7 @@ println!("Joined '{}' as {:?}", joined.name, joined.role);
 Leave (unsubscribe from) a newsletter.
 
 ```rust
-pub async fn leave(&self, jid: &Jid) -> Result<(), MexError>
+pub async fn leave(&self, jid: &Jid) -> Result<(), NewsletterError>
 ```
 
 **Parameters:**
@@ -165,7 +165,7 @@ pub async fn update(
     jid: &Jid,
     name: Option<&str>,
     description: Option<&str>,
-) -> Result<NewsletterMetadata, MexError>
+) -> Result<NewsletterMetadata, NewsletterError>
 ```
 
 **Parameters:**
@@ -190,7 +190,7 @@ println!("Updated: {}", updated.name);
 Mute or unmute a newsletter's **follower-activity** notifications (WhatsApp Web's `MUTE_FOLLOWER_ACTIVITY`). Sent via MEX as a user-setting update.
 
 ```rust
-pub async fn set_follower_mute(&self, jid: &Jid, muted: bool) -> Result<(), MexError>
+pub async fn set_follower_mute(&self, jid: &Jid, muted: bool) -> Result<(), NewsletterError>
 ```
 
 **Parameters:**
@@ -211,7 +211,7 @@ client.newsletter().set_follower_mute(&newsletter_jid, false).await?;
 Mute or unmute a newsletter's **admin-activity** notifications (WhatsApp Web's `MUTE_ADMIN_ACTIVITY`). Only meaningful for owners/admins.
 
 ```rust
-pub async fn set_admin_mute(&self, jid: &Jid, muted: bool) -> Result<(), MexError>
+pub async fn set_admin_mute(&self, jid: &Jid, muted: bool) -> Result<(), NewsletterError>
 ```
 
 **Parameters:**
@@ -259,7 +259,7 @@ pub async fn send_reaction(
     jid: &Jid,
     server_id: u64,
     reaction: &str,
-) -> Result<(), anyhow::Error>
+) -> Result<(), NewsletterError>
 ```
 
 **Parameters:**
@@ -290,7 +290,7 @@ pub async fn edit_message(
     jid: &Jid,
     message_id: impl Into<String>,
     new_content: wa::Message,
-) -> Result<(), anyhow::Error>
+) -> Result<(), NewsletterError>
 ```
 
 **Parameters:**
@@ -321,7 +321,7 @@ pub async fn revoke_message(
     &self,
     jid: &Jid,
     message_id: impl Into<String>,
-) -> Result<(), anyhow::Error>
+) -> Result<(), NewsletterError>
 ```
 
 **Parameters:**
@@ -349,7 +349,7 @@ pub async fn get_messages(
     jid: &Jid,
     count: u32,
     before: Option<u64>,
-) -> Result<Vec<NewsletterMessage>, anyhow::Error>
+) -> Result<Vec<NewsletterMessage>, NewsletterError>
 ```
 
 **Parameters:**
@@ -383,7 +383,7 @@ Subscribe to live updates for a newsletter (reaction counts, message changes).
 pub async fn subscribe_live_updates(
     &self,
     jid: &Jid,
-) -> Result<u64, anyhow::Error>
+) -> Result<u64, NewsletterError>
 ```
 
 **Parameters:**
@@ -522,20 +522,31 @@ pub struct NewsletterReactionCount {
 
 ## Error handling
 
-Metadata and management methods return `MexError`:
+All newsletter methods return `Result<T, NewsletterError>`:
 
 ```rust
-pub enum MexError {
-    PayloadParsing(String),
-    // ... other variants
+#[non_exhaustive]
+pub enum NewsletterError {
+    #[error(transparent)]
+    Mex(#[from] MexError),
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error("invalid newsletter request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
 }
 ```
 
-Message operations (`send_reaction`, `get_messages`, `subscribe_live_updates`) return `anyhow::Error`. Newsletter message sending uses `client.send_message()` which also returns `anyhow::Error`.
-
 ```rust
-match client.newsletter().create("Test", None).await {
-    Ok(metadata) => println!("Created: {}", metadata.name),
-    Err(e) => eprintln!("Failed: {}", e),
+use whatsapp_rust::NewsletterError;
+
+match client.newsletter().join(&newsletter_jid).await {
+    Ok(metadata) => println!("Joined: {}", metadata.id),
+    Err(NewsletterError::Mex(e)) => eprintln!("MEX error: {}", e),
+    Err(NewsletterError::Iq(e)) => eprintln!("IQ error: {}", e),
+    Err(e) => eprintln!("Error: {}", e),
 }
 ```

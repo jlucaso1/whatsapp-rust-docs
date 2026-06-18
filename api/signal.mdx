@@ -28,7 +28,7 @@ pub async fn encrypt_message(
     &self,
     jid: &Jid,
     plaintext: &[u8],
-) -> Result<(EncType, Vec<u8>)>
+) -> Result<(EncType, Vec<u8>), SignalError>
 ```
 
 **Parameters:**
@@ -66,7 +66,7 @@ pub async fn decrypt_message(
     jid: &Jid,
     enc_type: EncType,
     ciphertext: &[u8],
-) -> Result<Vec<u8>>
+) -> Result<Vec<u8>, SignalError>
 ```
 
 **Parameters:**
@@ -99,7 +99,7 @@ pub async fn encrypt_group_message(
     &self,
     group_jid: &Jid,
     plaintext: &[u8],
-) -> Result<(Option<Vec<u8>>, Vec<u8>)>
+) -> Result<(Option<Vec<u8>>, Vec<u8>), SignalError>
 ```
 
 **Parameters:**
@@ -136,7 +136,7 @@ pub async fn decrypt_group_message(
     group_jid: &Jid,
     sender_jid: &Jid,
     ciphertext: &[u8],
-) -> Result<Vec<u8>>
+) -> Result<Vec<u8>, SignalError>
 ```
 
 **Parameters:**
@@ -165,7 +165,7 @@ let plaintext = client.signal().decrypt_group_message(
 Check whether a Signal session exists for a JID.
 
 ```rust
-pub async fn validate_session(&self, jid: &Jid) -> Result<bool>
+pub async fn validate_session(&self, jid: &Jid) -> Result<bool, SignalError>
 ```
 
 **Parameters:**
@@ -188,7 +188,7 @@ if client.signal().validate_session(&jid).await? {
 Delete Signal sessions and identity keys for the given JIDs.
 
 ```rust
-pub async fn delete_sessions(&self, jids: &[Jid]) -> Result<()>
+pub async fn delete_sessions(&self, jids: &[Jid]) -> Result<(), SignalError>
 ```
 
 **Parameters:**
@@ -211,7 +211,7 @@ pub async fn create_participant_nodes(
     &self,
     recipient_jids: &[Jid],
     message: &waproto::whatsapp::Message,
-) -> Result<(Vec<Node>, bool)>
+) -> Result<(Vec<Node>, bool), SignalError>
 ```
 
 **Parameters:**
@@ -243,7 +243,7 @@ let (nodes, include_identity) = client.signal().create_participant_nodes(
 Ensure E2E sessions exist for the given JIDs.
 
 ```rust
-pub async fn assert_sessions(&self, jids: &[Jid]) -> Result<()>
+pub async fn assert_sessions(&self, jids: &[Jid]) -> Result<(), SignalError>
 ```
 
 **Parameters:**
@@ -262,7 +262,7 @@ client.signal().assert_sessions(&[jid1, jid2]).await?;
 Get all known device JIDs for the given user JIDs via usync.
 
 ```rust
-pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>>
+pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, SignalError>
 ```
 
 **Parameters:**
@@ -369,6 +369,29 @@ client.signal().assert_sessions(&[jid.clone()]).await?;
 // Now encryption should work again
 let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
 ```
+
+## Error types
+
+### SignalError
+
+All signal methods return `Result<T, SignalError>`:
+
+```rust
+#[non_exhaustive]
+pub enum SignalError {
+    #[error(transparent)]
+    Protocol(#[from] SignalProtocolError),
+    #[error("unsupported signal operation: {0}")]
+    Unsupported(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+**Variants:**
+- `Protocol` — Signal protocol error (session mismatch, decode failure, etc.)
+- `Unsupported` — Operation not supported for the given parameters
+- `Internal` — Catch-all for other errors
 
 ## See also
 

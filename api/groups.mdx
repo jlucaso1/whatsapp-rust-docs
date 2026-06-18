@@ -20,7 +20,7 @@ let groups = client.groups();
 Query group information with caching support.
 
 ```rust
-pub async fn query_info(&self, jid: &Jid) -> Result<Arc<GroupInfo>, anyhow::Error>
+pub async fn query_info(&self, jid: &Jid) -> Result<Arc<GroupInfo>, GroupError>
 ```
 
 **Parameters:**
@@ -52,7 +52,7 @@ tokio::spawn(async move {
 Get all groups the client is participating in.
 
 ```rust
-pub async fn get_participating(&self) -> Result<HashMap<Jid, GroupMetadata>, anyhow::Error>
+pub async fn get_participating(&self) -> Result<HashMap<Jid, GroupMetadata>, GroupError>
 ```
 
 **Returns:**
@@ -128,7 +128,7 @@ for (jid, metadata) in groups {
 Get metadata for a specific group.
 
 ```rust
-pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error>
+pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, GroupError>
 ```
 
 **Parameters:**
@@ -154,7 +154,7 @@ Create a new group.
 pub async fn create_group(
     &self,
     options: GroupCreateOptions,
-) -> Result<CreateGroupResult, anyhow::Error>
+) -> Result<CreateGroupResult, GroupError>
 ```
 
 **Parameters:**
@@ -208,7 +208,7 @@ Since v0.6, `create_group` returns the full `GroupMetadata` (matching `get_metad
 Change the group name.
 
 ```rust
-pub async fn set_subject(&self, jid: &Jid, subject: GroupSubject) -> Result<(), anyhow::Error>
+pub async fn set_subject(&self, jid: &Jid, subject: GroupSubject) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -233,7 +233,7 @@ pub async fn set_description(
     jid: &Jid,
     description: Option<GroupDescription>,
     prev: Option<&str>,
-) -> Result<(), anyhow::Error>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -265,7 +265,7 @@ client.groups().set_description(&group_jid, None, None).await?;
 Leave a group.
 
 ```rust
-pub async fn leave(&self, jid: &Jid) -> Result<(), anyhow::Error>
+pub async fn leave(&self, jid: &Jid) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -286,7 +286,7 @@ pub async fn add_participants(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
@@ -322,7 +322,7 @@ pub async fn remove_participants(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
@@ -349,7 +349,7 @@ pub async fn promote_participants(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<(), anyhow::Error>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -373,7 +373,7 @@ pub async fn demote_participants(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<(), anyhow::Error>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -393,7 +393,7 @@ client.groups().demote_participants(&group_jid, &to_demote).await?;
 Get or reset the group invite link.
 
 ```rust
-pub async fn get_invite_link(&self, jid: &Jid, reset: bool) -> Result<String, anyhow::Error>
+pub async fn get_invite_link(&self, jid: &Jid, reset: bool) -> Result<String, GroupError>
 ```
 
 **Parameters:**
@@ -421,7 +421,7 @@ println!("New invite link: https://chat.whatsapp.com/{}", new_link);
 Join a group using an invite code or full invite URL.
 
 ```rust
-pub async fn join_with_invite_code(&self, code: &str) -> Result<JoinGroupResult, anyhow::Error>
+pub async fn join_with_invite_code(&self, code: &str) -> Result<JoinGroupResult, GroupError>
 ```
 
 **Parameters:**
@@ -457,7 +457,7 @@ pub async fn join_with_invite_v4(
     code: &str,
     expiration: i64,
     admin_jid: &Jid,
-) -> Result<JoinGroupResult, anyhow::Error>
+) -> Result<JoinGroupResult, GroupError>
 ```
 
 **Parameters:**
@@ -498,7 +498,7 @@ V4 invites expire. The method automatically checks the expiration timestamp and 
 Get group metadata from an invite code without joining the group.
 
 ```rust
-pub async fn get_invite_info(&self, code: &str) -> Result<GroupMetadata, anyhow::Error>
+pub async fn get_invite_info(&self, code: &str) -> Result<GroupMetadata, GroupError>
 ```
 
 **Parameters:**
@@ -522,7 +522,7 @@ println!("Approval required: {}", metadata.membership_approval);
 Lock or unlock the group so only admins can change group info.
 
 ```rust
-pub async fn set_locked(&self, jid: &Jid, locked: bool) -> Result<(), anyhow::Error>
+pub async fn set_locked(&self, jid: &Jid, locked: bool) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -545,7 +545,7 @@ client.groups().set_locked(&group_jid, false).await?;
 Set announcement mode. When enabled, only admins can send messages.
 
 ```rust
-pub async fn set_announce(&self, jid: &Jid, announce: bool) -> Result<(), anyhow::Error>
+pub async fn set_announce(&self, jid: &Jid, announce: bool) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -568,7 +568,7 @@ client.groups().set_announce(&group_jid, false).await?;
 Set the disappearing messages timer on the group.
 
 ```rust
-pub async fn set_ephemeral(&self, jid: &Jid, expiration: u32) -> Result<(), anyhow::Error>
+pub async fn set_ephemeral(&self, jid: &Jid, expiration: u32) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -595,7 +595,7 @@ pub async fn set_membership_approval(
     &self,
     jid: &Jid,
     mode: MembershipApprovalMode,
-) -> Result<(), anyhow::Error>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -623,7 +623,7 @@ Get pending membership approval requests for a group.
 pub async fn get_membership_requests(
     &self,
     jid: &Jid,
-) -> Result<Vec<MembershipRequest>, anyhow::Error>
+) -> Result<Vec<MembershipRequest>, GroupError>
 ```
 
 **Parameters:**
@@ -654,7 +654,7 @@ pub async fn approve_membership_requests(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
@@ -689,7 +689,7 @@ pub async fn reject_membership_requests(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
@@ -716,7 +716,7 @@ pub async fn set_member_add_mode(
     &self,
     jid: &Jid,
     mode: MemberAddMode,
-) -> Result<(), anyhow::Error>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -745,7 +745,7 @@ pub async fn set_no_frequently_forwarded(
     &self,
     jid: &Jid,
     restrict: bool,
-) -> Result<(), anyhow::Error>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -772,7 +772,7 @@ pub async fn set_allow_admin_reports(
     &self,
     jid: &Jid,
     allow: bool,
-) -> Result<(), anyhow::Error>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -795,7 +795,7 @@ client.groups().set_allow_admin_reports(&group_jid, false).await?;
 Enable or disable group history sharing.
 
 ```rust
-pub async fn set_group_history(&self, jid: &Jid, enabled: bool) -> Result<(), anyhow::Error>
+pub async fn set_group_history(&self, jid: &Jid, enabled: bool) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -822,7 +822,7 @@ pub async fn set_member_link_mode(
     &self,
     jid: &Jid,
     mode: MemberLinkMode,
-) -> Result<(), MexError>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -842,10 +842,6 @@ client.groups().set_member_link_mode(&group_jid, MemberLinkMode::AdminLink).awai
 client.groups().set_member_link_mode(&group_jid, MemberLinkMode::AllMemberLink).await?;
 ```
 
-<Note>
-This method uses the MEX protocol and returns `MexError` instead of `anyhow::Error`. See the [MEX API](/api/mex) for details on MEX errors.
-</Note>
-
 ### set_member_share_history_mode
 
 Set who can share message history with new members. This uses the MEX protocol.
@@ -855,7 +851,7 @@ pub async fn set_member_share_history_mode(
     &self,
     jid: &Jid,
     mode: MemberShareHistoryMode,
-) -> Result<(), MexError>
+) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -886,7 +882,7 @@ client.groups().set_member_share_history_mode(
 Enable or disable limit sharing in the group. This uses the MEX protocol.
 
 ```rust
-pub async fn set_limit_sharing(&self, jid: &Jid, enabled: bool) -> Result<(), MexError>
+pub async fn set_limit_sharing(&self, jid: &Jid, enabled: bool) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -913,7 +909,7 @@ pub async fn cancel_membership_requests(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
@@ -940,7 +936,7 @@ pub async fn revoke_request_code(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
@@ -963,7 +959,7 @@ let results = client.groups().revoke_request_code(&group_jid, &to_revoke).await?
 Acknowledge a group notification.
 
 ```rust
-pub async fn acknowledge(&self, jid: &Jid) -> Result<(), anyhow::Error>
+pub async fn acknowledge(&self, jid: &Jid) -> Result<(), GroupError>
 ```
 
 **Parameters:**
@@ -983,7 +979,7 @@ Batch query group info for multiple groups at once.
 pub async fn batch_get_info(
     &self,
     jids: Vec<Jid>,
-) -> Result<Vec<BatchGroupResult>, anyhow::Error>
+) -> Result<Vec<BatchGroupResult>, GroupError>
 ```
 
 **Parameters:**
@@ -1030,7 +1026,7 @@ pub async fn set_profile_picture(
     &self,
     group_jid: &Jid,
     image_data: Vec<u8>,
-) -> Result<SetProfilePictureResponse, anyhow::Error>
+) -> Result<SetProfilePictureResponse, GroupError>
 ```
 
 **Parameters:**
@@ -1067,7 +1063,7 @@ Remove a group's profile picture. Admin operation.
 pub async fn remove_profile_picture(
     &self,
     group_jid: &Jid,
-) -> Result<SetProfilePictureResponse, anyhow::Error>
+) -> Result<SetProfilePictureResponse, GroupError>
 ```
 
 **Parameters:**
@@ -1093,7 +1089,7 @@ pub async fn get_profile_pictures(
     &self,
     group_jids: Vec<Jid>,
     picture_type: PictureType,
-) -> Result<Vec<GroupProfilePicture>, anyhow::Error>
+) -> Result<Vec<GroupProfilePicture>, GroupError>
 ```
 
 **Parameters:**
@@ -1447,20 +1443,40 @@ pub enum InviteInfoError {
 - `from_code(code: u16) -> Self` - Create from a numeric status code
 - `code(&self) -> u16` - Get the numeric status code
 
-## Error handling
+## Error types
 
-All methods return `Result<T, anyhow::Error>`. Common errors:
+### `GroupError`
 
-- Invalid JID format
-- Network errors
-- Permission denied (not admin)
-- Group not found
-- Subject/description too long
-- Participant not found
+All group methods return `Result<T, GroupError>`:
 
 ```rust
-match client.groups().set_subject(&group_jid, subject).await {
-    Ok(_) => println!("Subject updated"),
-    Err(e) => eprintln!("Failed to update subject: {}", e),
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum GroupError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Mex(#[from] MexError),
+    #[error("invalid group request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+**Variants:**
+- `Iq` — IQ request failed (timeout, server rejection, etc.)
+- `Mex` — MEX protocol error (for methods using the MEX transport)
+- `InvalidRequest` — malformed request (expired invite, missing fields, etc.)
+- `Internal` — catch-all for other errors
+
+```rust
+use whatsapp_rust::GroupError;
+
+match client.groups().leave(&group_jid).await {
+    Ok(_) => println!("Left group"),
+    Err(GroupError::Iq(e)) => eprintln!("Server rejected: {}", e),
+    Err(GroupError::InvalidRequest(msg)) => eprintln!("Bad request: {}", msg),
+    Err(e) => eprintln!("Error: {}", e),
 }
 ```

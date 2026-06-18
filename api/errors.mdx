@@ -1,0 +1,363 @@
+---
+title: Error Types
+description: Typed error reference for all whatsapp-rust public APIs
+---
+
+As of PR #893, all feature-domain APIs return a typed, domain-specific error instead of `anyhow::Error`. Use `?` to propagate errors into any `anyhow` context — all types implement `std::error::Error` and are `#[non_exhaustive]`, so your existing error-handling code compiles unchanged. Lower-level APIs such as `Client::connect` and media upload/download are not covered by this page and may still surface `anyhow::Error` directly.
+
+## Error hierarchy
+
+```
+ClientError          (transport/connection base — embedded by select domain errors)
+  ├── NotConnected
+  ├── Socket(SocketError)
+  ├── EncryptSend(EncryptSendError)
+  ├── AlreadyConnected
+  ├── NotLoggedIn
+  ├── Iq(IqError)
+  └── Internal(anyhow::Error)
+
+IqError              (IQ request failures — embedded by most domain errors)
+  ├── Timeout
+  ├── NotConnected
+  ├── Socket(SocketError)
+  ├── EncryptSend(EncryptSendError)
+  ├── ClientState(Box<ClientError>)
+  ├── Disconnected
+  ├── ServerError
+  ├── UnexpectedResponseType
+  ├── InternalChannelClosed
+  ├── EncodeError
+  └── ParseError
+```
+
+Domain errors that embed `IqError` or `ClientError` via `#[from]` propagate those failures automatically via `?`. Some errors (e.g. `AppStateError`, `SignalError`) use internal `anyhow::Error` wrapping instead and do not have `Iq` or `Client` variants.
+
+## Domain error types
+
+| Error type | Returned by | Module |
+|---|---|---|
+| `SendError` | `send_message`, `revoke_message`, `edit_message`, `pin_message`, `send_reaction`, and all other send-path methods | `whatsapp_rust` |
+| `GroupError` | All `Groups::*` methods | `whatsapp_rust` |
+| `BlockingError` | All `Blocking::*` methods | `whatsapp_rust` |
+| `AppStateError` | All `ChatActions::*` and `Labels::*` methods | `whatsapp_rust` |
+| `ChatStateError` | All `Chatstate::send*` methods | `whatsapp_rust` |
+| `CommunityError` | All `Community::*` methods | `whatsapp_rust` |
+| `ContactError` | All `Contacts::*` methods | `whatsapp_rust` |
+| `NewsletterError` | All `Newsletter::*` methods | `whatsapp_rust` |
+| `PollError` | `Polls::{create, create_quiz, vote, decrypt_vote, aggregate_votes}` | `whatsapp_rust` |
+| `ProfileError` | All `Profile::*` methods | `whatsapp_rust` |
+| `SignalError` | All `Signal::*` methods | `whatsapp_rust` |
+| `TcTokenError` | All `TcToken::*` methods | `whatsapp_rust` |
+| `MediaReuploadError` | `MediaReupload::request` | `whatsapp_rust` |
+| `PresenceError` | All `Presence::*` methods | `whatsapp_rust` |
+
+## Type definitions
+
+### SendError
+
+```rust
+#[non_exhaustive]
+pub enum SendError {
+    #[error(transparent)]
+    Client(ClientError),
+    #[error("client is not logged in")]
+    NotLoggedIn,
+    #[error("IQ request failed: {0}")]
+    Iq(#[from] IqError),
+    #[error("invalid send request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### GroupError
+
+```rust
+#[non_exhaustive]
+pub enum GroupError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Mex(#[from] MexError),
+    #[error("invalid group request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### BlockingError
+
+```rust
+#[non_exhaustive]
+pub enum BlockingError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error("invalid blocklist target: {0}")]
+    InvalidJid(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### AppStateError
+
+Shared by `ChatActions` and `Labels`.
+
+```rust
+#[non_exhaustive]
+pub enum AppStateError {
+    #[error("invalid app-state request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### ChatStateError
+
+```rust
+#[non_exhaustive]
+pub enum ChatStateError {
+    #[error(transparent)]
+    Client(#[from] ClientError),
+}
+```
+
+### CommunityError
+
+```rust
+#[non_exhaustive]
+pub enum CommunityError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Mex(#[from] MexError),
+    #[error(transparent)]
+    Group(#[from] GroupError),
+    #[error("invalid community request: {0}")]
+    InvalidRequest(String),
+}
+```
+
+### ContactError
+
+```rust
+#[non_exhaustive]
+pub enum ContactError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error("unsupported contact JID: {0}")]
+    InvalidJid(String),
+}
+```
+
+### NewsletterError
+
+```rust
+#[non_exhaustive]
+pub enum NewsletterError {
+    #[error(transparent)]
+    Mex(#[from] MexError),
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error("invalid newsletter request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### PollError
+
+```rust
+#[non_exhaustive]
+pub enum PollError {
+    #[error(transparent)]
+    Send(#[from] SendError),
+    #[error("invalid poll: {0}")]
+    InvalidPoll(String),
+    #[error("client is not logged in")]
+    NotLoggedIn,
+    #[error("poll vote crypto failed: {0}")]
+    Crypto(#[source] anyhow::Error),
+}
+```
+
+### ProfileError
+
+```rust
+#[non_exhaustive]
+pub enum ProfileError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### SignalError
+
+```rust
+#[non_exhaustive]
+pub enum SignalError {
+    #[error(transparent)]
+    Protocol(#[from] SignalProtocolError),
+    #[error("unsupported signal operation: {0}")]
+    Unsupported(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### TcTokenError
+
+```rust
+#[non_exhaustive]
+pub enum TcTokenError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+```
+
+### MediaReuploadError
+
+```rust
+#[non_exhaustive]
+pub enum MediaReuploadError {
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error("client is not logged in")]
+    NotLoggedIn,
+    #[error("invalid media reupload request: {0}")]
+    InvalidRequest(String),
+    #[error("media retry notification timed out")]
+    Timeout,
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### PresenceError
+
+```rust
+#[non_exhaustive]
+pub enum PresenceError {
+    #[error("cannot send presence without a push name set")]
+    PushNameEmpty,
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+```
+
+### ClientError (base type)
+
+```rust
+#[non_exhaustive]
+pub enum ClientError {
+    #[error("client is not connected")]
+    NotConnected,
+    #[error("client is already connected")]
+    AlreadyConnected,
+    #[error("client is not logged in")]
+    NotLoggedIn,
+    #[error("socket error: {0}")]
+    Socket(SocketError),
+    #[error("encrypt/send error: {0}")]
+    EncryptSend(EncryptSendError),
+    #[error("IQ request failed: {0}")]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+### IqError (base type)
+
+```rust
+#[non_exhaustive]
+pub enum IqError {
+    #[error("IQ request timed out")]
+    Timeout,
+    #[error("client is not connected")]
+    NotConnected,
+    #[error("socket error")]
+    Socket(SocketError),
+    #[error("encrypted send pipeline failed")]
+    EncryptSend(EncryptSendError),
+    #[error("client state prevented send")]
+    ClientState(Box<ClientError>),  // boxed to break the ClientError<->IqError cycle
+    #[error("received disconnect node during IQ wait")]
+    Disconnected,
+    #[error("received a server error response: code={code}, text='{text}'")]
+    ServerError { code: u16, text: String, error_type: Option<String>, backoff: Option<u32> },
+    #[error("received unexpected IQ response type")]
+    UnexpectedResponseType { got: Option<String> },
+    #[error("internal channel closed unexpectedly")]
+    InternalChannelClosed,
+    #[error("failed to encode IQ request")]
+    EncodeError(anyhow::Error),
+    #[error("failed to parse IQ response")]
+    ParseError(anyhow::Error),
+}
+```
+
+<Note>
+`IqError::ClientState` holds a `Box<ClientError>` (not `ClientError` directly) to break the mutual-size cycle between `ClientError` and `IqError`. Pattern matching needs dereferencing: `IqError::ClientState(e) => { /* *e is a ClientError */ }`.
+</Note>
+
+## Migration guide
+
+### From `anyhow::Error`
+
+If your handler used `?` into `anyhow`:
+
+```rust
+// Before — still compiles unchanged
+async fn my_fn() -> anyhow::Result<()> {
+    client.send_message(jid, msg).await?;  // SendError: Into<anyhow::Error>
+    Ok(())
+}
+```
+
+If you were matching on `anyhow::Error` downcasts, switch to typed matching:
+
+```rust
+// Before
+match client.send_message(jid, msg).await {
+    Ok(r) => { /* ... */ }
+    Err(e) => eprintln!("send failed: {e}"),
+}
+
+// After — match specific variants
+use whatsapp_rust::SendError;
+match client.send_message(jid, msg).await {
+    Ok(r) => { /* ... */ }
+    Err(SendError::NotLoggedIn) => eprintln!("not authenticated"),
+    Err(SendError::Iq(e)) => eprintln!("IQ failed: {e}"),
+    Err(SendError::InvalidRequest(msg)) => eprintln!("bad request: {msg}"),
+    Err(e) => eprintln!("send failed: {e}"),
+}
+```
+
+### IqError::ClientState boxing
+
+```rust
+// Before
+Err(IqError::ClientState(e)) => { /* e: ClientError */ }
+
+// After — dereference the box
+Err(IqError::ClientState(e)) => { /* *e: ClientError */ }
+```

@@ -24,7 +24,7 @@ let tc_token = client.tc_token();
 Issue privacy tokens for specified contacts.
 
 ```rust
-pub async fn issue_tokens(&self, jids: &[Jid]) -> Result<Vec<ReceivedTcToken>, IqError>
+pub async fn issue_tokens(&self, jids: &[Jid]) -> Result<Vec<ReceivedTcToken>, TcTokenError>
 ```
 
 **Parameters:**
@@ -57,7 +57,7 @@ Issued tokens are automatically stored in the backend and used for subsequent op
 Remove expired tokens from storage.
 
 ```rust
-pub async fn prune_expired(&self) -> Result<u32, anyhow::Error>
+pub async fn prune_expired(&self) -> Result<u32, TcTokenError>
 ```
 
 **Returns:**
@@ -78,7 +78,7 @@ By default, tokens expire after 28 days (4 buckets × 7 days). The server may ov
 Get a stored token for a specific JID.
 
 ```rust
-pub async fn get(&self, jid: &str) -> Result<Option<TcTokenEntry>, anyhow::Error>
+pub async fn get(&self, jid: &str) -> Result<Option<TcTokenEntry>, TcTokenError>
 ```
 
 **Parameters:**
@@ -104,7 +104,7 @@ if let Some(entry) = client.tc_token().get("100000000000001").await? {
 Get all JIDs that have stored tokens.
 
 ```rust
-pub async fn get_all_jids(&self) -> Result<Vec<String>, anyhow::Error>
+pub async fn get_all_jids(&self) -> Result<Vec<String>, TcTokenError>
 ```
 
 **Returns:**
@@ -117,6 +117,37 @@ println!("Tokens stored for {} contacts", jids.len());
 
 for jid in jids {
     println!("  - {}", jid);
+}
+```
+
+## Error handling
+
+Each method returns `Result<T, TcTokenError>`:
+
+```rust
+#[non_exhaustive]
+pub enum TcTokenError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+```
+
+**Variants:**
+- `Iq` — the server token request failed (timeout, server error, etc.)
+- `Store` — token persistence failed
+
+**Example:**
+```rust
+use whatsapp_rust::TcTokenError;
+
+let jids = vec!["100000000000001@lid".parse()?];
+match client.tc_token().issue_tokens(&jids).await {
+    Ok(tokens) => println!("Got {} tokens", tokens.len()),
+    Err(TcTokenError::Iq(e)) => eprintln!("Server request failed: {e}"),
+    Err(TcTokenError::Store(e)) => eprintln!("Storage error: {e}"),
+    Err(e) => eprintln!("Error: {e}"),
 }
 ```
 

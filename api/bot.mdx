@@ -666,7 +666,7 @@ Extracts a `MessageContext` from an `Event`. Returns `None` if the event is not 
 ### send_message
 
 ```rust
-pub async fn send_message(&self, message: wa::Message) -> Result<SendResult, anyhow::Error>
+pub async fn send_message(&self, message: wa::Message) -> Result<SendResult, SendError>
 ```
 
 Sends a message to the same chat. Returns a [`SendResult`](/api/send#sendresult) containing the `message_id` and `to` JID.
@@ -711,7 +711,7 @@ pub async fn edit_message(
     &self,
     original_message_id: impl Into<String>,
     new_message: wa::Message
-) -> Result<String, anyhow::Error>
+) -> Result<String, SendError>
 ```
 
 Edits a message in the same chat.
@@ -723,7 +723,7 @@ pub async fn revoke_message(
     &self,
     message_id: String,
     revoke_type: RevokeType
-) -> Result<(), anyhow::Error>
+) -> Result<(), SendError>
 ```
 
 Deletes a message in the same chat.
@@ -731,7 +731,7 @@ Deletes a message in the same chat.
 ### react
 
 ```rust
-pub async fn react(&self, emoji: &str) -> Result<SendResult, anyhow::Error>
+pub async fn react(&self, emoji: &str) -> Result<SendResult, SendError>
 ```
 
 Sends an emoji reaction to the incoming message. The chat JID, target message ID, and group/status `participant` are taken from the context — you only supply the emoji. Pass an empty string (`""`) to remove a previously sent reaction.

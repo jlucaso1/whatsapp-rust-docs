@@ -77,7 +77,8 @@
                 "group": "Core",
                 "pages": [
                   "api/client",
-                  "api/bot"
+                  "api/bot",
+                  "api/errors"
                 ]
               },
               {

@@ -12,7 +12,7 @@ pub async fn send_message(
     &self,
     to: impl Into<Jid>,
     message: wa::Message,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -196,7 +196,7 @@ pub async fn forward_message(
     &self,
     to: impl Into<Jid>,
     message: &wa::Message,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -242,7 +242,7 @@ pub async fn send_message_with_options(
     to: impl Into<Jid>,
     message: wa::Message,
     options: SendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -376,7 +376,7 @@ pub async fn edit_message(
     to: impl Into<Jid>,
     original_id: impl Into<String>,
     new_content: wa::Message,
-) -> Result<String, anyhow::Error>
+) -> Result<String, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -437,7 +437,7 @@ pub async fn edit_message_encrypted(
     original_id: impl Into<String>,
     message_secret: &[u8],
     new_content: wa::Message,
-) -> Result<String, anyhow::Error>
+) -> Result<String, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -494,7 +494,7 @@ pub async fn revoke_message(
     to: impl Into<Jid>,
     message_id: impl Into<String>,
     revoke_type: RevokeType,
-) -> Result<(), anyhow::Error>
+) -> Result<(), SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -588,7 +588,7 @@ pub async fn pin_message(
     chat: impl Into<Jid>,
     key: wa::MessageKey,
     duration: PinDuration,
-) -> Result<(), anyhow::Error>
+) -> Result<(), SendError>
 ```
 
 <ParamField path="chat" type="impl Into<Jid>" required>
@@ -673,7 +673,7 @@ pub async fn unpin_message(
     &self,
     chat: impl Into<Jid>,
     key: wa::MessageKey,
-) -> Result<(), anyhow::Error>
+) -> Result<(), SendError>
 ```
 
 <ParamField path="chat" type="impl Into<Jid>" required>
@@ -711,7 +711,7 @@ pub async fn keep_message(
     chat: impl Into<Jid>,
     key: wa::MessageKey,
     keep: bool,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="chat" type="impl Into<Jid>" required>
@@ -769,7 +769,7 @@ pub async fn set_chat_disappearing_timer(
     &self,
     chat: Jid,
     duration: u32,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="chat" type="Jid" required>
@@ -812,7 +812,7 @@ pub async fn send_reaction(
     chat: impl Into<Jid>,
     target_key: wa::MessageKey,
     emoji: &str,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="chat" type="impl Into<Jid>" required>
@@ -1221,3 +1221,49 @@ let message = wa::Message {
 ```
 
 `remote_jid` is emitted only when `quoted_chat_jid` and `target_chat_jid` refer to different chats (a cross-chat quote, such as quoting a status into a DM). Same-chat replies omit it, matching WhatsApp Web. For newsletter chats, the `participant` field is automatically set to the newsletter JID instead of the sender.
+
+---
+
+## Error types
+
+### `SendError`
+
+All send-path methods return `Result<T, SendError>`:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SendError {
+    #[error(transparent)]
+    Client(ClientError),
+    #[error("client is not logged in")]
+    NotLoggedIn,
+    #[error("IQ request failed: {0}")]
+    Iq(#[from] IqError),
+    #[error("invalid send request: {0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+```
+
+**Variants:**
+- `NotLoggedIn` — client is not authenticated; check connection state before sending
+- `Iq` — IQ request required by the send path failed
+- `InvalidRequest` — the send request was malformed (e.g., invalid JID, bad message shape)
+- `Client` — underlying transport/connection error
+- `Internal` — catch-all for errors not yet assigned a typed variant
+
+**Example:**
+
+```rust
+use whatsapp_rust::SendError;
+
+match client.send_message(jid.clone(), message).await {
+    Ok(result) => println!("Sent: {}", result.message_id),
+    Err(SendError::NotLoggedIn) => eprintln!("Not authenticated"),
+    Err(SendError::Iq(e)) => eprintln!("IQ failed: {}", e),
+    Err(SendError::InvalidRequest(msg)) => eprintln!("Bad request: {}", msg),
+    Err(e) => eprintln!("Send failed: {}", e),
+}
+```

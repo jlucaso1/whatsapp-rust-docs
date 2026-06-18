@@ -27,7 +27,7 @@ pub async fn send_text(
     font: i32,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -74,7 +74,7 @@ pub async fn send_image(
     caption: Option<&str>,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -119,7 +119,7 @@ pub async fn send_video(
     caption: Option<&str>,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -160,7 +160,7 @@ pub async fn send_raw(
     message: wa::Message,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Example:**
@@ -190,7 +190,7 @@ pub async fn revoke(
     message_id: impl Into<String>,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -213,45 +213,44 @@ client.status()
 
 ### send_reaction
 
-React to someone's status update (e.g. the "like" heart on WhatsApp). Pass an empty string to remove a previous reaction.
+React to a status update with an emoji. You send status reactions via `Client::send_reaction` (not `client.status()`) using `status@broadcast` as the chat JID and a `wa::MessageKey` whose `participant` field identifies the status owner.
 
 ```rust
 pub async fn send_reaction(
     &self,
-    status_owner: &Jid,
-    server_id: u64,
-    reaction: &str,
-) -> Result<(), anyhow::Error>
+    chat: impl Into<Jid>,
+    target_key: wa::MessageKey,
+    emoji: &str,
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
-- `status_owner` - JID of the person whose status you are reacting to
-- `server_id` - Server-assigned ID of the status message
-- `reaction` - Emoji to send (e.g. `"💚"`). Pass `""` to remove the reaction
+- `chat` - `Jid::status_broadcast()` (the broadcast JID)
+- `target_key` - Identifies the status to react to; set `participant` to the status owner's JID and `id` to the status message ID
+- `emoji` - Emoji to send (e.g. `"💚"`). Pass `""` to remove a previous reaction
 
 **Example:**
 ```rust
-// React to a status with a heart emoji
-client.status()
-    .send_reaction(
-        &Jid::pn("15551234567"),
-        1234567890,
-        "💚",
-    )
-    .await?;
+use waproto::whatsapp as wa;
+
+let status_jid = Jid::status_broadcast();
+
+let target_key = wa::MessageKey {
+    remote_jid: Some(status_jid.to_string()),
+    from_me: Some(false),
+    id: Some(status_message_id.clone()),
+    participant: Some(Jid::pn("15551234567").to_string()),
+};
+
+// React to a status
+client.send_reaction(&status_jid, target_key.clone(), "💚").await?;
 
 // Remove a previous reaction
-client.status()
-    .send_reaction(
-        &Jid::pn("15551234567"),
-        1234567890,
-        "",
-    )
-    .await?;
+client.send_reaction(&status_jid, target_key, "").await?;
 ```
 
 <Note>
-The `server_id` is the server-assigned numeric ID of the status message, not the client-generated message ID. You can obtain it from the status message event payload.
+See [Send API — send_reaction](/api/send#send_reaction) for the full parameter reference and additional examples.
 </Note>
 
 ## Types

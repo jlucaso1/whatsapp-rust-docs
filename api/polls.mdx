@@ -26,7 +26,7 @@ pub async fn create(
     name: &str,
     options: &[String],
     selectable_count: u32,
-) -> Result<(SendResult, Vec<u8>)>
+) -> Result<(SendResult, Vec<u8>), PollError>
 ```
 
 <ParamField path="to" type="&Jid" required>
@@ -79,7 +79,7 @@ pub async fn create_quiz(
     name: &str,
     options: &[String],
     correct_index: usize,
-) -> Result<(SendResult, Vec<u8>)>
+) -> Result<(SendResult, Vec<u8>), PollError>
 ```
 
 <ParamField path="to" type="&Jid" required>
@@ -132,7 +132,7 @@ pub async fn vote(
     poll_creator_jid: &Jid,
     message_secret: &[u8],
     option_names: &[String],
-) -> Result<SendResult>
+) -> Result<SendResult, PollError>
 ```
 
 <ParamField path="chat_jid" type="&Jid" required>
@@ -191,7 +191,7 @@ pub async fn decrypt_vote(
     poll_msg_id: &str,
     poll_creator_jid: &Jid,
     voter_jid: &Jid,
-) -> Result<Vec<Vec<u8>>>
+) -> Result<Vec<Vec<u8>>, PollError>
 ```
 
 <Note>
@@ -256,7 +256,7 @@ pub async fn aggregate_votes(
     message_secret: &[u8],
     poll_msg_id: &str,
     poll_creator_jid: &Jid,
-) -> Result<Vec<PollOptionResult>>
+) -> Result<Vec<PollOptionResult>, PollError>
 ```
 
 <Note>
@@ -404,20 +404,30 @@ The `EncryptedEdit` type from v0.5 still exists as a `MessageEdit`-specific faç
 
 ## Error handling
 
-All methods return `Result<T, anyhow::Error>`. Common errors:
-
-- **Fewer than 2 options** or **more than 12 options** when creating a poll
-- **Duplicate option names** — would produce identical SHA-256 hashes
-- **`selectable_count` out of range** — must be between 1 and the option count
-- **Invalid `message_secret` size** — must be exactly 32 bytes
-- **GCM tag verification failed** — wrong key, corrupted payload, or tampered data
-- **Invalid IV length** — must be exactly 12 bytes
-- **Not logged in** — voter's JID cannot be determined when voting
+All five poll methods (`create`, `create_quiz`, `vote`, `decrypt_vote`, and `aggregate_votes`) return `Result<T, PollError>`:
 
 ```rust
-match client.polls().create(&jid, "Question?", &options, 1).await {
-    Ok((result, secret)) => println!("Created poll: {}", result.message_id),
-    Err(e) => eprintln!("Failed: {}", e),
+#[non_exhaustive]
+pub enum PollError {
+    #[error(transparent)]
+    Send(#[from] SendError),
+    #[error("invalid poll: {0}")]
+    InvalidPoll(String),
+    #[error("client is not logged in")]
+    NotLoggedIn,
+    #[error("poll vote crypto failed: {0}")]
+    Crypto(#[source] anyhow::Error),
+}
+```
+
+```rust
+use whatsapp_rust::PollError;
+
+match client.polls().create(jid, "Question?", &options, 1).await {
+    Ok((result, secret)) => println!("Poll created: {}", result.message_id),
+    Err(PollError::InvalidPoll(msg)) => eprintln!("Invalid poll: {}", msg),
+    Err(PollError::Send(e)) => eprintln!("Send failed: {}", e),
+    Err(e) => eprintln!("Error: {}", e),
 }
 ```
 

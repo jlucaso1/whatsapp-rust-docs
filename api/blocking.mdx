@@ -20,14 +20,14 @@ let blocking = client.blocking();
 Block a contact. Accepts either a LID or a PN JID; the client resolves the LID↔PN pair from its mapping cache and emits a stanza carrying both (`jid=LID`, `pn_jid=PN`). Modern WhatsApp servers reject PN-only block requests.
 
 ```rust
-pub async fn block(&self, jid: &Jid) -> Result<(), IqError>
+pub async fn block(&self, jid: &Jid) -> Result<(), BlockingError>
 ```
 
 **Parameters:**
 - `jid` - Contact JID to block (LID or PN)
 
 **Requirements:**
-- A LID↔PN mapping for the target must exist in the client's mapping store. If no mapping is available, the call returns `IqError::EncodeError`.
+- A LID↔PN mapping for the target must exist in the client's mapping store. If no mapping is available, the call returns `BlockingError::InvalidJid`.
 
 **Effects:**
 - Contact will not be able to message you
@@ -46,7 +46,7 @@ println!("Blocked {}", contact);
 Unblock a previously blocked contact. Accepts either a LID or a PN JID; PN input is internally resolved to the LID required on the wire.
 
 ```rust
-pub async fn unblock(&self, jid: &Jid) -> Result<(), IqError>
+pub async fn unblock(&self, jid: &Jid) -> Result<(), BlockingError>
 ```
 
 **Parameters:**
@@ -64,7 +64,7 @@ println!("Unblocked {}", contact);
 Retrieve the full list of blocked contacts.
 
 ```rust
-pub async fn get_blocklist(&self) -> Result<Vec<BlocklistEntry>, anyhow::Error>
+pub async fn get_blocklist(&self) -> Result<Vec<BlocklistEntry>, BlockingError>
 ```
 
 **Returns:**
@@ -94,7 +94,7 @@ for entry in blocklist {
 Check if a specific contact is blocked. Accepts either a LID or a PN JID; the client resolves the LID↔PN pair from its mapping cache so a PN-input query correctly matches a LID-keyed blocklist entry (and vice versa).
 
 ```rust
-pub async fn is_blocked(&self, jid: &Jid) -> Result<bool, anyhow::Error>
+pub async fn is_blocked(&self, jid: &Jid) -> Result<bool, BlockingError>
 ```
 
 **Parameters:**
@@ -136,22 +136,26 @@ The timestamp may be `None` if the server doesn't provide it.
 
 ## Error Types
 
-### IqError
+### `BlockingError`
 
-Returned by `block()` and `unblock()` operations:
+All methods return `Result<T, BlockingError>`:
 
 ```rust
-pub enum IqError {
-    // Network/protocol errors
-    Timeout,
-    InvalidResponse,
-    // ... other variants
+#[non_exhaustive]
+pub enum BlockingError {
+    #[error(transparent)]
+    Iq(#[from] IqError),
+    #[error("invalid blocklist target: {0}")]
+    InvalidJid(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
 }
 ```
 
-### anyhow::Error
-
-Returned by `get_blocklist()` and `is_blocked()` for general errors.
+**Variants:**
+- `Iq` — Wraps an IQ request failure (timeout, server error, etc.)
+- `InvalidJid` — The provided JID was not a valid blocklist target
+- `Internal` — Internal error (network, encoding, etc.)
 
 ## Wire Format
 
@@ -297,17 +301,17 @@ for contact in contacts_to_block {
 ## Error Handling
 
 ```rust
-use whatsapp_rust::request::IqError;
+use whatsapp_rust::BlockingError;
 
 let contact: Jid = "15551234567@s.whatsapp.net".parse()?;
 
 match client.blocking().block(&contact).await {
     Ok(_) => println!("Blocked successfully"),
-    Err(IqError::Timeout) => {
-        eprintln!("Request timed out");
+    Err(BlockingError::Iq(e)) => {
+        eprintln!("IQ request failed: {}", e);
     }
-    Err(IqError::InvalidResponse) => {
-        eprintln!("Invalid response from server");
+    Err(BlockingError::InvalidJid(msg)) => {
+        eprintln!("Invalid JID: {}", msg);
     }
     Err(e) => eprintln!("Error: {}", e),
 }

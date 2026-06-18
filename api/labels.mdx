@@ -27,7 +27,7 @@ pub async fn create_label(
     label_id: &str,
     name: &str,
     color: i32,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -51,7 +51,7 @@ client.labels().create_label("5", "Clients", 4).await?;
 Delete a label. Existing chat associations are kept by the server; WhatsApp Web prunes them from its local database on receipt of the delete.
 
 ```rust
-pub async fn delete_label(&self, label_id: &str) -> Result<()>
+pub async fn delete_label(&self, label_id: &str) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -73,7 +73,7 @@ pub async fn add_chat_label(
     &self,
     label_id: &str,
     chat_jid: &Jid,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -97,7 +97,7 @@ pub async fn remove_chat_label(
     &self,
     label_id: &str,
     chat_jid: &Jid,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -159,11 +159,13 @@ App state sync requires the relevant encryption keys, which arrive during initia
 
 ## Error handling
 
-All methods return `Result<(), anyhow::Error>`. Empty `label_id` (and empty `name` for `create_label`) is rejected before any network work.
+All methods return `Result<(), AppStateError>`. If you pass an empty `label_id` (or an empty `name` to `create_label`), the call fails immediately with `AppStateError::InvalidRequest` before any network work is done.
 
 ```rust
-if let Err(e) = client.labels().create_label("", "Work", 0).await {
-    eprintln!("Validation failed: {e}"); // "label_id cannot be empty"
+use whatsapp_rust::AppStateError;
+
+if let Err(AppStateError::InvalidRequest(msg)) = client.labels().create_label("", "Work", 0).await {
+    eprintln!("Validation failed: {msg}"); // "label_id cannot be empty"
 }
 ```
 

@@ -27,7 +27,7 @@ pub async fn create_label(
     label_id: &str,
     name: &str,
     color: i32,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -51,7 +51,7 @@ client.labels().create_label("5", "Clients", 4).await?;
 Delete a label. Existing chat associations are kept by the server; WhatsApp Web prunes them from its local database on receipt of the delete.
 
 ```rust
-pub async fn delete_label(&self, label_id: &str) -> Result<()>
+pub async fn delete_label(&self, label_id: &str) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -73,7 +73,7 @@ pub async fn add_chat_label(
     &self,
     label_id: &str,
     chat_jid: &Jid,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -97,7 +97,7 @@ pub async fn remove_chat_label(
     &self,
     label_id: &str,
     chat_jid: &Jid,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**

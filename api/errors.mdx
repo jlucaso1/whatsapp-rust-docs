@@ -3,7 +3,7 @@ title: Error Types
 description: Typed error reference for all whatsapp-rust public APIs
 ---
 
-As of PR #893, every public API returns a typed, domain-specific error instead of `anyhow::Error`. Use `?` to propagate errors into any `anyhow` context — all types implement `std::error::Error` and are `#[non_exhaustive]`, so your existing error-handling code compiles unchanged.
+As of PR #893, all feature-domain APIs return a typed, domain-specific error instead of `anyhow::Error`. Use `?` to propagate errors into any `anyhow` context — all types implement `std::error::Error` and are `#[non_exhaustive]`, so your existing error-handling code compiles unchanged. Lower-level APIs such as `Client::connect` and media upload/download are not covered by this page and may still surface `anyhow::Error` directly.
 
 ## Error hierarchy
 

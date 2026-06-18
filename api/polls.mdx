@@ -191,7 +191,7 @@ pub async fn decrypt_vote(
     poll_msg_id: &str,
     poll_creator_jid: &Jid,
     voter_jid: &Jid,
-) -> Result<Vec<Vec<u8>>>
+) -> Result<Vec<Vec<u8>>, PollError>
 ```
 
 <Note>
@@ -256,7 +256,7 @@ pub async fn aggregate_votes(
     message_secret: &[u8],
     poll_msg_id: &str,
     poll_creator_jid: &Jid,
-) -> Result<Vec<PollOptionResult>>
+) -> Result<Vec<PollOptionResult>, PollError>
 ```
 
 <Note>
@@ -404,7 +404,7 @@ The `EncryptedEdit` type from v0.5 still exists as a `MessageEdit`-specific faç
 
 ## Error handling
 
-Send methods (`create`, `create_quiz`, `vote`) return `Result<T, PollError>`:
+All poll methods — `create`, `create_quiz`, `vote`, `decrypt_vote`, and `aggregate_votes` — return `Result<T, PollError>`:
 
 ```rust
 #[non_exhaustive]

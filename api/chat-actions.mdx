@@ -24,7 +24,7 @@ pub async fn archive_chat(
     &self,
     jid: &Jid,
     message_range: Option<SyncActionMessageRange>,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -46,7 +46,7 @@ pub async fn unarchive_chat(
     &self,
     jid: &Jid,
     message_range: Option<SyncActionMessageRange>,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -65,7 +65,7 @@ client.chat_actions().unarchive_chat(&jid, None).await?;
 Pin a chat to keep it at the top of the chat list.
 
 ```rust
-pub async fn pin_chat(&self, jid: &Jid) -> Result<()>
+pub async fn pin_chat(&self, jid: &Jid) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -86,7 +86,7 @@ WhatsApp limits the number of pinned chats. Attempting to pin too many chats may
 Unpin a chat.
 
 ```rust
-pub async fn unpin_chat(&self, jid: &Jid) -> Result<()>
+pub async fn unpin_chat(&self, jid: &Jid) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -104,7 +104,7 @@ client.chat_actions().unpin_chat(&jid).await?;
 Mute a chat indefinitely.
 
 ```rust
-pub async fn mute_chat(&self, jid: &Jid) -> Result<()>
+pub async fn mute_chat(&self, jid: &Jid) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -125,7 +125,7 @@ pub async fn mute_chat_until(
     &self,
     jid: &Jid,
     mute_end_timestamp_ms: i64
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -156,7 +156,7 @@ client.chat_actions()
 Unmute a chat.
 
 ```rust
-pub async fn unmute_chat(&self, jid: &Jid) -> Result<()>
+pub async fn unmute_chat(&self, jid: &Jid) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -180,7 +180,7 @@ pub async fn star_message(
     participant_jid: Option<&Jid>,
     message_id: &str,
     from_me: bool
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -223,7 +223,7 @@ pub async fn unstar_message(
     participant_jid: Option<&Jid>,
     message_id: &str,
     from_me: bool
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -248,7 +248,7 @@ pub async fn mark_chat_as_read(
     jid: &Jid,
     read: bool,
     message_range: Option<SyncActionMessageRange>,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -283,7 +283,7 @@ pub async fn delete_chat(
     jid: &Jid,
     delete_media: bool,
     message_range: Option<SyncActionMessageRange>,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -319,7 +319,7 @@ pub async fn clear_chat(
     delete_starred: bool,
     delete_media: bool,
     message_range: Option<SyncActionMessageRange>,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -356,7 +356,7 @@ pub async fn save_contact(
     full_name: Option<String>,
     first_name: Option<String>,
     save_on_primary_addressbook: bool,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -385,7 +385,7 @@ pub async fn set_user_status_mute(
     &self,
     jid: &Jid,
     muted: bool,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -417,7 +417,7 @@ pub async fn delete_message_for_me(
     from_me: bool,
     delete_media: bool,
     message_timestamp: Option<i64>,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**
@@ -489,7 +489,7 @@ pub async fn send_app_state_action(
     schema: &Schema,
     index_args: &[&str],
     value: &wa::SyncActionValue,
-) -> Result<()>
+) -> Result<(), AppStateError>
 ```
 
 **Parameters:**

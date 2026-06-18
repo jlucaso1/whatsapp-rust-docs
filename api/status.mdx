@@ -27,7 +27,7 @@ pub async fn send_text(
     font: i32,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -74,7 +74,7 @@ pub async fn send_image(
     caption: Option<&str>,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -119,7 +119,7 @@ pub async fn send_video(
     caption: Option<&str>,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -160,7 +160,7 @@ pub async fn send_raw(
     message: wa::Message,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Example:**
@@ -190,7 +190,7 @@ pub async fn revoke(
     message_id: impl Into<String>,
     recipients: &[Jid],
     options: StatusSendOptions,
-) -> Result<SendResult, anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**
@@ -221,7 +221,7 @@ pub async fn send_reaction(
     status_owner: &Jid,
     server_id: u64,
     reaction: &str,
-) -> Result<(), anyhow::Error>
+) -> Result<SendResult, SendError>
 ```
 
 **Parameters:**

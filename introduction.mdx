@@ -113,7 +113,7 @@ The library is organized into multiple crates for maximum flexibility:
 
 ```
 whatsapp-rust/
-├── src/                          # Main client library + binary
+├── src/                          # Main client library
 ├── wacore/                       # Platform-agnostic core (zero runtime deps)
 │   ├── binary/                   # WhatsApp binary protocol
 │   ├── libsignal/                # Signal Protocol implementation
@@ -125,7 +125,7 @@ whatsapp-rust/
 ├── transports/tokio-transport/   # Tokio WebSocket transport
 ├── http_clients/ureq-client/     # HTTP client for media
 ├── tests/e2e/                    # End-to-end test suite
-└── examples/                     # Benchmark examples
+└── examples/                     # Demo bot (demo.rs) and benchmarks
 ```
 
 ## Acknowledgements

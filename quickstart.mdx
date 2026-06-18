@@ -258,14 +258,14 @@ PairCodeOptions {
 
 ### Demo binary CLI flags
 
-The repository includes a demo bot binary (`src/main.rs`) that supports CLI arguments for authentication:
+The repository includes a demo bot example (`examples/demo.rs`) that supports CLI arguments for authentication:
 
 ```bash
-cargo run                                      # QR code pairing only
-cargo run -- --phone 15551234567               # Pair code + QR code (concurrent)
-cargo run -- -p 15551234567                    # Short form
-cargo run -- -p 15551234567 --code MYCODE12    # Custom 8-char pair code
-cargo run -- -p 15551234567 -c MYCODE12        # Short form
+cargo run --example demo                                      # QR code pairing only
+cargo run --example demo -- --phone 15551234567               # Pair code + QR code (concurrent)
+cargo run --example demo -- -p 15551234567                    # Short form
+cargo run --example demo -- -p 15551234567 --code MYCODE12    # Custom 8-char pair code
+cargo run --example demo -- -p 15551234567 -c MYCODE12        # Short form
 ```
 
 The demo bot responds to `🦀ping` with a quoted `🏓 Pong!` reply, edits the reply to append the send latency, and supports media ping/pong via CDN reuse.

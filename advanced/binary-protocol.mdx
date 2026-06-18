@@ -1022,6 +1022,47 @@ use wacore_binary::builder::NodeBuilder;
 }
 ```
 
+## Testing
+
+The `wacore-binary` crate has both randomized property tests and a fuzzing harness, since `unmarshal_ref` parses bytes straight off the wire and is security-critical.
+
+### Property tests
+
+[proptest](https://crates.io/crates/proptest) is used to run randomized roundtrip coverage. Run the full suite with:
+
+```bash
+cargo test -p wacore-binary
+```
+
+The test in `wacore/binary/tests/roundtrip_proptest.rs` generates random `Node` trees (depth ≤4, ≤4 children/attrs, ≤64 content bytes) and asserts `unmarshal(marshal(node)) == node` across 2,048 cases. Two encoder transforms are lossy at the *type* level, so the generator avoids them rather than weakening the assertion:
+
+- Strings containing `@` and ≤48 bytes are parsed as JIDs on decode (ambiguous), so no generated string contains `@`.
+- `String` content that is not a protocol token and not nibble/hex-packable re-decodes as `NodeContent::Bytes`. String content is therefore restricted to the nibble alphabet (`[0-9.-]`), which stays `String` on decode; arbitrary byte payloads go through `NodeContent::Bytes`, which is always lossless.
+
+The tests also run cleanly under `--no-default-features`, exercising the non-SIMD decode path:
+
+```bash
+cargo test -p wacore-binary --no-default-features --lib
+```
+
+### Fuzz target
+
+A `cargo-fuzz` / libFuzzer target at `wacore/binary/fuzz/` feeds arbitrary `&[u8]` into `unmarshal_ref` and verifies it never panics, overflows the stack, or aborts — malformed input must always return `Err`.
+
+The fuzz crate has its own `[workspace]` table so it stays **out of the main cargo workspace** and cannot affect `cargo build --workspace`, clippy, or the binary-size CI. It is intentionally not wired into gating CI (requires nightly + libFuzzer).
+
+To run the fuzzer:
+
+```bash
+# Install once
+cargo install cargo-fuzz
+
+# From wacore/binary/
+cargo +nightly fuzz run unmarshal_ref
+```
+
+Location: `wacore/binary/fuzz/fuzz_targets/unmarshal_ref.rs`, `wacore/binary/tests/roundtrip_proptest.rs`
+
 ## Error Handling
 
 ```rust

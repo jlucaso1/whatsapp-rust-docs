@@ -59,6 +59,10 @@ let bot = Bot::builder()
 ## The `InboundDurabilityHook` Trait
 
 ```rust
+use async_trait::async_trait;
+use std::sync::Arc;
+
+#[async_trait]
 pub trait InboundDurabilityHook {
     async fn on_message(
         &self,

@@ -553,6 +553,8 @@ By default, the client acknowledges a message to the server as soon as it is dec
 Register an `InboundDurabilityHook` to defer the ack until your consumer durably commits the message:
 
 ```rust
+use std::sync::Arc;
+use whatsapp_rust::prelude::*;
 use whatsapp_rust::InboundDurabilityHook;
 use async_trait::async_trait;
 

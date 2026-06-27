@@ -546,6 +546,46 @@ match event {
 
 ## Advanced Usage
 
+### At-Least-Once Delivery
+
+By default, the client acknowledges a message to the server as soon as it is decrypted. If your process crashes before you persist the message, it is lost — the server will not redeliver it.
+
+Register an `InboundDurabilityHook` to defer the ack until your consumer durably commits the message:
+
+```rust
+use std::sync::Arc;
+use whatsapp_rust::prelude::*;
+use whatsapp_rust::InboundDurabilityHook;
+use async_trait::async_trait;
+
+struct MyStore;
+
+#[async_trait]
+impl InboundDurabilityHook for MyStore {
+    async fn on_message(
+        &self,
+        _client: Arc<Client>,
+        info: &MessageInfo,
+        message: &wa::Message,
+    ) -> anyhow::Result<()> {
+        // Return Ok only after the commit is durable.
+        // Return Err to suppress the ack and trigger redelivery.
+        my_db_insert(&info.id, message).await?;
+        Ok(())
+    }
+}
+
+let bot = Bot::builder()
+    .with_backend(SqliteStore::new("whatsapp.db").await?)
+    .with_inbound_durability_hook(MyStore)
+    .build()
+    .await?;
+```
+
+The hook **must be idempotent** — deduplicate by `(info.source.chat, info.source.sender, info.id)` since a crash after the consumer commits but before the ack lands will replay the message.
+
+See [Inbound Durability Hook](/advanced/inbound-durability) for the full contract, caveats, and a worked example.
+
 ### Custom encryption handlers
 
 For custom encryption types (e.g., `pkmsg`, `msg`, `skmsg`):
@@ -734,3 +774,4 @@ Spawn tasks for long-running operations:
 - [Media Handling](/guides/media-handling) - Download and process media
 - [Group Management](/guides/group-management) - Handle group events
 - [Community management](/guides/communities) - CAG reactions and channel comments
+- [Inbound Durability Hook](/advanced/inbound-durability) - At-least-once message delivery

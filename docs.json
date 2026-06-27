@@ -65,7 +65,8 @@
                   "advanced/state-management",
                   "advanced/websocket-handling",
                   "advanced/observability",
-                  "advanced/metrics"
+                  "advanced/metrics",
+                  "advanced/inbound-durability"
                 ]
               }
             ]

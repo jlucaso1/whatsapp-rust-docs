@@ -1,0 +1,193 @@
+---
+title: Inbound Durability Hook
+description: Opt in to at-least-once message delivery by deferring the transport ack until your consumer durably commits each message.
+---
+
+## Overview
+
+By default the client acknowledges a message to the WhatsApp server **as soon as it is decrypted** (at-most-once delivery). The ack tells the server to drop the message from its offline queue and never resend it. If your process crashes, or your storage write fails, *after* the ack but *before* you persist the message, the message is lost — the server will not redeliver it.
+
+Registering an `InboundDurabilityHook` converts the consumer to **at-least-once delivery**:
+
+1. The decrypted message is buffered durably in the `pending_inbound_messages` table **before** the Signal ratchet is flushed.
+2. Your hook is awaited. On `Ok` the message is acked and the buffer row is cleared.
+3. On `Err` (or a crash), the ack is suppressed. The server redelivers the message on the next connect, where the hook runs again from the buffered copy.
+
+Default behavior is unchanged — with no hook registered nothing is buffered and the ack path is identical to before.
+
+<Note>
+This is the same gap whatsmeow closes with `SynchronousAck` + `EnableDecryptedEventBuffer`. The design follows whatsmeow's decrypt-buffer approach rather than a global gate.
+</Note>
+
+## Opting In
+
+```rust
+use whatsapp_rust::{InboundDurabilityHook, prelude::*};
+use async_trait::async_trait;
+use std::sync::Arc;
+
+struct MyStore { /* your DB connection */ }
+
+#[async_trait]
+impl InboundDurabilityHook for MyStore {
+    async fn on_message(
+        &self,
+        _client: Arc<Client>,
+        info: &MessageInfo,
+        message: &wa::Message,
+    ) -> anyhow::Result<()> {
+        // Durably commit the message (INSERT, enqueue to broker, etc.).
+        // Return Ok only after the commit is durable.
+        // Return Err to suppress the ack and trigger redelivery.
+        my_db_insert(&info.id, message).await?;
+        Ok(())
+    }
+}
+
+let bot = Bot::builder()
+    .with_backend(SqliteStore::new("whatsapp.db").await?)
+    // Opt in — without this call the client keeps its default at-most-once behavior.
+    .with_inbound_durability_hook(MyStore { /* ... */ })
+    .on_message(|ctx| async move {
+        // Event handlers still fire as normal; the ack is deferred in the background.
+        println!("received: {}", ctx.info.id);
+    })
+    .build()
+    .await?;
+```
+
+## The `InboundDurabilityHook` Trait
+
+```rust
+use async_trait::async_trait;
+use std::sync::Arc;
+
+#[async_trait]
+pub trait InboundDurabilityHook {
+    async fn on_message(
+        &self,
+        client: Arc<Client>,
+        info: &MessageInfo,
+        message: &wa::Message,
+    ) -> anyhow::Result<()>;
+}
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `client` | The active client — use it for lookups, **not** for sending to the same sender (see [Caveats](#caveats)). |
+| `info` | Message metadata (id, sender, chat, timestamp). |
+| `message` | The decrypted message proto. |
+
+Return `Ok(())` once the commit is durable. Return `Err` to suppress the ack.
+
+## Idempotency Requirement
+
+At-least-once means the hook **will be called more than once for the same message** when a crash occurs after the consumer commits but before the ack lands. Your hook **must be idempotent**.
+
+Deduplicate by the full triplet `(info.source.chat, info.source.sender, info.id)` — **not** `info.id` alone. Stanza IDs are only unique within a `(chat, sender)` pair, so two different chats can reuse the same ID string.
+
+```rust
+// Correct idempotency key
+let key = (
+    info.source.chat.to_string(),
+    info.source.sender.to_string(),
+    info.id.clone(),
+);
+
+// Wrong — id alone is not globally unique
+let key = info.id.clone();
+```
+
+In SQL, a `UNIQUE` constraint or `INSERT OR IGNORE` on `(chat, sender, id)` is the most robust approach.
+
+## How Redelivery Works
+
+When the server redelivers a message the client previously did not ack:
+
+1. The client detects the duplicate stanza.
+2. If a hook is registered and a buffered copy exists in `pending_inbound_messages`, the hook is run from that copy.
+3. On `Ok` the buffer row is cleared and the message is acked.
+4. On `Err` the buffer is kept; the hook runs again on the next redelivery.
+5. If no buffered copy exists (genuine duplicate already committed), the message is acked directly without invoking the hook.
+
+A 7-day retention sweep removes rows that a permanently-failing hook would otherwise leak. Rows that reach their TTL without being cleared are deleted, and if the server redelivers after that point the message degrades to at-most-once.
+
+## Backend Requirement
+
+Durable cross-crash replay requires a backend that implements the four pending-inbound methods on `ProtocolStore`:
+
+- `store_pending_inbound` — write the decrypted message bytes before the hook runs
+- `get_pending_inbound` — read the buffer on redelivery
+- `delete_pending_inbound` — clear the buffer after the hook commits
+- `delete_expired_pending_inbound` — retention sweep (called unconditionally from keepalive)
+
+The bundled `SqliteStore` implements all four. Custom backends that do not implement them return an error from the defaults, which causes `Bot::build()` to fail with `BotBuilderError::UnsupportedDurabilityBackend` — a clear error rather than a silent runtime degradation.
+
+If you use a custom backend and want to opt in to the durability hook, implement the four methods. See [Custom Backends](/guides/custom-backends#pending-inbound-buffer) for implementation guidance.
+
+## Caveats
+
+<Warning>
+**At-least-once, not exactly-once.** A crash after your consumer commits but before the ack lands replays the message. Your hook must be idempotent (deduplicate by `(chat, sender, id)`).
+</Warning>
+
+**Backpressure.** The hook is awaited inside the receive pipeline. A slow hook backpressures inbound processing for the duration of the commit — the same trade-off as whatsmeow's synchronous ack. Persist and return; spawn any reply logic after the hook returns `Ok`.
+
+**No synchronous sends to the same sender.** During 1:1 message processing the per-sender Signal lock is held. Performing a synchronous client operation to the same sender inside the hook (e.g. a blocking reply) will deadlock. Use `tokio::spawn` if you need to reply from within the hook.
+
+**Scope.** The hook covers end-to-end encrypted messages (1:1 and group). Newsletter and broadcast channel messages use a separate ack path and are not gated by the hook.
+
+**Buffer-write failure.** If the durable buffer write itself fails (e.g. disk full), the ack is suppressed, but if the process does not crash the Signal ratchet still advances. That one message degrades to at-most-once on its next redelivery (it can no longer be decrypted and there is no buffered copy to replay). The guarantee holds whenever the buffer write succeeds.
+
+**Redelivery `info` fields.** On a redelivery replay, `info` is re-parsed from the stanza. A few fields derived during the first dispatch (the ephemeral timer, encrypted comment threading) may be absent. The `message` body is always the original.
+
+## Full Example
+
+The repository ships `examples/durability_hook.rs` — a file-backed archiver that appends each message to disk with `fsync` before returning `Ok`, and seeds the deduplication set from the archive on startup so dedupe survives a restart.
+
+```bash
+cargo run --example durability_hook
+```
+
+Key patterns from that example:
+
+```rust
+#[async_trait]
+impl InboundDurabilityHook for InboxArchiver {
+    async fn on_message(
+        &self,
+        _client: Arc<Client>,
+        info: &MessageInfo,
+        message: &wa::Message,
+    ) -> anyhow::Result<()> {
+        let key = (
+            info.source.chat.to_string(),
+            info.source.sender.to_string(),
+            info.id.clone(),
+        );
+
+        // Idempotency check first.
+        if self.seen.lock()?.contains(&key) {
+            return Ok(());
+        }
+
+        // Durable commit on a blocking thread — disk I/O must not run
+        // on the async receive thread.
+        let file = Arc::clone(&self.file);
+        let line = format!("{}\t{}\t{}\n", key.0, key.1, key.2);
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut f = file.lock().unwrap();
+            f.write_all(line.as_bytes())?;
+            f.sync_all()  // Must sync before returning Ok
+        }).await??;
+
+        self.seen.lock()?.insert(key);
+        Ok(())
+    }
+}
+```
+
+<Tip>
+Always use `tokio::task::spawn_blocking` for disk I/O inside the hook. Blocking calls on the async thread stall the entire receive pipeline.
+</Tip>

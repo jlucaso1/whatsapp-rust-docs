@@ -464,6 +464,102 @@ impl ProtocolStore for MyCustomStore {
 
 See [Store API reference](/api/store#protocol-store) for all ProtocolStore methods.
 
+### Pending Inbound Buffer
+
+If you want to support the opt-in [`InboundDurabilityHook`](/advanced/inbound-durability), your backend must implement four additional `ProtocolStore` methods. Without them, `Bot::build()` rejects any attempt to register a durability hook with a `BotBuilderError::UnsupportedDurabilityBackend` error.
+
+The default trait implementations **fail closed** (return an error) rather than silently degrading to at-most-once, so you only need to override them if your backend opts in.
+
+```rust
+#[async_trait]
+impl ProtocolStore for MyCustomStore {
+    // ... other methods ...
+
+    // --- Pending Inbound Buffer (required for InboundDurabilityHook) ---
+    //
+    // Keyed by (chat, sender, id): stanza ids are only unique within a
+    // (chat, sender) pair, so a bare id key would collide across chats.
+
+    async fn store_pending_inbound(
+        &self,
+        chat: &str,
+        sender: &str,
+        id: &str,
+        message: &[u8],
+    ) -> Result<()> {
+        self.connection.execute(
+            "INSERT OR REPLACE INTO pending_inbound_messages \
+             (chat, sender, id, message, inserted_at) \
+             VALUES (?, ?, ?, ?, strftime('%s', 'now'))",
+            &[chat, sender, id, message],
+        ).await?;
+        Ok(())
+    }
+
+    async fn get_pending_inbound(
+        &self,
+        chat: &str,
+        sender: &str,
+        id: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let row = self.connection.query_optional(
+            "SELECT message FROM pending_inbound_messages \
+             WHERE chat = ? AND sender = ? AND id = ?",
+            &[chat, sender, id],
+        ).await?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    async fn delete_pending_inbound(
+        &self,
+        chat: &str,
+        sender: &str,
+        id: &str,
+    ) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM pending_inbound_messages \
+             WHERE chat = ? AND sender = ? AND id = ?",
+            &[chat, sender, id],
+        ).await?;
+        Ok(())
+    }
+
+    // Called unconditionally by the keepalive sweep on every backend.
+    // Must return Ok(0) for backends that have no buffer rather than erroring.
+    async fn delete_expired_pending_inbound(
+        &self,
+        cutoff_timestamp: i64,
+    ) -> Result<u32> {
+        let count = self.connection.execute(
+            "DELETE FROM pending_inbound_messages WHERE inserted_at < ?",
+            &[&cutoff_timestamp],
+        ).await?;
+        Ok(count as u32)
+    }
+}
+```
+
+The recommended schema (matching the bundled SQLite migration):
+
+```sql
+CREATE TABLE pending_inbound_messages (
+    chat        TEXT    NOT NULL,
+    sender      TEXT    NOT NULL,
+    id          TEXT    NOT NULL,
+    message     BLOB    NOT NULL,
+    inserted_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    PRIMARY KEY (chat, sender, id)
+);
+
+-- For the retention sweep (delete_expired_pending_inbound).
+CREATE INDEX idx_pending_inbound_inserted
+    ON pending_inbound_messages (inserted_at);
+```
+
+<Note>
+The `message` column stores the proto-serialized `wa::Message` bytes. The client writes them before the Signal ratchet advances so that a crash between the buffer write and the hook return can replay the exact same decrypted bytes on redelivery.
+</Note>
+
 ### Step 5: implement DeviceStore
 
 Handle device data persistence:
@@ -1192,3 +1288,4 @@ CREATE TABLE IF NOT EXISTS sessions (
 - [Sending Messages](/guides/sending-messages) - Use your custom backend
 - [Receiving Messages](/guides/receiving-messages) - Store received messages
 - [Group Management](/guides/group-management) - Store group metadata
+- [Inbound Durability Hook](/advanced/inbound-durability) - At-least-once delivery with your backend

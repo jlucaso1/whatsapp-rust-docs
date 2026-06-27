@@ -477,21 +477,23 @@ impl ProtocolStore for MyCustomStore {
 
     // --- Pending Inbound Buffer (required for InboundDurabilityHook) ---
     //
-    // Keyed by (chat, sender, id): stanza ids are only unique within a
-    // (chat, sender) pair, so a bare id key would collide across chats.
+    // Keyed by (chat, sender, id, device_id): stanza ids are only unique
+    // within a (chat, sender) pair; device_id isolates rows across accounts
+    // in shared multi-device stores.
 
     async fn store_pending_inbound(
         &self,
         chat: &str,
         sender: &str,
         id: &str,
+        device_id: u32,
         message: &[u8],
     ) -> Result<()> {
         self.connection.execute(
             "INSERT OR REPLACE INTO pending_inbound_messages \
-             (chat, sender, id, message, inserted_at) \
-             VALUES (?, ?, ?, ?, strftime('%s', 'now'))",
-            &[chat, sender, id, message],
+             (chat, sender, id, device_id, message, inserted_at) \
+             VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))",
+            &[chat, sender, id, &device_id, message],
         ).await?;
         Ok(())
     }
@@ -501,11 +503,12 @@ impl ProtocolStore for MyCustomStore {
         chat: &str,
         sender: &str,
         id: &str,
+        device_id: u32,
     ) -> Result<Option<Vec<u8>>> {
         let row = self.connection.query_optional(
             "SELECT message FROM pending_inbound_messages \
-             WHERE chat = ? AND sender = ? AND id = ?",
-            &[chat, sender, id],
+             WHERE chat = ? AND sender = ? AND id = ? AND device_id = ?",
+            &[chat, sender, id, &device_id],
         ).await?;
         Ok(row.map(|r| r.get(0)))
     }
@@ -515,11 +518,12 @@ impl ProtocolStore for MyCustomStore {
         chat: &str,
         sender: &str,
         id: &str,
+        device_id: u32,
     ) -> Result<()> {
         self.connection.execute(
             "DELETE FROM pending_inbound_messages \
-             WHERE chat = ? AND sender = ? AND id = ?",
-            &[chat, sender, id],
+             WHERE chat = ? AND sender = ? AND id = ? AND device_id = ?",
+            &[chat, sender, id, &device_id],
         ).await?;
         Ok(())
     }
@@ -528,11 +532,13 @@ impl ProtocolStore for MyCustomStore {
     // Must return Ok(0) for backends that have no buffer rather than erroring.
     async fn delete_expired_pending_inbound(
         &self,
+        device_id: u32,
         cutoff_timestamp: i64,
     ) -> Result<u32> {
         let count = self.connection.execute(
-            "DELETE FROM pending_inbound_messages WHERE inserted_at < ?",
-            &[&cutoff_timestamp],
+            "DELETE FROM pending_inbound_messages \
+             WHERE device_id = ? AND inserted_at < ?",
+            &[&device_id, &cutoff_timestamp],
         ).await?;
         Ok(count as u32)
     }
@@ -547,13 +553,14 @@ CREATE TABLE pending_inbound_messages (
     sender      TEXT    NOT NULL,
     id          TEXT    NOT NULL,
     message     BLOB    NOT NULL,
+    device_id   INTEGER NOT NULL DEFAULT 1,
     inserted_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    PRIMARY KEY (chat, sender, id)
+    PRIMARY KEY (chat, sender, id, device_id)
 );
 
--- For the retention sweep (delete_expired_pending_inbound).
+-- For the per-device retention sweep (delete_expired_pending_inbound).
 CREATE INDEX idx_pending_inbound_inserted
-    ON pending_inbound_messages (inserted_at);
+    ON pending_inbound_messages (device_id, inserted_at);
 ```
 
 <Note>

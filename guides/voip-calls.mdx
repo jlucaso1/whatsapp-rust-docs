@@ -20,6 +20,8 @@ whatsapp-rust supports end-to-end encrypted 1:1 voice calls that interoperate wi
 ```toml
 [dependencies]
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", features = ["voip"] }
+async-channel = "2"  # needed to implement AudioSource / AudioSink
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
 Once a release that includes `voip` is published, you can switch to the version form:
@@ -27,27 +29,32 @@ Once a release that includes `voip` is published, you can switch to the version 
 ```toml
 [dependencies]
 whatsapp-rust = { version = "0.7", features = ["voip"] }  # update when released
+async-channel = "2"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## Answering an Incoming Call
 
-Listen for `Event::IncomingCall` inside your async event handler, then accept it with your audio source and sink:
+`Event::IncomingCall` fires for all call-control stanzas (offer, preaccept, accept, reject, terminate, transport, relaylatency). Guard on `CallAction::Offer` before calling `accept()` — otherwise non-offer events return `CallError::NotAnOffer`:
 
 ```rust
 use whatsapp_rust::client::Client;
 use whatsapp_rust::types::events::Event;
+use whatsapp_rust::wacore::types::call::CallAction;
 
 async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
     match event {
         Event::IncomingCall(incoming) => {
-            let handle = client.voip()
-                .accept(&incoming)
-                .audio(mic_source, speaker_sink)
-                .start()
-                .await?;
+            if matches!(incoming.action, CallAction::Offer { .. }) {
+                let handle = client.voip()
+                    .accept(&incoming)
+                    .audio(mic_source, speaker_sink)
+                    .start()
+                    .await?;
 
-            // Resolves when either side hangs up
-            handle.wait_ended().await;
+                // Resolves when either side hangs up
+                handle.wait_ended().await;
+            }
         }
         _ => {}
     }

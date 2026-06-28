@@ -86,7 +86,7 @@ whatsapp-rust supports several optional features:
 | `tracing` | Emit `tracing` spans/events across connect, send, receive, IQ, app state, pairing, media, and session flows. See [Observability](/advanced/observability) | ❌ No |
 | `tracing-pii` | Render raw phone numbers in `tracing` fields instead of redacted `pn#<token>`. Local debugging only — never enable in production | ❌ No |
 | `metrics` | Emit `wa_*` counters, histograms, and gauges through the [`metrics`](https://docs.rs/metrics) facade for Prometheus/OTLP dashboards. See [Metrics](/advanced/metrics) | ❌ No |
-| `voip` | 1:1 voice calls: pure Rust MLow codec, E2E-SRTP encryption, relay transport. See [VoIP Calls](/guides/voip-calls) | ❌ No |
+| `voip` | 1:1 voice calls: pure Rust MLow codec, E2E-SRTP encryption, relay transport. **Requires git source — not in published 0.6** (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 | `debug-diagnostics` | Memory diagnostics API (`MemoryDiagnostics`) | ❌ No |

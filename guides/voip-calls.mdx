@@ -45,7 +45,8 @@ use whatsapp_rust::wacore::types::call::CallAction;
 async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
     match event {
         Event::IncomingCall(incoming) => {
-            if matches!(incoming.action, CallAction::Offer { .. }) {
+            // Borrow the action so `incoming` is not partially moved before `.accept(&incoming)`.
+            if matches!(&incoming.action, CallAction::Offer { .. }) {
                 let handle = client.voip()
                     .accept(&incoming)
                     .audio(mic_source, speaker_sink)

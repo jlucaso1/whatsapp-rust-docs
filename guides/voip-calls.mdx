@@ -31,7 +31,7 @@ whatsapp-rust = { version = "0.7", features = ["voip"] }  # update when released
 
 ## Answering an Incoming Call
 
-Listen for `Event::CallOffer` inside your async event handler, then accept it with your audio source and sink:
+Listen for `Event::IncomingCall` inside your async event handler, then accept it with your audio source and sink:
 
 ```rust
 use whatsapp_rust::client::Client;
@@ -39,7 +39,7 @@ use whatsapp_rust::types::Event;
 
 async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
     match event {
-        Event::CallOffer(incoming) => {
+        Event::IncomingCall(incoming) => {
             let handle = client.voip()
                 .accept(&incoming)
                 .audio(mic_source, speaker_sink)
@@ -63,7 +63,7 @@ use whatsapp_rust::types::Jid;
 let peer: Jid = "15551234567@s.whatsapp.net".parse()?;
 
 let handle = client.voip()
-    .call(peer)
+    .call(&peer)
     .audio(mic_source, speaker_sink)
     .start()
     .await?;
@@ -77,23 +77,32 @@ handle.wait_ended().await;
 
 ## Audio I/O
 
-You supply the audio I/O by implementing the `MicSource` and `SpeakerSink` traits. The bundled `examples/voip.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference:
+You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference:
 
 ```rust
-use whatsapp_rust::voip::{MicSource, SpeakerSink};
+use whatsapp_rust::voip::{AudioSource, AudioSink};
+use async_channel;
 
-struct MyMic { /* ... */ }
-struct MySpeaker { /* ... */ }
+struct MyMic { receiver: async_channel::Receiver<Vec<i16>> }
+struct MySpeaker { sender: async_channel::Sender<Vec<i16>> }
 
-impl MicSource for MyMic {
-    // Provide 16 kHz wideband PCM frames (60 ms = 960 samples)
-    fn next_frame(&mut self) -> Option<Vec<i16>> { /* ... */ }
+impl AudioSource for MyMic {
+    // Frames are 16 kHz wideband PCM (60 ms = 960 samples per Vec)
+    fn frames(&self) -> async_channel::Receiver<Vec<i16>> {
+        self.receiver.clone()
+    }
 }
 
-impl SpeakerSink for MySpeaker {
-    fn play_frame(&mut self, pcm: &[i16]) { /* ... */ }
+impl AudioSink for MySpeaker {
+    fn playout(&self) -> async_channel::Sender<Vec<i16>> {
+        self.sender.clone()
+    }
 }
 ```
+
+<Tip>
+  If you already have bare `async_channel` endpoints, you can pass them directly — `Receiver<Vec<i16>>` implements `AudioSource` and `Sender<Vec<i16>>` implements `AudioSink` out of the box.
+</Tip>
 
 <Tip>
   The library owns the call key, relay handshake, codec, and crypto. You only provide mic input and speaker output.
@@ -118,13 +127,20 @@ The library handles multi-device call scenarios automatically:
 
 ## Architecture: `CallEngine`
 
-The core `CallEngine` is **sans-IO** — it owns no socket, clock, or thread. You feed it relay packets, mic frames, and timer ticks; it emits transmit packets, playout PCM, call events, and the next deadline. This lets the same engine run across multiple runtimes:
+The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket, clock, or thread. You feed it relay packets, mic frames, and timer ticks; it emits transmit packets, playout PCM, call events, and the next deadline.
 
-| Target | Driver |
-|--------|--------|
-| Tokio (servers, desktop) | `run_call` async driver |
-| WebAssembly (browser) | WASM-compatible driver |
-| Embedded (esp32) | Bare-metal driver |
+<Warning>
+  **Platform support depends on which crate you use:**
+
+  - `wacore` with `features = ["voip"]` — pure Rust (MLow codec, SRTP crypto, `CallEngine`). No FFI. Compiles to WASM and embedded targets (esp32).
+  - `whatsapp-rust` with `features = ["voip"]` — adds the Tokio async driver, webrtc-rs (DTLS/SCTP), and libopus FFI. **This will not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
+</Warning>
+
+| Target | Supported crate |
+|--------|-----------------|
+| Tokio (servers, desktop) | `whatsapp-rust` with `voip` |
+| WebAssembly (browser) | `wacore` with `voip` (sans-IO only) |
+| Embedded (esp32) | `wacore` with `voip` (sans-IO only) |
 
 ## MLow Codec
 

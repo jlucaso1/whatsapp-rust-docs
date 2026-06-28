@@ -92,7 +92,23 @@ handle.wait_ended().await;
 
 ## Audio I/O
 
-You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip-cli/src/main.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference. Run it with `cargo run -p whatsapp-rust-voip-cli`:
+You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip-cli/src/main.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference.
+
+The CLI exposes three subcommands:
+
+| Subcommand | Description |
+|------------|-------------|
+| `loopback` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. |
+| `listen [accept]` | Connect to WhatsApp and print incoming calls. Rejects by default; pass `accept` to auto-answer. |
+| `call <jid>` | Connect to WhatsApp and place an outgoing call to the given JID. |
+
+To test the audio stack locally without a WhatsApp session:
+
+```bash
+cargo run -p whatsapp-rust-voip-cli -- loopback
+```
+
+The `AudioSource` / `AudioSink` implementation from the example:
 
 ```rust
 use whatsapp_rust::voip::{AudioSource, AudioSink};

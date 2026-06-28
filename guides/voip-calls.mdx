@@ -13,38 +13,53 @@ whatsapp-rust supports end-to-end encrypted 1:1 voice calls that interoperate wi
 
 ## Enabling the Feature
 
-Add the `voip` feature to your `Cargo.toml`:
+<Warning>
+  The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) and will be included in the next published release. Until then, depend on the git source:
+</Warning>
 
 ```toml
 [dependencies]
-whatsapp-rust = { version = "0.6", features = ["voip"] }
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", features = ["voip"] }
+```
+
+Once a release that includes `voip` is published, you can switch to the version form:
+
+```toml
+[dependencies]
+whatsapp-rust = { version = "0.7", features = ["voip"] }  # update when released
 ```
 
 ## Answering an Incoming Call
 
-Listen for `Event::CallOffer`, then accept it with your audio source and sink:
+Listen for `Event::CallOffer` inside your async event handler, then accept it with your audio source and sink:
 
 ```rust
+use whatsapp_rust::client::Client;
 use whatsapp_rust::types::Event;
 
-match event {
-    Event::CallOffer(incoming) => {
-        let handle = client.voip()
-            .accept(&incoming)
-            .audio(mic_source, speaker_sink)
-            .start()
-            .await?;
+async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
+    match event {
+        Event::CallOffer(incoming) => {
+            let handle = client.voip()
+                .accept(&incoming)
+                .audio(mic_source, speaker_sink)
+                .start()
+                .await?;
 
-        // Resolves when either side hangs up
-        handle.wait_ended().await;
+            // Resolves when either side hangs up
+            handle.wait_ended().await;
+        }
+        _ => {}
     }
-    _ => {}
+    Ok(())
 }
 ```
 
 ## Placing an Outgoing Call
 
 ```rust
+use whatsapp_rust::types::Jid;
+
 let peer: Jid = "15551234567@s.whatsapp.net".parse()?;
 
 let handle = client.voip()

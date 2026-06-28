@@ -647,6 +647,29 @@ The `server_cert_chain` field is populated after a successful XX (or XXfallback)
   As of v0.5, the `whatsapp-rust-sqlite-storage` crate bundles SQLite by default via the `bundled-sqlite` feature. You no longer need SQLite installed as a system dependency. To link against a system SQLite instead, disable the default features on the crate.
 </Note>
 
+### BLOB encoding
+
+Three BLOB columns use **protobuf (via `prost`)** for on-disk encoding:
+
+| Table | Column | Domain type |
+|-------|--------|-------------|
+| `device` | `server_cert_chain` | `CachedServerCertChain` |
+| `app_state_keys` | `key_data` | `AppStateSyncKey` |
+| `app_state_versions` | `state_data` | `HashState` |
+
+Protobuf's field-tagged wire format tolerates additive changes (adding or reordering fields) without corrupting persisted rows. The encode/decode helpers live in `storages/sqlite-storage/src/wire.rs`; `wacore` domain types are untouched — conversion happens only at the storage boundary.
+
+#### Upgrading from a bincode-encoded database
+
+No manual migration is needed. The storage layer self-heals lazily on first startup after upgrade:
+
+- A BLOB that cannot be decoded as protobuf (a legacy bincode row or genuine corruption) is treated as **absent** rather than an error.
+- App-state sync keys: the client re-requests the missing key from the primary device, which re-shares it. The next `set_sync_key` call overwrites the row in protobuf format.
+- App-state versions: the collection resets to version 0 and re-syncs from the server. The first `set_version` call overwrites the row in protobuf format.
+- Server cert chain: rebuilt on the next Noise XX handshake. The following `save_device_data` call overwrites the row in protobuf format.
+
+Net effect: settings re-sync automatically on the first connection after upgrade, with no data loss and no manual DB intervention required.
+
 ### Database schema
 
 The device table uses named columns for each field, making the schema self-documenting and reducing the risk of column mix-ups when fields are added:

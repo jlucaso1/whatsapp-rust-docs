@@ -1,0 +1,210 @@
+---
+title: VoIP Calls
+description: Place and answer end-to-end encrypted 1:1 voice calls with whatsapp-rust
+---
+
+## Overview
+
+whatsapp-rust supports end-to-end encrypted 1:1 voice calls that interoperate with the official WhatsApp app. The full media path is implemented in pure Rust: mic capture, encoding, E2E-SRTP encryption, relay transport, decryption, decoding, and playout.
+
+<Note>
+  Voice calling is behind the optional `voip` feature flag. The default build is entirely unaffected — none of the codec or relay dependencies are compiled unless you opt in.
+</Note>
+
+## Enabling the Feature
+
+<Warning>
+  The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) and will be included in the next published release. Until then, depend on the git source:
+</Warning>
+
+```toml
+[dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", features = ["voip"] }
+async-channel = "2"  # needed to implement AudioSource / AudioSink
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+Once a release that includes `voip` is published, you can switch to the version form:
+
+```toml
+[dependencies]
+whatsapp-rust = { version = "0.7", features = ["voip"] }  # update when released
+async-channel = "2"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+```
+
+## Answering an Incoming Call
+
+`Event::IncomingCall` fires for all call-control stanzas (offer, preaccept, accept, reject, terminate, transport, relaylatency). Guard on `CallAction::Offer` before calling `accept()` — otherwise non-offer events return `CallError::NotAnOffer`:
+
+```rust
+use whatsapp_rust::client::Client;
+use whatsapp_rust::types::events::Event;
+use whatsapp_rust::wacore::types::call::CallAction;
+
+async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
+    match event {
+        Event::IncomingCall(incoming) => {
+            // Borrow the action so `incoming` is not partially moved before `.accept(&incoming)`.
+            if matches!(&incoming.action, CallAction::Offer { .. }) {
+                let handle = client.voip()
+                    .accept(&incoming)
+                    .audio(mic_source, speaker_sink)
+                    .start()
+                    .await?;
+
+                // Resolves when either side hangs up
+                handle.wait_ended().await;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+```
+
+<Note>
+  `accept(...).start()` drives the **media plane only** (callKey decrypt → relay connect → engine). Sending `<preaccept>` and `<accept>` signaling stanzas to the peer is the caller's responsibility and must happen before or alongside `start()`. See `examples/voip.rs` in the repository for a complete incoming-call handler that includes signaling.
+</Note>
+
+## Placing an Outgoing Call
+
+```rust
+use whatsapp_rust::types::Jid;
+
+let peer: Jid = "15551234567@s.whatsapp.net".parse()?;
+
+let handle = client.voip()
+    .call(&peer)
+    .audio(mic_source, speaker_sink)
+    .start()
+    .await?;
+
+// End the call from your side: sends <terminate> to the peer and tears down local media.
+// CallHandle exposes call_id() / peer_jid() / call_creator() for exactly this.
+client.voip()
+    .terminate(handle.call_id(), &handle.peer_jid(), handle.call_creator())
+    .await?;
+
+// Or wait for the remote side to hang up
+handle.wait_ended().await;
+```
+
+## Audio I/O
+
+You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference:
+
+```rust
+use whatsapp_rust::voip::{AudioSource, AudioSink};
+use async_channel;
+
+struct MyMic { receiver: async_channel::Receiver<Vec<i16>> }
+struct MySpeaker { sender: async_channel::Sender<Vec<i16>> }
+
+impl AudioSource for MyMic {
+    // Frames are 16 kHz wideband PCM (60 ms = 960 samples per Vec)
+    fn frames(&self) -> async_channel::Receiver<Vec<i16>> {
+        self.receiver.clone()
+    }
+}
+
+impl AudioSink for MySpeaker {
+    fn playout(&self) -> async_channel::Sender<Vec<i16>> {
+        self.sender.clone()
+    }
+}
+```
+
+<Tip>
+  If you already have bare `async_channel` endpoints, you can pass them directly — `Receiver<Vec<i16>>` implements `AudioSource` and `Sender<Vec<i16>>` implements `AudioSink` out of the box.
+</Tip>
+
+<Tip>
+  The library owns the call key, relay handshake, codec, and crypto. You only provide mic input and speaker output.
+</Tip>
+
+## Call Handle
+
+`start()` returns a `CallHandle` for controlling an active call:
+
+| Method | Description |
+|--------|-------------|
+| `handle.wait_ended().await` | Resolves when either side hangs up |
+| `handle.hangup().await` | Tears down local media only — **no peer signaling** |
+| `client.voip().terminate(handle.call_id(), &handle.peer_jid(), handle.call_creator()).await` | Sends `<terminate>` to the peer **and** tears down local media |
+| `handle.call_id()` | The call ID (needed for `terminate`) |
+| `handle.peer_jid()` | The peer's JID (needed for `terminate`) |
+| `handle.call_creator()` | The call creator's JID (needed for `terminate`) |
+| `handle.set_muted(true)` | Mute or unmute the local microphone |
+| `handle.events()` | Subscribe to engine events (relay allocate, audio, failures) |
+
+## Multi-Device Behavior
+
+The library handles multi-device call scenarios automatically:
+
+- **Companion answering** — if another linked device picks up, the library performs a recv-key rekey to that device.
+- **Sibling dismiss** — if a sibling device declines or answers elsewhere, the call tears down cleanly on this device.
+- **Offline missed calls** — missed-call surfacing for devices that were offline when the call arrived.
+
+## Architecture: `CallEngine`
+
+The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket, clock, or thread. You feed it relay packets, mic frames, and timer ticks; it emits transmit packets, playout PCM, call events, and the next deadline.
+
+<Warning>
+  **Platform support depends on which crate you use:**
+
+  - `wacore` with `features = ["voip"]` — pure Rust (MLow codec, SRTP crypto, `CallEngine`). No FFI. Compiles to WASM and embedded targets (esp32).
+  - `whatsapp-rust` with `features = ["voip"]` — adds the Tokio async driver, webrtc-rs (DTLS/SCTP), and libopus FFI. **This will not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
+</Warning>
+
+| Target | Supported crate |
+|--------|-----------------|
+| Tokio (servers, desktop) | `whatsapp-rust` with `voip` |
+| WebAssembly (browser) | `wacore` with `voip` + `js` (sans-IO only; `js` enables WASM-compatible random number generation — see [Installation](/installation)) |
+| Embedded (esp32) | `wacore` with `voip` (sans-IO only) |
+
+## MLow Codec
+
+WhatsApp's voice codec ("MLow") is a heavily modified Opus variant. whatsapp-rust includes a **pure Rust** port — no FFI, no C library. It compiles to WASM and embedded targets alongside the rest of the crate and is pinned by a byte-exact golden roundtrip test.
+
+The decoder operates at a single fixed point:
+
+| Parameter | Value |
+|-----------|-------|
+| Sample rate | 16 kHz wideband |
+| Frame duration | 60 ms (960 samples) |
+| Off-spec frames | Dropped (fail-loud, no desync) |
+
+## Encryption
+
+Call audio is end-to-end encrypted the WhatsApp way:
+
+1. The call key arrives over the peer's Signal session.
+2. E2E-SRTP keys are derived with HKDF + the libsrtp AES-CM KDF.
+3. Audio frames are protected with AES-128-CTR and the WARP integrity tag.
+4. The SFrame layer wraps the SRTP payload.
+
+The relay never sees plaintext audio.
+
+## Validation
+
+The implementation is tested at multiple levels:
+
+- **Byte-exact golden roundtrip** for the MLow codec
+- **Known-answer-test vectors** for the E2E-SRTP crypto
+- **In-tree loopback** DTLS/SCTP transport E2E test
+- **Live tested** end-to-end against the real WhatsApp app over 3G/WiFi/5G
+
+## Roadmap
+
+The 1:1 audio path is the foundation. Natural follow-ups tracked upstream:
+
+- **Group calls** — the signaling and SFrame/SRTP key management generalize to multi-party; the engine is already participant-aware.
+- **Video calls** — the DTLS/SCTP/SRTP transport is codec-agnostic; video is a second media stream.
+- **Deeper codec coverage** — inband FEC, PLC, CNG, and low-bitrate operating points.
+- **Embedded demo** — the sans-IO core already builds for esp32.
+
+## Next Steps
+
+- [Installation](/installation) — enable the `voip` feature flag
+- [Advanced: Signal Protocol](/advanced/signal-protocol) — how call keys are derived from Signal sessions

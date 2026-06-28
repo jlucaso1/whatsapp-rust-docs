@@ -79,8 +79,11 @@ let handle = client.voip()
     .start()
     .await?;
 
-// End the call yourself
-handle.hangup().await;
+// End the call from your side: sends <terminate> to the peer and tears down local media.
+// CallHandle exposes call_id() / peer_jid() / call_creator() for exactly this.
+client.voip()
+    .terminate(handle.call_id(), &handle.peer_jid(), handle.call_creator())
+    .await?;
 
 // Or wait for the remote side to hang up
 handle.wait_ended().await;
@@ -126,7 +129,13 @@ impl AudioSink for MySpeaker {
 | Method | Description |
 |--------|-------------|
 | `handle.wait_ended().await` | Resolves when either side hangs up |
-| `handle.hangup().await` | Ends the call from this side |
+| `handle.hangup().await` | Tears down local media only — **no peer signaling** |
+| `client.voip().terminate(handle.call_id(), &handle.peer_jid(), handle.call_creator()).await` | Sends `<terminate>` to the peer **and** tears down local media |
+| `handle.call_id()` | The call ID (needed for `terminate`) |
+| `handle.peer_jid()` | The peer's JID (needed for `terminate`) |
+| `handle.call_creator()` | The call creator's JID (needed for `terminate`) |
+| `handle.set_muted(true)` | Mute or unmute the local microphone |
+| `handle.events()` | Subscribe to engine events (relay allocate, audio, failures) |
 
 ## Multi-Device Behavior
 
@@ -150,7 +159,7 @@ The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket
 | Target | Supported crate |
 |--------|-----------------|
 | Tokio (servers, desktop) | `whatsapp-rust` with `voip` |
-| WebAssembly (browser) | `wacore` with `voip` (sans-IO only) |
+| WebAssembly (browser) | `wacore` with `voip` + `js` (sans-IO only; `js` enables WASM-compatible random number generation — see [Installation](/installation)) |
 | Embedded (esp32) | `wacore` with `voip` (sans-IO only) |
 
 ## MLow Codec

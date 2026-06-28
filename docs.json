@@ -54,6 +54,7 @@
                   "guides/newsletters",
                   "guides/communities",
                   "guides/polls",
+                  "guides/voip-calls",
                   "guides/custom-backends"
                 ]
               },

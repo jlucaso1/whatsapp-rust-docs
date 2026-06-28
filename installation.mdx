@@ -75,7 +75,7 @@ tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 whatsapp-rust supports several optional features:
 
 | Feature | Description | Included by default |
-|---------|-------------|--------------------|
+|---------|-------------|-----------------|
 | `tokio-runtime` | Enables `TokioRuntime` implementation of the `Runtime` trait. Also required for `TypedCache::invalidate_all()` on custom cache backends | ✅ Yes |
 | `tokio-native` | Multi-threaded Tokio runtime (`tokio/rt-multi-thread`) | ✅ Yes |
 | `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
@@ -86,6 +86,7 @@ whatsapp-rust supports several optional features:
 | `tracing` | Emit `tracing` spans/events across connect, send, receive, IQ, app state, pairing, media, and session flows. See [Observability](/advanced/observability) | ❌ No |
 | `tracing-pii` | Render raw phone numbers in `tracing` fields instead of redacted `pn#<token>`. Local debugging only — never enable in production | ❌ No |
 | `metrics` | Emit `wa_*` counters, histograms, and gauges through the [`metrics`](https://docs.rs/metrics) facade for Prometheus/OTLP dashboards. See [Metrics](/advanced/metrics) | ❌ No |
+| `voip` | 1:1 voice calls: pure Rust MLow codec, E2E-SRTP encryption, relay transport. See [VoIP Calls](/guides/voip-calls) | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 | `debug-diagnostics` | Memory diagnostics API (`MemoryDiagnostics`) | ❌ No |
@@ -97,7 +98,7 @@ whatsapp-rust supports several optional features:
 The `wacore` crate has an additional feature for WASM browser targets:
 
 | Feature | Description | Included by default |
-|---------|-------------|--------------------|
+|---------|-------------|-----------------|
 | `js` | Enables browser-compatible random number generation via `getrandom/wasm_js` for `wasm32` targets | ❌ No |
 
 To use whatsapp-rust in a WASM browser environment, enable the `js` feature on `wacore`:
@@ -110,7 +111,7 @@ wacore = { version = "0.6", default-features = false, features = ["js"] }
 The `waproto` crate has its own feature flags:
 
 | Feature | Description | Included by default |
-|---------|-------------|--------------------|
+|---------|-------------|-----------------|
 | `serde-deserialize` | Adds `Deserialize` derive and `#[serde(default)]` to all protobuf types | ❌ No |
 | `serde-snake-case` | Accepts snake_case enum variant names during deserialization (implies `serde-deserialize`) | ❌ No |
 
@@ -124,7 +125,7 @@ waproto = { version = "0.6", features = ["serde-snake-case"] }
 The `whatsapp-rust-sqlite-storage` crate has its own feature flags:
 
 | Feature | Description | Included by default |
-|---------|-------------|--------------------|
+|---------|-------------|-----------------|
 | `bundled-sqlite` | Bundles SQLite (compiles from source, no system library needed) | ✅ Yes |
 
 To use a system-installed SQLite instead of the bundled version:

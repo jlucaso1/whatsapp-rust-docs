@@ -64,7 +64,7 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
 ```
 
 <Note>
-  `accept(...).start()` drives the **media plane only** (callKey decrypt → relay connect → engine). Sending `<preaccept>` and `<accept>` signaling stanzas to the peer is the caller's responsibility and must happen before or alongside `start()`. See `examples/voip.rs` in the repository for a complete incoming-call handler that includes signaling.
+  `accept(...).start()` drives the **media plane only** (callKey decrypt → relay connect → engine). Sending `<preaccept>` and `<accept>` signaling stanzas to the peer is the caller's responsibility and must happen before or alongside `start()`. See `examples/voip-cli/src/main.rs` in the repository for a complete incoming-call handler that includes signaling.
 </Note>
 
 ## Placing an Outgoing Call
@@ -92,7 +92,7 @@ handle.wait_ended().await;
 
 ## Audio I/O
 
-You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference:
+You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip-cli/src/main.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference. Run it with `cargo run -p whatsapp-rust-voip-cli`:
 
 ```rust
 use whatsapp_rust::voip::{AudioSource, AudioSink};

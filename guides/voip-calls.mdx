@@ -35,7 +35,7 @@ Listen for `Event::IncomingCall` inside your async event handler, then accept it
 
 ```rust
 use whatsapp_rust::client::Client;
-use whatsapp_rust::types::Event;
+use whatsapp_rust::types::events::Event;
 
 async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
     match event {
@@ -54,6 +54,10 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+<Note>
+  `accept(...).start()` drives the **media plane only** (callKey decrypt → relay connect → engine). Sending `<preaccept>` and `<accept>` signaling stanzas to the peer is the caller's responsibility and must happen before or alongside `start()`. See `examples/voip.rs` in the repository for a complete incoming-call handler that includes signaling.
+</Note>
 
 ## Placing an Outgoing Call
 

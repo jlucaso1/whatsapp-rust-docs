@@ -56,10 +56,10 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 ### Voice calls
 
 - **Incoming and outgoing 1:1 audio calls** - Interoperates with the official WhatsApp app over 3G/WiFi/5G
-- **Full media plane** - Mic capture, encode, encrypt, relay, decrypt, decode, and playout in pure Rust
-- **Pure Rust MLow codec** - WhatsApp's proprietary audio codec, no FFI; compiles to WASM and embedded targets
+- **Full media plane in Rust** - Mic capture, encode, encrypt, relay, decrypt, decode, and playout
+- **Pure Rust MLow codec** - WhatsApp's proprietary audio codec; the `wacore` codec layer is FFI-free and compiles to WASM and embedded targets
 - **E2E-SRTP encryption** - Call key from the Signal session, HKDF-derived SRTP keys, AES-128-CTR + WARP integrity
-- **Sans-IO `CallEngine`** - No owned sockets or threads; runs on Tokio, WASM, and embedded targets (esp32)
+- **Sans-IO `CallEngine`** - No owned sockets or threads; the `wacore` engine targets Tokio, WASM, and embedded (esp32); the top-level `voip` feature (webrtc-rs + libopus) is native-only
 - **Multi-device aware** - Companion answering rekey, sibling dismiss, and offline missed-call surfacing
 - **Opt-in `voip` feature** - Zero impact on default builds; codec and relay deps not compiled unless opted in
 

@@ -215,9 +215,19 @@ If you see "whatsapp-rust installed successfully!", you're ready to move on to t
 
 ## Docker deployment
 
-whatsapp-rust includes a Dockerfile for building a minimal, statically linked container image. The multi-stage build produces a `scratch`-based image with only the compiled binary.
+whatsapp-rust ships a pre-built multi-arch image to GHCR and includes a Dockerfile for building your own. The runtime image is built from `scratch` (only the static binary) and runs unprivileged as uid 65532.
 
-### Build the image
+### Pre-built image
+
+Pull from GitHub Container Registry — a single manifest resolves to `linux/amd64` or `linux/arm64` automatically based on the host:
+
+```bash
+docker pull ghcr.io/oxidezap/whatsapp-rust:latest
+```
+
+Tagged releases are also available (e.g. `ghcr.io/oxidezap/whatsapp-rust:0.6.0`). The image is published on every push to `main`, on `v*` tags, and can be triggered manually via the Actions tab.
+
+### Build from source
 
 ```bash
 docker build -t whatsapp-rust .
@@ -233,14 +243,28 @@ The build process:
 
 ### Run the container
 
+Use a **named volume** for `/data`. The container runs as uid 65532 and a named volume inherits that ownership automatically, so the SQLite database stays writable without extra setup:
+
 ```bash
-docker run -v ./data:/data whatsapp-rust
+docker run -v whatsapp-data:/data ghcr.io/oxidezap/whatsapp-rust:latest
 ```
 
-The container uses `/data` as its working directory, so mount a volume there to persist your SQLite database and session data across restarts. For pair code authentication, pass the `--phone` flag:
+For pair code authentication, pass the `--phone` flag:
 
 ```bash
-docker run -v ./data:/data whatsapp-rust --phone 15551234567
+docker run -v whatsapp-data:/data ghcr.io/oxidezap/whatsapp-rust:latest --phone 15551234567
+```
+
+<Note>
+  **Host bind mounts** (e.g. `-v ./data:/data`) require the host directory to be owned by uid 65532, otherwise the container cannot write the database. Named volumes don't have this requirement.
+</Note>
+
+#### Upgrading from an older image
+
+Images before this release ran as root. If an existing named volume has root-owned files, chown it once before restarting:
+
+```bash
+docker run --rm -v whatsapp-data:/data alpine chown -R 65532:65532 /data
 ```
 
 ### Graceful shutdown

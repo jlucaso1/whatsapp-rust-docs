@@ -848,6 +848,81 @@ let pm2 = PersistenceManager::new(backend2).await?;
 SELECT * FROM sessions WHERE device_id = 1 AND address = ?;
 ```
 
+### Memory and Thread Tuning (`SqliteStoreConfig`)
+
+Each session owns its own `SqliteStore`, so the store's fixed costs (thread-pool threads, pooled connections, page cache) multiply with session count. On a host running many sessions the defaults from `SqliteStore::new` / `new_for_device` are deliberately low-memory; `SqliteStoreConfig` lets you override them when you need more throughput on a single session.
+
+**Default (low-memory) profile:**
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `pool_size` | `1` | Single connection; store serializes via its internal semaphore |
+| `cache_size_kib` | `512` | Per-connection page cache (~512 KiB) |
+| `busy_timeout` | `5 s` | SQLite busy-timeout |
+| `synchronous` | `NORMAL` | WAL-safe durability |
+| `thread_pool` | shared process-wide pool | One lazy pool across all stores; ~0 idle threads per store |
+
+**`SqliteStoreConfig` struct:**
+
+```rust
+pub struct SqliteStoreConfig {
+    /// Connection pool size. Drives both r2d2 `max_size` and the
+    /// internal semaphore permits, so they always stay in sync.
+    pub pool_size: u32,
+    /// Per-connection SQLite page cache in KiB.
+    pub cache_size_kib: i64,
+    /// SQLite busy-timeout.
+    pub busy_timeout: Duration,
+    /// SQLite PRAGMA synchronous level.
+    pub synchronous: Synchronous,
+    /// Optional shared r2d2 thread pool. When `None`, the store uses the
+    /// process-wide lazy pool. Inject a custom pool (e.g. for tests) via this field.
+    pub thread_pool: Option<Arc<r2d2::ScheduledThreadPool>>,
+}
+```
+
+**Constructors:**
+
+```rust
+use whatsapp_rust::store::{SqliteStore, SqliteStoreConfig};
+
+// Low-memory default — same as SqliteStore::new()
+let backend = Arc::new(SqliteStore::with_config("whatsapp.db", SqliteStoreConfig::default()).await?);
+
+// Low-memory default, specific device_id — same as SqliteStore::new_for_device()
+let backend = Arc::new(
+    SqliteStore::with_config_for_device("whatsapp.db", 1, SqliteStoreConfig::default()).await?,
+);
+
+// High-throughput profile for a single busy session
+let backend = Arc::new(
+    SqliteStore::with_config_for_device(
+        "whatsapp.db",
+        1,
+        SqliteStoreConfig {
+            pool_size: 4,
+            cache_size_kib: 4096,
+            ..SqliteStoreConfig::default()
+        },
+    )
+    .await?,
+);
+```
+
+<Note>
+`SqliteStore::new` and `SqliteStore::new_for_device` are unchanged — they delegate to `SqliteStoreConfig::default()` internally. Raising `pool_size` above `1` also raises the internal semaphore permits in lockstep, so real concurrency is available without the store serializing every operation.
+</Note>
+
+**Multi-session measurements (from PR #926):**
+
+| | before | after (default config) |
+|---|---|---|
+| threads / store | ~3.0 | ~0 (shared, flat) |
+| 50 stores → total threads | 164 | 16 |
+| peak heap, 25 stores | 11.47 MiB | 9.69 MiB |
+
+At ~100 sessions the r2d2 thread count drops from ~300 to 2.
+
 ## DeviceCommand Pattern
 
 **Location:** `src/store/commands.rs`, `wacore/src/store/commands.rs`

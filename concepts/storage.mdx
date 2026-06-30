@@ -877,7 +877,7 @@ pub struct SqliteStoreConfig {
     pub synchronous: Synchronous,
     /// Optional shared r2d2 thread pool. When `None`, the store uses the
     /// process-wide lazy pool. Inject a custom pool (e.g. for tests) via this field.
-    pub thread_pool: Option<Arc<r2d2::ScheduledThreadPool>>,
+    pub thread_pool: Option<Arc<scheduled_thread_pool::ScheduledThreadPool>>,
 }
 ```
 

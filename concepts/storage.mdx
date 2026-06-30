@@ -858,7 +858,7 @@ Each session owns its own `SqliteStore`, so the store's fixed costs (thread-pool
 |---------|---------|-------|
 | `pool_size` | `1` | Single connection; store serializes via its internal semaphore |
 | `cache_size_kib` | `512` | Per-connection page cache (~512 KiB) |
-| `busy_timeout` | `5 s` | SQLite busy-timeout |
+| `busy_timeout` | `30 s` | SQLite busy-timeout |
 | `synchronous` | `NORMAL` | WAL-safe durability |
 | `thread_pool` | shared process-wide pool | One lazy pool across all stores; ~0 idle threads per store |
 
@@ -870,7 +870,7 @@ pub struct SqliteStoreConfig {
     /// internal semaphore permits, so they always stay in sync.
     pub pool_size: u32,
     /// Per-connection SQLite page cache in KiB.
-    pub cache_size_kib: i64,
+    pub cache_size_kib: u32,
     /// SQLite busy-timeout.
     pub busy_timeout: Duration,
     /// SQLite PRAGMA synchronous level.

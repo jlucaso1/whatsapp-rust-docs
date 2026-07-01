@@ -1,16 +1,17 @@
 ---
 title: Authentication
-description: QR code and pair code authentication flows in whatsapp-rust
+description: QR code, pair code, and passkey authentication flows in whatsapp-rust
 ---
 
 ## Overview
 
-WhatsApp-Rust supports two authentication methods for linking companion devices:
+WhatsApp-Rust supports three authentication methods for linking companion devices:
 
 1. **QR Code Pairing** - Scan a QR code with your phone
 2. **Pair Code (Phone Number Linking)** - Enter an 8-character code on your phone
+3. **Passkey Linking (SHORTCAKE_PASSKEY)** - Gate the link behind a WebAuthn passkey already registered to the account
 
-Both methods use the Noise Protocol for secure key exchange and can run concurrently - whichever completes first wins.
+All three methods use the Noise Protocol for secure key exchange (passkey linking additionally requires a WebAuthn assertion) and can run concurrently - whichever completes first wins.
 
 ## Authentication Flow
 
@@ -404,6 +405,186 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // 5. Send companion_finish IQ
 }
 ```
+
+## Passkey linking (SHORTCAKE_PASSKEY)
+
+### How it works
+
+**Location:** `wacore/src/shortcake.rs` (pure crypto/protobuf core), `src/passkey/mod.rs` (the `PasskeyAuthenticator` seam), `src/passkey/flow.rs` (the client driver)
+
+This gate requires a WebAuthn passkey **already registered** to the WhatsApp account (e.g. in Google Password Manager or iCloud Keychain) — it is not a standalone pairing method you can bootstrap from scratch like QR or pair code. The server asks the companion to prove possession of that passkey before it will hand over the ADV secret.
+
+```mermaid
+sequenceDiagram
+    participant Companion as Companion Device<br/>(Your App)
+    participant Auth as PasskeyAuthenticator<br/>(WebAuthn)
+    participant WA as WhatsApp Server
+    participant Phone as Primary Device<br/>(Phone)
+
+    WA->>Companion: notification: passkey_prologue_request
+    Companion->>Auth: get_assertion(AssertionRequest)
+    Auth-->>Companion: Assertion (WebAuthn signature)
+    Companion->>WA: <passkey_prologue> (credential_id, webauthn_assertion,<br/>ephemeral-identity commitment[, handoff proof])
+    WA->>Phone: relay prologue
+    Phone->>WA: primary_ephemeral_identity
+    WA->>Companion: notification: crsc_continuation
+    Companion->>Companion: derive shared key + verification code
+    Companion->>Phone: display/confirm "XXXX-XXXX" (unless skip_handoff_ux)
+    Companion->>WA: <encrypted_pairing_request> (rotated ADV secret, AES-256-GCM)
+    WA->>Companion: pair-success
+```
+
+1. **Server requests a WebAuthn assertion:** a `passkey_prologue_request` notification carries (or points to, via IQ) the `PublicKeyCredentialRequestOptions` JSON.
+2. **Companion obtains an assertion:** delegated to a registered [`PasskeyAuthenticator`](#passkeyauthenticator-trait) — e.g. Android Credential Manager — since the passkey's private key is non-extractable and never touches this crate.
+3. **Ephemeral-identity commit/reveal:** the companion generates a fresh X25519 keypair and nonce, commits to them (`<passkey_prologue>`), and the primary reveals its own ephemeral identity in return (`crsc_continuation`).
+4. **Shared key + verification code:** both nonces and public keys derive an AES-256-GCM key and an 8-character "XXXX-XXXX" verification code.
+5. **Encrypted pairing request:** the companion encrypts its static Noise/identity public keys plus a freshly **rotated** ADV secret under that key and sends `<encrypted_pairing_request>`.
+6. **Completion:** as with QR/pair-code, the server sends `pair-success` and linking finishes through the same [`PairSuccess`/`PairError`](#success-events) path.
+
+<Note>
+  The rotated ADV secret is held only in memory until [`send_passkey_confirmation`](#implementation-2) succeeds — it is committed to the device store (`DeviceCommand::SetAdvSecretKey`) only after the primary has it. An abandoned or failed attempt never leaves the device on a secret the primary never received.
+</Note>
+
+### Re-links skip the verification code
+
+On a **re-link** (the companion already has a prior ADV secret), the client derives an HMAC "handoff proof" from that prior secret and includes it in `<passkey_prologue>`. If the server accepts it as proof of continuity, `Event::PairPasskeyConfirmation.skip_handoff_ux` is `true` and the link can complete without showing the user a code. A brand-new link always shows the code.
+
+### `PasskeyAuthenticator` trait
+
+**Location:** `src/passkey/mod.rs`
+
+```rust
+#[async_trait]
+pub trait PasskeyAuthenticator: MaybeSendSync {
+    async fn get_assertion(&self, request: &AssertionRequest) -> Result<Assertion, PasskeyError>;
+}
+```
+
+```rust
+pub struct AssertionRequest {
+    pub challenge: Vec<u8>,               // already base64url-decoded
+    pub rp_id: Option<String>,
+    pub allow_credentials: Vec<Vec<u8>>,  // empty = discoverable credential
+    pub user_verification: UserVerification, // Required | Preferred | Discouraged
+    pub timeout_ms: Option<u64>,
+    pub raw_options_json: String,         // verbatim server JSON, e.g. for Android Credential Manager
+}
+
+pub struct Assertion {
+    pub assertion_json: Vec<u8>,   // WA's `<webauthn_assertion>` JSON shape
+    pub credential_id: Vec<u8>,
+}
+```
+
+Two helper functions parse/build the wire shapes so a host authenticator doesn't have to:
+
+```rust
+// Parses the server's PublicKeyCredentialRequestOptions JSON into an AssertionRequest
+pub fn parse_request_options(json: &str) -> Result<AssertionRequest, PasskeyError>;
+
+// Assemble WA Web's exact `<webauthn_assertion>` JSON from raw WebAuthn assertion components
+// (for authenticator backends that return raw bytes instead of WA-shaped JSON).
+pub fn build_webauthn_assertion_json(
+    credential_id: &[u8],
+    client_data_json: &[u8],
+    authenticator_data: &[u8],
+    signature: &[u8],
+    user_handle: Option<&[u8]>,
+) -> Vec<u8>;
+```
+
+If you don't need a custom integration, `CallbackAuthenticator` wraps any async closure as a `PasskeyAuthenticator`:
+
+```rust
+use std::sync::Arc;
+use whatsapp_rust::passkey::{Assertion, AssertionRequest, CallbackAuthenticator, PasskeyError};
+
+let authenticator = CallbackAuthenticator::new(|request: AssertionRequest| {
+    Box::pin(async move {
+        // e.g. hand `request.raw_options_json` to Android Credential Manager's
+        // GetPublicKeyCredentialOption(requestJson = ...) and map the result:
+        Ok(Assertion {
+            assertion_json: get_webauthn_assertion_json(&request).await?,
+            credential_id: get_credential_id(&request).await?,
+        })
+    })
+});
+
+client.set_passkey_authenticator(Arc::new(authenticator)).await;
+```
+
+### Driving modes
+
+- **Automatic:** with `set_passkey_authenticator` called, the client drives the whole flow — it calls `get_assertion` when the server asks, sends the response, and auto-confirms re-links whose `skip_handoff_ux` is `true`. A fresh link still emits `Event::PairPasskeyConfirmation` so you can show the code before the automatic confirm.
+- **Manual:** with no authenticator registered, the host drives every step from the three `Event::PairPasskey*` events (see below) and calls `send_passkey_response` / `send_passkey_confirmation` itself.
+
+### Implementation
+
+```rust
+use std::sync::Arc;
+use wacore::types::events::Event;
+use whatsapp_rust::passkey::CallbackAuthenticator;
+
+// Automatic: register an authenticator once, then just handle PairSuccess/PairError.
+client.set_passkey_authenticator(Arc::new(CallbackAuthenticator::new(my_get_assertion))).await;
+```
+
+```rust
+// Manual: drive each step from the events yourself.
+.on_event(|event, client| async move {
+    match &*event {
+        Event::PairPasskeyRequest(req) => {
+            let assertion = my_get_assertion_from_json(&req.request_options_json).await?;
+            client.send_passkey_response(assertion).await?;
+        }
+        Event::PairPasskeyConfirmation(conf) => {
+            if conf.skip_handoff_ux {
+                client.send_passkey_confirmation().await?;
+            } else {
+                println!("Confirm {} matches on your phone, then continue", conf.code);
+                // ...await user confirmation, then:
+                client.send_passkey_confirmation().await?;
+            }
+        }
+        Event::PairPasskeyError(err) => {
+            eprintln!("Passkey link failed (continuation={}): {}", err.continuation, err.error);
+        }
+        Event::PairSuccess(info) => println!("Paired as {}", info.id),
+        _ => {}
+    }
+})
+```
+
+### Passkey events
+
+```rust
+// wacore/src/types/events.rs
+Event::PairPasskeyRequest(PairPasskeyRequest {
+    request_options_json: String, // verbatim PublicKeyCredentialRequestOptions JSON
+})
+
+Event::PairPasskeyConfirmation(PairPasskeyConfirmation {
+    code: String,            // 8-char "XXXX-XXXX" verification code
+    skip_handoff_ux: bool,   // true on a proven re-link: no need to show the code
+})
+
+Event::PairPasskeyError(PairPasskeyError {
+    error: String,
+    continuation: bool,     // false = failed during the initial request, true = during continuation
+})
+```
+
+Linking completes through the ordinary [`PairSuccess`/`PairError`](#success-events) events — there is no separate "passkey success" event.
+
+### Client methods
+
+| Method | Purpose |
+|--------|---------|
+| `set_passkey_authenticator(Arc<dyn PasskeyAuthenticator>)` | Register an authenticator to auto-drive the flow |
+| `send_passkey_response(Assertion) -> Result<(), PasskeyError>` | Call after `PairPasskeyRequest`, with the obtained assertion |
+| `send_passkey_confirmation() -> Result<(), PasskeyError>` | Call after `PairPasskeyConfirmation` (or automatically, for a proven re-link) |
+
+See [Client API — Connection Management](/api/client#set_passkey_authenticator) for full signatures and error variants.
 
 ## Cryptography
 

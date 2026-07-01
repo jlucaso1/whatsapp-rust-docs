@@ -233,10 +233,15 @@ On WASM targets (`target_arch = "wasm32"`), all `Send` bounds are automatically 
   <Card title="pair_code" icon="mobile">
     Phone number pairing
   </Card>
+  <Card title="shortcake" icon="key">
+    SHORTCAKE_PASSKEY companion-linking crypto (ephemeral identity commit/reveal, verification code, HKDF/AES-GCM pairing envelope, handoff proof)
+  </Card>
   <Card title="net" icon="network-wired">
     Transport and HTTP client traits
   </Card>
 </CardGroup>
+
+`shortcake` is pure and platform-agnostic (no Tokio, wasm-buildable) — it only builds/parses the deterministic protocol payloads. The one non-reproducible step, obtaining a WebAuthn assertion, lives in `whatsapp_rust::passkey` (the `PasskeyAuthenticator` seam). See [Authentication — Passkey linking](/concepts/authentication#passkey-linking-shortcake_passkey).
 
 ### Specialized Features
 

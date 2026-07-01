@@ -192,6 +192,11 @@ pub enum Event {
 
     // Raw stanza (opt-in)
     RawNode(Arc<OwnedNodeRef>),
+
+    // Passkey linking (SHORTCAKE_PASSKEY)
+    PairPasskeyRequest(PairPasskeyRequest),
+    PairPasskeyConfirmation(PairPasskeyConfirmation),
+    PairPasskeyError(PairPasskeyError),
 }
 ```
 
@@ -452,6 +457,62 @@ pub struct PairError {
     pub business_name: String,
     pub platform: String,
     pub error: String,
+}
+```
+
+### PairPasskeyRequest
+
+**Emitted:** During [passkey (SHORTCAKE_PASSKEY) linking](/concepts/authentication#passkey-linking-shortcake_passkey), when the server asks for a WebAuthn assertion to gate the link
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PairPasskeyRequest {
+    pub request_options_json: String, // verbatim PublicKeyCredentialRequestOptions JSON
+}
+```
+
+If a `PasskeyAuthenticator` is registered via `Client::set_passkey_authenticator`, the client obtains and sends the assertion automatically; this event is for hosts that drive the WebAuthn ceremony manually.
+
+**Example:**
+```rust
+Event::PairPasskeyRequest(req) => {
+    let assertion = my_get_assertion_from_json(&req.request_options_json).await?;
+    client.send_passkey_response(assertion).await?;
+}
+```
+
+### PairPasskeyConfirmation
+
+**Emitted:** When the passkey link reaches the verification stage
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PairPasskeyConfirmation {
+    pub code: String,          // 8-char "XXXX-XXXX" verification code
+    pub skip_handoff_ux: bool, // true on a proven re-link: continuity means the code need not be shown
+}
+```
+
+**Example:**
+```rust
+Event::PairPasskeyConfirmation(conf) => {
+    if conf.skip_handoff_ux {
+        client.send_passkey_confirmation().await?;
+    } else {
+        println!("Confirm {} matches on your phone", conf.code);
+    }
+}
+```
+
+### PairPasskeyError
+
+**Emitted:** When a passkey link attempt fails
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PairPasskeyError {
+    pub error: String,
+    pub continuation: bool, // false = failed during the initial request, true = during continuation/verification
 }
 ```
 

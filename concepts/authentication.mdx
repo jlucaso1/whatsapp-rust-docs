@@ -175,7 +175,7 @@ for code in codes_clone {
 
 By default the `Event::PairingQrCode` `code` is the **raw** comma-separated string above. It is meant to be scanned from *inside* WhatsApp (**Linked Devices → Link a Device**) — it is **not** a URL and tapping it does nothing.
 
-WhatsApp Web (`WAWebLinkDeviceQrcode`) also supports a **deep-link** shape for iOS native-camera linking: prefixing the same payload with a `wa.me` URL turns the QR into a link. When scanned by the phone's **native camera app** (not the in-app scanner), the OS opens WhatsApp straight to the Linked Devices screen and hands off the pairing payload via the URL fragment (`#...`).
+WhatsApp Web (`WAWebLinkDeviceQrcode`) also supports a **deep-link** shape for **iOS native-camera linking**: prefixing the same payload with a `wa.me` URL turns the QR into a link. On iOS, scanning it with the **native Camera app** (not the in-app scanner) opens WhatsApp straight to the Linked Devices screen and hands off the pairing payload via the URL fragment (`#...`).
 
 The prefix is exported as a constant:
 
@@ -208,10 +208,10 @@ fn render_qr(payload: &str) {
 // ...inside your event handler:
 .on_event(|event, _client| async move {
     if let Event::PairingQrCode { code, timeout } = &*event {
-        // Prepend the prefix so a native camera opens WhatsApp directly.
+        // Prepend the prefix so iOS's native Camera opens WhatsApp directly.
         let deep_link = format!("{NATIVE_CAMERA_DEEP_LINK_PREFIX}{code}");
 
-        println!("Scan with your phone's camera (valid {}s):", timeout.as_secs());
+        println!("Scan with your iOS Camera app (valid {}s):", timeout.as_secs());
         render_qr(&deep_link);
 
         // Tip: `deep_link` is also a working https:// URL you can share as a

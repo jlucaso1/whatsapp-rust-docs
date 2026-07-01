@@ -1,4 +1,3 @@
----
 title: "Bot"
 description: "High-level builder for creating WhatsApp bots with event handlers"
 ---
@@ -860,6 +859,7 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 |---------|---------|-------------|
 | `session_locks_capacity` | 10,000 | Per-device Signal session lock capacity |
 | `chat_lanes_capacity` | 5,000 | Per-chat lane capacity (combined enqueue lock + message queue) |
+| `group_distribution_locks_capacity` | 512 | Per-group cold sender-key distribution lock capacity. Single-flights a group's cold SKDM fan-out: a concurrent send that races the winner's redistribution re-resolves against its warm marking instead of redistributing to every member again |
 
 #### Sent message DB cleanup
 
@@ -959,7 +959,7 @@ let config = CacheConfig {
 Fields left as `None` keep the default in-process `PortableCache` behaviour. See [Custom backends — cache store](/guides/custom-backends#custom-cache-store) for a full implementation guide.
 
 <Note>
-Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects that cannot be serialized to an external store.
+Coordination caches (`session_locks`, `chat_lanes`, `group_distribution_locks`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects that cannot be serialized to an external store.
 </Note>
 
 ### Custom configuration example

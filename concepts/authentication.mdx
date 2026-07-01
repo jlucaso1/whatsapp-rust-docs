@@ -71,7 +71,7 @@ pub fn make_qr_data_with_client_type(
 - `client_type`: Single-byte [`CompanionWebClientType`](#companionwebclienttype) wire id (e.g. `1` for Chrome, `9` for `OtherWebClient`)
 
 <Note>
-  Since [tulir/whatsmeow#1110](https://github.com/tulir/whatsmeow/pull/1110) WhatsApp Web emits the **5-field** form (with the trailing `client_type`). The parser (`PairUtils::parse_qr_code`) still accepts the legacy 4-field string for backwards compatibility, but `make_qr_data` always produces 5 fields.
+  Current WhatsApp Web emits the **5-field** form (with the trailing `client_type`). The parser (`PairUtils::parse_qr_code`) still accepts the legacy 4-field string for backwards compatibility, but `make_qr_data` always produces 5 fields.
 </Note>
 
 ### Implementation
@@ -470,7 +470,7 @@ pub struct ClientProfile {
 <Note>
 Since v0.6 the locale and `phone_id` come from the active `ClientProfile` instead of being hard-coded. The locale is split into two ISO fields — `locale_language` (ISO-639-1, e.g. `"en"`) and `locale_country` (ISO-3166-1 alpha-2, e.g. `"US"`) — both written to the matching `UserAgent` proto attributes. When `phone_id` is `None` the client builds a **fresh UUID-v4 on every `ClientPayload` build**; it is not persisted on `Device`, so if you need a stable WA Web–style `WAWebClientPayload.phoneId` you must supply it yourself (e.g. generate once at install time and pass it in via your own `ClientProfile` constructor). Login counter (`ClientPayload.lc`) lives on `Device`, not here — see the [Login counter](#login-counter-clientpayloadlc) section below.
 
-`passive_login` mirrors WA Web's `ClientPayload.passive`: `false` (the default) tells the server to deliver queued offline messages on connect, `true` keeps the connection passive until you pull explicitly (whatsmeow's convention).
+`passive_login` mirrors WA Web's `ClientPayload.passive`: `false` (the default) tells the server to deliver queued offline messages on connect, `true` keeps the connection passive until you pull explicitly.
 </Note>
 
 #### Built-in profiles

@@ -48,22 +48,31 @@ sequenceDiagram
 
 ```rust
 // src/pair.rs
-pub fn make_qr_data(store: &Device, ref_str: String) -> String {
-    let device_state = DeviceState {
-        identity_key: store.identity_key.clone(),
-        noise_key: store.noise_key.clone(),
-        adv_secret_key: store.adv_secret_key,
-    };
-    PairUtils::make_qr_data(&device_state, ref_str)
+// Auto-derives the client type from `device_props`.
+pub fn make_qr_data(store: &Device, ref_str: &str) -> String {
+    let client_type = companion_web_client_type_for_props(&store.device_props);
+    make_qr_data_with_client_type(store, ref_str, client_type)
 }
+
+// Use this to override the trailing client-type field explicitly.
+pub fn make_qr_data_with_client_type(
+    store: &Device,
+    ref_str: &str,
+    client_type: CompanionWebClientType,
+) -> String { /* ... */ }
 ```
 
-**QR Format:** `ref,noise_pub,identity_pub,adv_secret`
+**QR Format:** `ref,noise_pub,identity_pub,adv_secret,client_type`
 
 - `ref`: Pairing reference from server
 - `noise_pub`: Static Noise public key (32 bytes, base64)
 - `identity_pub`: Signal identity public key (32 bytes, base64)
 - `adv_secret`: Advertisement secret key (32 bytes, base64)
+- `client_type`: Single-byte [`CompanionWebClientType`](#companionwebclienttype) wire id (e.g. `1` for Chrome, `9` for `OtherWebClient`)
+
+<Note>
+  Current WhatsApp Web emits the **5-field** form (with the trailing `client_type`). The parser (`PairUtils::parse_qr_code`) still accepts the legacy 4-field string for backwards compatibility, but `make_qr_data` always produces 5 fields.
+</Note>
 
 ### Implementation
 
@@ -161,6 +170,57 @@ for code in codes_clone {
 <Note>
   The rotation uses `futures::future::select` with an `async_channel` stop signal rather than Tokio-specific primitives. This keeps the QR rotation compatible with any async runtime, since the `Client` uses the pluggable `Runtime` trait for sleep and spawn operations.
 </Note>
+
+### Native-camera deep link (open WhatsApp directly)
+
+By default the `Event::PairingQrCode` `code` is the **raw** comma-separated string above. It is meant to be scanned from *inside* WhatsApp (**Linked Devices → Link a Device**) — it is **not** a URL and tapping it does nothing.
+
+WhatsApp Web (`WAWebLinkDeviceQrcode`) also supports a **deep-link** shape for **iOS native-camera linking**: prefixing the same payload with a `wa.me` URL turns the QR into a link. On iOS, scanning it with the **native Camera app** (not the in-app scanner) opens WhatsApp straight to the Linked Devices screen and hands off the pairing payload via the URL fragment (`#...`).
+
+The prefix is exported as a constant:
+
+```rust
+// wacore/src/companion_reg.rs (re-exported from whatsapp_rust::pair)
+pub const NATIVE_CAMERA_DEEP_LINK_PREFIX: &str = "https://wa.me/settings/linked_devices#";
+```
+
+<Warning>
+  `make_qr_data` and `Event::PairingQrCode` **never** add this prefix — the emitted string is always the raw 5-field payload. If you want the deep-link behavior you must prepend the prefix yourself before rendering the QR. `PairUtils::parse_qr_code` transparently strips the prefix, so the raw and deep-link forms are interchangeable on the scanning side.
+</Warning>
+
+#### Mini example — render a scannable deep-link QR
+
+```rust
+use whatsapp_rust::pair::NATIVE_CAMERA_DEEP_LINK_PREFIX;
+use wacore::types::events::Event;
+
+// Depends on the `qrcode` crate:  qrcode = "0.14"
+fn render_qr(payload: &str) {
+    use qrcode::{QrCode, render::unicode};
+    let code = QrCode::new(payload).expect("valid QR payload");
+    let art = code
+        .render::<unicode::Dense1x2>()
+        .quiet_zone(true)
+        .build();
+    println!("{art}");
+}
+
+// ...inside your event handler:
+.on_event(|event, _client| async move {
+    if let Event::PairingQrCode { code, timeout } = &*event {
+        // Prepend the prefix so iOS's native Camera opens WhatsApp directly.
+        let deep_link = format!("{NATIVE_CAMERA_DEEP_LINK_PREFIX}{code}");
+
+        println!("Scan with your iOS Camera app (valid {}s):", timeout.as_secs());
+        render_qr(&deep_link);
+
+        // Tip: `deep_link` is also a working https:// URL you can share as a
+        // clickable link on the device itself.
+    }
+})
+```
+
+Render the **raw** `code` instead of `deep_link` if you want the classic in-app scanner flow; both produce a valid, scannable code.
 
 ## Pair code (phone number linking)
 
@@ -410,7 +470,7 @@ pub struct ClientProfile {
 <Note>
 Since v0.6 the locale and `phone_id` come from the active `ClientProfile` instead of being hard-coded. The locale is split into two ISO fields — `locale_language` (ISO-639-1, e.g. `"en"`) and `locale_country` (ISO-3166-1 alpha-2, e.g. `"US"`) — both written to the matching `UserAgent` proto attributes. When `phone_id` is `None` the client builds a **fresh UUID-v4 on every `ClientPayload` build**; it is not persisted on `Device`, so if you need a stable WA Web–style `WAWebClientPayload.phoneId` you must supply it yourself (e.g. generate once at install time and pass it in via your own `ClientProfile` constructor). Login counter (`ClientPayload.lc`) lives on `Device`, not here — see the [Login counter](#login-counter-clientpayloadlc) section below.
 
-`passive_login` mirrors WA Web's `ClientPayload.passive`: `false` (the default) tells the server to deliver queued offline messages on connect, `true` keeps the connection passive until you pull explicitly (whatsmeow's convention).
+`passive_login` mirrors WA Web's `ClientPayload.passive`: `false` (the default) tells the server to deliver queued offline messages on connect, `true` keeps the connection passive until you pull explicitly.
 </Note>
 
 #### Built-in profiles

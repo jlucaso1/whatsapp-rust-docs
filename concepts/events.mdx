@@ -734,9 +734,9 @@ Event::Receipt(receipt) => {
 **Emitted:** When a message cannot be decrypted or is unavailable. This includes:
 - Decryption failures (no session, invalid keys, MAC errors)
 - Group messages that fail with `NoSenderKeyState` (missing sender key) — dispatched before the retry receipt is sent
-- Messages with an `<unavailable>` node (view-once already viewed, server-side unavailability) — the client automatically requests content from your primary phone via [PDO](/guides/receiving-messages#unavailable-message-recovery-via-pdo)
+- Messages with an `<unavailable>` node — view-once already viewed, hosted content, bot fanouts, or other server-side unavailability. For `ViewOnce`/`Hosted`/`Bot`, the phone never shares that content with a companion device, so the client acks the stanza directly instead of requesting it. Only the `Unknown` case goes through [PDO recovery](/guides/receiving-messages#unavailable-message-recovery-via-pdo)
 
-When `is_unavailable` is `true`, the message had no encrypted content in the stanza. The client sends a PDO request to your primary phone, and if the phone responds successfully, a follow-up `Event::Message` is dispatched with the recovered content.
+When `is_unavailable` is `true`, the message had no encrypted content in the stanza. For `UnavailableType::Unknown`, the client sends a PDO request to your primary phone, and if the phone responds successfully, a follow-up `Event::Message` is dispatched with the recovered content. For `ViewOnce`, `Hosted`, and `Bot`, no PDO request is sent — that content is unrecoverable by design, so no follow-up `Event::Message` should be expected.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -747,10 +747,12 @@ pub struct UndecryptableMessage {
     pub decrypt_fail_mode: DecryptFailMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum UnavailableType {
     Unknown,
     ViewOnce,       // View-once media already viewed
+    Hosted,         // Hosted content the phone won't fan out to companions
+    Bot,            // AI bot message fanout
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -797,10 +799,13 @@ Event::UndecryptableMessage(undec) => {
             // Silently ignore — infrastructure message (reaction, poll vote, etc.)
         }
         DecryptFailMode::Show => {
-            if matches!(undec.unavailable_type, UnavailableType::ViewOnce) {
-                println!("View-once message already consumed");
-            } else {
-                eprintln!("Failed to decrypt message from {}", undec.info.source.sender);
+            match undec.unavailable_type {
+                UnavailableType::ViewOnce => println!("View-once message already consumed"),
+                UnavailableType::Hosted => println!("Hosted content unavailable"),
+                UnavailableType::Bot => println!("Bot message unavailable"),
+                UnavailableType::Unknown => {
+                    eprintln!("Failed to decrypt message from {}", undec.info.source.sender);
+                }
             }
         }
     }

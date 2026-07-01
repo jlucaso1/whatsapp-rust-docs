@@ -515,7 +515,7 @@ client.set_passkey_authenticator(Arc::new(authenticator)).await;
 
 ### Driving modes
 
-- **Automatic:** with `set_passkey_authenticator` called, the client drives the whole flow — it calls `get_assertion` when the server asks, sends the response, and auto-confirms re-links whose `skip_handoff_ux` is `true`. A fresh link still emits `Event::PairPasskeyConfirmation` so you can show the code before the automatic confirm.
+- **Automatic:** with `set_passkey_authenticator` called, the client drives the assertion step — it calls `get_assertion` when the server asks and sends the response for you. It also auto-confirms re-links whose `skip_handoff_ux` is `true`, since continuity is already proven. A **fresh** link does not auto-confirm even in this mode: it still emits `Event::PairPasskeyConfirmation`, and you must show the code to the user and call `send_passkey_confirmation()` yourself once they approve it — otherwise the link stalls before `<encrypted_pairing_request>` is ever sent.
 - **Manual:** with no authenticator registered, the host drives every step from the three `Event::PairPasskey*` events (see below) and calls `send_passkey_response` / `send_passkey_confirmation` itself.
 
 ### Implementation
@@ -525,7 +525,9 @@ use std::sync::Arc;
 use wacore::types::events::Event;
 use whatsapp_rust::passkey::CallbackAuthenticator;
 
-// Automatic: register an authenticator once, then just handle PairSuccess/PairError.
+// Automatic: register an authenticator once. Re-links finish on their own; a fresh
+// link still needs you to show the code from PairPasskeyConfirmation and call
+// send_passkey_confirmation() once the user approves it (see the Manual example below).
 client.set_passkey_authenticator(Arc::new(CallbackAuthenticator::new(my_get_assertion))).await;
 ```
 

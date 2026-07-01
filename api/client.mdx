@@ -293,6 +293,46 @@ println!("Enter this code on your phone: {}", code);
 
 ---
 
+### set_passkey_authenticator
+
+```rust
+pub async fn set_passkey_authenticator(&self, authenticator: Arc<dyn PasskeyAuthenticator>)
+```
+
+Registers a [`PasskeyAuthenticator`](/concepts/authentication#passkeyauthenticator-trait) for [passkey (SHORTCAKE_PASSKEY) linking](/concepts/authentication#passkey-linking-shortcake_passkey). Once set, the client auto-drives the flow end-to-end: it calls `get_assertion` when the server requests one, sends the response, and auto-confirms a re-link whose `skip_handoff_ux` is `true`. Leave it unset to drive every step manually from the `Event::PairPasskey*` events.
+
+<ParamField path="authenticator" type="Arc<dyn PasskeyAuthenticator>" required>
+  Produces a WebAuthn assertion for the server's challenge — typically backed by Android Credential Manager, hybrid/caBLE, or a software vault. Use `whatsapp_rust::passkey::CallbackAuthenticator::new(f)` to wrap an async closure.
+</ParamField>
+
+### send_passkey_response
+
+```rust
+pub async fn send_passkey_response(&self, assertion: Assertion) -> Result<(), PasskeyError>
+```
+
+Sends the WebAuthn assertion as `<passkey_prologue>` and opens the ephemeral-identity handshake. Call after an [`Event::PairPasskeyRequest`](/concepts/events#pairpasskeyrequest). Returns `PasskeyError::Flow` if a passkey open is already in progress.
+
+### send_passkey_confirmation
+
+```rust
+pub async fn send_passkey_confirmation(&self) -> Result<(), PasskeyError>
+```
+
+Finishes the link: encrypts the rotated ADV secret under the derived key, sends `<encrypted_pairing_request>`, and commits the secret rotation. For a fresh link, call this only after the user confirms the code from an [`Event::PairPasskeyConfirmation`](/concepts/events#pairpasskeyconfirmation) — a proven re-link (`skip_handoff_ux: true`) can call it immediately, and the automatic driver does so itself. Returns `PasskeyError::Flow` if called before the confirmation stage or without an active session.
+
+**Errors (`PasskeyError`):**
+
+| Variant | Cause |
+|---------|-------|
+| `NoCredential` | No passkey registered for this account on the authenticator |
+| `Cancelled` | User cancelled or the WebAuthn ceremony timed out |
+| `InvalidOptions(String)` | Malformed `PublicKeyCredentialRequestOptions` JSON from the server |
+| `Backend(String)` | Authenticator backend error |
+| `Flow(String)` | Protocol/state error (wrong stage, no active session, IQ failure) |
+
+---
+
 ## Connection State
 
 ### is_connected

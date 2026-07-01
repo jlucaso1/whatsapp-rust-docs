@@ -432,38 +432,53 @@ enum RetryReason {
 
 ### Unavailable message recovery via PDO
 
-When the server delivers a message with an `<unavailable>` child node instead of `<enc>` nodes, the message content is not present in the stanza. This happens when:
+When the server delivers a message with an `<unavailable>` child node instead of `<enc>` nodes, the message content is not present in the stanza. The client classifies the `<unavailable>` node into an `UnavailableType`:
 
-- A view-once message has already been viewed on another device
-- The server cannot deliver the encrypted payload for other reasons
+- **`ViewOnce`** — a view-once message already viewed on another device (`<unavailable type="view_once">`)
+- **`Hosted`** — hosted content the phone does not fan out to companion devices (`<unavailable hosted="true">`, wire-boolean, also matches `hosted="1"`)
+- **`Bot`** — an AI bot message fanout, signaled by a sibling `<bot>` child on the stanza
+- **`Unknown`** — a plain fanout with none of the above markers; the server just could not deliver the encrypted payload for some other reason
 
-Instead of silently dropping these messages, the client requests the content from your primary phone via PDO (Peer Data Operation). The flow is:
+Classification follows WhatsApp Web's own precedence (bot > hosted > view_once) via `UnavailableType::from_fanout_flags`.
 
-1. The client detects the `<unavailable>` node and its type (e.g., `view_once` or unknown)
+`ViewOnce`, `Hosted`, and `Bot` are exactly the three subtypes WhatsApp Web itself never placeholder-resends (`WAWebNonMessageDataRequestPlaceholderMessageResendUtils` excludes them). The phone won't share that content with a companion device, so a PDO request for them would always come back empty — and would additionally surface a spurious "Finished syncing with WhatsApp on &lt;device&gt;" notification on the phone for no benefit. The client short-circuits these three: it skips the PDO entirely and acks the stanza directly so the offline queue still drains. `UnavailableType::is_unrecoverable_fanout()` reports `true` for all three.
+
+Only a plain (`Unknown`) fanout is recovered via PDO. The flow for that case is:
+
+1. The client detects the `<unavailable>` node and classifies it as `Unknown`
 2. An `UndecryptableMessage` event is dispatched immediately with `is_unavailable: true`
 3. A PDO request (`PlaceholderMessageResend`) is sent to your own bare JID (server routes to all devices including device 0)
 4. The phone responds with the full `WebMessageInfo` containing the decrypted message
 5. The client validates the response came from device 0 (primary phone) and dispatches the recovered message as a normal `Event::Message`
 
-The recovered `MessageInfo` includes `unavailable_request_id` — the PDO request message ID — so you can correlate recovered messages with the original `UndecryptableMessage` event.
+For `ViewOnce`, `Hosted`, and `Bot`, only steps 1–2 happen: the client dispatches `UndecryptableMessage` and acks immediately. There is no PDO round-trip and no follow-up `Event::Message` to wait for.
+
+The recovered `MessageInfo` (for the PDO-recovered `Unknown` case) includes `unavailable_request_id` — the PDO request message ID — so you can correlate recovered messages with the original `UndecryptableMessage` event.
 
 ```rust
 Event::UndecryptableMessage(undec) => {
     if undec.is_unavailable {
-        // Message content is being requested from your phone via PDO.
-        // You'll receive an Event::Message when the phone responds.
         match undec.unavailable_type {
-            UnavailableType::ViewOnce => {
-                println!("View-once message — requesting from phone");
-            }
             UnavailableType::Unknown => {
+                // Content is being requested from your phone via PDO.
+                // You'll receive an Event::Message when the phone responds.
                 println!("Unavailable message — requesting from phone");
+            }
+            UnavailableType::ViewOnce => {
+                println!("View-once message already viewed elsewhere — unrecoverable");
+            }
+            UnavailableType::Hosted => {
+                println!("Hosted content unavailable — unrecoverable");
+            }
+            UnavailableType::Bot => {
+                println!("Bot message unavailable — unrecoverable");
             }
         }
     }
 }
 
-// When the phone responds, the recovered message includes the request ID:
+// When the phone responds to a PDO request (Unknown fanouts only), the
+// recovered message includes the request ID:
 Event::Message(msg, info) => {
     if let Some(request_id) = &info.unavailable_request_id {
         println!("Recovered via PDO (request: {})", request_id);

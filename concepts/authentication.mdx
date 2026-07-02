@@ -737,7 +737,7 @@ match result {
 
 Since v0.6 the client persists a `login_counter` on `Device`. Every successful connect increments it and the new value is sent as `ClientPayload.lc` during the Noise handshake. This mirrors WA Web's anti-abuse signal — the server uses the counter to spot replayed or cloned `ClientPayload`s. The counter resets when you call `logout()` or wipe device state.
 
-### 1:1 LID migration state
+### One-to-one LID migration state
 
 Fixes [#941](https://github.com/oxidezap/whatsapp-rust/issues/941): some accounts are not yet **1:1-LID-migrated** on WhatsApp's servers, and those accounts get every LID-addressed DM rejected with `ack error="400"`. The client tracks this account-level state in a persisted `Device.lid_migrated` flag so it can keep DM wire addressing on PN until the account has actually migrated — see [Signal Protocol — DM wire namespace vs. Signal session addressing](/advanced/signal-protocol#dm-wire-namespace-vs-signal-session-addressing).
 

@@ -350,7 +350,7 @@ pub(crate) async fn resolve_dm_wire_jid(&self, to: &Jid) -> Jid {
 
 `Client::is_lid_migrated()` is `true` when either is true:
 
-1. The persisted `Device.lid_migrated` flag (see [Storage — DeviceStore](/concepts/storage#devicestore)), set once from the primary's `pair-success` `<client-props>` (`isChatDbLidMigrated`) or from a `lid_migration_mapping_sync_message` protocol message pushed to the primary's own companions (self-only — see [Authentication — 1:1 LID migration state](/concepts/authentication#1-1-lid-migration-state)).
+1. The persisted `Device.lid_migrated` flag (see [Storage — DeviceStore](/concepts/storage#devicestore)), set once from the primary's `pair-success` `<client-props>` (`isChatDbLidMigrated`) or from a `lid_migration_mapping_sync_message` protocol message pushed to the primary's own companions (self-only — see [Authentication — one-to-one LID migration state](/concepts/authentication#one-to-one-lid-migration-state)).
 2. The `lid_one_on_one_migration_enabled` ab prop, as a fallback for sessions paired before the flag existed. The first observation of this prop being on also latches the persisted flag, so the account doesn't flap back to PN addressing before the next props fetch.
 
 Once set, `lid_migrated` never reverts for the same account — only pairing a *different* account onto the same store resets it. Signal session addressing (`resolve_encryption_jid`) and inbound decrypt are unaffected by any of this; only the outbound DM wire namespace is gated.

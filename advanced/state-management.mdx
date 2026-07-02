@@ -305,7 +305,7 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
 ```
 
 <Note>
-  `SetLidMigrated` gates outbound DM wire addressing (LID vs. PN) on whether the account is 1:1-LID-migrated. Runtime paths only ever set `true` — `false` is reserved for pair-success, where a fresh pairing of a *different* account must not inherit the previous account's migration state. See [Authentication — 1:1 LID migration state](/concepts/authentication#1-1-lid-migration-state).
+  `SetLidMigrated` gates outbound DM wire addressing (LID vs. PN) on whether the account is 1:1-LID-migrated. Runtime paths only ever set `true` — `false` is reserved for pair-success, where a fresh pairing of a *different* account must not inherit the previous account's migration state. See [Authentication — one-to-one LID migration state](/concepts/authentication#one-to-one-lid-migration-state).
 </Note>
 
 Location: `wacore/src/store/commands.rs`

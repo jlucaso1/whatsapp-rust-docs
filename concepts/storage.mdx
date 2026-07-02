@@ -974,7 +974,7 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
             device.platform = platform;
         }
         DeviceCommand::SetAccount(account) => {
-            device.account = account;
+            device.account = account.map(std::sync::Arc::new);
         }
         DeviceCommand::SetPreKeyWatermarks { next_pre_key_id, first_unupload_pre_key_id } => {
             device.next_pre_key_id = next_pre_key_id;

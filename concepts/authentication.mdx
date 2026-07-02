@@ -762,7 +762,7 @@ pub fn lid_migrated_update(props_migrated: bool, account_changed: bool) -> Optio
 }
 ```
 
-Once set, the flag never reverts for the same account (like the WA Web pref) — it can only be reset to `false` when a *different* account is paired onto the same store. Mutations go through `DeviceCommand::SetLidMigrated(bool)` (see [State Management](/advanced/state-management#deviceCommand-pattern)).
+Once set, the flag never reverts for the same account (like the WA Web pref) — it can only be reset to `false` when a *different* account is paired onto the same store. Mutations go through `DeviceCommand::SetLidMigrated(bool)` (see [State Management](/advanced/state-management#devicecommand-pattern)).
 
 ## Concurrent Pairing
 

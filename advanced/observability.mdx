@@ -107,25 +107,27 @@ Spans are grouped under a stable `wa.<area>.<op>` naming scheme so you can filte
 
 Most spans are emitted at `debug` or `trace`. The connection-lifecycle spans (`wa.conn.connect`, `wa.conn.disconnect`, `wa.conn.reconnect`, `wa.conn.run`, `wa.conn.logout`) are at `info` so connection state is visible at the default level. Failures surface at `ERROR` via `err(Debug)` on the instrumented function, and the existing `warn!`/`error!` log calls surface through the bridge.
 
+A downstream binary can statically strip lower levels at compile time with `tracing`'s `release_max_level_info` / `release_max_level_warn` features.
+
 ### Account identity in spans
 
 The `wa.conn.run`, `wa.iq`, and `wa.send.message` spans carry `lid` and `pn` fields for your own account, so traces are filterable and groupable per account in multi-account deployments. `pn` is redacted via `Jid::observe()` like any other phone-number field (see [PII handling](#pii-handling) below); `lid` is rendered in full since it is pseudonymous.
 
 `wa.conn.run` re-records both fields on every reconnect-loop iteration rather than once before the loop, since a freshly-paired device has no `lid`/`pn` yet on the first pass — pairing resolves them on a detached task with no ambient span, so the identity appears on the *next* reconnect iteration instead (a routine event: server-initiated stream-end, network blips).
 
-To tag your own spans or error context with the same account identity, call `Client::identity_tags()` (also gated by the `tracing` feature):
+To tag your own spans or error context with the same account identity, call `Client::identity_tags()` (available whenever the `tracing` feature is enabled on the `whatsapp-rust` dependency — no local feature of your own is required):
 
 ```rust
-#[cfg(feature = "tracing")]
-{
-    let tags = client.identity_tags();
-    tracing::info!(lid = ?tags.lid, pn = ?tags.pn, "custom event");
+let tags = client.identity_tags();
+if let Some(lid) = &tags.lid {
+    tracing::info!(lid = %lid, "custom event");
+}
+if let Some(pn) = &tags.pn {
+    tracing::info!(pn = %pn, "custom event");
 }
 ```
 
-`identity_tags()` returns an `IdentityTags { lid: Option<String>, pn: Option<String> }` snapshot — a named struct rather than a tuple, so LID/PN cannot be silently transposed at the call site. Both fields read from the same device snapshot used internally, so they stay consistent with what the library's own spans record.
-
-A downstream binary can statically strip lower levels at compile time with `tracing`'s `release_max_level_info` / `release_max_level_warn` features.
+`identity_tags()` returns an `IdentityTags { lid: Option<String>, pn: Option<String> }` snapshot — a named struct rather than a tuple, so LID/PN cannot be silently transposed at the call site. `pn` is already the redacted `pn#<token>` form produced by `Jid::observe()`, not the raw phone number, so logging it directly — as in the example above — does not leak PII; `lid` is rendered in full since it is pseudonymous. Both fields read from the same device snapshot used internally, so they stay consistent with what the library's own spans record.
 
 ### Filtering examples
 

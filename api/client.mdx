@@ -981,6 +981,20 @@ pub fn get_lid(&self) -> Option<Jid>
 
 Returns the LID (Linked Identity).
 
+### is_lid_migrated
+
+```rust
+pub async fn is_lid_migrated(&self) -> bool
+```
+
+Whether the account is 1:1-LID-migrated on WhatsApp's servers. This gates outbound DM wire addressing (the stanza `to`/`<participants>` namespace) — an unmigrated account keeps DMs on PN even when a LID mapping is cached, since the server rejects LID-addressed DMs from unmigrated accounts with `ack error="400"` ([#941](https://github.com/oxidezap/whatsapp-rust/issues/941)). Signal session addressing is unaffected either way.
+
+Returns `true` if the persisted `Device.lid_migrated` flag is set, or (as a fallback for accounts paired before the flag existed) if the `lid_one_on_one_migration_enabled` ab prop is currently enabled. See [Signal Protocol — DM wire namespace vs. Signal session addressing](/advanced/signal-protocol#dm-wire-namespace-vs-signal-session-addressing) and [Authentication — one-to-one LID migration state](/concepts/authentication#one-to-one-lid-migration-state).
+
+<Note>
+  This is normally handled automatically by the send path — you don't need to call it yourself before sending. It's exposed for diagnostics/telemetry.
+</Note>
+
 ### get_lid_pn_entry
 
 ```rust

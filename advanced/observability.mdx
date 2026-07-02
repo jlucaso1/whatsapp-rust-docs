@@ -119,15 +119,12 @@ To tag your own spans or error context with the same account identity, call `Cli
 
 ```rust
 let tags = client.identity_tags();
-if let Some(lid) = &tags.lid {
-    tracing::info!(lid = %lid, "custom event");
-}
-if let Some(pn) = &tags.pn {
-    tracing::info!(pn = %pn, "custom event");
-}
+tracing::info!(lid = tags.lid.as_deref(), pn = tags.pn.as_deref(), "custom event");
 ```
 
-`identity_tags()` returns an `IdentityTags { lid: Option<String>, pn: Option<String> }` snapshot — a named struct rather than a tuple, so LID/PN cannot be silently transposed at the call site. `pn` is already the redacted `pn#<token>` form produced by `Jid::observe()`, not the raw phone number, so logging it directly — as in the example above — does not leak PII; `lid` is rendered in full since it is pseudonymous. Both fields read from the same device snapshot used internally, so they stay consistent with what the library's own spans record.
+`tracing`'s `Value` impl for `Option<T>` records the field only when the value is `Some`, so a missing `lid` or `pn` is left absent on the event instead of printing as `None` or an empty string — matching how `wa.conn.run` / `wa.iq` / `wa.send.message` behave internally, and keeping both tags on a single event instead of splitting them across two.
+
+`identity_tags()` returns an `IdentityTags { lid: Option<String>, pn: Option<String> }` snapshot — a named struct rather than a tuple, so LID/PN cannot be silently transposed at the call site. `pn` is already the redacted `pn#<token>` form produced by `Jid::observe()`, not the raw phone number, so logging it directly — as in the example above — does not leak PII by default; `lid` is rendered in full since it is pseudonymous. This guarantee only holds while the `tracing-pii` feature stays disabled (the default) — with `tracing-pii` enabled, `identity_tags()` inherits `Jid::observe()`'s raw-number behavior like every other redacted value on this page, so `pn` becomes the actual phone number (see [`tracing-pii`](#tracing-pii-local-debugging-only) below). Both fields read from the same device snapshot used internally, so they stay consistent with what the library's own spans record.
 
 ### Filtering examples
 

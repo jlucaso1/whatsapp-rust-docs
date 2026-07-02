@@ -122,7 +122,7 @@ let upload = client.upload(image_bytes, MediaType::Image, Default::default()).aw
 
 // Create image message with upload metadata
 let message = wa::Message {
-    image_message: Some(Box::new(wa::message::ImageMessage {
+    image_message: buffa::MessageField::some(wa::message::ImageMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
         media_key: Some(upload.media_key_vec()),
@@ -133,7 +133,7 @@ let message = wa::Message {
         caption: Some("Check out this photo!".to_string()),
         mimetype: Some("image/jpeg".to_string()),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -176,7 +176,7 @@ let filename = doc_path.file_name()
 let upload = client.upload(doc_bytes, MediaType::Document, Default::default()).await?;
 
 let message = wa::Message {
-    document_message: Some(Box::new(wa::message::DocumentMessage {
+    document_message: buffa::MessageField::some(wa::message::DocumentMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
         media_key: Some(upload.media_key_vec()),
@@ -187,7 +187,7 @@ let message = wa::Message {
         file_name: Some(filename.to_string()),
         mimetype: Some("application/pdf".to_string()),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -204,7 +204,7 @@ let audio_bytes = fs::read("voice.ogg")?;
 let upload = client.upload(audio_bytes, MediaType::Audio, Default::default()).await?;
 
 let message = wa::Message {
-    audio_message: Some(Box::new(wa::message::AudioMessage {
+    audio_message: buffa::MessageField::some(wa::message::AudioMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
         media_key: Some(upload.media_key_vec()),
@@ -215,7 +215,7 @@ let message = wa::Message {
         mimetype: Some("audio/ogg; codecs=opus".to_string()),
         ptt: Some(true), // Mark as Push-To-Talk (voice note)
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 

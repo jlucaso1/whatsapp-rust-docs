@@ -168,10 +168,10 @@ pub async fn send_raw(
 use waproto::whatsapp as wa;
 
 let message = wa::Message {
-    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+    extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
         text: Some("Custom message".to_string()),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 

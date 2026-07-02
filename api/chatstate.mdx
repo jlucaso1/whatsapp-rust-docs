@@ -272,7 +272,7 @@ client.chatstate().send_paused(&recipient).await?;
 // Upload and send audio message
 let upload = client.upload(audio_data, MediaType::Audio, Default::default()).await?;
 let message = wa::Message {
-    audio_message: Some(Box::new(wa::message::AudioMessage {
+    audio_message: buffa::MessageField::some(wa::message::AudioMessage {
         url: Some(upload.url),
         direct_path: Some(upload.direct_path),
         media_key: Some(upload.media_key_vec()),
@@ -282,7 +282,7 @@ let message = wa::Message {
         mimetype: Some("audio/ogg; codecs=opus".to_string()),
         ptt: Some(true),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 client.send_message(recipient.clone(), message).await?;

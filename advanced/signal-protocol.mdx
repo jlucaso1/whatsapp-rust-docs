@@ -860,7 +860,7 @@ client.set_wanted_pre_key_count(256);
 
 Values outside `[5, 65_535]` are clamped at upload time (an out-of-range value logs a `warn!`). The floor avoids an empty-but-flagged pool or a re-upload loop. The ceiling is the wire-format limit: the upload IQ encodes the pre-key list length as a `u16`, so a larger batch would generate keys locally and then fail to encode.
 
-Per-key X25519 generation and prost encoding for the batch are offloaded via `wacore::runtime::blocking` (runtime-agnostic; runs inline on wasm) since the caller-controlled batch size can be large.
+Per-key X25519 generation and protobuf encoding for the batch are offloaded via `wacore::runtime::blocking` (runtime-agnostic; runs inline on wasm) since the caller-controlled batch size can be large.
 
 ### Pre-key ID counter and wrap-around
 
@@ -1191,7 +1191,7 @@ struct SenderKeyStoreState {
 }
 ```
 
-This eliminates prost encode (on store) and decode (on load) from the per-message hot path for both 1:1 and group messages. The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer:
+This eliminates protobuf encode (on store) and decode (on load) from the per-message hot path for both 1:1 and group messages. The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer:
 
 ```rust
 // wacore/libsignal/src/protocol/storage/traits.rs
@@ -1210,8 +1210,8 @@ All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`,
 
 | Operation | Before | After |
 |-----------|--------|-------|
-| `store_session` | clone all fields + prost encode | move (zero-cost) |
-| `load_session` | prost decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
+| `store_session` | clone all fields + protobuf encode | move (zero-cost) |
+| `load_session` | protobuf decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
 | `peek_session` | deep-clone record (1–2 KB) | `Arc` refcount bump; returns `Option<Arc<SessionRecord>>` |
 | `store_sender_key` | serialize to bytes + store bytes | store `SenderKeyRecord` object directly |
 | `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |

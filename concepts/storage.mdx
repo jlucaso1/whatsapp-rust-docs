@@ -308,7 +308,7 @@ struct ByteStoreState {
 ```
 
 **Key features:**
-- **Session object cache**: Sessions are stored as `SessionRecord` objects, eliminating prost encode/decode from the per-message path. Cold loads deserialize from backend bytes once and cache the object; subsequent reads return the cached object directly
+- **Session object cache**: Sessions are stored as `SessionRecord` objects, eliminating protobuf encode/decode from the per-message path. Cold loads deserialize from backend bytes once and cache the object; subsequent reads return the cached object directly
 - **Sender key object cache**: Sender keys are stored as `SenderKeyRecord` objects (same pattern as sessions), eliminating serialize/deserialize from the per-message group encryption path. Cold loads deserialize from backend bytes once and cache the object
 - **`Arc` previous sessions**: `SessionRecord.previous_sessions` is wrapped in `Arc<Vec<SessionStructure>>`, making clone O(1) for the ~40 archived sessions. Only rare paths (archive, promote, take/restore) trigger `Arc::make_mut`
 - **Owned `store_session`**: The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer. The compiler enforces no use-after-store
@@ -587,7 +587,7 @@ pub struct Device {
     #[serde(with = "BigArray")]
     pub signed_pre_key_signature: [u8; 64],
     #[serde(with = "account_serde", default)]
-    pub account: Option<wa::AdvSignedDeviceIdentity>,
+    pub account: Option<Arc<wa::ADVSignedDeviceIdentity>>,
     pub app_version_primary: u32,
     pub app_version_secondary: u32,
     pub app_version_tertiary: u32,
@@ -638,7 +638,7 @@ pub struct CachedNoiseCert {
 The `server_cert_chain` field is populated after a successful XX (or XXfallback) handshake and consumed on the next connect to attempt **Noise IK**. It is cleared via `DeviceCommand::ClearServerCertChain` if a resumed IK handshake fails crypto-fatally. See [Authentication — Noise Protocol Handshake](/concepts/authentication#noise-protocol-handshake).
 
 <Note>
-  The `account` field uses a custom `account_serde` module to bridge prost-generated protobuf types (which lack `serde::Deserialize`) into serde. It encodes `AdvSignedDeviceIdentity` to protobuf bytes on serialization and decodes them back on deserialization. The `#[serde(default)]` attribute ensures backward compatibility — old data missing this field deserializes as `None`.
+  The `account` field uses a custom `account_serde` module to bridge buffa-generated protobuf types (which lack `serde::Deserialize`) into serde. It encodes `ADVSignedDeviceIdentity` to protobuf bytes on serialization and decodes them back on deserialization. The `#[serde(default)]` attribute ensures backward compatibility — old data missing this field deserializes as `None`.
 </Note>
 
 ## SqliteStore implementation
@@ -651,7 +651,7 @@ The `server_cert_chain` field is populated after a successful XX (or XXfallback)
 
 ### BLOB encoding
 
-Three BLOB columns use **protobuf (via `prost`)** for on-disk encoding:
+Three BLOB columns use **protobuf (via `buffa`)** for on-disk encoding:
 
 | Table | Column | Domain type |
 |-------|--------|-------------|
@@ -942,7 +942,7 @@ pub enum DeviceCommand {
     SetLid(Option<Jid>),
     SetPushName(String),
     SetPlatform(String),
-    SetAccount(Option<wa::AdvSignedDeviceIdentity>),
+    SetAccount(Option<wa::ADVSignedDeviceIdentity>),
     /// Update both prekey watermarks atomically. Both must always move
     /// together — split updates are how the pre-watermark model lost track
     /// of generated keys. Replaces the removed `SetNextPreKeyId` variant.

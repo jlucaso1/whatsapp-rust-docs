@@ -49,7 +49,7 @@ let msg = wa::Message::text("Hello!");
 let msg_with_quote = wa::Message::text_with_context("Replying!", ctx.build_quote_context());
 ```
 
-These are equivalent to building `wa::Message { conversation: Some(...) }` and `wa::Message { extended_text_message: Some(...) }` by hand, but less verbose.
+These are equivalent to building `wa::Message { conversation: Some(...) }` and `wa::Message { extended_text_message: buffa::MessageField::some(...) }` by hand, but less verbose.
 
 ---
 
@@ -84,13 +84,13 @@ For messages with formatting, links, or context (replies/quotes):
 use waproto::whatsapp::message::ExtendedTextMessage;
 
 let message = wa::Message {
-    extended_text_message: Some(Box::new(ExtendedTextMessage {
+    extended_text_message: buffa::MessageField::some(ExtendedTextMessage {
         text: Some("Check out this link: https://example.com".to_string()),
         matched_text: Some("https://example.com".to_string()),
         title: Some("Example Site".to_string()),
         description: Some("A sample website".to_string()),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -120,11 +120,11 @@ let context = build_quote_context(
 
 // Create reply message
 let reply = wa::Message {
-    extended_text_message: Some(Box::new(ExtendedTextMessage {
+    extended_text_message: buffa::MessageField::some(ExtendedTextMessage {
         text: Some("This is my reply".to_string()),
-        context_info: Some(Box::new(context)),
+        context_info: buffa::MessageField::some(context),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -156,11 +156,11 @@ let context = build_quote_context_with_info(
 );
 
 let reply = wa::Message {
-    extended_text_message: Some(Box::new(ExtendedTextMessage {
+    extended_text_message: buffa::MessageField::some(ExtendedTextMessage {
         text: Some("This is my reply".to_string()),
-        context_info: Some(Box::new(context)),
+        context_info: buffa::MessageField::some(context),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -183,13 +183,13 @@ You can add quote context to any message type using `set_context_info`:
 use waproto::whatsapp::message::ImageMessage;
 
 let mut reply = wa::Message {
-    image_message: Some(Box::new(ImageMessage {
+    image_message: buffa::MessageField::some(ImageMessage {
         url: Some("https://mmg.whatsapp.net/...".to_string()),
         mimetype: Some("image/jpeg".to_string()),
         caption: Some("Here's an image reply".to_string()),
         // ... other image fields
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -290,10 +290,10 @@ For arbitrary message bodies:
 
 ```rust
 let body = wa::Message {
-    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+    extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
         text: Some("Great post!".to_string()),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -420,11 +420,11 @@ let chat_jid: Jid = "1234567890@s.whatsapp.net".parse()?;
 
 // Step 1: Send the parent album message
 let album_parent = wa::Message {
-    album_message: Some(Box::new(wa::message::AlbumMessage {
+    album_message: buffa::MessageField::some(wa::message::AlbumMessage {
         expected_image_count: Some(3),
         expected_video_count: Some(0),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -436,7 +436,7 @@ for image_data in [image1_bytes, image2_bytes, image3_bytes] {
     let upload = client.upload(image_data, MediaType::Image, Default::default()).await?;
 
     let image_msg = wa::Message {
-        image_message: Some(Box::new(wa::message::ImageMessage {
+        image_message: buffa::MessageField::some(wa::message::ImageMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
             media_key: Some(upload.media_key_vec()),
@@ -446,7 +446,7 @@ for image_data in [image1_bytes, image2_bytes, image3_bytes] {
             media_key_timestamp: Some(upload.media_key_timestamp),
             mimetype: Some("image/jpeg".to_string()),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     };
 
@@ -474,11 +474,11 @@ You can mix images and videos in the same album:
 
 ```rust
 let album_parent = wa::Message {
-    album_message: Some(Box::new(wa::message::AlbumMessage {
+    album_message: buffa::MessageField::some(wa::message::AlbumMessage {
         expected_image_count: Some(2),
         expected_video_count: Some(1),
         ..Default::default()
-    })),
+    }),
     ..Default::default()
 };
 
@@ -630,12 +630,12 @@ If you need to customize fields (for example, change a caption) before forwardin
 use waproto::whatsapp as wa;
 
 // Clone the image message, only change the caption
-if let Some(img) = &received_message.image_message {
+if let Some(img) = received_message.image_message.as_option() {
     let forwarded = wa::Message {
-        image_message: Some(Box::new(wa::message::ImageMessage {
+        image_message: buffa::MessageField::some(wa::message::ImageMessage {
             caption: Some("Forwarded!".to_string()),
-            ..*img.clone()
-        })),
+            ..img.clone()
+        }),
         ..Default::default()
     };
 
@@ -844,7 +844,7 @@ let quoted_message = original_message.prepare_for_quote();
 let context = wa::ContextInfo {
     stanza_id: Some(message_id.clone()),
     participant: Some(sender_jid.to_string()),
-    quoted_message: Some(quoted_message),
+    quoted_message: buffa::MessageField::from_box(quoted_message),
     ..Default::default()
 };
 ```

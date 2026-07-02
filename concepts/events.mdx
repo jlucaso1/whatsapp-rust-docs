@@ -1703,7 +1703,7 @@ impl<'a> HistorySyncStream<'a> {
     /// Returns `Ok(None)` when all conversations are exhausted.
     pub fn next_conversation_bytes(&mut self) -> Result<Option<&[u8]>, HistorySyncError>;
 
-    /// Advance to the next conversation, decoding it via prost.
+    /// Advance to the next conversation, decoding it via buffa.
     /// Corrupt entries are skipped and counted via `skipped_conversations()`.
     pub fn next_conversation(&mut self) -> Result<Option<wa::Conversation>, HistorySyncError>;
 

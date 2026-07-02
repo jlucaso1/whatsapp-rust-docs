@@ -692,11 +692,11 @@ use whatsapp_rust::bot::MessageContext;
 .on_event(|event, client| async move {
     if let Some(ctx) = MessageContext::from_event(&event, client) {
         let reply = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("Quoted reply!".to_string()),
-                context_info: Some(Box::new(ctx.build_quote_context())),
+                context_info: buffa::MessageField::some(ctx.build_quote_context()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
         let _ = ctx.send_message(reply).await;

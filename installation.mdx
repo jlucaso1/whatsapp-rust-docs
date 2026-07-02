@@ -30,11 +30,23 @@ Every sub-crate path is reachable through the main crate:
 - `whatsapp_rust::wacore`, `whatsapp_rust::wacore_binary`
 - `whatsapp_rust::store::SqliteStore`, `whatsapp_rust::http::UreqHttpClient`, `whatsapp_rust::transport::TokioWebSocketTransportFactory`
 
+<Note>
+  `buffa` (the crate `waproto` uses to generate protobuf types — see [waproto](/api/waproto)) is **not** re-exported. Add it directly if you construct any message with a sub-message field (i.e. anything beyond a plain-text `conversation`), since that requires naming `buffa::MessageField` from your own crate:
+
+  ```toml Cargo.toml
+  [dependencies]
+  whatsapp-rust = "0.6"
+  buffa = "0.8"
+  tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+  ```
+</Note>
+
 The same holds for git consumers — no need to pin every sibling crate:
 
 ```toml Cargo.toml
 [dependencies]
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+buffa = "0.8"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 

@@ -300,6 +300,10 @@ async fn handle_message(ctx: MessageContext) {
 
 You can also forward media instantly by reusing the original CDN fields — no download or re-upload needed:
 
+<Note>
+  Constructing a message with a sub-message field (like `image_message` below) requires `buffa::MessageField`. Add `buffa = "0.8"` to your `Cargo.toml` — it isn't re-exported by `whatsapp-rust`. See [Installation](/installation#add-to-your-project).
+</Note>
+
 ```rust
 /// Reuses the original CDN blob, only swaps the caption.
 /// Instant regardless of file size.

@@ -737,6 +737,33 @@ match result {
 
 Since v0.6 the client persists a `login_counter` on `Device`. Every successful connect increments it and the new value is sent as `ClientPayload.lc` during the Noise handshake. This mirrors WA Web's anti-abuse signal — the server uses the counter to spot replayed or cloned `ClientPayload`s. The counter resets when you call `logout()` or wipe device state.
 
+### 1:1 LID migration state
+
+Fixes [#941](https://github.com/oxidezap/whatsapp-rust/issues/941): some accounts are not yet **1:1-LID-migrated** on WhatsApp's servers, and those accounts get every LID-addressed DM rejected with `ack error="400"`. The client tracks this account-level state in a persisted `Device.lid_migrated` flag so it can keep DM wire addressing on PN until the account has actually migrated — see [Signal Protocol — DM wire namespace vs. Signal session addressing](/advanced/signal-protocol#dm-wire-namespace-vs-signal-session-addressing).
+
+The flag is set from two sources, both mirroring WA Web's `WAIsAccountLidFieldMigrated` pref:
+
+1. **Pair-success `<client-props>`.** The primary attaches an optional `<client-props>` child to `pair-success` carrying `ClientPairingProps.isChatDbLidMigrated`. `PairUtils::extract_pairing_props()` decodes it; a malformed or absent payload is treated the same as "not reported" and never fails the pairing itself.
+2. **`lid_migration_mapping_sync_message`.** The primary can later push a `ProtocolMessage.lid_migration_mapping_sync_message` to its own companions (mirroring WA Web's `setLidMigrationMappings`) carrying newly-assigned PN↔LID pairs. The client learns the mappings and, once the `lid_one_on_one_migration_enabled` ab prop allows it, persists the account as migrated. This message is honored **only from `is_from_me` sources** — a peer-sent copy is dropped, since accepting it would let a peer poison the LID-PN cache and flip your own account's wire addressing.
+
+```rust
+// wacore/src/pair.rs — pair-time write decision
+pub fn lid_migrated_update(props_migrated: bool, account_changed: bool) -> Option<bool> {
+    if props_migrated {
+        Some(true)
+    } else if account_changed {
+        // A different account must not inherit the previous account's state.
+        Some(false)
+    } else {
+        // Same-account relink whose pair-success omitted client-props:
+        // preserve whatever is already stored.
+        None
+    }
+}
+```
+
+Once set, the flag never reverts for the same account (like the WA Web pref) — it can only be reset to `false` when a *different* account is paired onto the same store. Mutations go through `DeviceCommand::SetLidMigrated(bool)` (see [State Management](/advanced/state-management#deviceCommand-pattern)).
+
 ## Concurrent Pairing
 
 Both methods can run simultaneously:

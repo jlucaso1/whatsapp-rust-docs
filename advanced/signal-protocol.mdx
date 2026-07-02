@@ -321,6 +321,44 @@ WhatsApp's multi-device architecture uses two addressing schemes: phone number J
 
 The `device`, `agent`, and `integrator` fields always round-trip — only the `user` (replaced with the LID user) and `server` change. This keeps Cloud API / Meta Business hosted devices on a hosted-flavored LID address rather than collapsing them into the standard `@lid` server, matching WA Web's per-device session keying.
 
+<Note>
+  `resolve_encryption_jid()` upgrades PN → LID unconditionally whenever a mapping is known — it governs Signal **session** addressing only, matching WA Web's `SignalAddress.toString()`. The outbound DM **wire** namespace (the stanza `to`, `<participants>`, and `DeviceSentMessage` destination) is a separate, account-level decision — see [DM wire namespace vs. Signal session addressing](#dm-wire-namespace-vs-signal-session-addressing) below.
+</Note>
+
+### DM wire namespace vs. Signal session addressing
+
+Since v0.6.x (fix for [#941](https://github.com/oxidezap/whatsapp-rust/issues/941)), a DM's outer `<message to>` / `<participants>` addressing is no longer derived directly from `resolve_encryption_jid()`. Some accounts are not yet **1:1-LID-migrated** on WhatsApp's servers, and those accounts get every LID-addressed DM rejected with `ack error="400"` even though the underlying Signal session is correctly LID-keyed.
+
+`Client::resolve_dm_wire_jid()` (`src/client/lid_pn.rs`) makes this account-level decision, mirroring WA Web's `Lid1X1MigrationUtils.isLidMigrated()` / `WAWebMessageDestinationChat`:
+
+```rust
+pub(crate) async fn resolve_dm_wire_jid(&self, to: &Jid) -> Jid {
+    if self.is_lid_migrated().await {
+        return self.resolve_encryption_jid(to).await.into_non_ad();
+    }
+    let bare = to.to_non_ad();
+    if bare.is_lid() {
+        self.swap_pn_lid_namespace(&bare).await.unwrap_or(bare)
+    } else {
+        bare
+    }
+}
+```
+
+- **Migrated account** (`Client::is_lid_migrated()` is `true`): behaves exactly like before — the wire namespace upgrades PN → LID whenever a mapping is known.
+- **Unmigrated account**: DMs stay on PN even with a cached LID mapping. A caller-supplied LID with a known PN mapping is mapped back to the PN chat; a LID with no cached mapping is sent as-is (there is no reverse LID→PN network resolution, matching WA Web).
+
+`Client::is_lid_migrated()` is `true` when either is true:
+
+1. The persisted `Device.lid_migrated` flag (see [Storage — DeviceStore](/concepts/storage#devicestore)), set once from the primary's `pair-success` `<client-props>` (`isChatDbLidMigrated`) or from a `lid_migration_mapping_sync_message` protocol message pushed to the primary's own companions (self-only — see [Authentication — 1:1 LID migration state](/concepts/authentication#1-1-lid-migration-state)).
+2. The `lid_one_on_one_migration_enabled` ab prop, as a fallback for sessions paired before the flag existed. The first observation of this prop being on also latches the persisted flag, so the account doesn't flap back to PN addressing before the next props fetch.
+
+Once set, `lid_migrated` never reverts for the same account — only pairing a *different* account onto the same store resets it. Signal session addressing (`resolve_encryption_jid`) and inbound decrypt are unaffected by any of this; only the outbound DM wire namespace is gated.
+
+<Warning>
+  This gate applies to 1:1 DMs only. Group sends, which already address everything by the group's own `AddressingMode`, are untouched.
+</Warning>
+
 ### Why migration is needed
 
 After pairing, the primary phone may initially establish sessions under a PN address. Once the LID mapping becomes known (from usync, incoming messages, or device notifications), the phone begins sending from the LID address. Without migration, the client holds a session under the PN address but receives messages addressed to the LID — causing `SessionNotFound` decryption failures.
@@ -1293,6 +1331,10 @@ let session_mutexes = self.session_mutexes_for(&lock_jids).await;
 The DM send path resolves all known recipient devices and own companion devices, encrypting per-device for each. This matches WA Web's `WAWebSendUserMsgJob` behavior where the local device table is read on the send path, and `WAWebDBDeviceListFanout` filters out hosted devices. The client checks the local device registry first (via `get_devices_from_registry()`); a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects from `get_user_devices`. The sender device is excluded (matching WA Web's `isMeDevice` in `getFanOutList`), and for self-DMs, overlapping device lists are deduplicated using a `HashSet` (matching WA Web's `Map` keyed by `toString`).
 
 **Own-device namespace alignment (v0.6):** When the recipient is addressed in the LID namespace (`@lid`), the client converts its own companion devices from the PN namespace to LID before fanning out. Without this alignment, a `<to>` mix of `@lid` and `@s.whatsapp.net` participants caused the server to reject the stanza for LID-addressed DMs. Outgoing messages to PN-addressed recipients are unaffected.
+
+<Note>
+  The recipient's namespace here is decided by [`resolve_dm_wire_jid()`](#dm-wire-namespace-vs-signal-session-addressing), not a raw mapping lookup — on an account that isn't 1:1-LID-migrated, the recipient (and therefore the whole fanout) stays PN even when a LID mapping is cached.
+</Note>
 
 Own companion devices (your other linked devices) receive per-device encryption for multi-device self-sync via `DeviceSentMessage`.
 

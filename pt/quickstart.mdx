@@ -314,7 +314,7 @@ async fn handle_message(ctx: &MessageContext) {
 Você também pode encaminhar mídia instantaneamente reusando os campos originais do CDN — sem necessidade de download ou re-upload:
 
 <Note>
-  Construir uma mensagem com um campo de sub-mensagem (como `image_message` abaixo) requer `buffa::MessageField`. Adicione `buffa = "0.8"` ao seu `Cargo.toml` — ele não é reexportado pelo `whatsapp-rust`.
+  Construir uma mensagem com um campo de sub-mensagem (como `image_message` abaixo) requer `MessageField`. O `whatsapp-rust` reexporta `buffa` como `whatsapp_rust::buffa` (e `MessageField` diretamente do `prelude`), então não é mais necessário adicionar `buffa` ao seu `Cargo.toml`.
 </Note>
 
 ```rust

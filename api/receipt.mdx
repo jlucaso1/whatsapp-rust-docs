@@ -180,7 +180,7 @@ This gate only applies to one-on-one direct messages. Group messages, broadcast 
 The value is populated from [`fetch_privacy_settings`](/api/privacy#fetch_privacy_settings), which the client runs automatically in the background after connecting, and is cached on the device so the correct receipt type is known immediately on every reconnect — before that background fetch completes. A privacy change made from another linked device is picked up on the next connect.
 
 <Note>
-  Toggle the setting with `client.set_privacy_setting(PrivacyCategory::ReadReceipts, PrivacyValue::None).await?` (or `PrivacyValue::All` to re-enable). See the [privacy API](/api/privacy) for details.
+  Toggle the setting with `client.set_privacy_setting(PrivacyCategory::ReadReceipts, PrivacyValue::None).await?` (or `PrivacyValue::All` to re-enable). See the [privacy API](/api/privacy) for details. This call only updates the setting on the server — the local cache `mark_as_read`/`mark_as_played` read from is refreshed by the same background fetch, so a receipt sent later in the *same* session, before the next connect, can still go out as the old type. Reconnect (or restart) to guarantee the new gating applies within the current session.
 </Note>
 
 ---

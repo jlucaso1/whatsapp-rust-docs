@@ -1848,7 +1848,7 @@ See [Signal Protocol - Digest key validation](/advanced/signal-protocol#digest-k
 
 ## Diagnostics
 
-Two on-`Client` surfaces answer "what does this session cost?" without any feature flag: always-on wire I/O counters via [`stats()`](#stats), and an on-demand memory breakdown via [`memory_report()`](#memory_report). Both are dependency-free and safe to call once per client even when running many clients in one process. For CPU/custom attribution (e.g. per-session allocator tracking), see [`BotBuilder::with_task_instrument`](/api/bot#with_task_instrument).
+Three on-`Client` surfaces answer "what does this session cost?" without any feature flag: always-on wire I/O counters via [`stats()`](#stats), an on-demand client-only memory breakdown via [`memory_report()`](#memory_report), and an on-demand unified estimate — client plus storage, transport, and HTTP — via [`resource_report()`](#resource_report). All three are dependency-free and safe to call once per client even when running many clients in one process. For CPU/custom attribution (e.g. per-session allocator tracking), see [`BotBuilder::with_task_instrument`](/api/bot#with_task_instrument) and [`BotBuilder::with_alloc_meter`](/api/bot#with_alloc_meter).
 
 ### stats
 
@@ -1940,6 +1940,50 @@ println!(
 
 <Note>
   `Client::stats()`, `MemoryReport`, `CollectionStats`, and `StatsSnapshot` were introduced to replace the old `debug-diagnostics`-gated `memory_diagnostics()` / `MemoryDiagnostics`, which have been removed. `CollectionStats`, `MemoryReport`, and `StatsSnapshot` are re-exported from the `whatsapp_rust` crate root.
+</Note>
+
+### resource_report
+
+```rust
+pub async fn resource_report(&self) -> ResourceReport
+```
+
+Unified per-session resource estimate: [`memory_report()`](#memory_report)'s client-only collections **plus** the components that live *outside* the `Client` and dominate real per-session RAM — the storage backend's page cache, the transport's buffers and TLS/noise state, and the HTTP client's connection pool. When a [`AllocMeter`](/api/bot#with_alloc_meter) is installed via [`BotBuilder::with_alloc_meter`](/api/bot#with_alloc_meter), the report also folds in an allocation-churn snapshot.
+
+On-demand only, no hot-path cost. Each out-of-client figure is best-effort — a component reports only what it can introspect, so absent (`None`) means "not reported", not "zero". `resource_report()`'s future is `Send`, so multi-session consumers can await it off a worker task (e.g. from an axum handler).
+
+**`ResourceReport` fields** (`#[non_exhaustive]`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `client` | `MemoryReport` | Identical to [`memory_report()`](#memory_report)'s result |
+| `storage` | `StorageResourceReport` | Storage-backend footprint (e.g. SQLite page cache). All-`None` for backends that don't report |
+| `transport` | `Option<TransportResourceReport>` | Transport read/write buffers plus a TLS/noise state estimate, if the transport reports them |
+| `http` | `Option<HttpResourceReport>` | HTTP connection-pool and in-flight footprint, if the client reports it |
+| `alloc` | `Option<AllocSnapshot>` | Allocation churn attributed via an installed `AllocMeter`; excluded from `total_estimated_bytes()` since it's churn, not a retained figure |
+
+`StorageResourceReport` fields: `memory_bytes: Option<u64>` (retained bytes; `Some(0)` for remote/store-backed backends whose data isn't process memory), `pages: Option<u64>` (backing page/entry count), `io_read_bytes` / `io_write_bytes: Option<u64>` (cumulative I/O, when counted).
+
+`TransportResourceReport` fields: `read_buffer_bytes`, `write_buffer_bytes`, `tls_state_bytes` — all `Option<u64>`.
+
+`HttpResourceReport` fields: `pool_connections: Option<u64>`, `pool_buffer_bytes: Option<u64>`, `inflight_bytes: Option<u64>`.
+
+`ResourceReport::total_estimated_bytes(&self) -> u64` sums the **retained** components (client + storage + transport + HTTP) and is a **lower bound**: components that report `None` contribute `0` rather than being excluded from the total, and `alloc` (churn) is deliberately excluded. `ResourceReport` implements `Display` for a pretty-printed breakdown alongside `memory_report()`'s.
+
+**Example:**
+
+```rust
+let report = client.resource_report().await;
+println!("{report}");
+println!("lower-bound retained bytes: {}", report.total_estimated_bytes());
+
+if let Some(alloc) = report.alloc {
+    println!("allocated (churn): {} bytes", alloc.allocated_bytes);
+}
+```
+
+<Note>
+  Storage, transport, and HTTP reports are supplied by the trait implementations behind `Client` — see [`DeviceStore::resource_report`](/api/store#devicestore-trait), [`Transport::resource_report`](/api/transport#resource_report), and [`HttpClient::resource_report`](/api/http-client#resource_report). `AllocSnapshot`, `StorageResourceReport`, `TransportResourceReport`, and `HttpResourceReport` are re-exported from `wacore::stats`; `HttpResourceReport`, `StorageResourceReport`, `TransportResourceReport`, and `AllocSnapshot` are also re-exported from the `whatsapp_rust` crate root.
 </Note>
 
 ---

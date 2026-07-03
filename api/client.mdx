@@ -1975,7 +1975,7 @@ On-demand only, no hot-path cost. Each out-of-client figure is best-effort — a
 ```rust
 let report = client.resource_report().await;
 println!("{report}");
-println!("lower-bound retained bytes: {}", report.total_estimated_bytes());
+println!("estimated retained bytes: {}", report.total_estimated_bytes());
 
 if let Some(alloc) = report.alloc {
     println!("allocated (churn): {} bytes", alloc.allocated_bytes);

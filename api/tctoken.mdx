@@ -224,7 +224,7 @@ client.send_message(jid, message).await?;
 let picture = client.contacts().get_profile_picture(&jid, true).await?;
 ```
 
-The tctoken (no cstoken fallback) is also attached automatically at three other privacy-gated call sites, matching WA Web's `USyncStatusProtocol`/`OutSpamTCTokenMixin`/`StartCall.js`:
+The tctoken (no cstoken fallback) is also attached automatically at three other call sites that use privacy tokens, matching WA Web's `USyncStatusProtocol`/`OutSpamTCTokenMixin`/`StartCall.js`:
 
 - **`get_user_info`** — a per-recipient tctoken is attached to each queried `<user>` node in the usync IQ, so status/about for a privacy-restricted contact resolves instead of coming back hidden. Gated behind `profile_scraping_privacy_token_in_about_usync`.
 - **`send_spam_report`** — when `SpamReportRequest::from_jid` is set, that contact's tctoken is attached to the spam report IQ so the report is accepted for a privacy-restricted account. Gated behind `enable_spam_report_iq_with_privacy_token`. Group reports that only set `group_jid`/`participant_jid` (no `from_jid`) don't get a token attached.
@@ -386,6 +386,17 @@ sequenceDiagram
     Client->>Client: Resolve sender LID
     Client->>Backend: store_received_tc_token (monotonicity guard, preserves sender_timestamp)
     Client->>Server: Re-subscribe presence
+    
+    Note over App,Server: Outgoing 1:1 call offer (voip feature, unconditional — no AB prop gate)
+    App->>Client: voip().call(&peer).audio(...).start()
+    Client->>Backend: Get tc_token for peer
+    Backend-->>Client: TcTokenEntry or None
+    Client->>Server: Call offer, tctoken as leading <privacy> child if stored
+    Server-->>Client: Offer ack
+    Client-->>App: CallHandle
+    Client->>Server: IQ set (issue fresh token to callee, if sender bucket rolled over)
+    Server-->>Client: IQ success
+    Client->>Backend: touch_tc_token_sender_timestamp
 ```
 
 ## Expiration

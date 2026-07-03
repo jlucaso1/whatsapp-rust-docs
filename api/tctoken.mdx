@@ -212,8 +212,8 @@ The client builds this config from AB props at runtime, falling back to defaults
 
 The library automatically includes privacy tokens in outgoing 1:1 message stanzas using a fallback chain that matches WhatsApp Web:
 
-1. **tctoken** — use the stored trusted contact token if it exists and hasn't expired
-2. **cstoken** — compute an HMAC-SHA256 fallback using the NCT salt and recipient LID (for first-contact scenarios)
+1. **tctoken** — used when `PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES` is on and a stored, unexpired token exists for the recipient
+2. **cstoken** — an independent HMAC-SHA256 fallback using the NCT salt and recipient LID, used when `NCT_TOKEN_SEND_ENABLED` is on and the tctoken above didn't win (its prop is off, or no valid token is stored) — see [AB prop gating](#ab-prop-gating) for the full priority logic
 3. **No token** — send without a token if neither is available (the server may return a 463 error)
 
 ```rust
@@ -340,14 +340,14 @@ sequenceDiagram
     App->>Client: send_message(jid1, msg)
     Client->>Backend: Get tc_token for jid1
     
-    alt TC token exists and not expired
+    alt tctoken prop on AND valid TC token stored
         Backend-->>Client: TcTokenEntry
         Client->>Server: Message with <tctoken>
-    else No TC token, NCT salt available
-        Backend-->>Client: None
+    else NCT_TOKEN_SEND_ENABLED on, salt/LID available
+        Backend-->>Client: None (or gated/expired)
         Client->>Client: HMAC-SHA256(nct_salt, recipient_lid)
         Client->>Server: Message with <cstoken>
-    else No TC token, no NCT salt
+    else Neither condition met
         Backend-->>Client: None
         Client->>Server: Message without token
     end

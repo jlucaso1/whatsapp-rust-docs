@@ -371,11 +371,13 @@ pub trait AppSyncStore: Send + Sync {
     ) -> Result<()>;
     async fn get_mutation_mac(&self, name: &str, index_mac: &[u8]) -> Result<Option<Vec<u8>>>;
     // Batched previous-MAC lookup (v0.6); default loops over get_mutation_mac.
+    // index_macs are inline [u8; 32] (an index MAC is always a full
+    // HMAC-SHA256 output) — no per-MAC heap allocation on either side.
     async fn get_mutation_macs(
         &self,
         name: &str,
-        index_macs: &[Vec<u8>],
-    ) -> Result<HashMap<Vec<u8>, Vec<u8>>>;
+        index_macs: &[[u8; 32]],
+    ) -> Result<HashMap<[u8; 32], Vec<u8>>>;
     async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
     async fn get_latest_sync_key_id(&self) -> Result<Option<Vec<u8>>>;
 }

@@ -167,8 +167,8 @@ async fn get_mutation_mac(&self, name: &str, index_mac: &[u8]) -> Result<Option<
 async fn get_mutation_macs(
     &self,
     name: &str,
-    index_macs: &[Vec<u8>],
-) -> Result<HashMap<Vec<u8>, Vec<u8>>>;
+    index_macs: &[[u8; 32]],
+) -> Result<HashMap<[u8; 32], Vec<u8>>>;
 
 /// Delete mutation MACs by their index MACs
 async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
@@ -176,6 +176,8 @@ async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Resu
 
 <Note>
 `get_mutation_macs` was added in v0.6 to collapse the app-state sync's per-mutation previous-MAC lookups (which were N+1) into a single batched query. It has a default implementation, so existing custom backends keep working — override it with a `WHERE index_mac IN (…)` query for the performance win. The SQLite store chunks the `IN` list at 500 entries.
+
+An index MAC is always a full HMAC-SHA256 output, so this method's signature uses inline `[u8; 32]` arrays (`wacore::appstate_sync::IndexMac`) instead of `Vec<u8>` — zero per-MAC heap allocations on either side of the batch lookup. This is a breaking change for custom backends that override `get_mutation_macs`: update the parameter and return-map key types to `[u8; 32]`. `get_mutation_mac`, `put_mutation_macs`, and `delete_mutation_macs` are unaffected.
 </Note>
 
 ## ProtocolStore Trait

@@ -227,16 +227,25 @@ Event::Connected(_) => {
 
 ### Disconnected
 
-**Emitted:** When connection is lost
+**Emitted:** When the connection is lost unexpectedly — not on an intentional client-initiated shutdown or reconnect
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
-pub struct Disconnected;
+pub struct Disconnected {
+    pub reason: DisconnectReason,
+}
 
-Event::Disconnected(Disconnected)
+Event::Disconnected(Disconnected { reason })
 ```
 
+**Fields:**
+- `reason: DisconnectReason` — why the transport ended. Check `reason.is_clean_shutdown()` to tell a routine server-initiated stream recycle (WhatsApp's normal reconnect path) apart from a genuine transport failure, without parsing logs. See [`DisconnectReason`](/api/transport#disconnected) for the variants.
+
 **Behavior:** Client automatically attempts reconnection
+
+<Note>
+Breaking change: `Disconnected` gained the `reason` field (previously a unit struct). Update `Event::Disconnected(Disconnected)` patterns to `Event::Disconnected(Disconnected { reason })` or `Event::Disconnected(_)`.
+</Note>
 
 ### ConnectFailure
 

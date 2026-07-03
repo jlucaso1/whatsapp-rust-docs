@@ -71,6 +71,8 @@ println!("Pruned {} expired tokens", deleted);
 
 <Note>
 By default, tokens expire after 28 days (4 buckets × 7 days). The server may override this via AB props. Expired tokens are also automatically pruned on connect. Call this method if you need to trigger pruning manually.
+
+The received token and the sender-side issuance bucket expire on independent cutoffs — a row is only pruned once **both** are stale, so recent sender-side rate-limit state survives an expired received token (and vice versa).
 </Note>
 
 ### get
@@ -183,6 +185,10 @@ pub struct TcTokenEntry {
 }
 ```
 
+<Note>
+An entry with an empty `token` is a **byte-less placeholder** — it records that a post-send issuance IQ succeeded before any real token was received from the contact. For a fresh placeholder, `token_timestamp` is set equal to `sender_timestamp` (there is no received epoch yet); since `token` is empty, the received-token side of the prune cutoff always treats the row as expired-or-absent regardless of that value, so pruning a placeholder depends only on whether `sender_timestamp` is still live. See [Post-send issuance](#post-send-issuance).
+</Note>
+
 ### TcTokenConfig
 
 Runtime-configurable timing for token expiration, sourced from server AB props.
@@ -206,8 +212,8 @@ The client builds this config from AB props at runtime, falling back to defaults
 
 The library automatically includes privacy tokens in outgoing 1:1 message stanzas using a fallback chain that matches WhatsApp Web:
 
-1. **tctoken** — use the stored trusted contact token if it exists and hasn't expired
-2. **cstoken** — compute an HMAC-SHA256 fallback using the NCT salt and recipient LID (for first-contact scenarios)
+1. **tctoken** — used when `PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES` is on and a stored, unexpired token exists for the recipient
+2. **cstoken** — an independent HMAC-SHA256 fallback using the NCT salt and recipient LID, used when `NCT_TOKEN_SEND_ENABLED` is on and the tctoken above didn't win (its prop is off, or no valid token is stored) — see [AB prop gating](#ab-prop-gating) for the full priority logic
 3. **No token** — send without a token if neither is available (the server may return a 463 error)
 
 ```rust
@@ -220,22 +226,26 @@ let picture = client.contacts().get_profile_picture(&jid, true).await?;
 
 ### AB prop gating
 
-Token inclusion on message stanzas is gated by server-side AB props:
+Token inclusion on message stanzas is gated by two **independent** server-side AB props, matching WhatsApp Web's `MsgCreateFanoutStanza.js` (`Re = R(te) ?? D(te, s)`):
 
-- **`PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES`** — controls whether tctoken/cstoken stanza children are attached to outgoing messages
-- **`NCT_TOKEN_SEND_ENABLED`** — controls whether the cstoken fallback is used when no tctoken is available
+- **`PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES`** — gates the tctoken only (`R`). When off, a stored, valid tctoken is never attached.
+- **`NCT_TOKEN_SEND_ENABLED`** — gates the cstoken fallback independently (`D`). The cstoken is attached whenever this flag is on and the NCT salt/recipient LID are available — **even when the tctoken prop above is off, or a valid tctoken exists but its prop is disabled**. The cstoken is not nested behind the tctoken prop.
 
 Token *issuance scheduling* (requesting new tokens from the server after sending) runs regardless of these flags.
 
 ### Post-send issuance
 
-After sending a 1:1 message, the library checks whether a new token should be issued for the recipient. If the sender-side bucket has rolled over since the last issuance, a background IQ request issues a fresh token and stores the response. This matches WhatsApp Web's `sendTcToken` behavior in `MsgJob.js`.
+After sending a 1:1 message, the library checks whether a new token should be issued for the recipient. If the sender-side bucket has rolled over since the last issuance, a background IQ request fires.
+
+On IQ success, the sender-side issuance timestamp is recorded **unconditionally**, matching WhatsApp Web's `sendTcToken` in `MsgJob.js`, which persists `tcTokenSenderTimestamp` on success regardless of the response body — the real `set privacy` IQ response carries no token bytes, so the timestamp can't be derived from an echoed token.
+
+If no entry exists yet for the recipient, this creates a byte-less placeholder that carries only the sender timestamp. The placeholder is superseded by the contact's first real token (see [Incoming token notifications](#incoming-token-notifications)), regardless of the real token's own timestamp.
 
 ### Identity change reissuance
 
 When a contact reinstalls WhatsApp and their identity key changes, the library automatically re-issues TC tokens so the contact retains a valid privacy token. This matches WhatsApp Web's `sendTcTokenWhenDeviceIdentityChange` behavior.
 
-The reissuance is triggered when an `UntrustedIdentity` error is encountered during message decryption. After handling the identity change (clearing the old identity and retrying decryption), the client spawns a background task that:
+The reissuance is triggered when an `UntrustedIdentity` error is encountered during message decryption **from the sender's primary device (device 0)** — an identity change on a companion device does not trigger reissuance, matching WA Web. After handling the identity change (clearing the old identity and retrying decryption), the client spawns a background task that:
 
 1. Checks if a token was previously issued to the sender (via `sender_timestamp`)
 2. Verifies the token hasn't expired on the sender side
@@ -244,7 +254,7 @@ The reissuance is triggered when an `UntrustedIdentity` error is encountered dur
 This ensures that privacy-gated operations (like profile picture fetching) continue to work after a contact reinstalls, without requiring manual token management.
 
 <Note>
-Token reissuance is skipped for bot JIDs and status broadcast senders. The operation is deduplicated via session locks to prevent concurrent reissuance for the same sender.
+Token reissuance is skipped for bot JIDs, status broadcast senders, and identity changes reported for non-primary (companion) devices. The operation is deduplicated via session locks to prevent concurrent reissuance for the same sender.
 </Note>
 
 ### Incoming token notifications
@@ -253,9 +263,13 @@ When a contact sends you a privacy token, the library handles it automatically:
 
 1. Parses the `<notification type="privacy_token">` stanza
 2. Resolves the sender to a LID for storage (using `sender_lid` attribute or LID-PN cache)
-3. Applies a timestamp monotonicity guard — older tokens don't overwrite newer ones
-4. Stores the token in the backend
+3. Applies a timestamp monotonicity guard — an older token doesn't overwrite a newer *real* token
+4. Stores the token in the backend, preserving any `sender_timestamp` already recorded by the post-send issuance path
 5. Re-subscribes presence for the sender to pick up the updated token
+
+<Note>
+A byte-less placeholder (written by post-send issuance before any real token has been received) is always replaced by the contact's first real token, even if the placeholder's own timestamp is newer — the monotonicity guard only applies once a real token is on record.
+</Note>
 
 ### Startup pruning
 
@@ -280,7 +294,7 @@ When no valid TC token exists for a recipient, the library falls back to a **cst
 
 1. The server provides an NCT salt through the `nct_salt_sync` app state mutation (or via history sync during initial pairing)
 2. The salt is stored in the `Device` struct as `nct_salt`
-3. When sending a message to a recipient with no stored TC token, the library computes `HMAC-SHA256(nct_salt, recipient_lid)` and includes it as a `<cstoken>` stanza child
+3. When sending a message where the tctoken doesn't win — either `PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES` is off, or no valid TC token is stored — and `NCT_TOKEN_SEND_ENABLED` is on, the library computes `HMAC-SHA256(nct_salt, recipient_lid)` and includes it as a `<cstoken>` stanza child (see [AB prop gating](#ab-prop-gating) for the full priority logic)
 
 ### Wire format
 
@@ -313,7 +327,7 @@ sequenceDiagram
     participant Server
     
     Note over Client,Server: On connect: prune expired tokens
-    Client->>Backend: delete_expired_tc_tokens(cutoff)
+    Client->>Backend: delete_expired_tc_tokens(token_cutoff, sender_cutoff)
     
     Note over App,Server: Manual issuance
     App->>Client: issue_tokens([jid1, jid2])
@@ -326,14 +340,14 @@ sequenceDiagram
     App->>Client: send_message(jid1, msg)
     Client->>Backend: Get tc_token for jid1
     
-    alt TC token exists and not expired
+    alt tctoken prop on AND valid TC token stored
         Backend-->>Client: TcTokenEntry
         Client->>Server: Message with <tctoken>
-    else No TC token, NCT salt available
-        Backend-->>Client: None
+    else NCT_TOKEN_SEND_ENABLED on, salt/LID available
+        Backend-->>Client: None (or gated/expired)
         Client->>Client: HMAC-SHA256(nct_salt, recipient_lid)
         Client->>Server: Message with <cstoken>
-    else No TC token, no NCT salt
+    else Neither condition met
         Backend-->>Client: None
         Client->>Server: Message without token
     end
@@ -343,13 +357,13 @@ sequenceDiagram
     
     Note over Client,Server: Post-send issuance (if bucket rolled over)
     Client->>Server: IQ set (issue new token)
-    Server-->>Client: Fresh token
-    Client->>Backend: Store token
+    Server-->>Client: IQ success (no token bytes in the response)
+    Client->>Backend: touch_tc_token_sender_timestamp (advance sender bucket)
     
     Note over Client,Server: Incoming token notification
     Server->>Client: notification type="privacy_token"
     Client->>Client: Resolve sender LID
-    Client->>Backend: Store token (monotonicity guard)
+    Client->>Backend: store_received_tc_token (monotonicity guard, preserves sender_timestamp)
     Client->>Server: Re-subscribe presence
 ```
 
@@ -366,17 +380,20 @@ TC token expiration uses a bucket-aligned system. By default, tokens expire afte
 
 Bucket durations are capped at 180 days. The expiration cutoff is bucket-aligned — it always falls on a bucket boundary, matching WhatsApp Web's `tokenExpirationCutoff` logic.
 
+Pruning evaluates the received-token cutoff and the sender-bucket cutoff independently: a row is only removed once its received token is expired-or-absent **and** its sender bucket is expired-or-absent, so recent sender-side rate-limit state is never dropped just because the received token expired (and vice versa).
+
 ```rust
 use wacore::iq::tctoken::{tc_token_expiration_cutoff, is_tc_token_expired};
 
-// Get the cutoff timestamp for expired tokens (using defaults)
+// Get the cutoff timestamp for expired received tokens (using defaults)
 let cutoff = tc_token_expiration_cutoff();
 println!("Tokens before {} are expired", cutoff);
 
 // Check a specific token
 let expired = is_tc_token_expired(some_timestamp);
 
-// Prune expired tokens (uses AB-prop-aware config)
+// Prune expired tokens — checks both the received-token and sender-bucket
+// cutoffs (AB-prop-aware config); a row survives if either is still live
 let deleted = client.tc_token().prune_expired().await?;
 ```
 

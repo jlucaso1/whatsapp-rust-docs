@@ -442,7 +442,15 @@ pub trait ProtocolStore: Send + Sync {
     async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()>;
     async fn delete_tc_token(&self, jid: &str) -> Result<()>;
     async fn get_all_tc_token_jids(&self) -> Result<Vec<String>>;
-    async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
+    // Pruned only when BOTH the received-token cutoff and the sender-bucket
+    // cutoff have passed, so recent sender-side state outlives an expired token.
+    async fn delete_expired_tc_tokens(&self, token_cutoff: i64, sender_cutoff: i64) -> Result<u32>;
+    // Advance-only upsert of the sender-side issuance timestamp; inserts a
+    // byte-less placeholder if no entry exists yet. Defaulted (read-modify-write).
+    async fn touch_tc_token_sender_timestamp(&self, jid: &str, sender_timestamp: i64) -> Result<()> { /* default */ }
+    // Store a token received from a contact without clobbering an existing
+    // sender_timestamp. Defaulted (read-modify-write).
+    async fn store_received_tc_token(&self, jid: &str, token: &[u8], token_timestamp: i64) -> Result<()> { /* default */ }
 
     // Sent Message Store (retry support, matches WA Web's getMessageTable)
     async fn store_sent_message(&self, chat_jid: &str, message_id: &str, payload: &[u8]) -> Result<()>;

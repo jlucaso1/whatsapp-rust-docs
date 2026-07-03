@@ -455,15 +455,18 @@ PRAGMA foreign_keys = ON;
 `SqliteStoreConfig` also exposes an opt-in `mmap_size: Option<u64>` field (default `None`, current behavior — no `PRAGMA mmap_size` emitted). Set it with the builder-style `with_mmap_size(bytes)`:
 
 ```rust
-use whatsapp_rust_sqlite_storage::SqliteStoreConfig;
+use whatsapp_rust_sqlite_storage::{SqliteStore, SqliteStoreConfig};
 
 let config = SqliteStoreConfig::default().with_mmap_size(64 * 1024 * 1024); // 64 MiB
+let store = SqliteStore::with_config("whatsapp.db", config).await?;
 ```
+
+`with_mmap_size` only sets the field on the config value — the store applies it when the config is passed to [`SqliteStore::with_config`](#creating-a-store) (or `with_config_for_device`). Building a config and never passing it to one of those constructors leaves `mmap_size` unset, since `SqliteStore::new` / `new_for_device` always use `SqliteStoreConfig::default()`.
 
 When set to a non-zero value, this emits `PRAGMA mmap_size = <bytes>;`, moving reads of the main database file through a reclaimable, OS-backed memory map instead of the heap page cache — useful for a process holding many small per-session databases, since mapped pages can be reclaimed under memory pressure while heap-cached pages cannot. `0` disables mmap, same as `None`.
 
 <Warning>
-  mmap I/O covers *reads* of the main database file only. In WAL mode (this store's default), writes still go through the WAL, and a checkpoint briefly falls back to non-mmap I/O. `SqliteStore::resource_report()` (see [`DeviceStore` Trait](#devicestore-trait)) does not account for `mmap_size` — with mmap enabled, some reads bypass the heap page cache it measures, so the reported estimate can overstate actual process-heap residency for that session.
+  mmap I/O covers *reads* of the main database file only. In WAL mode (this store's default), writes still go through the WAL, and a checkpoint briefly falls back to non-mmap I/O. `SqliteStore::resource_report()` (see [`DeviceStore::resource_report`](#resource_report)) does not account for `mmap_size` — with mmap enabled, some reads bypass the heap page cache it measures, so the reported estimate can overstate actual process-heap residency for that session.
 </Warning>
 
 ### Usage Example

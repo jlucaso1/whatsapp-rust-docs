@@ -46,7 +46,7 @@ Sub-message fields (nested protobuf messages) are `buffa::MessageField<T>`, not 
 </Note>
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use waproto::whatsapp as wa;
 
 let img = wa::Message {
@@ -115,7 +115,7 @@ pub struct Message {
 **Usage in main library:**
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use waproto::whatsapp as wa;
 
 // Construct a text message
@@ -753,7 +753,7 @@ The `generate` feature flag was removed. Code generation is now always-on and do
 ### Constructing Messages
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use waproto::whatsapp as wa;
 
 // Text message
@@ -849,7 +849,7 @@ wacore provides utilities for working with waproto messages:
 Example:
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use wacore::proto_helpers;
 use waproto::whatsapp as wa;
 

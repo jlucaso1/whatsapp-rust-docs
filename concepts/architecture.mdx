@@ -331,8 +331,11 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 1. Connection lost → `cleanup_connection_state()` (see [disconnect cleanup](#disconnect-cleanup))
 2. Check `enable_auto_reconnect` → exit if disabled (401, 409, 516 disable this)
 3. Check `expected_disconnect` → immediate reconnect if expected (e.g., 515)
-4. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
-5. Wait → attempt reconnection (with 20s connect timeout)
+4. Stability-gated backoff reset: the counter resets to base only if the connection was authenticated (`<success>`) for at least 30s (`STABLE_CONNECTION_RESET_MS`, WA Web's `resetDelay`) **and** no explicit penalty (429, manual `reconnect()`) is pending for this cycle — a penalty survives even a stable connection (WA Web `cancelReset`)
+5. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
+6. Wait → attempt reconnection (with 20s connect timeout)
+
+See [WebSocket & Noise Protocol - Fibonacci backoff](/advanced/websocket-handling#fibonacci-backoff) for the stability-reset and penalty-survival mechanics.
 
 ### Disconnect cleanup
 
@@ -361,9 +364,10 @@ Chat lane invalidation is critical for correctness. Without it, stale message pr
 **Stream error behavior:**
 - **401 (unauthorized)**: Disables auto-reconnect, emits `LoggedOut`
 - **409 (conflict)**: Disables auto-reconnect, emits `StreamReplaced`
-- **429 (rate limited)**: Adds 5 extra Fibonacci steps to backoff, then reconnects
+- **429 (rate limited)**: Adds 5 extra Fibonacci steps to backoff, then reconnects; also suppresses the next stability-gated backoff reset (see above)
 - **515 (expected)**: Immediate reconnect without backoff
 - **516 (device removed)**: Disables auto-reconnect, emits `LoggedOut`
+- **`<xml-not-well-formed/>`** (no numeric code): Force-closes the socket and reconnects with standard backoff — WA Web treats a malformed frame as unrecoverable for the current stream
 
 ### Message loop (read loop)
 

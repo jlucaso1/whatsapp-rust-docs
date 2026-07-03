@@ -936,10 +936,15 @@ Each stream error sets `is_logged_in = false` and fires the `shutdown_notifier` 
 | **503** | Normal handling | None | Yes — standard backoff |
 | **515** | Marks as expected disconnect | None | Yes — immediate, no backoff |
 | **516** | Disables auto-reconnect | `LoggedOut` | No — device removed |
-| **500** / unknown / missing code | Logs as warning, stays connected (since v0.6) | None | N/A — no disconnect; session preserved |
+| `<stream:error>` with an `<xml-not-well-formed/>` child (no numeric code) | Force-closes the socket | `StreamError` | Yes — standard backoff |
+| **500** / unknown / missing code | Logs as warning, stays connected (since v0.6) | `StreamError` | N/A — no disconnect; session preserved |
 
 <Note>
 Before v0.6 the client treated every unknown stream-error code as fatal: it set `is_logged_in = false`, fired `shutdown_notifier`, and ended up in a "zombie" state where the connection survived but background tasks (keepalive, prekey upload) refused to run. v0.6 keeps the fatal set listed above and downgrades everything else (including code `500` and code-less `<stream:error><ack/>` routing wrappers) to a warning. `is_logged_in` stays `true`, the transport stays open, and any reconnect is driven by the server's `<xmlstreamend/>` — not by the stream-error handler itself.
+</Note>
+
+<Note>
+`<xml-not-well-formed/>` is checked before the ack-wrapper case above and is an exception to that downgrade: WA Web (`Handle/StreamError.js`) treats it as "bad xml, closing socket" (`CLOSE_SOCKET`). A malformed frame desyncs the stream, so the client proactively recycles the socket (`is_logged_in = false`, `should_disconnect = true`) instead of waiting for the server to end it. It counts toward the reconnect backoff like a normal disconnect — it is not an expected disconnect (515), so no immediate reconnect. Like every other case in this code-less/unknown-code branch, an `Event::StreamError` is still dispatched before the socket is closed — consumers see the event even though the connection is being force-recycled rather than gracefully downgraded.
 </Note>
 
 **Processing pipeline:**
@@ -1000,6 +1005,10 @@ Jitter:   ±10%
 ```
 
 For rate-limited errors (429), the backoff counter is incremented by 5 before the normal increment, causing the delay to jump significantly on the next reconnection attempt.
+
+**Stability-gated reset.** The backoff counter does not reset to its base immediately on a successful `<success>` authentication. Instead, `connected_at_ms` records the auth time, and the counter only resets when the *next* disconnect finds the connection was stable for at least `STABLE_CONNECTION_RESET_MS` (30s) — matching WA Web's `resetDelay`. A connection that authenticates and then immediately drops keeps escalating the backoff instead of resetting to 1s and retrying in a tight loop.
+
+An explicit penalty applied during the connection — a 429 rate-limit or a manual `Client::reconnect()` — sets `backoff_reset_suppressed`, which survives even a stable (≥30s) connection and prevents the next disconnect from erasing that deliberate backoff step (matching WA Web's `cancelReset()`). The suppression flag is cleared on the next successful `<success>`, so it does not carry over indefinitely. An expected disconnect (e.g., 515) resets `connected_at_ms` to 0 so a later failed connect cannot read the prior cycle's stale timestamp as "stable."
 
 ### Retry strategy
 

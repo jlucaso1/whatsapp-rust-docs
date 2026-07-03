@@ -197,12 +197,19 @@ Location: `wacore/libsignal/src/protocol/ratchet/keys.rs`, `wacore/libsignal/src
 
 ### Forward Jumps
 
-The protocol tolerates out-of-order messages up to a limit:
+The protocol tolerates out-of-order messages up to a limit. Peer sessions and group sender-key chains match WhatsApp Web's `signalFutureMessagesMax`; a pairwise session with one of your **own** other devices gets a wider (but still bounded) ceiling, since multi-device app-sync legitimately jumps far ahead and the peer is trusted:
 
 ```rust
-const MAX_FORWARD_JUMPS: usize = 25000;
+// wacore/libsignal/src/protocol/consts.rs
+pub const MAX_FORWARD_JUMPS: usize = 2_000;       // peer sessions + group sender keys
+pub const MAX_FORWARD_JUMPS_SELF: usize = 25_000; // sessions with your own other devices
 
-if jump > MAX_FORWARD_JUMPS {
+// wacore/libsignal/src/protocol/session_cipher.rs
+const fn forward_jump_limit(is_self: bool) -> usize {
+    if is_self { MAX_FORWARD_JUMPS_SELF } else { MAX_FORWARD_JUMPS }
+}
+
+if jump > forward_jump_limit(state.session_with_self()?) {
     return Err(SignalProtocolError::InvalidMessage(
         original_message_type,
         "message from too far into the future",
@@ -210,7 +217,11 @@ if jump > MAX_FORWARD_JUMPS {
 }
 ```
 
-Location: `wacore/libsignal/src/protocol/session_cipher.rs:832-847`
+<Note>
+Before this change, self-device sessions were exempt from the limit entirely (jumps beyond `MAX_FORWARD_JUMPS` were logged and allowed through). `MAX_FORWARD_JUMPS_SELF` (25,000) now bounds that path too — still wide enough for legitimate app-sync catch-up, but no longer unbounded. Peer sessions and group sender-key chains dropped from 25,000 to 2,000, matching WA Web's `signalFutureMessagesMax`; a message whose counter is more than 2,000 steps ahead is rejected (driving the retry-receipt path) instead of forcing thousands of KDF derivations per message.
+</Note>
+
+Location: `wacore/libsignal/src/protocol/consts.rs`, `wacore/libsignal/src/protocol/session_cipher.rs`
 
 ## DM device fanout
 
@@ -528,7 +539,7 @@ pub async fn group_decrypt(
 5. Decrypt with AES-256-CBC
 
 <Warning>
-  Group decryption maintains up to MAX_FORWARD_JUMPS (25000) cached message keys per sender. This prevents resource exhaustion attacks but limits tolerance for extreme out-of-order delivery.
+  Group decryption maintains up to MAX_FORWARD_JUMPS (2,000) cached message keys per sender. This prevents resource exhaustion attacks but limits tolerance for extreme out-of-order delivery.
 </Warning>
 
 ### Unknown device detection
@@ -632,6 +643,7 @@ pub struct PreparedGroupStanza {
 - **Status path:** A late-init boolean tracks whether full distribution occurred. The sender key tracking is only updated after the status stanza is successfully sent.
 - **Error recovery:** If `prepare_group_stanza` fails with `NoSenderKeyState`, all sender key device tracking for that group is cleared and the send is retried with full distribution.
 - **Sender key rotation:** On `rotateKey`, the Signal sender key is also deleted for forward secrecy (matching WhatsApp Web's `deleteGroupSenderKeyInfo`), and all device tracking is cleared via `clear_sender_key_devices`.
+- **Group `<modify>` notification (number/LID migration):** A `w:gp2` `<modify>` notification (a participant's number or LID changed) unconditionally force-rotates the own group sender key and invalidates both the persisted and in-memory group metadata cache, matching WhatsApp Web's `modifyParticipantInfo` (`rotateKey: true`). The next send regenerates and redistributes a fresh sender key against the current participant list instead of risking a stale entry for the migrated device. See `Client::force_rotate_own_sender_key`, `src/handlers/notification/groups.rs`.
 
 **Incremental targeting:**
 
@@ -903,6 +915,16 @@ let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64)
 
 Location: `src/prekeys.rs`
 
+### Retry-receipt prekey marking
+
+When building a retry receipt that includes keys (`should_include_keys`), the one-time prekey handed directly to the peer is now also marked uploaded via `mark_single_prekey_uploaded`, matching WhatsApp Web's `markKeyAsUploaded`. Without this, the same prekey ID could be re-offered to the server pool in the next batch upload — a third party fetching the bundle could then consume the identical one-time ID and fail to decrypt.
+
+`mark_single_prekey_uploaded` requires a held `prekey_upload_lock` guard (a compile-time proof, not just a runtime convention) so the get-or-gen and the watermark write are atomic against the batch upload path. It only advances `first_unupload_pre_key_id` when the id being marked is still the current window head (idempotent no-op otherwise), and collapses `next_pre_key_id` onto the wrapped low watermark only when marking the terminal id at the 24-bit edge — a non-terminal high-end head keeps its surviving window key.
+
+The device account is validated **before** the prekey is reserved/marked, so a missing account fails the retry-receipt build without silently abandoning a one-time prekey from the upload window.
+
+Location: `src/prekeys.rs`, `src/retry.rs`
+
 ### Force-refreshing pre-keys for device migration
 
 When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.
@@ -1134,7 +1156,8 @@ The implementation enforces several hard limits to prevent resource exhaustion a
 | Constant | Value | Purpose |
 |---|---|---|
 | `MAX_PREKEY_ID` | 16,777,215 (2^24 − 1) | Maximum valid pre-key ID (24-bit wire format) |
-| `MAX_FORWARD_JUMPS` | 25,000 | Maximum message skip in a ratchet chain |
+| `MAX_FORWARD_JUMPS` | 2,000 | Maximum message skip in a ratchet chain — peer sessions and group sender keys |
+| `MAX_FORWARD_JUMPS_SELF` | 25,000 | Maximum message skip for a session with your own other devices (wider, still bounded) |
 | `MAX_MESSAGE_KEYS` | 2,000 | Maximum cached out-of-order message keys per chain |
 | `MAX_RECEIVER_CHAINS` | 5 | Maximum receiver chains per session |
 | `ARCHIVED_STATES_MAX_LENGTH` | 40 | Maximum archived session states |

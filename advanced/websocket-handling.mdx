@@ -936,8 +936,8 @@ Each stream error sets `is_logged_in = false` and fires the `shutdown_notifier` 
 | **503** | Normal handling | None | Yes — standard backoff |
 | **515** | Marks as expected disconnect | None | Yes — immediate, no backoff |
 | **516** | Disables auto-reconnect | `LoggedOut` | No — device removed |
-| **500** / unknown / missing code | Logs as warning, stays connected (since v0.6) | None | N/A — no disconnect; session preserved |
 | `<stream:error>` with an `<xml-not-well-formed/>` child (no numeric code) | Force-closes the socket | None | Yes — standard backoff |
+| **500** / unknown / missing code | Logs as warning, stays connected (since v0.6) | None | N/A — no disconnect; session preserved |
 
 <Note>
 Before v0.6 the client treated every unknown stream-error code as fatal: it set `is_logged_in = false`, fired `shutdown_notifier`, and ended up in a "zombie" state where the connection survived but background tasks (keepalive, prekey upload) refused to run. v0.6 keeps the fatal set listed above and downgrades everything else (including code `500` and code-less `<stream:error><ack/>` routing wrappers) to a warning. `is_logged_in` stays `true`, the transport stays open, and any reconnect is driven by the server's `<xmlstreamend/>` — not by the stream-error handler itself.

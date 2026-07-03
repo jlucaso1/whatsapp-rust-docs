@@ -138,6 +138,22 @@ while let Ok(n) = response.body.read(&mut buffer) {
 }
 ```
 
+#### resource_report
+
+Best-effort per-session footprint of this client: idle connection-pool buffers plus any in-flight download/media buffering the implementation can see. Defaulted to `None` ("not reported") — a client that can introspect its pool overrides it.
+
+```rust
+fn resource_report(&self) -> Option<wacore::stats::HttpResourceReport> {
+    None
+}
+```
+
+**Returns:**
+- `Some(HttpResourceReport)` with any subset of `pool_connections`, `pool_buffer_bytes`, `inflight_bytes` filled in (each `Option<u64>`)
+- `None` (default) if the client doesn't report
+
+Feeds into [`Client::resource_report()`](/api/client#resource_report). `UreqHttpClient` overrides this (below) with an estimate for its default agent's idle pool; media downloads are a real transient-RAM source, so even a coarse estimate is worth reporting.
+
 ## Data Structures
 
 ### HttpRequest
@@ -392,6 +408,8 @@ let agent: ureq::Agent = Config::builder()
     .build()
     .into();
 ```
+
+`UreqHttpClient::new()` (the default agent) reports a `resource_report()` estimate for its idle connection pool — up to 3 idle connections, each with a 16 KiB input and 16 KiB output buffer, so `pool_connections: Some(3)`, `pool_buffer_bytes: Some(96 * 1024)`, `inflight_bytes: None`. `UreqHttpClient::with_agent(...)` (a caller-supplied agent) reports `None` — its buffer and pool configuration is opaque, so the client doesn't guess.
 
 The `execute` method clones the agent and wraps the call in `spawn_blocking`:
 

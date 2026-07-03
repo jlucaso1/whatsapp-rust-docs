@@ -206,6 +206,46 @@ println!("busy: {:?}, polls: {}", snapshot.busy, snapshot.polls);
   Opt-in and off by default — instrumenting every poll has measurable overhead, so treat this as a diagnostics tool rather than an always-on meter. See [`Client::stats()`](/api/client#stats) for always-on wire I/O counters (atomics incremented on every frame) and [`Client::memory_report()`](/api/client#memory_report) for the on-demand, zero-cost-when-unused memory breakdown.
 </Note>
 
+### with_alloc_meter
+
+```rust
+pub fn with_alloc_meter(mut self, meter: Arc<wacore::stats::AllocMeter>) -> Self
+```
+
+Installs a `wacore::stats::AllocMeter` as this client's task instrument and keeps a typed handle so [`Client::resource_report()`](/api/client#resource_report) can fold in its allocation-churn snapshot. `AllocMeter` is a first-class `TaskInstrument` — the churn counterpart to `CpuMeter`'s busy-time tracking — that attributes heap bytes allocated and freed to this client.
+
+This is sugar over [`with_task_instrument`](#with_task_instrument): it occupies the same single instrument slot, so it's mutually exclusive with `CpuMeter` or any other hook — **last setter wins**. Calling `with_task_instrument` after `with_alloc_meter` drops the typed alloc-meter handle, so `resource_report()`'s `alloc` field reverts to `None` even though the instrument itself is replaced.
+
+The library never touches an allocator directly. The host must install a `#[global_allocator]` that calls `AllocMeter::on_alloc` / `AllocMeter::on_dealloc` on every (de)allocation — `examples/alloc_tracking.rs` in the source repo is the ~20-line reference implementation.
+
+<Warning>
+  Only allocations made *inside* an instrumented poll or blocking closure are counted — every task spawned through the `Runtime` trait, plus the main run loop (see the `with_task_instrument` `voip` caveat above, which applies here too). Deallocations are charged to whichever meter is active when the free happens, not the one that allocated the block, so `freed_bytes` (and `net_bytes()`) drift for buffers that outlive the poll that made them — `allocated_bytes` is the reliable cumulative signal.
+</Warning>
+
+<ParamField path="meter" type="Arc<wacore::stats::AllocMeter>" required>
+  The allocation meter to install and drive via the poll hooks
+</ParamField>
+
+**Example:**
+```rust
+use std::sync::Arc;
+use wacore::stats::AllocMeter;
+
+let meter = Arc::new(AllocMeter::new());
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_alloc_meter(meter.clone())
+    .build()
+    .await?;
+
+// Later, fold the snapshot into the unified resource report:
+let report = bot.client().resource_report().await;
+if let Some(alloc) = report.alloc {
+    println!("allocated: {} B, freed: {} B, net: {} B", alloc.allocated_bytes, alloc.freed_bytes, alloc.net_bytes());
+}
+```
+
 ---
 
 ## Event Handling

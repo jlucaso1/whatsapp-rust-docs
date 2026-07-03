@@ -378,6 +378,8 @@ client.enable_auto_reconnect.store(false, Ordering::Relaxed);
 let enabled = client.enable_auto_reconnect.load(Ordering::Relaxed);
 ```
 
+The consecutive-failure counter used for Fibonacci backoff is internal; read it via [`client.stats().reconnect_errors`](#diagnostics) instead of a public field.
+
 ### Stream error handling
 
 The client handles specific `<stream:error>` codes from the WhatsApp server:
@@ -895,14 +897,6 @@ pub enable_auto_reconnect: Arc<AtomicBool>
 ```
 
 Controls whether the client automatically reconnects after an unexpected disconnection. Defaults to `true`. Set to `false` to disable auto-reconnect.
-
-### auto_reconnect_errors
-
-```rust
-pub auto_reconnect_errors: Arc<AtomicU32>
-```
-
-Tracks the number of consecutive reconnection failures. Used internally for Fibonacci backoff calculations. Resets to `0` on a successful connection.
 
 ### custom_enc_handlers
 
@@ -1848,54 +1842,101 @@ See [Signal Protocol - Digest key validation](/advanced/signal-protocol#digest-k
 
 ---
 
-## Memory diagnostics
+## Diagnostics
 
-<Note>
-  Requires the `debug-diagnostics` feature flag.
-</Note>
+Two on-`Client` surfaces answer "what does this session cost?" without any feature flag: always-on wire I/O counters via [`stats()`](#stats), and an on-demand memory breakdown via [`memory_report()`](#memory_report). Both are dependency-free and safe to call once per client even when running many clients in one process. For CPU/custom attribution (e.g. per-session allocator tracking), see [`BotBuilder::with_task_instrument`](/api/bot#with_task_instrument).
 
-### memory_diagnostics
+### stats
 
 ```rust
-#[cfg(feature = "debug-diagnostics")]
-pub async fn memory_diagnostics(&self) -> MemoryDiagnostics
+pub fn stats(&self) -> StatsSnapshot
 ```
 
-Returns a snapshot of all internal collection sizes for memory leak detection. Moka caches report approximate counts (pending evictions may not be reflected).
+Cumulative wire I/O and activity counters for this client session, always recorded — no feature gate. Byte counts are post-noise wire bytes (frame headers and AEAD tags included; handshake and TLS/WebSocket overhead excluded), so sessions from different clients in the same process can be compared directly. Cheap to call: it's a copy of a handful of atomics.
 
-**`MemoryDiagnostics` fields:**
+**`StatsSnapshot` fields** (`#[non_exhaustive]`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `group_cache` | `u64` | Moka cache — group metadata |
-| `device_registry_cache` | `u64` | Moka cache — device registry |
-| `lid_pn_lid_entries` | `u64` | LID-to-PN mapping entries |
-| `lid_pn_pn_entries` | `u64` | PN-to-LID mapping entries |
-| `retried_group_messages` | `u64` | Pending group message retries |
-| `recent_messages` | `u64` | Recent message dedup cache |
-| `message_retry_counts` | `u64` | Message retry counter cache |
-| `pdo_pending_requests` | `u64` | PDO pending request cache |
-| `pdo_requested` | `u64` | PDO once-per-message memo cache |
-| `sender_key_device_cache` | `u64` | Per-group sender key device tracking cache |
-| `session_locks` | `u64` | Per-device session locks |
-| `chat_lanes` | `u64` | Per-chat lanes (combined enqueue lock + message queue) |
+| `bytes_sent` | `u64` | Post-noise wire bytes written to the transport |
+| `bytes_received` | `u64` | Wire bytes received from the transport |
+| `frames_sent` | `u64` | Encrypted frames written |
+| `frames_received` | `u64` | Decodable frames received |
+| `messages_sent` | `u64` | Outgoing message send attempts (DM/group/status) |
+| `messages_received` | `u64` | Incoming messages successfully decrypted and dispatched |
+| `reconnects` | `u64` | Reconnect attempts started by the auto-reconnect loop |
+| `reconnect_errors` | `u32` | Consecutive reconnect failures (resets on success) |
+| `resends_throttled` | `u64` | Outbound resends dropped by the per-chat rate limiter — surfaces storm chats |
+| `last_data_sent_ms` | `u64` | Timestamp (ms since UNIX epoch) of the last sent frame |
+| `last_data_received_ms` | `u64` | Timestamp (ms since UNIX epoch) of the last received data |
+
+All counters are monotonic over the client's lifetime (they survive reconnects); only the two timestamps reset on connection teardown.
+
+**Example:**
+
+```rust
+let stats = client.stats();
+println!(
+    "sent {} bytes / {} frames, received {} bytes / {} frames, {} reconnects",
+    stats.bytes_sent, stats.frames_sent, stats.bytes_received, stats.frames_received, stats.reconnects
+);
+```
+
+### memory_report
+
+```rust
+pub async fn memory_report(&self) -> MemoryReport
+```
+
+Entry counts plus estimated retained heap bytes for the client's internal collections. On-demand only — it walks the in-process caches under their locks when called, and costs nothing otherwise (unused report code is eliminated by fat LTO). Counts are approximate (caches may have pending evictions). Byte figures are honest estimates rather than byte-exact accounting — Signal records use their protobuf encoded size, other collections sum key/payload capacities — suitable for per-session attribution and leak detection. Store-backed caches (e.g. Redis-backed custom stores) report `bytes: 0`, since their entries don't live in this process's memory.
+
+**`MemoryReport` fields** (`#[non_exhaustive]`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `group_cache` | `CollectionStats` | Group metadata cache |
+| `device_registry_cache` | `CollectionStats` | Device registry cache |
+| `lid_pn_lid_entries` | `CollectionStats` | LID-to-PN mapping entries |
+| `lid_pn_pn_entries` | `CollectionStats` | PN-to-LID mapping entries (shares payloads with `lid_pn_lid_entries`; bytes here cover only entries the LID map no longer holds) |
+| `recent_messages` | `CollectionStats` | Recent message dedup cache |
+| `sender_key_device_cache` | `CollectionStats` | Per-group sender key device tracking cache |
+| `group_devices_memo` | `CollectionStats` | Resolved group-devices memoization cache |
+| `message_retry_counts` | `u64` | Message retry counter cache (count only) |
+| `undecryptable_dispatched` | `u64` | Undecryptable-message dedup cache (count only) |
+| `pdo_pending_requests` | `u64` | PDO pending request cache (count only) |
+| `pdo_requested` | `u64` | PDO once-per-message memo cache (count only) |
+| `session_locks` | `u64` | Per-device session locks (count only) |
+| `chat_lanes` | `u64` | Per-chat lanes — combined enqueue lock + message queue (count only) |
+| `resend_rate_limiter_chats` | `u64` | Chats tracked by the per-chat resend rate limiter (count only) |
 | `response_waiters` | `usize` | Active IQ response waiters |
 | `node_waiters` | `usize` | Active node waiters |
 | `pending_retries` | `usize` | Pending message retries |
 | `presence_subscriptions` | `usize` | Active presence subscriptions |
 | `app_state_key_requests` | `usize` | Pending app state key requests |
 | `app_state_syncing` | `usize` | Active app state sync operations |
-| `signal_cache_sessions` | `usize` | Cached Signal sessions |
-| `signal_cache_identities` | `usize` | Cached Signal identities |
-| `signal_cache_sender_keys` | `usize` | Cached sender keys |
+| `signal_sessions` | `CollectionStats` | Cached Signal sessions |
+| `signal_identities` | `CollectionStats` | Cached Signal identities |
+| `signal_sender_keys` | `CollectionStats` | Cached sender keys |
 | `chatstate_handlers` | `usize` | Registered chat state handlers |
 | `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
 
+`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field, and `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown.
+
 **Example:**
+
 ```rust
-let diag = client.memory_diagnostics().await;
-println!("{}", diag); // Pretty-prints all collection sizes
+let report = client.memory_report().await;
+println!("{report}"); // pretty-prints every collection's count and bytes
+println!("total estimated bytes: {}", report.total_estimated_bytes());
+println!(
+    "signal sessions: {} entries, {} bytes",
+    report.signal_sessions.entries, report.signal_sessions.bytes
+);
 ```
+
+<Note>
+  `Client::stats()`, `MemoryReport`, `CollectionStats`, and `StatsSnapshot` were introduced to replace the old `debug-diagnostics`-gated `memory_diagnostics()` / `MemoryDiagnostics`, which have been removed. `CollectionStats`, `MemoryReport`, and `StatsSnapshot` are re-exported from the `whatsapp_rust` crate root.
+</Note>
 
 ---
 

@@ -103,7 +103,6 @@ whatsapp-rust supports several optional features:
 | `voip` | 1:1 voice calls: pure Rust MLow codec, E2E-SRTP encryption, relay transport. **Requires git source — not in published 0.6** (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
-| `debug-diagnostics` | Memory diagnostics API (`MemoryDiagnostics`) | ❌ No |
 
 <Tip>
   All default features enable Tokio as the async runtime, but every component is optional. To target a different runtime (async-std, WASM, etc.), disable all defaults and provide your own implementations of the `Runtime`, `TransportFactory`, `HttpClient`, and `Backend` traits. See [custom backends](/guides/custom-backends) for details.

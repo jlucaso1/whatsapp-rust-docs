@@ -170,7 +170,7 @@ pub fn with_task_instrument(
 ) -> Self
 ```
 
-Instruments the client's internal tasks with a `TaskInstrument` hook, called around every poll of a spawned task (and around blocking work). Runtime-agnostic — it wraps whichever `Runtime` the client uses (via [`with_runtime`](#with_runtime) or the default), so every task spawned through the `Runtime` trait is covered. Default: no hook, the runtime is used untouched and nothing is metered.
+Instruments the client's internal tasks with a `TaskInstrument` hook, called around every poll of a spawned task (and around blocking work). Runtime-agnostic — it wraps whichever `Runtime` the client uses (via [`with_runtime`](#with_runtime) or the default), so every task spawned through the `Runtime` trait is covered. [`Bot::run`](#run) also meters the main run loop itself (the read loop, including frame decryption), so that work is covered whether you launch via `bot.run().await` or `Bot::spawn()` — the two paths never double-wrap. Default: no hook, the runtime is used untouched and nothing is metered.
 
 <Warning>
   When the `voip` feature is enabled, 1:1 call media tasks spawn directly on Tokio instead of through the `Runtime` trait, so they are **not** covered by this hook. A `CpuMeter` attached here will undercount CPU for sessions with active calls.
@@ -663,6 +663,10 @@ handle.await?;
 <Warning>
 You must call `.await?` on the returned handle to keep the bot running. If you drop the handle, the bot will continue running in the background.
 </Warning>
+
+<Note>
+If a [`with_task_instrument`](#with_task_instrument) hook is configured, `run()` meters the client's main run loop (the read loop, including frame decryption) itself, in addition to the tasks the instrumented runtime already covers. This closes the gap where `bot.run().await` polls that future on the caller's task rather than through `Runtime::spawn`.
+</Note>
 
 ---
 

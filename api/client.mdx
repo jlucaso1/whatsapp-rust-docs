@@ -1948,7 +1948,7 @@ println!(
 pub async fn resource_report(&self) -> ResourceReport
 ```
 
-Unified per-session resource estimate: [`memory_report()`](#memory_report)'s client-only collections **plus** the components that live *outside* the `Client` and dominate real per-session RAM — the storage backend's page cache, the transport's buffers and TLS/noise state, and the HTTP client's connection pool. When a [`AllocMeter`](/api/bot#with_alloc_meter) is installed via [`BotBuilder::with_alloc_meter`](/api/bot#with_alloc_meter), the report also folds in an allocation-churn snapshot.
+Unified per-session resource estimate: [`memory_report()`](#memory_report)'s client-only collections **plus** the components that live *outside* the `Client` and dominate real per-session RAM — the storage backend's page cache, the transport's buffers and TLS/noise state, and the HTTP client's connection pool. When an [`AllocMeter`](/api/bot#with_alloc_meter) is installed via [`BotBuilder::with_alloc_meter`](/api/bot#with_alloc_meter), the report also folds in an allocation-churn snapshot.
 
 On-demand only, no hot-path cost. Each out-of-client figure is best-effort — a component reports only what it can introspect, so absent (`None`) means "not reported", not "zero". `resource_report()`'s future is `Send`, so multi-session consumers can await it off a worker task (e.g. from an axum handler).
 
@@ -1968,7 +1968,7 @@ On-demand only, no hot-path cost. Each out-of-client figure is best-effort — a
 
 `HttpResourceReport` fields: `pool_connections: Option<u64>`, `pool_buffer_bytes: Option<u64>`, `inflight_bytes: Option<u64>`.
 
-`ResourceReport::total_estimated_bytes(&self) -> u64` sums the **retained** components (client + storage + transport + HTTP) and is a **lower bound**: components that report `None` contribute `0` rather than being excluded from the total, and `alloc` (churn) is deliberately excluded. `ResourceReport` implements `Display` for a pretty-printed breakdown alongside `memory_report()`'s.
+`ResourceReport::total_estimated_bytes(&self) -> u64` sums the **retained** components (client + storage + transport + HTTP). Treat it as a best-effort retained estimate, not a strict lower bound: unreported fields (`None`) are treated as `0`, so components that cannot fully introspect their footprint are silently undercounted — but the storage figure is itself a `min(cache cap, db size)` *upper* bound on the SQLite page cache, and can overstate actual heap residency when [`mmap_size`](/api/store#database-configuration) is enabled (see the caveat there), so the total can run either high or low depending on configuration. `alloc` (churn) is deliberately excluded. `ResourceReport` implements `Display` for a pretty-printed breakdown alongside `memory_report()`'s.
 
 **Example:**
 
@@ -1983,7 +1983,7 @@ if let Some(alloc) = report.alloc {
 ```
 
 <Note>
-  Storage, transport, and HTTP reports are supplied by the trait implementations behind `Client` — see [`DeviceStore::resource_report`](/api/store#devicestore-trait), [`Transport::resource_report`](/api/transport#resource_report), and [`HttpClient::resource_report`](/api/http-client#resource_report). `AllocSnapshot`, `StorageResourceReport`, `TransportResourceReport`, and `HttpResourceReport` are re-exported from `wacore::stats`; `HttpResourceReport`, `StorageResourceReport`, `TransportResourceReport`, and `AllocSnapshot` are also re-exported from the `whatsapp_rust` crate root.
+  Storage, transport, and HTTP reports are supplied by the trait implementations behind `Client` — see [`DeviceStore::resource_report`](/api/store#resource_report), [`Transport::resource_report`](/api/transport#resource_report), and [`HttpClient::resource_report`](/api/http-client#resource_report). `AllocSnapshot`, `StorageResourceReport`, `TransportResourceReport`, and `HttpResourceReport` are re-exported from `wacore::stats`; all four are also re-exported from the `whatsapp_rust` crate root.
 </Note>
 
 ---

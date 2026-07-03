@@ -390,13 +390,17 @@ async fn create(&self) -> Result<i32>;
 /// Create a snapshot of the database state
 /// Optional: label with name, save extra_content (e.g. failing message)
 async fn snapshot_db(&self, name: &str, extra_content: Option<&[u8]>) -> Result<()>;
-
-/// Best-effort process-local memory this backend attributes to the session
-/// (defaulted; returns an all-`None` report unless overridden)
-async fn resource_report(&self) -> wacore::stats::StorageResourceReport;
 ```
 
-`resource_report()` is a defaulted method — most custom backends don't need to implement it. It exists so a backend that can introspect its own memory (like `SqliteStore`'s SQLite page cache, often the single largest per-session chunk since it lives entirely outside the `Client`) can report it for [`Client::resource_report()`](/api/client#resource_report). Remote/store-backed backends (Redis, etc.) should override it to return `memory_bytes: Some(0)` — their data isn't process memory — rather than leaving the default all-`None` ("not reported"), if they want to make that positive claim explicit.
+#### resource_report
+
+```rust
+async fn resource_report(&self) -> wacore::stats::StorageResourceReport {
+    wacore::stats::StorageResourceReport::default()
+}
+```
+
+Best-effort process-local memory this backend attributes to the session. Defaulted — most custom backends don't need to implement it. It exists so a backend that can introspect its own memory (like `SqliteStore`'s SQLite page cache, often the single largest per-session chunk since it lives entirely outside the `Client`) can report it for [`Client::resource_report()`](/api/client#resource_report). Remote/store-backed backends (Redis, etc.) should override it to return `memory_bytes: Some(0)` — their data isn't process memory — rather than leaving the default all-`None` ("not reported"), if they want to make that positive claim explicit.
 
 ## SqliteStore implementation
 

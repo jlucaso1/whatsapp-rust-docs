@@ -987,10 +987,57 @@ After connection, the client validates that the server's copy of the key bundle 
 </Note>
 
 <Warning>
-  Hash mismatches or missing local pre-keys are logged but do **not** trigger a re-upload. Only a 404 response (server has no record) triggers re-upload. This matches WhatsApp Web's behavior where `validateLocalKeyBundle` exceptions are caught without re-uploading — the normal `RotateKeyJob` eventually refreshes keys.
+  Hash mismatches or missing local pre-keys are logged but do **not** trigger a re-upload. Only a 404 response (server has no record) triggers re-upload. This matches WhatsApp Web's behavior where `validateLocalKeyBundle` exceptions are caught without re-uploading — the normal [`RotateKeyJob`](#signed-pre-key-rotation-rotatekeyjob) eventually refreshes the signed pre-key.
 </Warning>
 
 Location: `src/prekeys.rs:218-344`, `wacore/src/iq/prekeys.rs:170-302`
+
+### Signed pre-key rotation (RotateKeyJob)
+
+The signed pre-key minted at pairing was otherwise **permanent** — a forward-secrecy gap. whatsapp-rust mirrors WhatsApp Web's `RotateKeyJob`: on a cadence, generate a fresh signed pre-key, upload it, and retain the previous keys so prekey messages already in flight against a rotated-out key still decrypt.
+
+**Cadence:**
+
+- Checked once per connection. Spawned right after the startup pre-key upload during post-login init, so a slow or failing rotation IQ never delays the rest of login.
+- Rotates once `now - last_signed_pre_key_rotation_ms >= SIGNED_PRE_KEY_ROTATION_INTERVAL_MS` (7 days / weekly). This interval is the one value **not** grounded in the captured WA Web bundle — there `RotateKeyJob` is a persisted, server-tuned background job — so it's a tunable policy default.
+- A device upgraded in with the field at `0` gets a one-time baseline stamp (`DeviceCommand::SetSignedPreKeyRotationBaseline`) instead of rotating immediately, so its first rotation lands a full interval out.
+- Single-flighted via `Client::signed_pre_key_rotation_lock` so overlapping post-login tasks (from reconnect churn) can't run the rotate/upload/prune sequence concurrently; a losing task just no-ops for that check.
+
+**Wire format** (`RotateSignedPreKeySpec`, reuses the upload path's `<skey>` encoder so the two can never drift):
+
+```xml
+<iq xmlns="encrypt" type="set" to="s.whatsapp.net" id="...">
+  <rotate>
+    <skey>
+      <id>[3-byte BE signed pre-key ID]</id>
+      <value>[32-byte signed pre-key public]</value>
+      <signature>[64-byte signature]</signature>
+    </skey>
+  </rotate>
+</iq>
+```
+
+**Rotation sequence** (`Client::rotate_signed_pre_key`):
+
+1. Compute `new_id = current_id + 1`, wrapping to `1` at the 24-bit border (same scheme as one-time pre-key IDs).
+2. Stage the new key pair in the `signed_prekeys` backend table **before** upload — an already-staged candidate for that id is reused verbatim, so a retry after an ambiguous failure re-uploads the exact key the server may have already accepted instead of minting a different one under the same id.
+3. Retain the outgoing (current) key in the backend table **before** upload, so once the server accepts the new key the old id's decrypt window is already durable — no post-acceptance write can strand it.
+4. Upload via the `<rotate>` IQ above.
+5. On success, `DeviceCommand::SetSignedPreKey` atomically installs the new key pair, id, signature, and rotation timestamp. The now-redundant staged copy is dropped, and retained signed pre-keys are pruned (newest-id-first) to `SIGNED_PRE_KEY_RETENTION` (3 total: the current key + the 2 most recent rotated-out keys).
+
+**Error handling** (mirrors WA Web's `RotateKeyJob` ladder; a rotation failure never fails login):
+
+| Response | Action |
+|----------|--------|
+| `406` / `409` (deterministic rejection of this key) | Drop the staged candidate and remint a fresh one on a later connect — reusing it would wedge rotation forever. |
+| Other server error (rate limits, `>=500`, ...) | Keep the staged candidate and retry it as-is on a later connect. |
+| Transport failure (ambiguous — the server may have accepted it) | Keep the staged candidate and retry it as-is on a later connect. |
+
+**Backend fallback for rotated-out ids:**
+
+Before this feature, `Device::load_signed_prekey` (`src/store/signal.rs`) returned a record only when the requested id matched the *current* `signed_pre_key_id` field — the `signed_prekeys` backend table (which already existed, with full CRUD) was never consulted for other ids. Rotating the key in place would therefore make any in-flight prekey message naming the old id fail with `InvalidSignedPreKeyId`. `load_signed_prekey` and `contains_signed_prekey` now fall back to the backend table for non-current ids, which is what makes rotation safe to ship.
+
+Location: `src/features/rotate_key.rs`, `src/store/signal.rs`, `wacore/src/iq/prekeys.rs`, `wacore/src/store/commands.rs`
 
 ### Re-pair pre-key healing (v0.6)
 

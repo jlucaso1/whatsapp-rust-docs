@@ -626,6 +626,8 @@ pub struct Device {
     pub login_counter: i32,                  // Per-connect counter sent as ClientPayload.lc
     #[serde(default)]
     pub lid_migrated: bool,                  // Account is 1:1-LID-migrated; gates DM wire addressing
+    #[serde(default)]
+    pub last_signed_pre_key_rotation_ms: i64, // WA Web RotateKeyJob cadence clock; 0 = pre-feature device, baselined (not rotated) on first connect
 }
 
 /// Cached form of the server's two-cert chain. `leaf.key` is the server
@@ -713,7 +715,8 @@ CREATE TABLE device (
     nct_salt BLOB,
     server_cert_chain BLOB,  -- Cached two-cert chain for Noise IK resume
     login_counter INTEGER NOT NULL DEFAULT 0,  -- Per-connect counter; sent as ClientPayload.lc
-    lid_migrated BOOLEAN NOT NULL DEFAULT 0  -- Account is 1:1-LID-migrated; gates DM wire addressing
+    lid_migrated BOOLEAN NOT NULL DEFAULT 0,  -- Account is 1:1-LID-migrated; gates DM wire addressing
+    last_signed_pre_key_rotation_ms BIGINT NOT NULL DEFAULT 0  -- WA Web RotateKeyJob cadence clock; 0 = unset/legacy, baselined on first connect
 );
 
 -- Signal protocol tables

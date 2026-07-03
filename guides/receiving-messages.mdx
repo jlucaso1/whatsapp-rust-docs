@@ -188,20 +188,20 @@ See [WAProto API reference](/api/waproto) for the full message type hierarchy.
 match event {
     Event::Messages(batch) => {
         for InboundMessage { message, info } in batch.iter() {
-        // Simple text
-        if let Some(text) = &message.conversation {
-            println!("Text: {}", text);
-        }
-        
-        // Extended text (with links, formatting)
-        if let Some(ext) = &message.extended_text_message {
-            if let Some(text) = &ext.text {
-                println!("Extended text: {}", text);
+            // Simple text
+            if let Some(text) = &message.conversation {
+                println!("Text: {}", text);
             }
-            if let Some(url) = &ext.matched_text {
-                println!("Contains link: {}", url);
+
+            // Extended text (with links, formatting)
+            if let Some(ext) = &message.extended_text_message {
+                if let Some(text) = &ext.text {
+                    println!("Extended text: {}", text);
+                }
+                if let Some(url) = &ext.matched_text {
+                    println!("Contains link: {}", url);
+                }
             }
-        }
         }
     }
     _ => {}
@@ -316,18 +316,18 @@ When you send a message from one device, other devices receive it as a `DeviceSe
 match event {
     Event::Messages(batch) => {
         for InboundMessage { message, info } in batch.iter() {
-        // If this was originally a DeviceSentMessage, the library has:
-        // 1. Extracted the inner message content
-        // 2. Merged message_context_info from outer + inner
-        //    - message_secret: inner value, fallback to outer
-        //    - limit_sharing_v2: always from outer
-        //    - thread_id: inner if non-empty, otherwise outer
-        //    - bot_metadata: inner value, fallback to outer
-        
-        // You can safely access the merged context
-        if let Some(ctx) = &message.message_context_info {
-            println!("Thread: {:?}", ctx.thread_id);
-        }
+            // If this was originally a DeviceSentMessage, the library has:
+            // 1. Extracted the inner message content
+            // 2. Merged message_context_info from outer + inner
+            //    - message_secret: inner value, fallback to outer
+            //    - limit_sharing_v2: always from outer
+            //    - thread_id: inner if non-empty, otherwise outer
+            //    - bot_metadata: inner value, fallback to outer
+
+            // You can safely access the merged context
+            if let Some(ctx) = &message.message_context_info {
+                println!("Thread: {:?}", ctx.thread_id);
+            }
         }
     }
     _ => {}

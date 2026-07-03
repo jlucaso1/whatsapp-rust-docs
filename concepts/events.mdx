@@ -735,35 +735,35 @@ use waproto::whatsapp as wa;
 
 Event::Messages(batch) => {
     for InboundMessage { message: msg, info } in batch.iter() {
-    println!("From: {} in {}", info.source.sender, info.source.chat);
+        println!("From: {} in {}", info.source.sender, info.source.chat);
 
-    // Text message
-    if let Some(text) = &msg.conversation {
-        println!("Text: {}", text);
-    }
+        // Text message
+        if let Some(text) = &msg.conversation {
+            println!("Text: {}", text);
+        }
 
-    // Extended text (with link preview, quoted message, etc.)
-    if let Some(ext) = &msg.extended_text_message {
-        println!("Text: {}", ext.text.as_deref().unwrap_or(""));
+        // Extended text (with link preview, quoted message, etc.)
+        if let Some(ext) = &msg.extended_text_message {
+            println!("Text: {}", ext.text.as_deref().unwrap_or(""));
 
-        if let Some(context) = &ext.context_info {
-            if let Some(quoted) = &context.quoted_message {
-                println!("Quoted: {:?}", quoted);
+            if let Some(context) = &ext.context_info {
+                if let Some(quoted) = &context.quoted_message {
+                    println!("Quoted: {:?}", quoted);
+                }
             }
         }
-    }
 
-    // Image message
-    if let Some(img) = &msg.image_message {
-        println!("Image: {} ({}x{})", 
-            img.caption.as_deref().unwrap_or(""),
-            img.width.unwrap_or(0),
-            img.height.unwrap_or(0)
-        );
-    }
+        // Image message
+        if let Some(img) = &msg.image_message {
+            println!("Image: {} ({}x{})", 
+                img.caption.as_deref().unwrap_or(""),
+                img.width.unwrap_or(0),
+                img.height.unwrap_or(0)
+            );
+        }
 
-    // Video, audio, document, sticker, etc.
-    // See waproto::whatsapp::Message for all types
+        // Video, audio, document, sticker, etc.
+        // See waproto::whatsapp::Message for all types
     }
 }
 ```
@@ -2355,6 +2355,8 @@ Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc
 .on_event(|event, client| async move {
     // Only handle events you care about
     for InboundMessage { message: msg, info } in event.messages() {
+        // These are independent filters, not mutually exclusive cases —
+        // a non-self-sent group message enters both blocks.
         if info.source.is_group {
             // Only handle group messages
         }

@@ -1712,8 +1712,10 @@ impl<'a> HistorySyncStream<'a> {
     /// In-place variant of `next_conversation`: decodes into `conversation`,
     /// returning `Ok(false)` at clean EOF. buffa's `clear()` retains `Vec`
     /// capacity, so reusing one struct across a drain loop skips the
-    /// per-conversation message-spine reallocations. After `Ok(false)` (or
-    /// an error) the struct's contents are unspecified.
+    /// per-conversation message-spine reallocations. Corrupt entries are
+    /// skipped and counted via `skipped_conversations()`, matching the
+    /// behaviour of `next_conversation`. After `Ok(false)` (or an error)
+    /// the struct's contents are unspecified.
     pub fn next_conversation_into(&mut self, conversation: &mut wa::Conversation) -> Result<bool, HistorySyncError>;
 
     /// Number of conversations skipped due to decode errors.

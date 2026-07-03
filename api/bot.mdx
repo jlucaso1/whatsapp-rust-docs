@@ -172,6 +172,10 @@ pub fn with_task_instrument(
 
 Instruments the client's internal tasks with a `TaskInstrument` hook, called around every poll of a spawned task (and around blocking work). Runtime-agnostic — it wraps whichever `Runtime` the client uses (via [`with_runtime`](#with_runtime) or the default), so every task spawned through the `Runtime` trait is covered. Default: no hook, the runtime is used untouched and nothing is metered.
 
+<Warning>
+  When the `voip` feature is enabled, 1:1 call media tasks spawn directly on Tokio instead of through the `Runtime` trait, so they are **not** covered by this hook. A `CpuMeter` attached here will undercount CPU for sessions with active calls.
+</Warning>
+
 Pass the built-in `wacore::stats::CpuMeter` for per-session CPU accounting (busy time + poll count), keeping a clone to read `.snapshot()` later. Or implement `TaskInstrument` yourself to scope allocator attribution, an ESP-IDF `heap_caps` sampler, or any other per-session platform hook — the library only calls `on_poll_start`/`on_poll_end` and never inspects what the hook does.
 
 <ParamField path="instrument" type="Arc<dyn wacore::stats::TaskInstrument>" required>

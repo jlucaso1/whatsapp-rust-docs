@@ -2179,7 +2179,7 @@ Event::RawNode(node) => {
 
 ```rust
 use whatsapp_rust::bot::Bot;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, InboundMessage};
 
 let mut bot = Bot::builder()
     .with_backend(backend)
@@ -2233,7 +2233,7 @@ client.register_handler(Arc::new(ConnectionHandler));
 Events are buffered in an unbounded channel, so events fired before the receiver starts listening are not lost.
 
 ```rust
-use wacore::types::events::{ChannelEventHandler, Event};
+use wacore::types::events::{ChannelEventHandler, Event, InboundMessage};
 use std::sync::Arc;
 
 let (handler, event_rx) = ChannelEventHandler::new();

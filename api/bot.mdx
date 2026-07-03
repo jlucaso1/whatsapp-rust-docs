@@ -25,7 +25,7 @@ The Bot is the **recommended way** to use whatsapp-rust. It provides sensible de
 ```rust
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::TokioRuntime;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, InboundMessage};
 
 let mut bot = Bot::builder()
     .with_backend(backend)
@@ -283,7 +283,7 @@ Bot::builder()
 For scenarios where you need to process events outside of a closure (e.g., testing, custom event loops, or runtime-agnostic code), use `ChannelEventHandler` with `register_handler` instead of `on_event`:
 
 ```rust
-use wacore::types::events::{ChannelEventHandler, Event};
+use wacore::types::events::{ChannelEventHandler, Event, InboundMessage};
 
 let mut bot = Bot::builder()
     .with_backend(backend)
@@ -817,7 +817,7 @@ Newsletter (channel) messages don't flow through `MessageContext::react`. Use [`
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, InboundMessage};
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use waproto::whatsapp as wa;

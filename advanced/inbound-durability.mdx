@@ -52,9 +52,13 @@ impl InboundDurabilityHook for MyStore {
         _client: Arc<Client>,
         batch: &[InboundMessage],
     ) -> anyhow::Result<()> {
-        // Durably commit the whole batch in one transaction (INSERT, enqueue
-        // to broker, etc.). Return Ok only after the commit is durable.
-        // Return Err to suppress every ack in the batch and trigger redelivery.
+        // Ideally a single INSERT/transaction over the whole batch. This
+        // loop commits per item instead, so a failure partway through (the
+        // `?` on a later item) leaves earlier items already durably
+        // committed — yet the SDK still suppresses every ack and redelivers
+        // the whole batch on Err. `my_db_insert` MUST be an idempotent
+        // upsert (e.g. `INSERT ... ON CONFLICT DO NOTHING`) so that replay
+        // of an already-committed item is a no-op, not a duplicate.
         for item in batch {
             my_db_insert(&item.info.id, &item.message).await?;
         }

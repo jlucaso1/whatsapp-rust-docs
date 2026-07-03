@@ -328,6 +328,10 @@ See the [media forwarding guide](/guides/media-handling#forwarding-media-via-cdn
 
 Use `spawn()` to run the bot in the background while your code continues, and `shutdown()` for a clean stop:
 
+<Warning>
+  `whatsapp_rust::shutdown_signal()` landed on `main` with [PR #960](https://github.com/oxidezap/whatsapp-rust/pull/960) and will be included in the next published release after `0.6.0`. Until then it isn't available from `whatsapp-rust = "0.6"` — depend on the git source (see [Installation](/installation#add-to-your-project)), or use a bare `tokio::signal::ctrl_c().await?` in the meantime (SIGINT/Ctrl+C only — see the note below for why that's not enough under Docker/Kubernetes/systemd).
+</Warning>
+
 ```rust
 use whatsapp_rust::prelude::*;
 

@@ -227,7 +227,7 @@ Event::Connected(_) => {
 
 ### Disconnected
 
-**Emitted:** When the connection is lost unexpectedly — not on an intentional client-initiated shutdown or reconnect
+**Emitted:** When the connection ends without the client itself intentionally closing or reconnecting it — covers both a routine server-initiated stream recycle and a genuine transport failure (see `reason` below to tell them apart)
 
 ```rust
 #[derive(Debug, Clone, Serialize)]

@@ -224,6 +224,19 @@ client.send_message(jid, message).await?;
 let picture = client.contacts().get_profile_picture(&jid, true).await?;
 ```
 
+The tctoken (no cstoken fallback) is also attached automatically on two other privacy-gated IQs, matching WA Web's `USyncStatusProtocol`/`OutSpamTCTokenMixin`:
+
+- **`get_user_info`** — a per-recipient tctoken is attached to each queried `<user>` node in the usync IQ, so status/about for a privacy-restricted contact resolves instead of coming back empty. Gated behind `profile_scraping_privacy_token_in_about_usync`.
+- **`send_spam_report`** — the reported contact's tctoken is attached to the spam report IQ so the report is accepted for a privacy-restricted account. Gated behind `enable_spam_report_iq_with_privacy_token`.
+
+```rust
+// Attaches the queried contact's tctoken automatically when the AB prop is on
+let info = client.contacts().get_user_info(&[jid]).await?;
+
+// Attaches the reported contact's tctoken automatically when the AB prop is on
+let result = client.send_spam_report(request).await?;
+```
+
 ### AB prop gating
 
 Token inclusion on message stanzas is gated by two **independent** server-side AB props, matching WhatsApp Web's `MsgCreateFanoutStanza.js` (`Re = R(te) ?? D(te, s)`):
@@ -232,6 +245,8 @@ Token inclusion on message stanzas is gated by two **independent** server-side A
 - **`NCT_TOKEN_SEND_ENABLED`** — gates the cstoken fallback independently (`D`). The cstoken is attached whenever this flag is on and the NCT salt/recipient LID are available — **even when the tctoken prop above is off, or a valid tctoken exists but its prop is disabled**. The cstoken is not nested behind the tctoken prop.
 
 Token *issuance scheduling* (requesting new tokens from the server after sending) runs regardless of these flags.
+
+The usync and spam-report attachment points each have their own independent gating prop (`profile_scraping_privacy_token_in_about_usync`, `enable_spam_report_iq_with_privacy_token`) — unrelated to the message-stanza props above, and with no cstoken fallback.
 
 ### Post-send issuance
 

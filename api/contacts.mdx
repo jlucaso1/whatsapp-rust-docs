@@ -245,6 +245,8 @@ The implementation automatically:
 - Includes tokens in profile picture requests
 - Skips tokens for groups and newsletters
 
+`get_user_info` does the same for status/about: when the `profile_scraping_privacy_token_in_about_usync` AB prop is on, each queried JID's TC token is attached to its `<user>` node in the usync IQ, matching WhatsApp Web's `USyncStatusProtocol`. This is what lets `status`/`status_error` resolve correctly for a privacy-restricted contact instead of the status always coming back hidden. See [TC Token](/api/tctoken#automatic-usage) for details.
+
 ## Async compatibility
 
 `is_on_whatsapp` and `get_user_info` work correctly when called from `#[async_trait]` implementations or any context that boxes the returned future (`Box<dyn Future + Send>`). Earlier versions produced a compile error (`"implementation of FnOnce is not general enough"`) that could not be worked around in user code. Fixed in [#826](https://github.com/oxidezap/whatsapp-rust/pull/826) with no API changes.

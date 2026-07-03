@@ -27,14 +27,18 @@ During the **offline drain** (the backlog replayed on reconnect), the client acc
 
 | Trigger | Value |
 |---|---|
-| Message count | 200 |
+| Message count | 400 |
 | Encoded size | 4 MiB |
 | Timeout since first buffered message | 3 seconds |
 | End of drain / disconnect / reconnect | forced flush |
 
-These triggers are internal constants, not currently exposed as configuration. The drain→live transition is raceless: the tail batch of the drain always commits before any live-mode message is processed, so a consumer never observes drain and live messages out of order across the boundary.
+These triggers are internal constants, not currently exposed as configuration. The message-count trigger matches WhatsApp Web's `web_message_processing_cache_size` (the snapshot flush granularity — distinct from the 200-stanza `<offline_batch>` server pull size). The drain→live transition is raceless: the tail batch of the drain always commits before any live-mode message is processed, so a consumer never observes drain and live messages out of order across the boundary.
 
-Within a batch, the commit order is: durable buffer write (one transaction) → Signal-cache flush → your hook → buffer clear → acks → `Event::Messages` dispatch. A failure at any step leaves the **entire batch** unacked, and the server redelivers all of it — so your hook must commit a batch all-or-nothing.
+Within a batch, the commit order is: durable buffer write (one transaction) → Signal-cache flush → your hook → buffer clear → acks → `Event::Messages` dispatch → buffered offline delivery receipts flushed. A failure at any step leaves the **entire batch** unacked, and the server redelivers all of it — so your hook must commit a batch all-or-nothing.
+
+<Note>
+Offline delivery receipts are flushed once **per durable drain batch**, not only at the end of the full offline drain, matching WA Web's `createSnapshot` → `sendAggregateOfflineReceipts` per snapshot. This bounds the receipt buffer over a large backlog and caps redelivery on a mid-drain disconnect to a single snapshot instead of the whole backlog.
+</Note>
 
 ## Opting In
 

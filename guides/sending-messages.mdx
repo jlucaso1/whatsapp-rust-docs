@@ -234,7 +234,8 @@ If you're already inside an event handler, [`MessageContext::react`](/api/bot#re
 ```rust
 use whatsapp_rust::bot::MessageContext;
 
-if let Some(ctx) = MessageContext::from_event(&event, client) {
+for inbound in event.messages() {
+    let ctx = MessageContext::from_inbound(inbound, client.clone());
     ctx.react("❤️").await?;
 }
 ```
@@ -304,14 +305,16 @@ let result = client.comments()
 
 The `parent_key.participant` field must identify the post author so receivers can derive the HKDF decryption key from the envelope. When `from_me` is `true` and `participant` is absent the library resolves the author to your own identity.
 
-Incoming encrypted comments are decrypted transparently. The comment body is dispatched as `Event::Message` and the parent post key is available on `MessageInfo::comment_target`:
+Incoming encrypted comments are decrypted transparently. The comment body is dispatched as part of an `Event::Messages` batch and the parent post key is available on `MessageInfo::comment_target`:
 
 ```rust
-Event::Message(msg, info) => {
-    if let Some(parent_key) = &info.comment_target {
-        println!("Comment on post: {:?}", parent_key.id);
-        if let Some(text) = msg.text_content() {
-            println!("Text: {}", text);
+Event::Messages(batch) => {
+    for InboundMessage { message: msg, info } in batch.iter() {
+        if let Some(parent_key) = &info.comment_target {
+            println!("Comment on post: {:?}", parent_key.id);
+            if let Some(text) = msg.text_content() {
+                println!("Text: {}", text);
+            }
         }
     }
 }
@@ -693,9 +696,11 @@ let expiration = metadata.ephemeral_expiration; // 0 if disabled
 For incoming messages, read it from `MessageInfo`:
 
 ```rust
-Event::Message(message, info) => {
-    if let Some(expiration) = info.ephemeral_expiration {
-        println!("Chat has {}s disappearing timer", expiration);
+Event::Messages(batch) => {
+    for InboundMessage { info, .. } in batch.iter() {
+        if let Some(expiration) = info.ephemeral_expiration {
+            println!("Chat has {}s disappearing timer", expiration);
+        }
     }
 }
 ```

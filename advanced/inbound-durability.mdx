@@ -1,6 +1,6 @@
 ---
 title: Inbound Durability Hook
-description: Opt in to at-least-once message delivery by deferring the transport ack until your consumer durably commits each message.
+description: Opt in to at-least-once message delivery by deferring the transport ack until your consumer durably commits each batch of messages.
 ---
 
 ## Overview
@@ -9,15 +9,32 @@ By default the client acknowledges a message to the WhatsApp server **as soon as
 
 Registering an `InboundDurabilityHook` converts the consumer to **at-least-once delivery**:
 
-1. The decrypted message is buffered durably in the `pending_inbound_messages` table **before** the Signal ratchet is flushed.
-2. Your hook is awaited. On `Ok` the message is acked and the buffer row is cleared.
-3. On `Err` (or a crash), the ack is suppressed. The server redelivers the message on the next connect, where the hook runs again from the buffered copy.
+1. The decrypted message(s) are buffered durably in the `pending_inbound_messages` table **before** the Signal ratchet is flushed.
+2. Your hook is awaited with the whole batch. On `Ok` every message in the batch is acked and its buffer row cleared.
+3. On `Err` (or a crash), all their acks are suppressed. The server redelivers the batch on the next connect, where the hook runs again from the buffered copies.
 
 Default behavior is unchanged — with no hook registered nothing is buffered and the ack path is identical to before.
 
 <Note>
 This is the same gap whatsmeow closes with `SynchronousAck` + `EnableDecryptedEventBuffer`. The design follows whatsmeow's decrypt-buffer approach rather than a global gate.
 </Note>
+
+## Batching
+
+Live traffic is delivered to the hook one message at a time — a batch of one, committed immediately, so latency is unchanged from the previous per-message behavior.
+
+During the **offline drain** (the backlog replayed on reconnect), the client accumulates decrypted messages and commits them as a batch, mirroring WhatsApp Web's `MessageProcessorCache` granularity. A batch flushes on whichever trigger fires first:
+
+| Trigger | Value |
+|---|---|
+| Message count | 200 |
+| Encoded size | 4 MiB |
+| Timeout since first buffered message | 3 seconds |
+| End of drain / disconnect / reconnect | forced flush |
+
+These triggers are internal constants, not currently exposed as configuration. The drain→live transition is raceless: the tail batch of the drain always commits before any live-mode message is processed, so a consumer never observes drain and live messages out of order across the boundary.
+
+Within a batch, the commit order is: durable buffer write (one transaction) → Signal-cache flush → your hook → buffer clear → acks → `Event::Messages` dispatch. A failure at any step leaves the **entire batch** unacked, and the server redelivers all of it — so your hook must commit a batch all-or-nothing.
 
 ## Opting In
 
@@ -30,16 +47,21 @@ struct MyStore { /* your DB connection */ }
 
 #[async_trait]
 impl InboundDurabilityHook for MyStore {
-    async fn on_message(
+    async fn on_messages(
         &self,
         _client: Arc<Client>,
-        info: &MessageInfo,
-        message: &wa::Message,
+        batch: &[InboundMessage],
     ) -> anyhow::Result<()> {
-        // Durably commit the message (INSERT, enqueue to broker, etc.).
-        // Return Ok only after the commit is durable.
-        // Return Err to suppress the ack and trigger redelivery.
-        my_db_insert(&info.id, message).await?;
+        // Ideally a single INSERT/transaction over the whole batch. This
+        // loop commits per item instead, so a failure partway through (the
+        // `?` on a later item) leaves earlier items already durably
+        // committed — yet the SDK still suppresses every ack and redelivers
+        // the whole batch on Err. `my_db_insert` MUST be an idempotent
+        // upsert (e.g. `INSERT ... ON CONFLICT DO NOTHING`) so that replay
+        // of an already-committed item is a no-op, not a duplicate.
+        for item in batch {
+            my_db_insert(&item.info.id, &item.message).await?;
+        }
         Ok(())
     }
 }
@@ -49,7 +71,8 @@ let bot = Bot::builder()
     // Opt in — without this call the client keeps its default at-most-once behavior.
     .with_inbound_durability_hook(MyStore { /* ... */ })
     .on_message(|ctx| async move {
-        // Event handlers still fire as normal; the ack is deferred in the background.
+        // Event handlers still fire once per message, in arrival order;
+        // the ack is deferred in the background.
         println!("received: {}", ctx.info.id);
     })
     .build()
@@ -61,42 +84,48 @@ let bot = Bot::builder()
 ```rust
 use async_trait::async_trait;
 use std::sync::Arc;
+use wacore::types::events::InboundMessage;
 
 #[async_trait]
 pub trait InboundDurabilityHook {
-    async fn on_message(
-        &self,
-        client: Arc<Client>,
-        info: &MessageInfo,
-        message: &wa::Message,
-    ) -> anyhow::Result<()>;
+    async fn on_messages(&self, client: Arc<Client>, batch: &[InboundMessage]) -> anyhow::Result<()>;
 }
 ```
 
 | Parameter | Description |
 |-----------|-------------|
-| `client` | The active client — use it for lookups, **not** for sending to the same sender (see [Caveats](#caveats)). |
-| `info` | Message metadata (id, sender, chat, timestamp). |
-| `message` | The decrypted message proto. |
+| `client` | The active client — use it for lookups, **not** for sending to a sender present in the batch (see [Caveats](#caveats)). |
+| `batch` | The decrypted messages to commit, in arrival order. A batch of one on live traffic; possibly many during the offline drain. |
 
-Return `Ok(())` once the commit is durable. Return `Err` to suppress the ack.
+Each `InboundMessage` carries:
+
+```rust
+pub struct InboundMessage {
+    pub message: Arc<wa::Message>,
+    pub info: Arc<MessageInfo>,
+}
+```
+
+Return `Ok(())` once the whole batch is durably committed. Return `Err` to suppress every ack in the batch.
+
+`InboundMessage`, `MessageBatch`, and `BatchOrigin` are re-exported from the crate `prelude`.
 
 ## Idempotency Requirement
 
-At-least-once means the hook **will be called more than once for the same message** when a crash occurs after the consumer commits but before the ack lands. Your hook **must be idempotent**.
+At-least-once means the hook **will be called more than once for the same message** when a crash occurs after the consumer commits but before the ack lands. Your hook **must be idempotent**, and since a failed batch is redelivered whole, a partially-applied batch commit must also be safe to re-run.
 
 Deduplicate by the full triplet `(info.source.chat, info.source.sender, info.id)` — **not** `info.id` alone. Stanza IDs are only unique within a `(chat, sender)` pair, so two different chats can reuse the same ID string.
 
 ```rust
-// Correct idempotency key
+// Correct idempotency key, per item in the batch
 let key = (
-    info.source.chat.to_string(),
-    info.source.sender.to_string(),
-    info.id.clone(),
+    item.info.source.chat.to_string(),
+    item.info.source.sender.to_string(),
+    item.info.id.clone(),
 );
 
 // Wrong — id alone is not globally unique
-let key = info.id.clone();
+let key = item.info.id.clone();
 ```
 
 In SQL, a `UNIQUE` constraint or `INSERT OR IGNORE` on `(chat, sender, id)` is the most robust approach.
@@ -106,7 +135,7 @@ In SQL, a `UNIQUE` constraint or `INSERT OR IGNORE` on `(chat, sender, id)` is t
 When the server redelivers a message the client previously did not ack:
 
 1. The client detects the duplicate stanza.
-2. If a hook is registered and a buffered copy exists in `pending_inbound_messages`, the hook is run from that copy.
+2. If a hook is registered and a buffered copy exists in `pending_inbound_messages`, the message re-enters the commit pipeline (it can be grouped into the same batch as other stanzas being processed at the time) and the hook runs from the buffered copy.
 3. On `Ok` the buffer row is cleared and the message is acked.
 4. On `Err` the buffer is kept; the hook runs again on the next redelivery.
 5. If no buffered copy exists (genuine duplicate already committed), the message is acked directly without invoking the hook.
@@ -115,36 +144,38 @@ A 7-day retention sweep removes rows that a permanently-failing hook would other
 
 ## Backend Requirement
 
-Durable cross-crash replay requires a backend that implements the four pending-inbound methods on `ProtocolStore`:
+Durable cross-crash replay requires a backend that implements the pending-inbound methods on `ProtocolStore`:
 
 - `store_pending_inbound` — write the decrypted message bytes before the hook runs
 - `get_pending_inbound` — read the buffer on redelivery
 - `delete_pending_inbound` — clear the buffer after the hook commits
 - `delete_expired_pending_inbound` — retention sweep (called unconditionally from keepalive)
 
-The bundled `SqliteStore` implements all four. Custom backends that do not implement them return an error from the defaults, which causes `Bot::build()` to fail with `BotBuilderError::UnsupportedDurabilityBackend` — a clear error rather than a silent runtime degradation.
+Two additional batch-oriented methods, `store_pending_inbound_batch` and `delete_pending_inbound_batch`, default to looping the single-row methods above, so existing custom backends keep working unchanged. The bundled `SqliteStore` overrides both to commit a whole batch in one transaction — see [Custom Backends](/guides/custom-backends#pending-inbound-buffer) if you want the same atomicity in your own backend.
 
-If you use a custom backend and want to opt in to the durability hook, implement the four methods. See [Custom Backends](/guides/custom-backends#pending-inbound-buffer) for implementation guidance.
+Backends that implement none of these return an error from the defaults, which causes `Bot::build()` to fail with `BotBuilderError::UnsupportedDurabilityBackend` — a clear error rather than a silent runtime degradation.
 
 ## Caveats
 
 <Warning>
-**At-least-once, not exactly-once.** A crash after your consumer commits but before the ack lands replays the message. Your hook must be idempotent (deduplicate by `(chat, sender, id)`).
+**At-least-once, not exactly-once.** A crash after your consumer commits but before the ack lands replays the message (or its whole batch). Your hook must be idempotent (deduplicate by `(chat, sender, id)`).
 </Warning>
 
 **Backpressure.** The hook is awaited inside the receive pipeline. A slow hook backpressures inbound processing for the duration of the commit — the same trade-off as whatsmeow's synchronous ack. Persist and return; spawn any reply logic after the hook returns `Ok`.
 
-**No synchronous sends to the same sender.** During 1:1 message processing the per-sender Signal lock is held. Performing a synchronous client operation to the same sender inside the hook (e.g. a blocking reply) will deadlock. Use `tokio::spawn` if you need to reply from within the hook.
+**No synchronous sends to a sender in the batch.** During 1:1 message processing the per-sender Signal lock is held. Performing a synchronous client operation to a sender present in the batch (e.g. a blocking reply) will deadlock. Use `tokio::spawn` if you need to reply from within the hook.
 
-**Scope.** The hook covers end-to-end encrypted messages (1:1 and group). Newsletter and broadcast channel messages use a separate ack path and are not gated by the hook.
+**Scope.** The hook covers end-to-end encrypted messages (1:1 and group). Newsletter and broadcast channel messages use a separate ack path and are never gated by the hook — they dispatch `Event::Messages` directly. PDO placeholder recoveries (`info.unavailable_request_id` set) bypass the hook the same way.
 
-**Buffer-write failure.** If the durable buffer write itself fails (e.g. disk full), the ack is suppressed, but if the process does not crash the Signal ratchet still advances. That one message degrades to at-most-once on its next redelivery (it can no longer be decrypted and there is no buffered copy to replay). The guarantee holds whenever the buffer write succeeds.
+**Buffer-write failure.** If the durable buffer write itself fails (e.g. disk full), the acks for that batch are suppressed, but if the process does not crash the Signal ratchet still advances. Those messages degrade to at-most-once on their next redelivery (they can no longer be decrypted and there is no buffered copy to replay). The guarantee holds whenever the buffer write succeeds.
 
 **Redelivery `info` fields.** On a redelivery replay, `info` is re-parsed from the stanza. A few fields derived during the first dispatch (the ephemeral timer, encrypted comment threading) may be absent. The `message` body is always the original.
 
+**`Event::Messages` is at-least-once too, when a hook is registered.** A redelivery whose buffered copy survived (e.g. the post-commit cleanup failed and the ack was lost) replays through the same commit and dispatches the event again — event handlers need the same idempotency discipline as the hook if they perform side effects.
+
 ## Full Example
 
-The repository ships `examples/durability_hook.rs` — a file-backed archiver that appends each message to disk with `fsync` before returning `Ok`, and seeds the deduplication set from the archive on startup so dedupe survives a restart.
+The repository ships `examples/durability_hook.rs` — a file-backed archiver that appends each message in a batch to disk with a single `fsync` before returning `Ok`, and seeds the deduplication set from the archive on startup so dedupe survives a restart.
 
 ```bash
 cargo run --example durability_hook
@@ -153,41 +184,59 @@ cargo run --example durability_hook
 Key patterns from that example:
 
 ```rust
-#[async_trait]
+#[async_trait::async_trait]
 impl InboundDurabilityHook for InboxArchiver {
-    async fn on_message(
+    async fn on_messages(
         &self,
         _client: Arc<Client>,
-        info: &MessageInfo,
-        message: &wa::Message,
+        batch: &[whatsapp_rust::types::events::InboundMessage],
     ) -> anyhow::Result<()> {
-        let key = (
-            info.source.chat.to_string(),
-            info.source.sender.to_string(),
-            info.id.clone(),
-        );
-
-        // Idempotency check first.
-        if self.seen.lock()?.contains(&key) {
-            return Ok(());
+        // Live traffic arrives one message at a time; an offline drain hands
+        // over a whole batch. Either way the commit below is a single append +
+        // fsync, so the durability cost amortizes over the batch.
+        let mut lines = String::new();
+        let mut keys: Vec<CommitKey> = Vec::with_capacity(batch.len());
+        {
+            let seen = self.seen.lock().map_err(|_| anyhow::anyhow!("seen lock poisoned"))?;
+            for m in batch {
+                let key: CommitKey = (
+                    m.info.source.chat.to_string(),
+                    m.info.source.sender.to_string(),
+                    m.info.id.clone(),
+                );
+                // Dedup against the archive AND earlier entries of this same
+                // batch, so one fsync can never append a key twice.
+                if seen.contains(&key) || keys.contains(&key) {
+                    continue;
+                }
+                let preview = m.message.conversation.as_deref().unwrap_or("<non-text>").replace(['\t', '\n'], " ");
+                lines.push_str(&format!("{}\t{}\t{}\t{preview}\n", key.0, key.1, key.2));
+                keys.push(key);
+            }
         }
 
-        // Durable commit on a blocking thread — disk I/O must not run
-        // on the async receive thread.
-        let file = Arc::clone(&self.file);
-        let line = format!("{}\t{}\t{}\n", key.0, key.1, key.2);
-        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            let mut f = file.lock().unwrap();
-            f.write_all(line.as_bytes())?;
-            f.sync_all()  // Must sync before returning Ok
-        }).await??;
+        if !keys.is_empty() {
+            // Durable commit on a blocking thread: append then fsync — all-or-
+            // nothing for the batch. Returning Ok only after sync_all means
+            // "safe to ack every message"; any error returns Err, so the acks
+            // are suppressed and the server redelivers the batch later.
+            let file = Arc::clone(&self.file);
+            tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+                let mut f = file.lock().expect("file lock poisoned");
+                f.write_all(lines.as_bytes())?;
+                f.sync_all()
+            }).await.map_err(|e| anyhow::anyhow!("archive write task failed: {e}"))??;
 
-        self.seen.lock()?.insert(key);
+            let mut seen = self.seen.lock().map_err(|_| anyhow::anyhow!("seen lock poisoned"))?;
+            for key in keys {
+                seen.insert(key);
+            }
+        }
         Ok(())
     }
 }
 ```
 
 <Tip>
-Always use `tokio::task::spawn_blocking` for disk I/O inside the hook. Blocking calls on the async thread stall the entire receive pipeline.
+Always use `tokio::task::spawn_blocking` for disk I/O inside the hook. Blocking calls on the async thread stall the entire receive pipeline, including the batch that is waiting to commit.
 </Tip>

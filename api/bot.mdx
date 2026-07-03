@@ -25,7 +25,7 @@ The Bot is the **recommended way** to use whatsapp-rust. It provides sensible de
 ```rust
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::TokioRuntime;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, InboundMessage};
 
 let mut bot = Bot::builder()
     .with_backend(backend)
@@ -34,8 +34,10 @@ let mut bot = Bot::builder()
     .with_runtime(TokioRuntime)
     .on_event(|event, client| async move {
         match &*event {
-            Event::Message(msg, info) => {
-                println!("Message from {}: {:?}", info.source.sender, msg);
+            Event::Messages(batch) => {
+                for InboundMessage { message: msg, info } in batch.iter() {
+                    println!("Message from {}: {:?}", info.source.sender, msg);
+                }
             }
             Event::Connected(_) => {
                 println!("Connected to WhatsApp!");
@@ -230,13 +232,15 @@ use waproto::whatsapp as wa;
 Bot::builder()
     .on_event(|event, client| async move {
         match &*event {
-            Event::Message(msg, info) => {
+            Event::Messages(batch) => {
                 // Reply to messages
-                let reply = wa::Message {
-                    conversation: Some("Hello back!".to_string()),
-                    ..Default::default()
-                };
-                let _ = client.send_message(info.source.chat.clone(), reply).await;
+                for InboundMessage { info, .. } in batch.iter() {
+                    let reply = wa::Message {
+                        conversation: Some("Hello back!".to_string()),
+                        ..Default::default()
+                    };
+                    let _ = client.send_message(info.source.chat.clone(), reply).await;
+                }
             }
             Event::Connected(_) => {
                 println!("Bot online!");
@@ -264,9 +268,9 @@ Like `on_event`, but registers the handler with a narrowed [`EventInterest`](/co
 use wacore::types::events::EventKind;
 
 Bot::builder()
-    .on_event_for(&[EventKind::Message, EventKind::Connected], |event, client| async move {
+    .on_event_for(&[EventKind::Messages, EventKind::Connected], |event, client| async move {
         match &*event {
-            Event::Message(msg, info) => { /* … */ }
+            Event::Messages(batch) => { /* … */ }
             Event::Connected(_) => println!("online"),
             _ => {}
         }
@@ -279,7 +283,7 @@ Bot::builder()
 For scenarios where you need to process events outside of a closure (e.g., testing, custom event loops, or runtime-agnostic code), use `ChannelEventHandler` with `register_handler` instead of `on_event`:
 
 ```rust
-use wacore::types::events::{ChannelEventHandler, Event};
+use wacore::types::events::{ChannelEventHandler, Event, InboundMessage};
 
 let mut bot = Bot::builder()
     .with_backend(backend)
@@ -299,8 +303,10 @@ let handle = bot.run().await?;
 while let Ok(event) = event_rx.recv().await {
     match &*event {
         Event::Connected(_) => println!("Connected!"),
-        Event::Message(msg, info) => {
-            println!("Message from {}", info.source.sender);
+        Event::Messages(batch) => {
+            for InboundMessage { info, .. } in batch.iter() {
+                println!("Message from {}", info.source.sender);
+            }
         }
         _ => {}
     }
@@ -672,7 +678,7 @@ If a [`with_task_instrument`](#with_task_instrument) hook is configured, `run()`
 
 ## MessageContext
 
-A convenience helper for message handling. You can construct it from the `Event::Message` components:
+A convenience helper for message handling. You can construct it from an `InboundMessage` — the item type carried by `Event::Messages`' `MessageBatch`:
 
 ```rust
 pub struct MessageContext {
@@ -683,7 +689,7 @@ pub struct MessageContext {
 ```
 
 <Note>
-Since v0.6 `message` is `Arc<wa::Message>` (was `Box<wa::Message>`). This matches the `Event::Message` payload and lets `from_event` / `from_arc` reuse the bus-dispatched `Arc` with zero deep clones.
+Since v0.6 `message` is `Arc<wa::Message>` (was `Box<wa::Message>`). This matches the `InboundMessage` payload and lets `from_inbound` / `from_arc` reuse the bus-dispatched `Arc` with zero deep clones.
 </Note>
 
 ### from_parts
@@ -700,15 +706,15 @@ Constructs a `MessageContext` from individual message components. Internally clo
 pub fn from_arc(message: Arc<wa::Message>, info: &MessageInfo, client: Arc<Client>) -> Self
 ```
 
-Constructs a `MessageContext` from an existing `Arc<wa::Message>` without copying the body — pair this with the `Arc` you receive from `Event::Message` to keep dispatch zero-clone.
+Constructs a `MessageContext` from an existing `Arc<wa::Message>` without copying the body — pair this with the `Arc` you receive from an `InboundMessage` to keep dispatch zero-clone.
 
-### from_event
+### from_inbound
 
 ```rust
-pub fn from_event(event: &Event, client: Arc<Client>) -> Option<Self>
+pub fn from_inbound(inbound: &InboundMessage, client: Arc<Client>) -> Self
 ```
 
-Extracts a `MessageContext` from an `Event`. Returns `None` if the event is not an `Event::Message`. Reuses the existing `Arc<wa::Message>` rather than cloning the body.
+Extracts a `MessageContext` from a single `InboundMessage` (one item of a `MessageBatch`). Unlike the removed `from_event`, this is infallible — there's no "wrong event kind" case once you're iterating `Event::Messages`' batch. Reuses the existing `Arc<wa::Message>` rather than cloning the body. This is what `Bot::on_message` uses internally to fan a batch out to your per-message handler, invoked once per item in arrival order.
 
 ### send_message
 
@@ -737,7 +743,8 @@ use waproto::whatsapp as wa;
 use whatsapp_rust::bot::MessageContext;
 
 .on_event(|event, client| async move {
-    if let Some(ctx) = MessageContext::from_event(&event, client) {
+    for inbound in event.messages() {
+        let ctx = MessageContext::from_inbound(inbound, client.clone());
         let reply = wa::Message {
             extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("Quoted reply!".to_string()),
@@ -790,8 +797,9 @@ Internally this calls [`Client::send_reaction`](/api/send#send_reaction) with `s
 use whatsapp_rust::bot::MessageContext;
 
 .on_event(|event, client| async move {
-    if let Some(ctx) = MessageContext::from_event(&event, client) {
+    for inbound in event.messages() {
         // React with a thumbs-up to every incoming message.
+        let ctx = MessageContext::from_inbound(inbound, client.clone());
         let _ = ctx.react("👍").await;
     }
 })
@@ -809,7 +817,7 @@ Newsletter (channel) messages don't flow through `MessageContext::react`. Use [`
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, InboundMessage};
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use waproto::whatsapp as wa;
@@ -829,14 +837,16 @@ async fn main() -> anyhow::Result<()> {
         .skip_history_sync() // Bot only needs new messages
         .on_event(|event, client| async move {
             match &*event {
-                Event::Message(msg, info) => {
+                Event::Messages(batch) => {
                     // Echo messages back
-                    if let Some(text) = &msg.conversation {
-                        let reply = wa::Message {
-                            conversation: Some(format!("You said: {}", text)),
-                            ..Default::default()
-                        };
-                        let _ = client.send_message(info.source.chat.clone(), reply).await;
+                    for InboundMessage { message: msg, info } in batch.iter() {
+                        if let Some(text) = &msg.conversation {
+                            let reply = wa::Message {
+                                conversation: Some(format!("You said: {}", text)),
+                                ..Default::default()
+                            };
+                            let _ = client.send_message(info.source.chat.clone(), reply).await;
+                        }
                     }
                 }
                 Event::Connected(_) => {

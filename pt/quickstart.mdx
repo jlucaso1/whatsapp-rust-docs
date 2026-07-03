@@ -16,7 +16,7 @@ use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, InboundMessage};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,8 +34,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::PairingQrCode { code, .. } => {
                     println!("Scan this QR code with WhatsApp:\n{}", code);
                 }
-                Event::Message(msg, info) => {
-                    println!("Message from {}: {:?}", info.source.sender, msg);
+                Event::Messages(batch) => {
+                    for InboundMessage { message: msg, info } in batch.iter() {
+                        println!("Message from {}: {:?}", info.source.sender, msg);
+                    }
                 }
                 _ => {}
             }
@@ -88,8 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           Event::PairingQrCode { code, .. } => {
               println!("QR Code:\n{}", code);
           }
-          Event::Message(msg, info) => {
-              // Trate a mensagem recebida
+          Event::Messages(batch) => {
+              for InboundMessage { message: msg, info } in batch.iter() {
+                  // Trate a mensagem recebida
+              }
           }
           Event::Connected(_) => {
               println!("Connected successfully!");
@@ -134,19 +138,21 @@ use waproto::whatsapp as wa;
         Event::PairingQrCode { code, .. } => {
             println!("QR Code:\n{}", code);
         }
-        Event::Message(msg, info) => {
-            // Verifica se a mensagem é um texto dizendo "ping"
-            if let Some(text) = msg.text_content() {
-                if text == "ping" {
-                    // Cria a mensagem de resposta
-                    let reply = wa::Message {
-                        conversation: Some("pong".to_string()),
-                        ..Default::default()
-                    };
+        Event::Messages(batch) => {
+            for InboundMessage { message: msg, info } in batch.iter() {
+                // Verifica se a mensagem é um texto dizendo "ping"
+                if let Some(text) = msg.text_content() {
+                    if text == "ping" {
+                        // Cria a mensagem de resposta
+                        let reply = wa::Message {
+                            conversation: Some("pong".to_string()),
+                            ..Default::default()
+                        };
 
-                    // Envia a resposta
-                    if let Err(e) = client.send_message(info.source.chat.clone(), reply).await {
-                        eprintln!("Failed to send reply: {}", e);
+                        // Envia a resposta
+                        if let Err(e) = client.send_message(info.source.chat.clone(), reply).await {
+                            eprintln!("Failed to send reply: {}", e);
+                        }
                     }
                 }
             }
@@ -285,7 +291,8 @@ Para um tratamento de mensagens mais limpo, use `MessageContext` para encapsular
 use whatsapp_rust::bot::{Bot, MessageContext};
 
 .on_event(|event, client| async move {
-    if let Some(ctx) = MessageContext::from_event(&event, client) {
+    for inbound in event.messages() {
+        let ctx = MessageContext::from_inbound(inbound, client.clone());
         handle_message(&ctx).await;
     }
 })
@@ -346,7 +353,7 @@ use chrono::{Local, Utc};
 use log::{error, info};
 use std::sync::Arc;
 use wacore::proto_helpers::MessageExt;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, InboundMessage};
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::TokioRuntime;
@@ -386,9 +393,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::PairingQrCode { code, .. } => {
                     println!("\n{}", code);
                 }
-                Event::Message(msg, info) => {
-                    let ctx = MessageContext::from_parts(msg, info, client);
-                    handle_message(&ctx).await;
+                Event::Messages(batch) => {
+                    for InboundMessage { message: msg, info } in batch.iter() {
+                        let ctx = MessageContext::from_parts(msg, info, client.clone());
+                        handle_message(&ctx).await;
+                    }
                 }
                 Event::Connected(_) => info!("Bot connected!"),
                 Event::LoggedOut(_) => error!("Bot was logged out!"),

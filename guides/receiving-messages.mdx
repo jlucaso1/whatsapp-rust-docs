@@ -62,8 +62,9 @@ See [Bot API reference](/api/bot#event-handling) for full details.
 
 ```rust
 pub enum Event {
-    /// Successfully decrypted message
-    Message(Arc<wa::Message>, Arc<MessageInfo>),
+    /// One or more successfully decrypted messages (batch of one on live
+    /// traffic, an accumulated batch during the offline drain)
+    Messages(MessageBatch),
     
     /// Message that couldn't be decrypted
     UndecryptableMessage(UndecryptableMessage),
@@ -185,19 +186,21 @@ See [WAProto API reference](/api/waproto) for the full message type hierarchy.
 
 ```rust
 match event {
-    Event::Message(message, info) => {
-        // Simple text
-        if let Some(text) = &message.conversation {
-            println!("Text: {}", text);
-        }
-        
-        // Extended text (with links, formatting)
-        if let Some(ext) = &message.extended_text_message {
-            if let Some(text) = &ext.text {
-                println!("Extended text: {}", text);
+    Event::Messages(batch) => {
+        for InboundMessage { message, info } in batch.iter() {
+            // Simple text
+            if let Some(text) = &message.conversation {
+                println!("Text: {}", text);
             }
-            if let Some(url) = &ext.matched_text {
-                println!("Contains link: {}", url);
+
+            // Extended text (with links, formatting)
+            if let Some(ext) = &message.extended_text_message {
+                if let Some(text) = &ext.text {
+                    println!("Extended text: {}", text);
+                }
+                if let Some(url) = &ext.matched_text {
+                    println!("Contains link: {}", url);
+                }
             }
         }
     }
@@ -263,17 +266,19 @@ if let Some(reaction) = &message.reaction_message {
 
 ### Channel Comments
 
-Encrypted channel comments from Community Announcement Groups are decrypted transparently and dispatched as `Event::Message` carrying the comment body. The parent post key surfaces on `MessageInfo::comment_target` (the inner `Message` proto has no slot for the threading link):
+Encrypted channel comments from Community Announcement Groups are decrypted transparently and dispatched as `Event::Messages` carrying the comment body. The parent post key surfaces on `MessageInfo::comment_target` (the inner `Message` proto has no slot for the threading link):
 
 ```rust
-Event::Message(msg, info) => {
-    if let Some(parent_key) = &info.comment_target {
-        // This Event::Message is a decrypted CAG channel comment.
-        println!("Comment on post: {:?}", parent_key.id);
-        println!("Post author:     {:?}", parent_key.participant);
+Event::Messages(batch) => {
+    for InboundMessage { message: msg, info } in batch.iter() {
+        if let Some(parent_key) = &info.comment_target {
+            // This item is a decrypted CAG channel comment.
+            println!("Comment on post: {:?}", parent_key.id);
+            println!("Post author:     {:?}", parent_key.participant);
 
-        if let Some(text) = msg.text_content() {
-            println!("Comment text: {}", text);
+            if let Some(text) = msg.text_content() {
+                println!("Comment text: {}", text);
+            }
         }
     }
 }
@@ -309,18 +314,20 @@ When you send a message from one device, other devices receive it as a `DeviceSe
 ```rust
 // The library handles this automatically - you receive the inner message directly
 match event {
-    Event::Message(message, info) => {
-        // If this was originally a DeviceSentMessage, the library has:
-        // 1. Extracted the inner message content
-        // 2. Merged message_context_info from outer + inner
-        //    - message_secret: inner value, fallback to outer
-        //    - limit_sharing_v2: always from outer
-        //    - thread_id: inner if non-empty, otherwise outer
-        //    - bot_metadata: inner value, fallback to outer
-        
-        // You can safely access the merged context
-        if let Some(ctx) = &message.message_context_info {
-            println!("Thread: {:?}", ctx.thread_id);
+    Event::Messages(batch) => {
+        for InboundMessage { message, info } in batch.iter() {
+            // If this was originally a DeviceSentMessage, the library has:
+            // 1. Extracted the inner message content
+            // 2. Merged message_context_info from outer + inner
+            //    - message_secret: inner value, fallback to outer
+            //    - limit_sharing_v2: always from outer
+            //    - thread_id: inner if non-empty, otherwise outer
+            //    - bot_metadata: inner value, fallback to outer
+
+            // You can safely access the merged context
+            if let Some(ctx) = &message.message_context_info {
+                println!("Thread: {:?}", ctx.thread_id);
+            }
         }
     }
     _ => {}
@@ -338,11 +345,13 @@ Self-sent messages synced from your primary device are automatically unwrapped. 
 Messages are automatically decrypted by the client:
 
 ```rust
-// The Event::Message already contains decrypted content
+// The Event::Messages batch already contains decrypted content
 match event {
-    Event::Message(message, info) => {
-        // Message is already decrypted and ready to use
-        println!("Decrypted: {:?}", message.conversation);
+    Event::Messages(batch) => {
+        for InboundMessage { message, .. } in batch.iter() {
+            // Message is already decrypted and ready to use
+            println!("Decrypted: {:?}", message.conversation);
+        }
     }
     _ => {}
 }
@@ -449,9 +458,9 @@ Only a plain (`Unknown`) fanout is recovered via PDO. The flow for that case is:
 2. An `UndecryptableMessage` event is dispatched immediately with `is_unavailable: true`
 3. A PDO request (`PlaceholderMessageResend`) is sent to your own bare JID (server routes to all devices including device 0)
 4. The phone responds with the full `WebMessageInfo` containing the decrypted message
-5. The client validates the response came from device 0 (primary phone) and dispatches the recovered message as a normal `Event::Message`
+5. The client validates the response came from device 0 (primary phone) and dispatches the recovered message as a normal `Event::Messages` — event-only, bypassing the durability hook and the offline-drain batcher (delivered immediately, `BatchOrigin::Live`)
 
-For `ViewOnce`, `Hosted`, and `Bot`, only steps 1–2 happen: the client dispatches `UndecryptableMessage` and acks immediately. There is no PDO round-trip and no follow-up `Event::Message` to wait for.
+For `ViewOnce`, `Hosted`, and `Bot`, only steps 1–2 happen: the client dispatches `UndecryptableMessage` and acks immediately. There is no PDO round-trip and no follow-up `Event::Messages` to wait for.
 
 The recovered `MessageInfo` (for the PDO-recovered `Unknown` case) includes `unavailable_request_id` — the PDO request message ID — so you can correlate recovered messages with the original `UndecryptableMessage` event.
 
@@ -461,7 +470,7 @@ Event::UndecryptableMessage(undec) => {
         match undec.unavailable_type {
             UnavailableType::Unknown => {
                 // Content is being requested from your phone via PDO.
-                // You'll receive an Event::Message when the phone responds.
+                // You'll receive an Event::Messages when the phone responds.
                 println!("Unavailable message — requesting from phone");
             }
             UnavailableType::ViewOnce => {
@@ -479,9 +488,11 @@ Event::UndecryptableMessage(undec) => {
 
 // When the phone responds to a PDO request (Unknown fanouts only), the
 // recovered message includes the request ID:
-Event::Message(msg, info) => {
-    if let Some(request_id) = &info.unavailable_request_id {
-        println!("Recovered via PDO (request: {})", request_id);
+Event::Messages(batch) => {
+    for InboundMessage { info, .. } in batch.iter() {
+        if let Some(request_id) = &info.unavailable_request_id {
+            println!("Recovered via PDO (request: {})", request_id);
+        }
     }
 }
 ```
@@ -565,7 +576,7 @@ match event {
 
 By default, the client acknowledges a message to the server as soon as it is decrypted. If your process crashes before you persist the message, it is lost — the server will not redeliver it.
 
-Register an `InboundDurabilityHook` to defer the ack until your consumer durably commits the message:
+Register an `InboundDurabilityHook` to defer the ack until your consumer durably commits the message(s). Live traffic calls the hook with a batch of one; an offline drain hands over an accumulated batch (WhatsApp Web's `MessageProcessorCache` granularity), so the durability cost amortizes over the batch instead of paying a round-trip per message:
 
 ```rust
 use std::sync::Arc;
@@ -577,15 +588,19 @@ struct MyStore;
 
 #[async_trait]
 impl InboundDurabilityHook for MyStore {
-    async fn on_message(
+    async fn on_messages(
         &self,
         _client: Arc<Client>,
-        info: &MessageInfo,
-        message: &wa::Message,
+        batch: &[InboundMessage],
     ) -> anyhow::Result<()> {
-        // Return Ok only after the commit is durable.
-        // Return Err to suppress the ack and trigger redelivery.
-        my_db_insert(&info.id, message).await?;
+        // This loop commits each item independently, so a later item's `?`
+        // can leave earlier items already committed while the SDK still
+        // redelivers the whole batch on Err. `my_db_insert` MUST be an
+        // idempotent upsert (e.g. `INSERT ... ON CONFLICT DO NOTHING`), or
+        // wrap the loop in one transaction — see the note below.
+        for item in batch {
+            my_db_insert(&item.info.id, &item.message).await?;
+        }
         Ok(())
     }
 }
@@ -597,9 +612,9 @@ let bot = Bot::builder()
     .await?;
 ```
 
-The hook **must be idempotent** — deduplicate by `(info.source.chat, info.source.sender, info.id)` since a crash after the consumer commits but before the ack lands will replay the message.
+The hook **must be idempotent** — deduplicate by `(info.source.chat, info.source.sender, info.id)` since a crash after the consumer commits but before the ack lands will replay the message, and a failed batch is redelivered whole.
 
-See [Inbound Durability Hook](/advanced/inbound-durability) for the full contract, caveats, and a worked example.
+See [Inbound Durability Hook](/advanced/inbound-durability) for the full contract, batching triggers, caveats, and a worked example.
 
 ### Custom encryption handlers
 
@@ -695,10 +710,12 @@ See [Signal Protocol](/advanced/signal-protocol) for more on session management.
 ```rust
 .on_event(|event, client| async move {
     match &*event {
-        Event::Message(message, info) => {
-            // Process message
-            if let Err(e) = process_message(message, info, client).await {
-                eprintln!("Error processing message {}: {:?}", info.id, e);
+        Event::Messages(batch) => {
+            // Process each message in the batch
+            for InboundMessage { message, info } in batch.iter() {
+                if let Err(e) = process_message(message, info, client.clone()).await {
+                    eprintln!("Error processing message {}: {:?}", info.id, e);
+                }
             }
         }
         Event::UndecryptableMessage(undecryptable) => {
@@ -754,7 +771,7 @@ Always handle critical events:
 
 ```rust
 match &*event {
-    Event::Message(message, info) => { /* ... */ }
+    Event::Messages(batch) => { /* ... */ }
     Event::Connected(_) => { /* Initialize */ }
     Event::Disconnected(_) => { /* Cleanup */ }
     Event::LoggedOut(_) => { /* Re-authenticate */ }
@@ -768,13 +785,13 @@ Spawn tasks for long-running operations:
 
 ```rust
 .on_event(|event, client| async move {
-    if let Event::Message(message, info) = &*event {
+    if matches!(&*event, Event::Messages(_)) {
         // Spawn task for heavy processing — Arc clone is O(1)
         let client = client.clone();
         let event = event.clone();
         tokio::spawn(async move {
-            if let Event::Message(message, info) = &*event {
-                process_heavy_task(message, info, client).await;
+            for InboundMessage { message, info } in event.messages() {
+                process_heavy_task(message, info, client.clone()).await;
             }
         });
     }

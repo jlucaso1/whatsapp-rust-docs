@@ -1844,6 +1844,12 @@ Validates that the server's copy of the Signal Protocol key bundle matches local
 
 See [Signal Protocol - Digest key validation](/advanced/signal-protocol#digest-key-validation) for the wire format and detailed validation process.
 
+### Signed pre-key rotation
+
+There is no public method for this — it runs automatically. Once per connection, after the post-login pre-key upload, the client checks whether the signed pre-key is due for rotation (weekly by default) and, if so, generates a fresh one, uploads it via an `encrypt`/`<rotate>` IQ, and retains the previous key so in-flight prekey messages still decrypt. Rotation failures are logged and retried on a later connect — they never fail login.
+
+See [Signal Protocol - Signed pre-key rotation (RotateKeyJob)](/advanced/signal-protocol#signed-pre-key-rotation-rotatekeyjob) for the full sequence, wire format, and error handling.
+
 ---
 
 ## Diagnostics

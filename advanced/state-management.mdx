@@ -257,10 +257,28 @@ pub enum DeviceCommand {
     SetPropsHash(Option<String>),
     SetNextPreKeyId(u32),
     SetLidMigrated(bool),
+    /// Install a freshly rotated signed pre-key (WA Web `RotateKeyJob`). Sets
+    /// the key trio and stamps the rotation cadence clock in one command so
+    /// they can never be observed split.
+    SetSignedPreKey {
+        key_pair: KeyPair,
+        id: u32,
+        signature: [u8; 64],
+        rotation_ms: i64,
+    },
+    /// Seed the rotation cadence baseline without touching the key. Used once
+    /// for devices upgraded in with `last_signed_pre_key_rotation_ms == 0`, so
+    /// the first rotation lands a full interval out instead of firing
+    /// immediately on the next connect.
+    SetSignedPreKeyRotationBaseline(i64),
 }
 ```
 
 Location: `wacore/src/store/commands.rs`
+
+<Note>
+  `DeviceCommand` cannot derive `Debug` once a variant holds a `KeyPair` — `KeyPair` deliberately omits `Debug` so private key material never formats into logs. The enum has a hand-written `Debug` impl instead; `SetSignedPreKey`'s logs only `id` and `rotation_ms`, redacting the key pair and signature via `finish_non_exhaustive()`.
+</Note>
 
 ### Why Commands?
 
@@ -298,6 +316,15 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::SetLidMigrated(migrated) => {
             device.lid_migrated = migrated;
+        }
+        DeviceCommand::SetSignedPreKey { key_pair, id, signature, rotation_ms } => {
+            device.signed_pre_key = key_pair;
+            device.signed_pre_key_id = id;
+            device.signed_pre_key_signature = signature;
+            device.last_signed_pre_key_rotation_ms = rotation_ms;
+        }
+        DeviceCommand::SetSignedPreKeyRotationBaseline(rotation_ms) => {
+            device.last_signed_pre_key_rotation_ms = rotation_ms;
         }
         // ... handle all variants
     }

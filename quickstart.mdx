@@ -343,13 +343,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let handle = bot.spawn(); // bot runs in the background; client is available via handle.client()
 
-    tokio::signal::ctrl_c().await?;
+    whatsapp_rust::shutdown_signal().await;
     handle.shutdown().await; // graceful: flushes pending state, then stops
     Ok(())
 }
 ```
 
 `BotHandle` also exposes `abort()` as an escape hatch (skips the flush). Awaiting the handle resolves to `()` once the run loop exits.
+
+<Note>
+  Prefer [`shutdown_signal()`](/installation#graceful-shutdown) over a bare `tokio::signal::ctrl_c()`: it resolves on **SIGTERM as well as SIGINT**. Supervisors like `docker stop`, Kubernetes, and systemd stop a process with SIGTERM first — a Ctrl+C-only wait never sees it, so cleanup is skipped and the process is hard-killed once the stop grace period elapses. Requires the `signal` feature, on by default.
+</Note>
 
 ## Complete example with logging
 

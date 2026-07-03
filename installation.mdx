@@ -286,7 +286,18 @@ docker run --rm -v whatsapp-data:/data alpine chown -R 65532:65532 /data
 
 The container supports graceful shutdown out of the box. When the `signal` feature is enabled (it is by default), the bot listens for `SIGTERM` and `Ctrl+C`, disconnects cleanly from WhatsApp, and exits. Docker sends `SIGTERM` on `docker stop`, so the bot will shut down gracefully without losing session state.
 
-Since the image is built from `scratch`, PID 1 is the binary itself. It handles signals directly — no init system like `tini` is needed.
+Since the image is built from `scratch`, PID 1 is the binary itself. It handles signals directly — no init system like `tini` is needed. This matters more than usual for PID 1: the kernel silently drops any signal a PID-1 process has no handler installed for, so an unhandled `SIGTERM` doesn't just fall back to the default disposition — it's dropped entirely, and the process only stops once `docker stop`'s grace period expires and it's `SIGKILL`ed.
+
+The bundled `demo` and `voip-cli` binaries get this via `whatsapp_rust::shutdown_signal()` — an exported async fn (gated on the `signal` feature) that resolves on the first of SIGINT or SIGTERM on Unix, or Ctrl+C elsewhere. Both handlers are armed before the future first suspends, so a signal arriving right after the first poll is still delivered. Use it in your own `main()` in place of a bare `tokio::signal::ctrl_c()` if you also deploy under Docker/Kubernetes/systemd:
+
+```rust
+tokio::select! {
+    _ = &mut handle => {}
+    _ = whatsapp_rust::shutdown_signal() => {
+        handle.shutdown().await;
+    }
+}
+```
 
 <Note>
   The Dockerfile detects the host target triple at build time via `rustc -vV`, so `docker buildx build --platform linux/arm64` (or any other supported platform) works natively without modifying the Dockerfile. The nightly-only build flags (`-Zshare-generics`, `-Zbuild-std`) apply only inside this image — stable consumers and local `cargo build` invocations are unaffected.

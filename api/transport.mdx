@@ -187,7 +187,9 @@ pub enum DisconnectReason {
 
 ```rust
 impl DisconnectReason {
-    pub fn is_clean_shutdown(&self) -> bool;
+    pub fn is_clean_shutdown(&self) -> bool {
+        // ...
+    }
 }
 ```
 
@@ -196,8 +198,8 @@ impl DisconnectReason {
 | Variant | `is_clean_shutdown()` |
 |---------|------------------------|
 | `StreamEnded` | `true` — EOF with no close frame is how the WA server recycles a connection |
-| `ServerClose { code: None \| Some(1000) \| Some(1001), .. }` | `true` — no code, normal closure, or going-away are graceful |
-| `ServerClose { code: Some(_), .. }` (any other code) | `false` — protocol/server error, restart, etc. |
+| `ServerClose` with code `None`, `Some(1000)`, or `Some(1001)` | `true` — no code, normal closure, or going-away are graceful |
+| `ServerClose` with any other code | `false` — protocol/server error, restart, etc. |
 | `ReadError(_)` | `false` — a transport read/IO error is always a real failure |
 | `Unknown` | `false` — an unreported reason is never assumed benign |
 

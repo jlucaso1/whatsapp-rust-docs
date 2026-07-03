@@ -270,9 +270,39 @@ async fn delete_tc_token(&self, jid: &str) -> Result<()>;
 /// Get all JIDs that have stored tc tokens
 async fn get_all_tc_token_jids(&self) -> Result<Vec<String>>;
 
-/// Delete tc tokens with token_timestamp older than cutoff (returns count deleted)
-async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
+/// Delete tc tokens that have no live state left. A row is removed only when
+/// its received token is expired-or-absent (token_timestamp < token_cutoff, or
+/// empty) AND its sender bucket is expired-or-absent (sender_timestamp <
+/// sender_cutoff, or null) — so recent sender-side rate-limit state is never
+/// dropped just because the received token expired. Returns count deleted.
+async fn delete_expired_tc_tokens(&self, token_cutoff: i64, sender_cutoff: i64) -> Result<u32>;
+
+/// Advance sender_timestamp for a contact toward `sender_timestamp`, inserting
+/// a byte-less placeholder when no entry exists and preserving any existing
+/// token bytes. The stored value only ever moves forward (max), so concurrent
+/// writers (post-send issuance, history sync) converge regardless of ordering.
+/// Must be atomic w.r.t. `put_tc_token`/`store_received_tc_token` — the default
+/// is a read-modify-write; override with a single atomic upsert (`SqliteStore`
+/// and `InMemoryBackend` both do).
+async fn touch_tc_token_sender_timestamp(&self, jid: &str, sender_timestamp: i64) -> Result<()> {
+    // default: read-modify-write via get_tc_token + put_tc_token
+}
+
+/// Store a token received from a contact, preserving any existing
+/// `sender_timestamp`. The symmetric counterpart of
+/// `touch_tc_token_sender_timestamp` — each writer owns its own field, so the
+/// notification path never drops a sender bucket the issuance path wrote
+/// concurrently. Same atomicity requirement as above.
+async fn store_received_tc_token(&self, jid: &str, token: &[u8], token_timestamp: i64) -> Result<()> {
+    // default: read-modify-write via get_tc_token + put_tc_token
+}
 ```
+
+<Note>
+`delete_expired_tc_tokens` gained a second `sender_cutoff` parameter — **this is a breaking change** for any custom backend that overrides it; update the signature to `(&self, token_cutoff: i64, sender_cutoff: i64) -> Result<u32>` and prune on both windows independently (see the built-in `SqliteStore`/`InMemoryBackend` implementations for the two-filter pattern).
+
+`touch_tc_token_sender_timestamp` and `store_received_tc_token` are new defaulted methods — existing custom backends compile and work unchanged, but should override both with an atomic upsert if the backend supports one, since the default read-modify-write can race a concurrent writer touching the same row (post-send issuance vs. an incoming `privacy_token` notification).
+</Note>
 
 ### Sent message store
 
@@ -703,6 +733,10 @@ pub struct TcTokenEntry {
     pub sender_timestamp: Option<i64>,     // When we sent our token
 }
 ```
+
+<Note>
+An entry with an empty `token` and only `sender_timestamp` set is a byte-less placeholder written by `touch_tc_token_sender_timestamp` — it records that a post-send issuance IQ succeeded before any real token had been received from the contact.
+</Note>
 
 ### DeviceListRecord
 

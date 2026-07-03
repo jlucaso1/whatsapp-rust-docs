@@ -48,6 +48,10 @@ if let Some(report_id) = result.report_id {
 }
 ```
 
+<Note>
+When `from_jid` is set, `send_spam_report` automatically looks up and attaches that contact's TC token to the IQ, gated behind the `enable_spam_report_iq_with_privacy_token` AB prop. This matches WhatsApp Web's `OutSpamTCTokenMixin` and lets the report be accepted for privacy-restricted accounts. No caller action is needed — see [TC Token](/api/tctoken#automatic-usage).
+</Note>
+
 ### Group spam report
 
 ```rust

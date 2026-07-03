@@ -42,11 +42,11 @@ let message = wa::Message {
 Sub-message fields (nested protobuf messages) are `buffa::MessageField<T>`, not `Option<Box<T>>` or `Option<T>`. Construct one with `buffa::MessageField::some(..)`, and read it back with `.as_option()`, `.is_set()`, or `.is_unset()`.
 
 <Note>
-  `buffa` is not re-exported by `whatsapp-rust`, so naming `buffa::MessageField` yourself requires adding `buffa = "0.8"` to your own `Cargo.toml` — see [Installation](/installation#add-to-your-project). This is only needed if you construct or read protobuf sub-message fields directly; plain scalar fields (`conversation`, etc.) don't need it.
+  `waproto` re-exports `buffa` (`waproto::buffa`), and `whatsapp-rust` in turn re-exports it as `whatsapp_rust::buffa` (with `MessageField` also available directly from `prelude`). Naming `buffa::MessageField` no longer requires a direct `buffa` dependency of your own — see [Installation](/installation#add-to-your-project). You can still add `buffa` directly if you want to pin your own version or use APIs beyond `MessageField`.
 </Note>
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use waproto::whatsapp as wa;
 
 let img = wa::Message {
@@ -115,7 +115,7 @@ pub struct Message {
 **Usage in main library:**
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use waproto::whatsapp as wa;
 
 // Construct a text message
@@ -753,7 +753,7 @@ The `generate` feature flag was removed. Code generation is now always-on and do
 ### Constructing Messages
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use waproto::whatsapp as wa;
 
 // Text message
@@ -849,7 +849,7 @@ wacore provides utilities for working with waproto messages:
 Example:
 
 ```rust
-use buffa::MessageField;
+use waproto::buffa::MessageField;
 use wacore::proto_helpers;
 use waproto::whatsapp as wa;
 

@@ -30,15 +30,18 @@ Every sub-crate path is reachable through the main crate:
 - `whatsapp_rust::wacore`, `whatsapp_rust::wacore_binary`
 - `whatsapp_rust::store::SqliteStore`, `whatsapp_rust::http::UreqHttpClient`, `whatsapp_rust::transport::TokioWebSocketTransportFactory`
 
-<Note>
-  `buffa` (the crate `waproto` uses to generate protobuf types — see [waproto](/api/waproto)) is **not** re-exported. Add it directly if you construct any message with a sub-message field (i.e. anything beyond a plain-text `conversation`), since that requires naming `buffa::MessageField` from your own crate:
+`whatsapp-rust` also re-exports every third-party crate whose types appear in its public API, so you never need to add or version-pin any of these yourself:
 
-  ```toml Cargo.toml
-  [dependencies]
-  whatsapp-rust = "0.6"
-  buffa = "0.8"
-  tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
-  ```
+- `whatsapp_rust::buffa` — sub-message fields on `wa::Message` (`MessageField`; also re-exported directly from `prelude`) — see [waproto](/api/waproto)
+- `whatsapp_rust::anyhow` — the error type on the store/transport/`InboundDurabilityHook` traits
+- `whatsapp_rust::async_trait` — the macro required to implement those traits
+- `whatsapp_rust::bytes` — `Transport::send` payloads
+- `whatsapp_rust::chrono` — timestamps returned by `wacore::time` and message metadata
+- `whatsapp_rust::futures` — the `oneshot::Receiver` returned by response-waiting accessors
+- `whatsapp_rust::serde`, `whatsapp_rust::serde_json`, `whatsapp_rust::async_channel`
+
+<Note>
+  This is purely additive — you can still add any of these crates directly (for example to pin your own version, or to use APIs beyond what whatsapp-rust re-exports).
 </Note>
 
 The same holds for git consumers — no need to pin every sibling crate:
@@ -46,7 +49,6 @@ The same holds for git consumers — no need to pin every sibling crate:
 ```toml Cargo.toml
 [dependencies]
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-buffa = "0.8"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 

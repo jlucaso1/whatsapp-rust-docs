@@ -81,7 +81,7 @@ client.mark_as_read(&chat_jid, None, &message_ids).await?;
 </Note>
 
 <Note>
-  `mark_as_read` adapts the wire shape to the chat, matching WhatsApp Web. A newsletter read is sent as `read-self`. A `status@broadcast` read carries `context="status"`. When the status author is a LID, it also adds `peer_participant_pn` (the resolved LID→PN). The same call handles all three cases — you don't pass anything extra.
+  `mark_as_read` adapts the wire shape to the chat, matching WhatsApp Web. A newsletter read is sent as `read-self`. A `status@broadcast` read carries `context="status"`. When the status author is a LID, it also adds `peer_participant_pn` (the resolved LID→PN). For a direct message, the receipt also downgrades to `read-self` when the account's `readreceipts` privacy setting is `none` — the sender is not notified, matching WhatsApp Web. Groups and broadcast lists always send the notifying `read` type regardless of that setting. The same call handles all these cases — you don't pass anything extra. See [Read receipt privacy gating](#read-receipt-privacy-gating) below.
 </Note>
 
 ---
@@ -161,7 +161,26 @@ client.mark_as_played(
 ```
 
 <Note>
-  Played receipts are **not sent automatically** — call `mark_as_played()` from your media player when the user finishes (or starts) playing the audio or video note. The library does not gate this call on the recipient's read-receipts privacy setting, matching `mark_as_read`.
+  Played receipts are **not sent automatically** — call `mark_as_played()` from your media player when the user finishes (or starts) playing the audio or video note. Like `mark_as_read`, a DM played receipt downgrades to `played-self` when the account's `readreceipts` privacy setting is `none` (the sender is not notified); groups, broadcast lists, and status broadcasts are unaffected by that setting. See [Read receipt privacy gating](#read-receipt-privacy-gating) below.
+</Note>
+
+---
+
+## Read receipt privacy gating
+
+The `readreceipts` privacy category (see [`PrivacyCategory::ReadReceipts`](/api/privacy#privacycategory)) controls whether `mark_as_read` and `mark_as_played` notify the other party for direct messages:
+
+| `readreceipts` value | DM receipt type sent |
+| --- | --- |
+| `all` (default) | `read` / `played` — the sender is notified |
+| `none` | `read-self` / `played-self` — marks the message read on your own devices only; the sender is **not** notified |
+
+This gate only applies to one-on-one direct messages. Group messages, broadcast lists, and status broadcasts always send the notifying `read`/`played` type — WhatsApp Web does not apply this privacy setting to them. Newsletters are unaffected too; they always use `read-self`/`played-self` regardless of this setting.
+
+The value is populated from [`fetch_privacy_settings`](/api/privacy#fetch_privacy_settings), which the client runs automatically in the background after connecting, and is cached on the device so the correct receipt type is known immediately on every reconnect — before that background fetch completes. A privacy change made from another linked device is picked up on the next connect.
+
+<Note>
+  Toggle the setting with `client.set_privacy_setting(PrivacyCategory::ReadReceipts, PrivacyValue::None).await?` (or `PrivacyValue::All` to re-enable). See the [privacy API](/api/privacy) for details.
 </Note>
 
 ---
@@ -295,7 +314,7 @@ pub enum ReceiptType {
 </ParamField>
 
 <ParamField path="ReadSelf" type="variant">
-  Read receipt from your own device (type=`"read-self"`). Received when you read a message on another device.
+  Read receipt from your own device (type=`"read-self"`). Received when you read a message on another device, or sent for a DM when your own `readreceipts` privacy setting is `none` (see [Read receipt privacy gating](#read-receipt-privacy-gating)).
 </ParamField>
 
 <ParamField path="Played" type="variant">
@@ -303,7 +322,7 @@ pub enum ReceiptType {
 </ParamField>
 
 <ParamField path="PlayedSelf" type="variant">
-  Played receipt from your own device (type=`"played-self"`). Received when you play media on another device.
+  Played receipt from your own device (type=`"played-self"`). Received when you play media on another device, or sent for a DM when your own `readreceipts` privacy setting is `none` (see [Read receipt privacy gating](#read-receipt-privacy-gating)).
 </ParamField>
 
 <ParamField path="Retry" type="variant">
@@ -456,7 +475,7 @@ let mut bot = Bot::builder()
 
 ## Played receipts (media)
 
-For voice notes and video notes, send played receipts with [`mark_as_played`](#mark_as_played) once the user has played the media. Newsletters send `played-self`; everything else sends `played`. The wire shape mirrors read receipts:
+For voice notes and video notes, send played receipts with [`mark_as_played`](#mark_as_played) once the user has played the media. Newsletters send `played-self`; everything else sends `played`, unless the DM privacy gate (see [above](#read-receipt-privacy-gating)) downgrades it to `played-self`. The wire shape mirrors read receipts:
 
 ```xml
 <receipt id="MESSAGE_ID" to="CHAT_JID" type="played" participant="SENDER_JID" />
@@ -471,7 +490,7 @@ You can also listen for incoming played receipts via the `Event::Receipt` event 
 ### Read receipt privacy
 
 <Tip>
-  Respect user privacy settings. If you're building a client, consider adding a setting to disable read receipts.
+  The library already respects the account's `readreceipts` privacy setting for direct messages (see [Read receipt privacy gating](#read-receipt-privacy-gating)) — a DM `mark_as_read`/`mark_as_played` call automatically goes out as `read-self`/`played-self` when that setting is `none`. The pattern below is for an additional **local** opt-out, e.g. a per-app toggle that skips sending receipts entirely rather than sending the silent `-self` variant.
 </Tip>
 
 ```rust

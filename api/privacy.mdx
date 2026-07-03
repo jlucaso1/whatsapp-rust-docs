@@ -45,6 +45,10 @@ if let Some(value) = response.get_value(&PrivacyCategory::Last) {
 }
 ```
 
+<Note>
+  The client also fetches privacy settings automatically in the background right after connecting, purely to keep an internal cache current — you don't need to call this yourself for that. Today the only setting cached this way is `ReadReceipts`, which gates the wire type of outgoing DM read/played receipts (see [Read receipt privacy gating](/api/receipt#read-receipt-privacy-gating)). Call `fetch_privacy_settings` directly when you need the full, current set of values, e.g. to render a settings screen.
+</Note>
+
 ### set_privacy_setting
 
 Update a specific privacy setting.
@@ -86,6 +90,10 @@ client.set_privacy_setting(PrivacyCategory::CallAdd, PrivacyValue::Known).await?
 
 <Note>
 Each `PrivacyCategory` only accepts specific `PrivacyValue` variants. See the [valid combinations table](#valid-category-value-combinations) below.
+</Note>
+
+<Note>
+  Setting `ReadReceipts` to `None` takes effect on the **next connect** (the client re-fetches and re-caches the setting on each connect, matching WhatsApp Web, which reads it from local prefs). From then on, `mark_as_read`/`mark_as_played` on a direct message send `read-self`/`played-self` instead of `read`/`played`, so the other party is no longer notified. This only applies to DMs — group, broadcast list, and status-broadcast receipts are unaffected. See [Read receipt privacy gating](/api/receipt#read-receipt-privacy-gating).
 </Note>
 
 ### set_privacy_disallowed_list
@@ -345,5 +353,6 @@ if category.is_valid_value(&value) {
 ## See also
 
 - [Client API](/api/client#fetch_privacy_settings) - Client-level privacy methods
+- [Receipt API](/api/receipt#read-receipt-privacy-gating) - How `ReadReceipts` gates DM read/played receipts
 - [TC Token API](/api/tctoken) - Trusted contact tokens used for privacy-gated operations
 - [Blocking API](/api/blocking) - Block and unblock contacts

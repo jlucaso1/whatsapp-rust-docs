@@ -197,7 +197,7 @@ println!("busy: {:?}, polls: {}", snapshot.busy, snapshot.polls);
 ```
 
 <Note>
-  Opt-in and off by default — instrumenting every poll has measurable overhead, so treat this as a diagnostics tool rather than an always-on meter. See [`Client::stats()` and `Client::memory_report()`](/api/client#diagnostics) for the always-on, zero-cost-when-unused wire I/O and memory surfaces.
+  Opt-in and off by default — instrumenting every poll has measurable overhead, so treat this as a diagnostics tool rather than an always-on meter. See [`Client::stats()`](/api/client#stats) for always-on wire I/O counters (atomics incremented on every frame) and [`Client::memory_report()`](/api/client#memory_report) for the on-demand, zero-cost-when-unused memory breakdown.
 </Note>
 
 ---

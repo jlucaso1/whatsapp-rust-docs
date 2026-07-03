@@ -1870,7 +1870,7 @@ Cumulative wire I/O and activity counters for this client session, always record
 | `last_data_sent_ms` | `u64` | Timestamp (ms since UNIX epoch) of the last sent frame |
 | `last_data_received_ms` | `u64` | Timestamp (ms since UNIX epoch) of the last received data |
 
-All counters are monotonic over the client's lifetime (they survive reconnects); only the two timestamps reset on connection teardown.
+Most counters are monotonic over the client's lifetime and survive reconnects. Two fields are the exceptions: the two timestamps reset on connection teardown, and `reconnect_errors` itself resets to `0` on every successful reconnect (it counts *consecutive* failures, not a lifetime total).
 
 **Example:**
 

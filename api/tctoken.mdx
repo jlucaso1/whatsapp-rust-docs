@@ -227,7 +227,7 @@ let picture = client.contacts().get_profile_picture(&jid, true).await?;
 The tctoken (no cstoken fallback) is also attached automatically on two other privacy-gated IQs, matching WA Web's `USyncStatusProtocol`/`OutSpamTCTokenMixin`:
 
 - **`get_user_info`** — a per-recipient tctoken is attached to each queried `<user>` node in the usync IQ, so status/about for a privacy-restricted contact resolves instead of coming back hidden. Gated behind `profile_scraping_privacy_token_in_about_usync`.
-- **`send_spam_report`** — the reported contact's tctoken is attached to the spam report IQ so the report is accepted for a privacy-restricted account. Gated behind `enable_spam_report_iq_with_privacy_token`.
+- **`send_spam_report`** — when `SpamReportRequest::from_jid` is set, that contact's tctoken is attached to the spam report IQ so the report is accepted for a privacy-restricted account. Gated behind `enable_spam_report_iq_with_privacy_token`. Group reports that only set `group_jid`/`participant_jid` (no `from_jid`) don't get a token attached.
 
 ```rust
 // Attaches the queried contact's tctoken automatically when the AB prop is on

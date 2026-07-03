@@ -60,6 +60,9 @@ Handlers receive `Arc<Event>` — a shared reference-counted pointer to the even
 
 **Implementation:**
 ```rust
+use wacore::types::events::{Event, InboundMessage};
+use std::sync::Arc;
+
 struct MyHandler;
 
 impl EventHandler for MyHandler {

@@ -468,6 +468,41 @@ See [Store API reference](/api/store#protocol-store) for all ProtocolStore metho
 
 If you want to support the opt-in [`InboundDurabilityHook`](/advanced/inbound-durability), your backend must implement four additional `ProtocolStore` methods. Without them, `Bot::build()` rejects any attempt to register a durability hook with a `BotBuilderError::UnsupportedDurabilityBackend` error.
 
+<Note>
+Two further methods, `store_pending_inbound_batch` and `delete_pending_inbound_batch`, back the client's [inbound commit batching](/advanced/inbound-durability#batching) during the offline drain. Both default to looping the single-row methods below, so implementing just the four methods in this section is enough — your backend keeps working, just without batch atomicity. Override them if you want the whole batch committed in one transaction:
+
+```rust
+async fn store_pending_inbound_batch(&self, rows: &[PendingInboundRow<'_>]) -> Result<()> {
+    // e.g. one multi-row INSERT inside a single transaction
+    self.connection.transaction(|tx| async move {
+        for row in rows {
+            tx.execute(
+                "INSERT OR REPLACE INTO pending_inbound_messages \
+                 (chat, sender, id, device_id, message, inserted_at) \
+                 VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))",
+                &[row.chat, row.sender, row.id, &self.device_id, row.message],
+            ).await?;
+        }
+        Ok(())
+    }).await
+}
+
+async fn delete_pending_inbound_batch(&self, keys: &[PendingInboundKey<'_>]) -> Result<()> {
+    self.connection.transaction(|tx| async move {
+        for key in keys {
+            tx.execute(
+                "DELETE FROM pending_inbound_messages WHERE chat = ? AND sender = ? AND id = ?",
+                &[key.chat, key.sender, key.id],
+            ).await?;
+        }
+        Ok(())
+    }).await
+}
+```
+
+The bundled `SqliteStore` overrides both this way, so the offline-drain batcher pays one Diesel transaction per batch instead of one round-trip per message.
+</Note>
+
 The default trait implementations **fail closed** (return an error) rather than silently degrading to at-most-once, so you only need to override them if your backend opts in.
 
 ```rust

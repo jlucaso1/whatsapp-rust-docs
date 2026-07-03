@@ -65,8 +65,10 @@ struct MyHandler;
 impl EventHandler for MyHandler {
     fn handle_event(&self, event: Arc<Event>) {
         match &*event {
-            Event::Message(msg, info) => {
-                println!("Message from {}: {:?}", info.source.sender, msg);
+            Event::Messages(batch) => {
+                for InboundMessage { message: msg, info } in batch.iter() {
+                    println!("Message from {}: {:?}", info.source.sender, msg);
+                }
             }
             _ => {}
         }
@@ -87,13 +89,13 @@ impl EventHandler for MyHandler {
     fn handle_event(&self, event: Arc<Event>) { /* … */ }
 
     fn interest(&self) -> EventInterest {
-        // Only Message and Connected events reach this handler.
-        EventInterest::of(&[EventKind::Message, EventKind::Connected])
+        // Only Messages and Connected events reach this handler.
+        EventInterest::of(&[EventKind::Messages, EventKind::Connected])
     }
 }
 ```
 
-- **`EventKind`** is a `#[repr(u8)]` discriminant — one variant per `Event` variant (`Message`, `Connected`, `Receipt`, …). The enum is `#[non_exhaustive]`, so `match` blocks on `EventKind` must include a wildcard arm (`_ => …`); new kinds may be added in minor releases as the library tracks new server events.
+- **`EventKind`** is a `#[repr(u8)]` discriminant — one variant per `Event` variant (`Messages`, `Connected`, `Receipt`, …). The enum is `#[non_exhaustive]`, so `match` blocks on `EventKind` must include a wildcard arm (`_ => …`); new kinds may be added in minor releases as the library tracks new server events.
 - **`EventKind::CAPACITY`** is a public `u8` constant (currently `64`) that bounds the number of kinds. It exists because each discriminant is packed as a bit in `EventInterest`'s `u64` mask, and a future variant that would overflow it fails compilation rather than silently corrupting the mask at runtime. Treat it as a read-only ceiling — you don't need to check it at runtime.
 - **`EventInterest`** is a 64-bit set of kinds. Build it with `EventInterest::of(&[…])`, `EventInterest::ALL` (the default), `EventInterest::none()`, or chain `.with(kind)`. Query it with `.wants(kind)`.
 - The bus exposes `has_handler_for(kind)` and only produces an event when at least one registered handler wants its kind.
@@ -101,8 +103,8 @@ impl EventHandler for MyHandler {
 With the [`Bot`](/api/bot) builder, the same narrowing is available via `on_event_for`:
 
 ```rust
-bot.on_event_for(&[EventKind::Message], |event, client| async move {
-    // only Message events
+bot.on_event_for(&[EventKind::Messages], |event, client| async move {
+    // only Messages events
 });
 ```
 
@@ -134,7 +136,7 @@ pub enum Event {
     LoggedOut(LoggedOut),
 
     // Messages
-    Message(Arc<wa::Message>, Arc<MessageInfo>),
+    Messages(MessageBatch),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
     Notification(Arc<OwnedNodeRef>),
@@ -563,16 +565,35 @@ Event::ClientOutdated(_) => {
 
 ## Message Events
 
-### Message
+### Messages
 
-**Emitted:** For all incoming messages (text, media, etc.)
+**Emitted:** For all incoming messages (text, media, etc.), one event per durable commit.
 
 ```rust
-Event::Message(Arc<wa::Message>, Arc<MessageInfo>)
+Event::Messages(MessageBatch)
+
+pub struct InboundMessage {
+    pub message: Arc<wa::Message>,
+    pub info: Arc<MessageInfo>,
+}
+
+pub enum BatchOrigin {
+    Live,          // delivered immediately, batch of one
+    OfflineDrain,  // accumulated batch from the offline drain
+}
+
+pub struct MessageBatch {
+    pub messages: Arc<[InboundMessage]>,
+    pub origin: BatchOrigin,
+}
 ```
 
 <Note>
-Both the message body and `MessageInfo` are `Arc`-wrapped. The bus dispatches the same `Arc<wa::Message>` to every handler — no deep clone on fan-out — and `Event::as_message()` returns `Option<(&Arc<wa::Message>, &MessageInfo)>` so you can cheaply share the payload with spawned tasks or downstream channels. Before v0.6 the body was `Box<wa::Message>`; the public guarantee changed from "owned, freely mutable" to "shared, immutable read access" — call `Arc::make_mut` (or clone the inner `wa::Message`) only if you genuinely need to mutate.
+Live traffic dispatches a batch of one, so per-message latency is unchanged from the previous single-message event. During the offline drain the client accumulates decrypted messages and dispatches one `Event::Messages` per durable commit (size/byte/timeout triggers, matching WhatsApp Web's `MessageProcessorCache` — see [Inbound Durability](/advanced/inbound-durability#batching)). `MessageBatch` behaves as a collection: `batch.iter()`, `batch.len()`, `batch.is_empty()`, `batch.first()`, and `for msg in &batch` all work directly. `Event::as_messages()` returns `Option<&MessageBatch>`, and `Event::messages()` returns an iterator over the batch's `InboundMessage`s (empty for any other event kind) — use it to scan a mixed event stream without matching on `Event::Messages` first.
+</Note>
+
+<Note>
+Both the message body and `MessageInfo` are `Arc`-wrapped inside `InboundMessage`. The same `Arc` slice handed to a registered [durability hook](/advanced/inbound-durability) is what this event carries — no deep clone, and a consumer never sees a message the hook did not commit (newsletter messages and PDO placeholder recoveries are the two exceptions: they dispatch event-only, bypassing the hook). Before v0.6 the body was `Box<wa::Message>`; the public guarantee changed from "owned, freely mutable" to "shared, immutable read access" — call `Arc::make_mut` (or clone the inner `wa::Message`) only if you genuinely need to mutate.
 </Note>
 
 **MessageInfo structure:**
@@ -712,7 +733,8 @@ pub struct DeviceSentMeta {
 ```rust
 use waproto::whatsapp as wa;
 
-Event::Message(msg, info) => {
+Event::Messages(batch) => {
+    for InboundMessage { message: msg, info } in batch.iter() {
     println!("From: {} in {}", info.source.sender, info.source.chat);
 
     // Text message
@@ -742,6 +764,7 @@ Event::Message(msg, info) => {
 
     // Video, audio, document, sticker, etc.
     // See waproto::whatsapp::Message for all types
+    }
 }
 ```
 
@@ -806,7 +829,7 @@ Event::Receipt(receipt) => {
 - Group messages that fail with `NoSenderKeyState` (missing sender key) — dispatched before the retry receipt is sent
 - Messages with an `<unavailable>` node — view-once already viewed, hosted content, bot fanouts, or other server-side unavailability. For `ViewOnce`/`Hosted`/`Bot`, the phone never shares that content with a companion device, so the client acks the stanza directly instead of requesting it. Only the `Unknown` case goes through [PDO recovery](/guides/receiving-messages#unavailable-message-recovery-via-pdo)
 
-When `is_unavailable` is `true`, the message had no encrypted content in the stanza. For `UnavailableType::Unknown`, the client sends a PDO request to your primary phone, and if the phone responds successfully, a follow-up `Event::Message` is dispatched with the recovered content. For `ViewOnce`, `Hosted`, and `Bot`, no PDO request is sent — that content is unrecoverable by design, so no follow-up `Event::Message` should be expected.
+When `is_unavailable` is `true`, the message had no encrypted content in the stanza. For `UnavailableType::Unknown`, the client sends a PDO request to your primary phone, and if the phone responds successfully, a follow-up `Event::Messages` is dispatched with the recovered content (event-only — a PDO recovery bypasses the durability hook and the offline-drain batcher, dispatching immediately with `BatchOrigin::Live`). For `ViewOnce`, `Hosted`, and `Bot`, no PDO request is sent — that content is unrecoverable by design, so no follow-up `Event::Messages` should be expected.
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
@@ -2162,8 +2185,9 @@ let mut bot = Bot::builder()
     .with_backend(backend)
     .on_event(|event, client| async move {
         match &*event {
-            Event::Message(msg, info) => {
-                // Handle message
+            Event::Messages(batch) => {
+                // Handle each message in the batch
+                for InboundMessage { message: msg, info } in batch.iter() { /* … */ }
             }
             Event::Connected(_) => {
                 // Handle connection
@@ -2181,7 +2205,7 @@ let mut bot = Bot::builder()
 struct MessageHandler;
 impl EventHandler for MessageHandler {
     fn handle_event(&self, event: Arc<Event>) {
-        if let Event::Message(msg, info) = &*event {
+        for InboundMessage { message: msg, info } in event.messages() {
             // Handle messages
         }
     }
@@ -2222,8 +2246,10 @@ while let Ok(event) = event_rx.recv().await {
             println!("Connected!");
             break;
         }
-        Event::Message(msg, info) => {
-            println!("Message from {}", info.source.sender);
+        Event::Messages(batch) => {
+            for InboundMessage { info, .. } in batch.iter() {
+                println!("Message from {}", info.source.sender);
+            }
         }
         _ => {}
     }
@@ -2317,7 +2343,7 @@ Event::HistorySync(lazy_sync) => {
 
 ### Arc\<Event\> dispatch
 
-With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Message(Arc<wa::Message>, Arc<MessageInfo>)`. Both the `wa::Message` body and the `MessageInfo` are `Arc`-wrapped, enabling zero-cost sharing across the message dispatch, retry receipt, and PDO recovery paths without cloning the full struct.
+With `Arc<Event>` dispatch, each event is wrapped in a single `Arc` by the `CoreEventBus` and shared across all handlers. This eliminates deep clones of large event payloads like `LazyHistorySync` blobs and `Messages(MessageBatch)`. Both the `wa::Message` body and the `MessageInfo` inside each `InboundMessage` are `Arc`-wrapped, enabling zero-cost sharing across the message dispatch, durability hook, retry receipt, and PDO recovery paths without cloning the full struct — the batch handed to a registered durability hook is the very same `Arc<[InboundMessage]>` this event carries.
 
 Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc<Event>` get parse-once semantics for free — the first handler to call `lazy_sync.get()` triggers the decode, and subsequent handlers reuse the cached result.
 
@@ -2328,14 +2354,13 @@ Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc
 ```rust
 .on_event(|event, client| async move {
     // Only handle events you care about
-    match &*event {
-        Event::Message(msg, info) if info.source.is_group => {
+    for InboundMessage { message: msg, info } in event.messages() {
+        if info.source.is_group {
             // Only handle group messages
         }
-        Event::Message(msg, info) if !info.source.is_from_me => {
+        if !info.source.is_from_me {
             // Only handle messages from others
         }
-        _ => {}
     }
 })
 ```
@@ -2350,11 +2375,8 @@ Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc
 })
 
 async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
-    match event {
-        Event::Message(msg, info) => {
-            process_message(msg, info, client).await?
-        }
-        _ => {}
+    for InboundMessage { message: msg, info } in event.messages() {
+        process_message(msg, info, client.clone()).await?
     }
     Ok(())
 }
@@ -2364,12 +2386,12 @@ async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
 
 ```rust
 .on_event(|event, client| async move {
-    if let Event::Message(msg, info) = &*event {
+    if matches!(&*event, Event::Messages(_)) {
         let client = client.clone();
         let event = event.clone(); // Arc clone — O(1)
 
         tokio::spawn(async move {
-            if let Event::Message(msg, info) = &*event {
+            for InboundMessage { message: msg, info } in event.messages() {
                 process_message(msg, info, &client).await;
             }
         });

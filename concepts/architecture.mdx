@@ -273,7 +273,8 @@ Incoming stanzas are decoded as `Arc<OwnedNodeRef>` (zero-copy from the network 
 pub async fn handle_message(client: &Arc<Client>, node: &Arc<OwnedNodeRef>) {
     // 1. Extract encrypted message from NodeRef
     // 2. Decrypt via Signal Protocol
-    // 3. Dispatch Event::Message
+    // 3. Commit (or accumulate into a batch during the offline drain)
+    // 4. Dispatch Event::Messages
 }
 ```
 
@@ -421,6 +422,10 @@ pub(crate) struct OfflineSyncMetrics {
 
 **Concurrency gating:** During offline sync, the client restricts message processing to a single concurrent task (1 semaphore permit) to preserve ordering. Once sync completes — either by the server end marker, all expected items arriving, or timeout — the semaphore is expanded to 64 permits, switching to parallel message processing.
 
+<Note>
+The drain→live transition also flushes the tail of the [inbound commit batch](/advanced/inbound-durability#batching): the last accumulated batch of decrypted messages commits (buffer → Signal flush → durability hook → acks → `Event::Messages`) before the semaphore widens, so no live-mode message is processed ahead of it. If that tail commit fails, the transition is deferred and retried every 3 seconds while the client stays in single-permit drain mode; `OfflineSyncCompleted` still fires immediately so startup waiters are not blocked on the retry.
+</Note>
+
 **Semaphore transition safety:** When the semaphore is swapped from 1 to 64 permits, tasks that were already waiting on the old semaphore must not be silently dropped. The client uses a **generation-checked re-acquire loop** to handle this transition safely:
 
 1. Each semaphore swap increments an atomic `message_semaphore_generation` counter
@@ -435,7 +440,7 @@ This prevents a critical issue where `pkmsg` messages (which carry Sender Key Di
 **Pull-batch backlog drain (v0.6):** Offline resume now drives the same pull-batch loop WA Web uses to drain the backlog: stanzas that the client can't process (unrecognized `<enc type>`, known-but-empty `<enc>` content, duplicates, ciphertexts that decrypt-fail terminally) are transport-acked alongside their retry receipt so the server stops re-delivering them. Before this, such a stanza fell through `classify_incoming_message` silently, so the server kept replaying it from the offline queue every reconnect until `<stream:error>` closed the stream. The drain logic also acks duplicate-message PDOs that previously hit the silent-drop branch in `handle_decrypted_plaintext`, and preserves the original `recipient` attribute (via `Client::spawn_node_transport_ack`, which echoes the raw `NodeRef` instead of rebuilding from `MessageInfo`) so LID-routed offline stanzas don't trigger `<stream:error>` on the ack.
 
 <Note>
-The Meta AI bot's `msmsg` (`<enc type="msmsg">`) encryption type was the original motivating case for this drain — it could not be decrypted, only acked. Since the bot-secret decryption landed (see [Bot message decryption](/api/signal#bot-message-decryption-msmsg)), `msmsg` stanzas are decrypted and dispatched as normal `Event::Message`s; the drain still covers genuinely unrecognized or undecryptable enc types.
+The Meta AI bot's `msmsg` (`<enc type="msmsg">`) encryption type was the original motivating case for this drain — it could not be decrypted, only acked. Since the bot-secret decryption landed (see [Bot message decryption](/api/signal#bot-message-decryption-msmsg)), `msmsg` stanzas are decrypted and dispatched as normal `Event::Messages`; the drain still covers genuinely unrecognized or undecryptable enc types.
 </Note>
 
 **Nack on terminal decrypt failure:** When a ciphertext exhausts retries (`max-retry` reached in the PDO recovery state machine), the client now emits a `<nack reason="…">` carrying a structured `NackReason` code instead of silently dropping the message. The full set of 21 codes (`ParsingError`, `InvalidProtobuf`, `MissingMessageSecret`, etc.) mirrors WA Web's reason set so the server stops retransmitting once it sees a terminal nack — see [Protocol → Nack reasons](/advanced/binary-protocol#nack-reasons).

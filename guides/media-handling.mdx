@@ -18,7 +18,8 @@ use wacore::download::Downloadable;
 use whatsapp_rust::client::Client;
 
 match event {
-    Event::Message(message, info) => {
+    Event::Messages(batch) => {
+        for InboundMessage { message, info } in batch.iter() {
         // Image
         if let Some(img) = message.image_message.as_option() {
             let data = client.download(img).await?;
@@ -49,6 +50,7 @@ match event {
         if let Some(sticker) = message.sticker_message.as_option() {
             let data = client.download(sticker).await?;
             std::fs::write("sticker.webp", data)?;
+        }
         }
     }
     _ => {}

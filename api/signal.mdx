@@ -305,7 +305,7 @@ When you message Meta AI or another `@bot` account, the bot's replies arrive as 
 The client handles this end to end and **transparently**:
 
 1. **On send to a bot**, the outbound `MessageContextInfo.messageSecret` is persisted (keyed by `(chat, sender, msg_id)`) so the reply can be decrypted later.
-2. **On receive**, an `msmsg` stanza is decrypted and decoded into a `wa::Message`, then dispatched as a normal [`Event::Message`](/concepts/events#message) — there is no separate bot event. The sender is the bot JID (e.g. `…@bot`) and `MsgMetaInfo.target_id` points back at your original prompt.
+2. **On receive**, an `msmsg` stanza is decrypted and decoded into a `wa::Message`, then dispatched as a normal [`Event::Messages`](/concepts/events#messages) — there is no separate bot event. The sender is the bot JID (e.g. `…@bot`) and `MsgMetaInfo.target_id` points back at your original prompt.
 3. **On failure** (missing secret, GCM tag mismatch, malformed proto) the client nacks with reason `495` (`MissingMessageSecret`) instead of silently dropping, and group bot replies are acked with a bare `<ack class="message">` matching WA Web.
 
 You don't need to call anything — receiving bot replies works as soon as you've sent a message to the bot from the same client. The low-level primitive is `wacore::bot_message::decrypt_bot_message(message_secret, enc_iv, enc_payload, ctx)`, and persistence is backed by the [`MsgSecretStore`](/api/store#msgsecretstore) trait.

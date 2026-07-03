@@ -1617,7 +1617,11 @@ struct MyHandler;
 impl EventHandler for MyHandler {
     fn handle_event(&self, event: Arc<Event>) {
         match &*event {
-            Event::Message(msg, info) => println!("New message from {}: {:?}", info.source.sender, msg),
+            Event::Messages(batch) => {
+                for InboundMessage { message: msg, info } in batch.iter() {
+                    println!("New message from {}: {:?}", info.source.sender, msg);
+                }
+            }
             Event::Connected(_) => println!("Connected!"),
             _ => {}
         }

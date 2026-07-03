@@ -251,10 +251,12 @@ For CAG chats the library checks `GroupInfo::is_community_announce` (populated f
 Incoming encrypted reactions from CAG posts are decrypted transparently by the receive path and surfaced as a normal `reaction_message` event. The `key` field is filled from the envelope's `target_message_key`, so your event handler looks identical to a regular group reaction:
 
 ```rust
-Event::Message(msg, info) => {
-    if let Some(reaction) = msg.reaction_message.as_option() {
-        println!("Reaction: {:?}", reaction.text);
-        println!("On post:  {:?}", reaction.key.as_option().and_then(|k| k.id.as_deref()));
+Event::Messages(batch) => {
+    for InboundMessage { message: msg, .. } in batch.iter() {
+        if let Some(reaction) = msg.reaction_message.as_option() {
+            println!("Reaction: {:?}", reaction.text);
+            println!("On post:  {:?}", reaction.key.as_option().and_then(|k| k.id.as_deref()));
+        }
     }
 }
 ```
@@ -305,16 +307,18 @@ Each comment carries a fresh `messageSecret` of its own so it can receive encryp
 
 ### Receiving comments
 
-Incoming encrypted comments are decrypted transparently on the receive path. The decrypted body is dispatched as a normal `Event::Message`. Because the inner `Message` proto has no slot for the parent post key, the threading link surfaces on `MessageInfo::comment_target`:
+Incoming encrypted comments are decrypted transparently on the receive path. The decrypted body is dispatched as part of a normal `Event::Messages` batch. Because the inner `Message` proto has no slot for the parent post key, the threading link surfaces on `MessageInfo::comment_target`:
 
 ```rust
-Event::Message(msg, info) => {
-    if let Some(parent_key) = &info.comment_target {
-        // This is a channel comment.
-        println!("Comment on post: {:?}", parent_key.id);
+Event::Messages(batch) => {
+    for InboundMessage { message: msg, info } in batch.iter() {
+        if let Some(parent_key) = &info.comment_target {
+            // This is a channel comment.
+            println!("Comment on post: {:?}", parent_key.id);
 
-        if let Some(text) = msg.text_content() {
-            println!("Comment text: {}", text);
+            if let Some(text) = msg.text_content() {
+                println!("Comment text: {}", text);
+            }
         }
     }
 }

@@ -186,7 +186,7 @@ pub struct TcTokenEntry {
 ```
 
 <Note>
-An entry with an empty `token` and only `sender_timestamp` set is a **byte-less placeholder** — it records that a post-send issuance IQ succeeded before any real token was received from the contact. See [Post-send issuance](#post-send-issuance).
+An entry with an empty `token` is a **byte-less placeholder** — it records that a post-send issuance IQ succeeded before any real token was received from the contact. For a fresh placeholder, `token_timestamp` is set equal to `sender_timestamp` (there is no received epoch yet); since `token` is empty, the received-token side of the prune cutoff always treats the row as expired-or-absent regardless of that value, so pruning a placeholder depends only on whether `sender_timestamp` is still live. See [Post-send issuance](#post-send-issuance).
 </Note>
 
 ### TcTokenConfig
@@ -294,7 +294,7 @@ When no valid TC token exists for a recipient, the library falls back to a **cst
 
 1. The server provides an NCT salt through the `nct_salt_sync` app state mutation (or via history sync during initial pairing)
 2. The salt is stored in the `Device` struct as `nct_salt`
-3. When sending a message to a recipient with no valid stored TC token, and `NCT_TOKEN_SEND_ENABLED` is on, the library computes `HMAC-SHA256(nct_salt, recipient_lid)` and includes it as a `<cstoken>` stanza child — independently of whether the tctoken AB prop is enabled
+3. When sending a message where the tctoken doesn't win — either `PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES` is off, or no valid TC token is stored — and `NCT_TOKEN_SEND_ENABLED` is on, the library computes `HMAC-SHA256(nct_salt, recipient_lid)` and includes it as a `<cstoken>` stanza child (see [AB prop gating](#ab-prop-gating) for the full priority logic)
 
 ### Wire format
 

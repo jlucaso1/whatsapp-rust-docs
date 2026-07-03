@@ -90,6 +90,10 @@ client.voip()
 handle.wait_ended().await;
 ```
 
+<Note>
+  If the callee has a stored [trusted-contact token](/api/tctoken), it's attached to the offer automatically, and a fresh token is issued to them in the background after the offer sends — matching WhatsApp Web's `sendTcToken` in `StartCall.js`. This prevents 463 nacks on calls to privacy-restricted contacts and needs no action from the caller. Group-call initiation doesn't implement this yet.
+</Note>
+
 ## Audio I/O
 
 You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip-cli/src/main.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference.

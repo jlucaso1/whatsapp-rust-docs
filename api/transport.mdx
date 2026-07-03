@@ -186,6 +186,24 @@ pub enum DisconnectReason {
 `DisconnectReason` implements `Display` for human-readable logging. Custom transports should emit the most specific variant they can determine.
 
 ```rust
+impl DisconnectReason {
+    pub fn is_clean_shutdown(&self) -> bool {
+        // ...
+    }
+}
+```
+
+`is_clean_shutdown()` tells a benign, server-initiated stream recycle (the normal WhatsApp reconnect path) apart from a genuine transport failure, so consumers of [`events::Disconnected`](/concepts/events#disconnected) don't have to parse logs to classify a disconnect. It's deliberately conservative — anything ambiguous returns `false` (treated as a real failure):
+
+| Variant | `is_clean_shutdown()` |
+|---------|------------------------|
+| `StreamEnded` | `true` — EOF with no close frame is how the WA server recycles a connection |
+| `ServerClose` with code `None`, `Some(1000)`, or `Some(1001)` | `true` — no code, normal closure, or going-away are graceful |
+| `ServerClose` with any other code | `false` — protocol/server error, restart, etc. |
+| `ReadError(_)` | `false` — a transport read/IO error is always a real failure |
+| `Unknown` | `false` — an unreported reason is never assumed benign |
+
+```rust
 TransportEvent::Disconnected(reason) => {
     tracing::info!(%reason, "transport closed");
     break;

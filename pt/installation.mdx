@@ -66,7 +66,6 @@ whatsapp-rust suporta diversas features opcionais:
 | `signal` | Manipulação de sinais Unix (desligamento gracioso em SIGTERM/Ctrl+C) | ✅ Sim |
 | `danger-skip-tls-verify` | Pula a verificação TLS (inseguro) | ❌ Não |
 | `debug-snapshots` | Snapshots de protocolo para debug | ❌ Não |
-| `debug-diagnostics` | API de diagnóstico de memória (`MemoryDiagnostics`) | ❌ Não |
 
 <Tip>
   Todas as features padrão habilitam Tokio como o runtime assíncrono, mas todo componente é opcional. Para usar um runtime diferente (async-std, WASM, etc.), desabilite todos os padrões e forneça suas próprias implementações dos traits `Runtime`, `TransportFactory`, `HttpClient` e `Backend`. Veja [backends personalizados](/guides/custom-backends) para detalhes.

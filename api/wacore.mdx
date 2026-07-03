@@ -730,7 +730,7 @@ MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" \
 The output is a JSON array of `customSmallerIsBetter` entries printed to stdout, suitable for consumption by [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
 
 <Note>
-Integration benchmarks require the `danger-skip-tls-verify` and `debug-diagnostics` features, which are enabled automatically via the `bench-integration` crate's `Cargo.toml`. You can also enable DHAT heap profiling with `--features dhat-heap` for detailed allocation flamegraphs.
+Integration benchmarks require the `danger-skip-tls-verify` feature, which is enabled automatically via the `bench-integration` crate's `Cargo.toml`. You can also enable DHAT heap profiling with `--features dhat-heap` for detailed allocation flamegraphs.
 </Note>
 
 ### Allocation optimizations

@@ -161,6 +161,49 @@ let bot = Bot::builder()
 `TokioRuntime` is only available when the `tokio-runtime` feature is enabled (it is by default). To use a different async runtime, implement the `Runtime` trait from `wacore::runtime`. See [custom backends](/guides/custom-backends#custom-runtime) for details.
 </Note>
 
+### with_task_instrument
+
+```rust
+pub fn with_task_instrument(
+    mut self,
+    instrument: Arc<dyn wacore::stats::TaskInstrument>,
+) -> Self
+```
+
+Instruments the client's internal tasks with a `TaskInstrument` hook, called around every poll of a spawned task (and around blocking work). Runtime-agnostic — it wraps whichever `Runtime` the client uses (via [`with_runtime`](#with_runtime) or the default), so every task spawned through the `Runtime` trait is covered. Default: no hook, the runtime is used untouched and nothing is metered.
+
+<Warning>
+  When the `voip` feature is enabled, 1:1 call media tasks spawn directly on Tokio instead of through the `Runtime` trait, so they are **not** covered by this hook. A `CpuMeter` attached here will undercount CPU for sessions with active calls.
+</Warning>
+
+Pass the built-in `wacore::stats::CpuMeter` for per-session CPU accounting (busy time + poll count), keeping a clone to read `.snapshot()` later. Or implement `TaskInstrument` yourself to scope allocator attribution, an ESP-IDF `heap_caps` sampler, or any other per-session platform hook — the library only calls `on_poll_start`/`on_poll_end` and never inspects what the hook does.
+
+<ParamField path="instrument" type="Arc<dyn wacore::stats::TaskInstrument>" required>
+  Hook invoked around every poll of the client's internal tasks
+</ParamField>
+
+**Example:**
+```rust
+use std::sync::Arc;
+use wacore::stats::CpuMeter;
+
+let cpu = Arc::new(CpuMeter::new());
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_task_instrument(cpu.clone())
+    .build()
+    .await?;
+
+// Later, read accumulated busy time and poll count:
+let snapshot = cpu.snapshot();
+println!("busy: {:?}, polls: {}", snapshot.busy, snapshot.polls);
+```
+
+<Note>
+  Opt-in and off by default — instrumenting every poll has measurable overhead, so treat this as a diagnostics tool rather than an always-on meter. See [`Client::stats()`](/api/client#stats) for always-on wire I/O counters (atomics incremented on every frame) and [`Client::memory_report()`](/api/client#memory_report) for the on-demand, zero-cost-when-unused memory breakdown.
+</Note>
+
 ---
 
 ## Event Handling

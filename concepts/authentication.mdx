@@ -294,10 +294,18 @@ pub struct PairCodeOptions {
     pub custom_code: Option<String>,
 
     /// Override for `companion_platform_id`. When `None`, the value is
-    /// derived from `Device.device_props.platform_type`. The accompanying
-    /// `companion_platform_display` string is always derived (it cannot
-    /// be overridden separately).
+    /// derived from `Device.device_props.platform_type`.
     pub platform_id: Option<CompanionWebClientType>,
+
+    /// Advanced OS override for `companion_platform_display`. `None`
+    /// (default) canonicalizes `DeviceProps::os` to a small server-safe set
+    /// (an unrecognized/branding value coerces to `Linux`). `Some(os)` sends
+    /// `os` **verbatim**, bypassing that coercion — use it to keep a real OS
+    /// name the server accepts but the canonical set drops (e.g. `"Ubuntu"`,
+    /// `"Fedora"`). At your own risk: the server rejects a non-OS string with
+    /// `bad-request`. An all-whitespace value is ignored (falls back to the
+    /// safe coercion).
+    pub display_os: Option<String>,
 }
 ```
 
@@ -335,13 +343,30 @@ The proto's `UNKNOWN` (wire `'0'`) is intentionally absent — WA Web never emit
 
 #### `companion_platform_display`
 
-The display string sent in `<companion_platform_display>` is built from the resolved wire variant and the OS reported in `DeviceProps`:
+The display string sent in `<companion_platform_display>` is built from the resolved wire variant and a **canonicalized** OS derived from `DeviceProps::os`:
 
 - Web variants emit `<Browser> (<OS>)`, e.g. `Chrome (Linux)`, `Firefox (Windows)`. Non-browser web variants (Electron, UWP, OtherWebClient) and Android-mapped-to-Chrome fall back to `Chrome (<OS>)`, mirroring WA Web's reported renderer name.
 - Explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`, e.g. `Android (Android)`.
-- Empty OS substitutes `Linux`.
 
-The server only validates that the display string is 1..=100 bytes — there is no browser whitelist.
+<Warning>
+  Unlike QR pairing — which never sends this field and so tolerates an arbitrary branding string in `DeviceProps::os` — the pair-code `companion_hello` server **rejects a non-OS `companion_platform_display` with `bad-request`**. The OS component is therefore canonicalized through `wacore::companion_reg::CompanionOs` into a small, server-safe set instead of using `DeviceProps::os` verbatim.
+</Warning>
+
+`CompanionOs::from_hint` classifies a free-form OS hint (case-insensitive, with whole-word guards so branding like `"KaiOS"`/`"March"`/`"across"` doesn't false-match a substring) into one of:
+
+| `CompanionOs` | Wire string | Matches (examples) |
+|---|---|---|
+| `Windows` | `Windows` | `windows`, `Windows 11` |
+| `MacOs` | `Mac OS` | `Mac`, `macOS`, `Mac OS X`, `darwin` |
+| `Linux` | `Linux` | `Linux`, `Ubuntu`, `Fedora`, `Arch`, `Chrome OS`, `CrOS` |
+| `Android` | `Android` | `Android`, `android 14` |
+| `Ios` | `iOS` | `iOS`, `iPhone`, `iPad`, `iPadOS` |
+
+An OS that doesn't classify (empty, or a branding string such as `"Veloz"`) coerces to `Linux` — the same fallback QR pairing already used for an empty OS, now also covering non-OS branding strings. The client logs a one-time `warn!` when this coercion actually changes a non-empty `os`, so a consumer sees why their custom branding didn't ride through.
+
+**Escape hatch:** set `PairCodeOptions::display_os` to send an OS **verbatim**, bypassing canonicalization entirely — useful to keep a real, server-accepted name the canonical set collapses (e.g. `"Ubuntu"` → `Linux`). This is at the caller's risk: a non-OS string here is rejected with `bad-request`. An all-whitespace override is ignored and falls back to the safe coercion.
+
+The server also validates that the display string is 1..=100 bytes.
 
 ### Pair code events
 
@@ -941,6 +966,10 @@ match client.pair_with_code(options).await {
     }
 }
 ```
+
+<Note>
+  A `PairError::RequestFailed` carrying `bad-request` (400) is not necessarily a permanent/invalid-input failure — the server reuses the same error for **rate-limiting** (it throttles pair-code requests per phone number), and the two are indistinguishable in the response. Back off and retry rather than treating every 400 as fatal. By default, the library canonicalizes `companion_platform_display`'s OS (see [`companion_platform_display`](#companion-platform-display)), so display-shaped rejections are generally ruled out unless you explicitly bypass canonicalization via `PairCodeOptions::display_os`. Any server `backoff` hint is preserved on the wrapped `IqError::ServerError` (see [Error Types](/api/errors#iqerror-base-type)).
+</Note>
 
 The previous catch-all `CryptoError(String)` and `RequestFailed(String)` variants have been split into typed variants that preserve their underlying source. Match on `std::error::Error::source()` (or downcast it) to inspect the inner `CurveError`, `CryptoProviderError`, or `IqError`.
 

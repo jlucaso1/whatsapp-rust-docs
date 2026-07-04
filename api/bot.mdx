@@ -506,6 +506,9 @@ Bot::builder()
         // `None` derives the wire id from the device's `PlatformType`.
         // Override only when you need a specific `<companion_platform_id>`.
         platform_id: Some(CompanionWebClientType::Chrome),
+        // `..Default::default()` covers `display_os` (`None` = safe OS
+        // canonicalization; see the Tip below).
+        ..Default::default()
     })
     .on_event(|event, _client| async move {
         match &*event {
@@ -524,7 +527,7 @@ Pair code runs concurrently with QR code pairing — whichever completes first w
 </Note>
 
 <Tip>
-The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and the device's `os` string: web variants emit `<Browser> (<OS>)` (Android `PlatformType`s map to `Chrome`, so they show as `Chrome (Android)` by default); explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`. There is no separate `platform_display` field on `PairCodeOptions`.
+The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and a **canonicalized** OS derived from the device's `os` string: web variants emit `<Browser> (<OS>)` (Android `PlatformType`s map to `Chrome`, so they show as `Chrome (Android)` by default); explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`. The OS is coerced into a small server-safe set (`Windows`/`Mac OS`/`Linux`/`Android`/`iOS`) because the pair-code server rejects a non-OS display with `bad-request` — an arbitrary branding `os` string falls back to `Linux`. Set `PairCodeOptions::display_os` to send a real, non-canonical OS name verbatim instead. See [Authentication — companion_platform_display](/concepts/authentication#companion-platform-display) for the full classification table.
 </Tip>
 
 ### on_pair_code_refresh

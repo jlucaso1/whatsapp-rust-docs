@@ -68,7 +68,7 @@ All download methods handle three categories of CDN errors automatically:
 - **Media not found (404/410):** When a media URL has expired or the file has been relocated, the CDN returns 404 or 410. The client treats this the same as an auth error — it invalidates the cached connection, re-derives download URLs with fresh credentials and hosts, and retries once. This matches WhatsApp Web's `MediaNotFoundError` handling.
 - **Other errors (e.g., 500):** The client tries the next available CDN host without refreshing credentials. Hosts are tried in priority order (primary first, then fallback).
 
-For streaming downloads, the writer is seeked back to position 0 before retrying so partial writes are overwritten.
+For streaming downloads, the writer is seeked back to position 0 before retrying so partial writes are overwritten. `download()` gives every attempt a fresh in-memory buffer instead, so a failed host that wrote a longer body can't leave a stale tail behind a shorter successful retry.
 
 ---
 

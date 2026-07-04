@@ -527,6 +527,37 @@ Pair code runs concurrently with QR code pairing — whichever completes first w
 The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and the device's `os` string: web variants emit `<Browser> (<OS>)` (Android `PlatformType`s map to `Chrome`, so they show as `Chrome (Android)` by default); explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`. There is no separate `platform_display` field on `PairCodeOptions`.
 </Tip>
 
+### on_pair_code_refresh
+
+```rust
+pub fn on_pair_code_refresh<F, Fut>(self, handler: F) -> Self
+where
+    F: Fn(bool, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Registers a handler for [`Event::PairingCodeRefresh`](/concepts/events#pairingcoderefresh), fired when the server asks the companion to refresh an in-progress pair code. The `bool` argument is `force_manual`.
+
+<ParamField path="handler" type="F" required>
+  Async function that receives `force_manual: bool` and `Arc<Client>`
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_pair_code(options)
+    .on_pair_code_refresh(|force_manual, client| async move {
+        // The previous code is no longer guaranteed valid — request a fresh
+        // one via `client.pair_with_code(...)` with the same phone number.
+        println!("Server requested a pair-code refresh (force_manual={force_manual})");
+    })
+    // ...
+```
+
+<Note>
+Only fires while a pair-code flow is outstanding and the notification's ref matches it — a `refresh_code` notification for a stale or unrelated flow is ignored.
+</Note>
+
 ---
 
 ## Cache Configuration

@@ -449,7 +449,9 @@ pub trait ProtocolStore: Send + Sync {
     // byte-less placeholder if no entry exists yet. Defaulted (read-modify-write).
     async fn touch_tc_token_sender_timestamp(&self, jid: &str, sender_timestamp: i64) -> Result<()> { /* default */ }
     // Store a token received from a contact without clobbering an existing
-    // sender_timestamp. Defaulted (read-modify-write).
+    // sender_timestamp. Newer-wins: a stale write (older token_timestamp,
+    // unless the existing token is a byte-less placeholder) is a no-op.
+    // Defaulted (read-modify-write); SqliteStore/InMemoryBackend enforce it atomically.
     async fn store_received_tc_token(&self, jid: &str, token: &[u8], token_timestamp: i64) -> Result<()> { /* default */ }
 
     // Sent Message Store (retry support, matches WA Web's getMessageTable)

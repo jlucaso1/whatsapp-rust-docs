@@ -292,16 +292,27 @@ async fn touch_tc_token_sender_timestamp(&self, jid: &str, sender_timestamp: i64
 /// `sender_timestamp`. The symmetric counterpart of
 /// `touch_tc_token_sender_timestamp` — each writer owns its own field, so the
 /// notification path never drops a sender bucket the issuance path wrote
-/// concurrently. Same atomicity requirement as above.
+/// concurrently.
+///
+/// **Newer-wins**: the stored `(token, token_timestamp)` pair is overwritten
+/// only when the existing token is a byte-less placeholder, or the incoming
+/// `token_timestamp` is at least as new as the stored one — a stale write must
+/// never clobber a fresher real token. `SqliteStore` enforces this atomically
+/// inside an `IMMEDIATE` transaction; `InMemoryBackend` under its state lock.
+/// This is what lets concurrent history-sync chunks and the
+/// privacy-notification path converge on the same row without an external
+/// lock. The default read-modify-write below is a best-effort for
+/// third-party backends — same atomicity caveat as
+/// `touch_tc_token_sender_timestamp`.
 async fn store_received_tc_token(&self, jid: &str, token: &[u8], token_timestamp: i64) -> Result<()> {
-    // default: read-modify-write via get_tc_token + put_tc_token
+    // default: read-modify-write via get_tc_token + put_tc_token, newer-wins
 }
 ```
 
 <Note>
 `delete_expired_tc_tokens` gained a second `sender_cutoff` parameter — **this is a breaking change** for any custom backend that overrides it; update the signature to `(&self, token_cutoff: i64, sender_cutoff: i64) -> Result<u32>` and prune on both windows independently (see the built-in `SqliteStore`/`InMemoryBackend` implementations for the two-filter pattern).
 
-`touch_tc_token_sender_timestamp` and `store_received_tc_token` are new defaulted methods — existing custom backends compile and work unchanged, but should override both with an atomic upsert if the backend supports one, since the default read-modify-write can race a concurrent writer touching the same row (post-send issuance vs. an incoming `privacy_token` notification).
+`touch_tc_token_sender_timestamp` and `store_received_tc_token` are defaulted methods — existing custom backends compile and work unchanged, but should override both with an atomic upsert if the backend supports one, since the default read-modify-write can race a concurrent writer touching the same row (post-send issuance vs. an incoming `privacy_token` notification). For `store_received_tc_token` specifically, a non-atomic override that races two callers can let an older token's write land last and clobber a fresher one — the built-in backends close this by making the newer-wins check part of the same read+write.
 </Note>
 
 ### Sent message store

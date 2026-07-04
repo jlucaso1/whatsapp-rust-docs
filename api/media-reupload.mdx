@@ -189,7 +189,7 @@ pub enum MediaReuploadError {
 
 - `Client` — wraps `ClientError` (transport/client-layer failures)
 - `NotLoggedIn` — Cannot determine own JID
-- `InvalidRequest` — Newsletter messages are not supported for media reupload
+- `InvalidRequest` — Newsletter messages are not supported for media reupload; or, when using `request_many`, a `msg_id` appears more than once in the batch
 - `Timeout` — The server did not respond within 30 seconds
 - `Internal` — Encryption failure or other internal error
 

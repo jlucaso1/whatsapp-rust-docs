@@ -64,6 +64,62 @@ match result {
 }
 ```
 
+### request_many
+
+Request re-upload for several messages at once, concurrently. Use this for bulk recovery — e.g. resuming a client after a long offline period leaves many expired media URLs — since it completes in roughly one [request](#request) timeout instead of the serial sum of per-item waits.
+
+```rust
+pub async fn request_many(
+    &self,
+    reqs: &[MediaReuploadRequest<'_>],
+) -> Vec<Result<MediaRetryResult, MediaReuploadError>>
+```
+
+<ParamField path="reqs" type="&[MediaReuploadRequest]" required>
+  The batch of reupload requests.
+</ParamField>
+
+<ResponseField name="results" type="Vec<Result<MediaRetryResult, MediaReuploadError>>">
+  One result per input request, in the same order as `reqs`. One item failing does not abort the others.
+</ResponseField>
+
+**Example:**
+
+```rust
+use whatsapp_rust::features::media_reupload::{MediaReuploadRequest, MediaRetryResult};
+
+let reqs = vec![
+    MediaReuploadRequest {
+        msg_id: "3EB0ABC123",
+        chat_jid: &chat_jid,
+        media_key: &media_key_bytes,
+        is_from_me: false,
+        participant: Some(&sender_jid),
+    },
+    MediaReuploadRequest {
+        msg_id: "3EB0DEF456",
+        chat_jid: &other_chat_jid,
+        media_key: &other_media_key_bytes,
+        is_from_me: false,
+        participant: None,
+    },
+];
+
+for result in client.media_reupload().request_many(&reqs).await {
+    match result {
+        Ok(MediaRetryResult::Success { direct_path }) => {
+            println!("New download path: {}", direct_path);
+        }
+        Ok(other) => eprintln!("Reupload failed: {:?}", other),
+        Err(e) => eprintln!("Request error: {}", e),
+    }
+}
+```
+
+<Warning>
+Duplicate `msg_id`s within one batch are rejected (past the first occurrence) with `MediaReuploadError::InvalidRequest` — the underlying `mediaretry` waiter is keyed on message id alone, so two in-flight waiters for the same id could otherwise resolve each other with the wrong payload. A message id is unique per message, so a duplicate in a batch is a caller mistake.
+</Warning>
+
 ## Protocol flow
 
 1. The client encrypts a `ServerErrorReceipt` protobuf using an HKDF-derived key from the media key

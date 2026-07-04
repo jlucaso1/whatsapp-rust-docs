@@ -378,10 +378,13 @@ Under `Ordered`, a callback that panics is caught and logged; it does not kill t
 pub fn with_event_handler(mut self, handler: impl EventHandler + 'static) -> Self
 ```
 
-Registers a struct-based [`EventHandler`](/concepts/events#eventhandler-trait) directly on the bus. Unlike the closure registrars, the handler keeps its state in `&self` (no per-field clone dance) and `handle_event` runs inline on the dispatch path — spawn your own task for slow work. Not affected by [`with_event_delivery`](#with_event_delivery).
+Registers a struct-based [`EventHandler`](/concepts/events#eventhandler-trait) directly on the bus. Unlike the closure registrars, the handler holds its state as struct fields (no per-field clone dance); because `handle_event` takes `&self`, mutable state requires interior mutability (`Mutex`, `RwLock`, or atomics). `handle_event` runs inline on the dispatch path — spawn your own task for slow work. Not affected by [`with_event_delivery`](#with_event_delivery).
 
 **Example:**
 ```rust
+use std::sync::Arc;
+use wacore::types::events::{Event, EventHandler};
+
 struct MyStatefulHandler { /* ... */ }
 
 impl EventHandler for MyStatefulHandler {

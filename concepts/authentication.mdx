@@ -423,7 +423,7 @@ let pairing_ref = PairCodeUtils::parse_companion_hello_response(&response)
 match reg_node.get_attr("stage").map(|v| v.as_str()).as_deref() {
     Some("primary_hello") => handle_primary_hello(client, reg_node).await,
     Some("refresh_code") => handle_refresh_code(client, reg_node).await,
-    other => { /* ignored */ false }
+    _ => { /* ignored */ false }
 }
 ```
 

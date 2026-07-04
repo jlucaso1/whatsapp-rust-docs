@@ -284,7 +284,7 @@ When a contact sends you a privacy token, the library handles it automatically:
 
 1. Parses the `<notification type="privacy_token">` stanza
 2. Resolves the sender to a LID for storage (using `sender_lid` attribute or LID-PN cache)
-3. Applies a timestamp monotonicity pre-filter — an older token doesn't gate a presence re-subscribe on a newer *real* token
+3. Applies a timestamp monotonicity pre-filter — if the incoming token is older than a stored *real* token, storage and the presence re-subscribe are both skipped
 4. Stores the token in the backend, preserving any `sender_timestamp` already recorded by the post-send issuance path
 5. Re-subscribes presence for the sender to pick up the updated token
 

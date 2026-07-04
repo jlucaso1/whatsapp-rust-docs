@@ -2226,6 +2226,19 @@ let mut bot = Bot::builder()
     .await?;
 ```
 
+### Delivery order and backpressure
+
+Closures registered via `on_event`, `on_event_for`, `on_message`, and the other typed registrars are bridged onto the `CoreEventBus` by an internal adapter with a configurable delivery strategy, set via [`BotBuilder::with_event_delivery`](/api/bot#with_event_delivery):
+
+- **`EventDelivery::Concurrent` (default)** — each event is fanned out to every interested callback on its own spawned task. A slow callback never stalls the bus or its siblings, but ordering across events is not guaranteed, and a persistently slow consumer can accumulate unbounded in-flight tasks.
+- **`EventDelivery::Ordered { capacity }`** — events are handed to a single drainer task through a bounded mailbox and delivered to callbacks strictly in arrival order (within an event, interested callbacks run in registration order). This mirrors the ordered `messages.upsert` contract of WA Web (`preserveOrder: true`), whatsmeow, and Baileys. When the mailbox is full the event is dropped — counted in [`StatsSnapshot::events_dropped`](/api/client#stats) — instead of backpressuring the receive pipeline or growing without bound. A panicking callback is caught and logged; the drainer keeps running and later events still get delivered.
+
+Struct-based handlers registered with [`with_event_handler`](/api/bot#with_event_handler) (or `client.register_handler`) always run `handle_event` inline on the dispatch path — `EventDelivery` only governs the closure-based registrars.
+
+<Note>
+`Ordered` trades throughput and drop-under-load for a stronger ordering guarantee. If dropped events are unacceptable, pair it with an [inbound durability hook](/advanced/inbound-durability) for at-least-once redelivery — the hook's buffering is independent of the delivery mailbox.
+</Note>
+
 ### Multiple Handlers
 
 ```rust

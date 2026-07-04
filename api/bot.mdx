@@ -318,6 +318,84 @@ Bot::builder()
     // ...
 ```
 
+### with_event_delivery
+
+```rust
+pub fn with_event_delivery(mut self, delivery: EventDelivery) -> Self
+```
+
+Chooses how `on_event`/`on_event_for` (and the other closure-based registrars) receive events off the bus.
+
+```rust
+#[non_exhaustive]
+pub enum EventDelivery {
+    /// Each event is delivered to each interested callback on its own spawned
+    /// task (default). A slow callback stalls neither the bus nor its
+    /// siblings, but ordering across events is not guaranteed and a
+    /// persistently slow consumer can accumulate unbounded in-flight tasks.
+    Concurrent,
+    /// Events are delivered to the callbacks strictly in arrival order
+    /// through a single bounded mailbox drained by one task — the ordered
+    /// `messages.upsert` contract of WA Web (`preserveOrder`), whatsmeow and
+    /// Baileys. When the mailbox is full the event is dropped and counted in
+    /// `StatsSnapshot::events_dropped` instead of blocking the receive
+    /// pipeline or growing without limit.
+    Ordered { capacity: usize },
+}
+```
+
+<ParamField path="delivery" type="EventDelivery" required>
+  Delivery strategy. Defaults to `EventDelivery::Concurrent` — existing consumers are unaffected unless they opt in.
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::prelude::*;
+
+Bot::builder()
+    .with_backend(backend)
+    // Deliver callbacks in arrival order through a 256-slot mailbox.
+    .with_event_delivery(EventDelivery::Ordered { capacity: 256 })
+    .on_message(|ctx| async move {
+        // Guaranteed to run in the order messages arrived.
+        println!("{}", ctx.info.id);
+    })
+    .build()
+    .await?;
+```
+
+<Note>
+`capacity` is clamped to at least 1. Only affects the closure-based callbacks (`on_event`, `on_event_for`, `on_message`, and the other typed registrars) — a raw handler registered via [`with_event_handler`](#with_event_handler) always runs inline on the dispatch path and is unaffected by this setting.
+</Note>
+
+<Tip>
+Under `Ordered`, a callback that panics is caught and logged; it does not kill the single drainer or drop later events. If you need at-least-once delivery instead of best-effort drops under load, pair `Ordered` with an [inbound durability hook](/advanced/inbound-durability) — the hook buffers and redelivers independently of the delivery mailbox. See [`Client::stats()`](/api/client#stats) for the `events_dropped` counter.
+</Tip>
+
+### with_event_handler
+
+```rust
+pub fn with_event_handler(mut self, handler: impl EventHandler + 'static) -> Self
+```
+
+Registers a struct-based [`EventHandler`](/concepts/events#eventhandler-trait) directly on the bus. Unlike the closure registrars, the handler keeps its state in `&self` (no per-field clone dance) and `handle_event` runs inline on the dispatch path — spawn your own task for slow work. Not affected by [`with_event_delivery`](#with_event_delivery).
+
+**Example:**
+```rust
+struct MyStatefulHandler { /* ... */ }
+
+impl EventHandler for MyStatefulHandler {
+    fn handle_event(&self, event: Arc<Event>) {
+        // Runs inline — spawn if this does non-trivial work.
+    }
+}
+
+Bot::builder()
+    .with_backend(backend)
+    .with_event_handler(MyStatefulHandler { /* ... */ })
+    // ...
+```
+
 ### Using ChannelEventHandler
 
 For scenarios where you need to process events outside of a closure (e.g., testing, custom event loops, or runtime-agnostic code), use `ChannelEventHandler` with `register_handler` instead of `on_event`:

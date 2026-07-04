@@ -284,12 +284,14 @@ When a contact sends you a privacy token, the library handles it automatically:
 
 1. Parses the `<notification type="privacy_token">` stanza
 2. Resolves the sender to a LID for storage (using `sender_lid` attribute or LID-PN cache)
-3. Applies a timestamp monotonicity guard — an older token doesn't overwrite a newer *real* token
+3. Applies a timestamp monotonicity pre-filter — if the incoming token is older than a stored *real* token, storage and the presence re-subscribe are both skipped
 4. Stores the token in the backend, preserving any `sender_timestamp` already recorded by the post-send issuance path
 5. Re-subscribes presence for the sender to pick up the updated token
 
+The same newer-wins rule (older writes rejected, a byte-less placeholder always accepts the first real token) is also enforced **atomically inside the store itself** — see [`store_received_tc_token`](/api/store#tctoken-storage). This is what closes the cross-source race between this notification path and history-sync's tc-token candidates: both call the same store method, so whichever call lands last can never clobber a fresher token, without needing a lock shared across the two paths.
+
 <Note>
-A byte-less placeholder (written by post-send issuance before any real token has been received) is always replaced by the contact's first real token, even if the placeholder's own timestamp is newer — the monotonicity guard only applies once a real token is on record.
+A byte-less placeholder (written by post-send issuance before any real token has been received) is always replaced by the contact's first real token, even if the placeholder's own timestamp is newer — the newer-wins rule only blocks a stale write once a real token is on record.
 </Note>
 
 ### Startup pruning
@@ -384,7 +386,7 @@ sequenceDiagram
     Note over Client,Server: Incoming token notification
     Server->>Client: notification type="privacy_token"
     Client->>Client: Resolve sender LID
-    Client->>Backend: store_received_tc_token (monotonicity guard, preserves sender_timestamp)
+    Client->>Backend: store_received_tc_token (atomic newer-wins, preserves sender_timestamp)
     Client->>Server: Re-subscribe presence
     
     Note over App,Server: Outgoing 1:1 call offer (voip feature, unconditional — no AB prop gate)

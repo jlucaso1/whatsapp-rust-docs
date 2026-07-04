@@ -132,6 +132,7 @@ pub enum Event {
     // Pairing
     PairingQrCode { code: String, timeout: Duration },
     PairingCode { code: String, timeout: Duration },
+    PairingCodeRefresh { force_manual: bool },
     PairSuccess(PairSuccess),
     PairError(PairError),
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
@@ -425,14 +426,37 @@ Event::PairingQrCode { code, timeout } => {
 ```rust
 Event::PairingCode {
     code: String,           // 8-character code
-    timeout: Duration,      // ~180 seconds
+    timeout: Duration,      // ~180 seconds, remaining at time of emission
 }
 ```
+
+<Note>
+`timeout` is the *remaining* validity window, not always the full ~180 seconds: the clock starts before the stage-1 `companion_hello` round-trip, so `timeout` is already reduced by however long that request took.
+</Note>
 
 **Example:**
 ```rust
 Event::PairingCode { code, .. } => {
     println!("Enter {} on your phone", code);
+}
+```
+
+### PairingCodeRefresh
+
+**Emitted:** When the server asks the companion to refresh an in-progress pair code (WA Web `refreshAltLinkingCode` / `forceManualRefresh`). Only fired while a pair-code flow is outstanding and the server's ref matches it — a `refresh_code` notification for a stale or unrelated flow is silently ignored.
+
+```rust
+Event::PairingCodeRefresh {
+    force_manual: bool,     // true when the server requires an explicit re-request rather than an auto-rotation
+}
+```
+
+**Example:**
+```rust
+Event::PairingCodeRefresh { force_manual } => {
+    // The previous code is no longer guaranteed valid — request a new one,
+    // e.g. by calling `client.pair_with_code(options)` again.
+    println!("Server requested a pair-code refresh (force_manual={force_manual})");
 }
 ```
 

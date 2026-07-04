@@ -351,18 +351,39 @@ The server only validates that the display string is 1..=100 bytes — there is 
 // wacore/src/types/events.rs
 Event::PairingCode {
     code: String,           // The 8-character pairing code
-    timeout: Duration,      // Validity (~180 seconds)
+    timeout: Duration,      // Validity (~180 seconds), remaining at time of emission
 }
 ```
 
-**Generated in:** `src/pair_code.rs:215-219`
+**Generated in:** `src/pair_code.rs`
+
+The validity clock (`code_generation_ts`) is stamped *before* the stage-1 `companion_hello` request is sent, matching WA Web's `startAltLinkingFlow`. Because of this, `timeout` on the dispatched event is the *remaining* window (`code_validity() - elapsed`), not always the full ~180 seconds — otherwise a UI countdown built from the event would outlast the server's (and this crate's own `handle_primary_hello`) actual expiry check by however long stage 1 took.
 
 ```rust
+let code_generation_ts = wacore::time::now_secs();
+// ...stage 1 companion_hello round-trip...
+let elapsed = wacore::time::now_secs().saturating_sub(code_generation_ts).max(0) as u64;
+let remaining = PairCodeUtils::code_validity()
+    .saturating_sub(std::time::Duration::from_secs(elapsed));
+
 self.core.event_bus.dispatch(Event::PairingCode {
     code: code.clone(),
-    timeout: PairCodeUtils::code_validity(),
+    timeout: remaining,
 });
 ```
+
+### Pair code refresh events
+
+**Event:** `Event::PairingCodeRefresh`
+
+```rust
+// wacore/src/types/events.rs
+Event::PairingCodeRefresh {
+    force_manual: bool,  // true when the server requires an explicit re-request
+}
+```
+
+Fired when a `link_code_companion_reg` notification arrives with `stage="refresh_code"` (WA Web `refreshAltLinkingCode` / `forceManualRefresh`) and its `link_code_pairing_ref` matches the outstanding request. The typical reaction is to call [`Client::pair_with_code`](/api/client#pair_with_code) again with the same phone number — the previous code is no longer guaranteed valid. Register a handler with [`Bot::on_pair_code_refresh`](/api/bot#on_pair_code_refresh) or match on the event directly via `on_event`.
 
 ### Two-Stage Flow
 
@@ -394,17 +415,33 @@ let pairing_ref = PairCodeUtils::parse_companion_hello_response(&response)
 
 **Trigger:** `link_code_companion_reg` notification from server
 
-**Handling:** `src/pair_code.rs:229-376`
+**Handling:** `src/pair_code.rs`
+
+`handle_pair_code_notification` dispatches on the notification's `stage` attribute, mirroring WA Web's `handleAltDeviceLinkingNotification`. An unrecognized stage is ignored without touching the in-progress flow:
 
 ```rust
-pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &Node) -> bool {
-    // 1. Extract primary's wrapped ephemeral pub (80 bytes)
-    // 2. Extract primary's identity pub (32 bytes)
-    // 3. Decrypt primary's ephemeral key (expensive PBKDF2)
-    // 4. Prepare encrypted key bundle
-    // 5. Send companion_finish IQ
+match reg_node.get_attr("stage").map(|v| v.as_str()).as_deref() {
+    Some("primary_hello") => handle_primary_hello(client, reg_node).await,
+    Some("refresh_code") => handle_refresh_code(client, reg_node).await,
+    _ => { /* ignored */ false }
 }
 ```
+
+**`primary_hello`** — the user entered the code on their phone:
+
+1. Extract primary's wrapped ephemeral pub (80 bytes)
+2. Extract primary's identity pub (32 bytes)
+3. Validate the notification before touching any crypto (checked in this order, so a rejected notification never consumes a retry slot):
+   - `link_code_pairing_ref` must match the ref cached from `companion_hello` (WA Web `InvalidRefError`)
+   - the code must still be within its ~180s validity window (WA Web `OldCodeError`)
+   - at most `PairCodeUtils::max_primary_hello_attempts()` (3, matching WA Web's `T`) genuine attempts are processed per code (WA Web `MaxPrimaryHelloError`) — a rejected attempt does not count against this cap
+4. Decrypt primary's ephemeral key (expensive PBKDF2, run in `spawn_blocking`)
+5. Prepare encrypted key bundle
+6. Send `companion_finish` IQ
+
+The whole of stage 2 runs under the `pair_code_state` lock, held from validation through the socket send. The transport dispatches `<notification>` stanzas on concurrent detached tasks, so two `primary_hello` notifications for the same code could otherwise each derive a *different* random `adv_secret` and race `SetAdvSecretKey` (last-write-wins) — desyncing the persisted secret from the `companion_finish` the server acts on. Holding the lock across the full stage makes concurrent notifications for the same code process sequentially, matching WA Web's single-threaded model. State stays `WaitingForPhoneConfirmation` after a successful `companion_finish` (rather than moving to `Completed`) so a genuine retry can still reuse it — only `pair-success` (see [`crate::pair`](#qr-code-pairing)) completes the flow.
+
+**`refresh_code`** — the server asks the companion to regenerate the code it is displaying. Dispatches [`Event::PairingCodeRefresh`](/concepts/events#pairingcoderefresh) with `force_manual` taken from the notification's `force_manual_refresh` attribute, but only when the notification's ref matches the outstanding flow (WA Web's `getCurrentRef()` guard) — otherwise it is ignored.
 
 ## Passkey linking (SHORTCAKE_PASSKEY)
 
@@ -981,6 +1018,10 @@ let options = PairCodeOptions {
         Event::PairingCode { code, timeout } => {
             // Display code to user
             println!("Enter {} on your phone", code);
+        }
+        Event::PairingCodeRefresh { force_manual } => {
+            // Previous code is no longer guaranteed valid — request a new one
+            println!("Refresh requested (force_manual={})", force_manual);
         }
         Event::PairSuccess(info) => {
             // Save success notification

@@ -546,7 +546,7 @@ Registers a handler for [`Event::PairingCodeRefresh`](/concepts/events#pairingco
 ```rust
 Bot::builder()
     .with_pair_code(options)
-    .on_pair_code_refresh(|force_manual, client| async move {
+    .on_pair_code_refresh(|force_manual, _client| async move {
         // The previous code is no longer guaranteed valid — request a fresh
         // one via `client.pair_with_code(...)` with the same phone number.
         println!("Server requested a pair-code refresh (force_manual={force_manual})");

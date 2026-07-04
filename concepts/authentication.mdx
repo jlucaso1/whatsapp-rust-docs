@@ -1,3 +1,4 @@
+---
 title: Authentication
 description: QR code, pair code, and passkey authentication flows in whatsapp-rust
 ---
@@ -967,7 +968,7 @@ match client.pair_with_code(options).await {
 ```
 
 <Note>
-  A `PairError::RequestFailed` carrying `bad-request` (400) is not necessarily a permanent/invalid-input failure — the server reuses the same error for **rate-limiting** (it throttles pair-code requests per phone number), and the two are indistinguishable in the response. Back off and retry rather than treating every 400 as fatal. The library canonicalizes `companion_platform_display`'s OS (see [`companion_platform_display`](#companion-platform-display)), so a display-shaped rejection is already ruled out. Any server `backoff` hint is preserved on the wrapped `IqError::ServerError` (see [Error Types](/api/errors#iqerror-base-type)).
+  A `PairError::RequestFailed` carrying `bad-request` (400) is not necessarily a permanent/invalid-input failure — the server reuses the same error for **rate-limiting** (it throttles pair-code requests per phone number), and the two are indistinguishable in the response. Back off and retry rather than treating every 400 as fatal. By default, the library canonicalizes `companion_platform_display`'s OS (see [`companion_platform_display`](#companion-platform-display)), so display-shaped rejections are generally ruled out unless you explicitly bypass canonicalization via `PairCodeOptions::display_os`. Any server `backoff` hint is preserved on the wrapped `IqError::ServerError` (see [Error Types](/api/errors#iqerror-base-type)).
 </Note>
 
 The previous catch-all `CryptoError(String)` and `RequestFailed(String)` variants have been split into typed variants that preserve their underlying source. Match on `std::error::Error::source()` (or downcast it) to inspect the inner `CurveError`, `CryptoProviderError`, or `IqError`.

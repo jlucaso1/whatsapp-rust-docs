@@ -51,7 +51,7 @@ wacore/
 ├── binary/           // Binary protocol encoding/decoding
 ├── libsignal/        // E2E encryption
 ├── noise/            // Noise Protocol handshake
-├── appstate/         // App state management
+├── appstate/         // App state sync protocol
 ├── derive/           // Derive macros (EmptyNode, ProtocolNode, StringEnum)
 ├── iq/               // Type-safe IQ protocol types
 ├── net.rs            // Transport, HttpClient trait definitions
@@ -550,7 +550,7 @@ pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
 The DM send path resolves all known recipient devices and own companion devices from the local device registry, filters out hosted devices, excludes the sender device, and deduplicates for self-DMs — matching WA Web's `WAWebSendUserMsgJob` and `WAWebDBDeviceListFanout` behavior. The local registry is checked first; a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects. Session locks are acquired for all involved devices in sorted order to prevent deadlocks. The `build_session_lock_keys()` helper resolves encryption JIDs (normalizing the recipient to bare form via `to_non_ad()`), sorts by `(server, user, device)` using `cmp_for_lock_order()`, and deduplicates. The `session_mutexes_for()` helper then converts the sorted JIDs to session mutexes, reusing a single `String` buffer to avoid per-JID heap allocations.
 
-Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`. Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
+The peer message path (single-device) acquires a single lock for the resolved encryption JID. Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`. Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
 
 ### Background Saver
 

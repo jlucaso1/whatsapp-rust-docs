@@ -24,7 +24,7 @@ The policy is only consulted for **group and `status@broadcast`** retry receipts
 
 When `admit` returns `false`, the receipt is dropped before the group-info fetch, the unknown-device `rotateKey` block, `markForgetSenderKey`, key-bundle processing, and the resend. A dropped receipt is not queued — the requester re-requests on its own timer, so a policy should refill over time to keep genuine recovery possible.
 
-## The `RetryAdmission` Trait
+## The `RetryAdmission` trait
 
 ```rust
 pub trait RetryAdmission: wacore::sync_marker::MaybeSendSync {
@@ -49,7 +49,7 @@ The device is intentionally part of `requester`, but a policy may key on the use
 
 `RetryAdmission` is re-exported from the crate root and from the `prelude`.
 
-## Opting In
+## Opting in
 
 ```rust
 use whatsapp_rust::RetryAdmission;
@@ -73,12 +73,13 @@ let bot = Bot::builder()
 // default behavior: every retry receipt admitted, matching WhatsApp Web.
 bot.client().set_retry_admission(Arc::new(AlwaysAdmit));
 
-bot.run().await;
+let handle = bot.run().await?;
+handle.await?;
 ```
 
 `Client::set_retry_admission` returns `false` (and keeps the previously-registered policy) if called more than once — set it once, before connecting. Live tuning belongs inside the policy itself (e.g. atomics), not in re-registration.
 
-## Example: Token-Bucket Quarantine
+## Example: token-bucket quarantine
 
 The repository ships `examples/retry_quarantine.rs`: a per-`(chat, requester)` token bucket, burst 2 / refill 2 per day, with a bounded keyspace (fails open — admits — once the tracked-pair cap is reached, rather than growing unbounded or blocking a brand-new pair).
 
@@ -93,10 +94,10 @@ Key points from that example:
 - **Refill 2/day** keeps genuine recovery possible for a member whose session is intermittently broken, without allowing a sustained storm.
 - **`burst = 0` disables the policy outright** (always admits), useful for a kill switch without unregistering.
 
-## Relation to `#982`
+## Design rationale
 
 This hook is a decoupled, WA Web-compliant alternative to embedding a quarantine directly in the SDK's default retry-receipt path: the core stays byte-for-byte WA Web, and any volume-based policy — including the exact mechanism above — lives in operator code via this trait instead of being on by default.
 
-## See Also
+## See also
 
 - [Inbound Durability Hook](/advanced/inbound-durability) — the sibling opt-in hook idiom (`OnceLock`, zero overhead unset) that this trait follows.

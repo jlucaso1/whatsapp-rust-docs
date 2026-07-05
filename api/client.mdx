@@ -1874,6 +1874,7 @@ Cumulative wire I/O and activity counters for this client session, always record
 | `frames_received` | `u64` | Decodable frames received |
 | `messages_sent` | `u64` | Outgoing message send attempts (DM/group/status) |
 | `messages_received` | `u64` | Incoming messages successfully decrypted and dispatched |
+| `events_dropped` | `u64` | Inbound events shed because a consumer's bounded delivery mailbox was full (opt-in [`EventDelivery::Ordered`](/api/bot#with_event_delivery)) — a non-zero, growing value flags a consumer that can't keep up |
 | `reconnects` | `u64` | Reconnect attempts started by the auto-reconnect loop |
 | `reconnect_errors` | `u32` | Consecutive reconnect failures (resets on success) |
 | `resends_throttled` | `u64` | Outbound resends dropped by the per-chat rate limiter — surfaces storm chats |

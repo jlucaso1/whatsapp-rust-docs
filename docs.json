@@ -67,7 +67,8 @@
                   "advanced/websocket-handling",
                   "advanced/observability",
                   "advanced/metrics",
-                  "advanced/inbound-durability"
+                  "advanced/inbound-durability",
+                  "advanced/retry-admission"
                 ]
               }
             ]

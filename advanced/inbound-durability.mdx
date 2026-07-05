@@ -244,3 +244,7 @@ impl InboundDurabilityHook for InboxArchiver {
 <Tip>
 Always use `tokio::task::spawn_blocking` for disk I/O inside the hook. Blocking calls on the async thread stall the entire receive pipeline, including the batch that is waiting to commit.
 </Tip>
+
+## See also
+
+- [Retry Admission Hook](/advanced/retry-admission) — the sibling opt-in hook idiom (`OnceLock`, zero overhead unset) for gating inbound group/status retry receipts.

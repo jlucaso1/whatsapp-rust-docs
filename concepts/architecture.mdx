@@ -51,7 +51,7 @@ wacore/
 ├── binary/           // Binary protocol encoding/decoding
 ├── libsignal/        // E2E encryption
 ├── noise/            // Noise Protocol handshake
-├── appstate/         // App state sync protocol
+├── appstate/         // App state management
 ├── derive/           // Derive macros (EmptyNode, ProtocolNode, StringEnum)
 ├── iq/               // Type-safe IQ protocol types
 ├── net.rs            // Transport, HttpClient trait definitions
@@ -451,6 +451,20 @@ The Meta AI bot's `msmsg` (`<enc type="msmsg">`) encryption type was the origina
 
 **Ack SKDM-only session decrypts:** A `pkmsg`/`msg` that decrypts successfully but carries only a Sender Key Distribution Message (no user-facing content to dispatch) is now explicitly acked. Previously it could decrypt, skip event dispatch, and leave no ack — so the server kept replaying it from the offline queue. The fix closes that gap so SKDM-only stanzas drain like any other processed message.
 
+### Critical app-state sync (pairing bootstrap)
+
+Right after a fresh pairing (and on any reconnect before the account's critical app-state collections have synced), the client fetches the `CriticalBlock` and `CriticalUnblockLow` collections — blocked contacts and push name — via a batched IQ, before dispatching `Connected`. Decoding those snapshots requires the app-state **sync-key-share**, an E2E message the primary phone sends automatically, which can arrive late if a heavy history sync is saturating the stream at the same time.
+
+**A single 180-second deadline** (`CRITICAL_SYNC_TIMEOUT_SECS`, matching WhatsApp Web's `WAWebSyncBootstrap`) bounds the whole critical-sync path:
+
+1. A watchdog task is armed first against this deadline, before anything else runs. If critical sync hasn't completed by then, the client reconnects to retry — WhatsApp Web instead logs out (`socketLogout`) at this point, but reconnecting preserves credentials and lets auto-reconnect retry the sync.
+2. The client waits up to 10 seconds (`KEY_SHARE_GRACE_SECS`) for the auto-shared key before running the batched critical-collections IQ. This grace period is purely an optimization to skip a redundant explicit key request in the common fast case — it does not gate correctness.
+3. If a collection still can't be decoded because its key hasn't landed, the client sends an explicit `AppStateSyncKeyRequest` and waits for the re-share. For this initial critical bootstrap, the wait is bounded by whatever time remains on the shared 180s deadline (rather than a short fixed wait), so a key that arrives late — or is never auto-shared at all — still has a chance to recover on the same connection instead of failing the sync outright.
+
+Non-critical app-state sync (background regular collections, group `server_sync`, and the `ib` dirty-resync path) is unaffected by this deadline — those callers keep waiting a fixed 10 seconds for a missing key before giving up and re-syncing on a later cycle.
+
+The net effect: a key-share that's delayed by a saturated stream during pairing no longer strands the critical sync until the 180s watchdog forces a reconnect — it recovers via the explicit request within the same window, so contacts and push name sync reliably on the first connection.
+
 ### Deferred device sync
 
 During offline sync, the client may receive group messages from devices not yet present in the local device registry (for example, a companion device that was paired while the client was offline). Rather than firing a network request for each unknown device individually, the client batches these into a `PendingDeviceSync` set.
@@ -536,7 +550,7 @@ pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
 The DM send path resolves all known recipient devices and own companion devices from the local device registry, filters out hosted devices, excludes the sender device, and deduplicates for self-DMs — matching WA Web's `WAWebSendUserMsgJob` and `WAWebDBDeviceListFanout` behavior. The local registry is checked first; a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects. Session locks are acquired for all involved devices in sorted order to prevent deadlocks. The `build_session_lock_keys()` helper resolves encryption JIDs (normalizing the recipient to bare form via `to_non_ad()`), sorts by `(server, user, device)` using `cmp_for_lock_order()`, and deduplicates. The `session_mutexes_for()` helper then converts the sorted JIDs to session mutexes, reusing a single `String` buffer to avoid per-JID heap allocations.
 
-The peer message path (single-device) acquires a single lock for the resolved encryption JID. Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`. Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
+Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`. Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
 
 ### Background Saver
 

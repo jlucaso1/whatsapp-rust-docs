@@ -1,0 +1,103 @@
+---
+title: Retry Admission Hook
+description: Opt in to bounding a storm of inbound group/status retry receipts, without changing the SDK's default WhatsApp Web-compliant behavior.
+---
+
+## Overview
+
+WhatsApp Web has **no volume-based throttle on inbound retry receipts**. `WAWebHandleRetryRequest` serializes them per chat, refuses past `MAX_RETRY`, and otherwise processes every receipt — its gates are all semantic (`ALREADY_DELIVERED`, `CHANGED_IDENTITY`, `RECORD_MISSING`, `DEVICE_NOT_RECIPIENT`, `HIGH_RETRY_COUNT`, `MESSAGE_EXPIRED`), never "this member is asking too often." This SDK mirrors that: by default, every inbound `<receipt type="retry">` runs the full repair path (`markForgetSenderKey`, key-bundle processing, resend).
+
+A single-user WA Web client never sends at a volume where this matters. A bot in a large group can, if a cohort of members has pairwise sessions that never establish — each of those members retries on every message, driving the repair path at storm rate.
+
+Registering a `RetryAdmission` policy lets you bound that cost **without the SDK diverging from WhatsApp Web by default**. Leaving it unset keeps exact WA Web behavior, at zero cost — the check on the receive path is a single `OnceLock::get()`.
+
+<Note>
+This is an opt-in seam for bot-scale deployments. Dropping a retry receipt is a deliberate decision to skip an eligible repair request; the SDK will never do this on its own.
+</Note>
+
+## Scope
+
+The policy is only consulted for **group and `status@broadcast`** retry receipts from **other accounts**. It is never consulted for:
+
+- Retries from your own companion devices (`is_peer`) — their session must always be able to rebuild.
+- Any 1:1 (DM) retry.
+
+When `admit` returns `false`, the receipt is dropped before the group-info fetch, the unknown-device `rotateKey` block, `markForgetSenderKey`, key-bundle processing, and the resend. A dropped receipt is not queued — the requester re-requests on its own timer, so a policy should refill over time to keep genuine recovery possible.
+
+## The `RetryAdmission` trait
+
+```rust
+pub trait RetryAdmission: wacore::sync_marker::MaybeSendSync {
+    /// Return `true` to admit the retry receipt (WA Web behavior), `false` to
+    /// drop it before any repair work runs. Must return promptly (no I/O, no
+    /// blocking).
+    fn admit(&self, chat: &Jid, requester: &Jid, retry_count: u8) -> bool;
+}
+```
+
+Object-safe and WASM-safe (`MaybeSendSync` is `Send + Sync` on native targets, unbounded on `wasm32`).
+
+| Parameter | Description |
+|---|---|
+| `chat` | The group or `status@broadcast` JID the retry receipt was sent in. |
+| `requester` | The retrying participant's device JID. |
+| `retry_count` | The receipt's attempt number. |
+
+`admit` is called **inline on the receive path** and is deliberately synchronous — a slow or awaiting policy would stall retry processing for the pending key, and a gate never needs to wait. Keep it to a fast, local decision (an atomic counter, a token-bucket check); do no I/O or blocking inside it.
+
+The device is intentionally part of `requester`, but a policy may key on the user alone: WhatsApp Web re-targets a whole user's sender key when its primary device goes cold, so all devices of one broken account can reasonably share a single budget.
+
+`RetryAdmission` is re-exported from the crate root and from the `prelude`.
+
+## Opting in
+
+```rust
+use whatsapp_rust::RetryAdmission;
+use whatsapp_rust::prelude::*;
+use std::sync::Arc;
+
+struct AlwaysAdmit;
+
+impl RetryAdmission for AlwaysAdmit {
+    fn admit(&self, _chat: &Jid, _requester: &Jid, _retry_count: u8) -> bool {
+        true
+    }
+}
+
+let bot = Bot::builder()
+    .with_backend(SqliteStore::new("whatsapp.db").await?)
+    .build()
+    .await?;
+
+// Register before connecting. Without this call the client keeps its
+// default behavior: every retry receipt admitted, matching WhatsApp Web.
+bot.client().set_retry_admission(Arc::new(AlwaysAdmit));
+
+let handle = bot.run().await?;
+handle.await?;
+```
+
+`Client::set_retry_admission` returns `false` (and keeps the previously-registered policy) if called more than once — set it once, before connecting. Live tuning belongs inside the policy itself (e.g. atomics), not in re-registration.
+
+## Example: token-bucket quarantine
+
+The repository ships `examples/retry_quarantine.rs`: a per-`(chat, requester)` token bucket, burst 2 / refill 2 per day, with a bounded keyspace (fails open — admits — once the tracked-pair cap is reached, rather than growing unbounded or blocking a brand-new pair).
+
+```bash
+cargo run --example retry_quarantine
+```
+
+Key points from that example:
+
+- **Keyed by user, not device** — `(chat.user, requester.user)`, matching the "one broken account, one budget" rationale above.
+- **Burst 2** repairs a healthy member immediately (one mark is enough — the next send already carries the SKDM); receipts past the burst from the same pair are dropped before any repair work.
+- **Refill 2/day** keeps genuine recovery possible for a member whose session is intermittently broken, without allowing a sustained storm.
+- **`burst = 0` disables the policy outright** (always admits), useful for a kill switch without unregistering.
+
+## Design rationale
+
+This hook is a decoupled, WA Web-compliant alternative to embedding a quarantine directly in the SDK's default retry-receipt path: the core stays byte-for-byte WA Web, and any volume-based policy — including the exact mechanism above — lives in operator code via this trait instead of being on by default.
+
+## See also
+
+- [Inbound Durability Hook](/advanced/inbound-durability) — the sibling opt-in hook idiom (`OnceLock`, zero overhead unset) that this trait follows.

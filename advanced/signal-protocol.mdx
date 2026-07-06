@@ -1037,7 +1037,9 @@ The signed pre-key minted at pairing was otherwise **permanent** — a forward-s
 
 Before this feature, `Device::load_signed_prekey` (`src/store/signal.rs`) returned a record only when the requested id matched the *current* `signed_pre_key_id` field — the `signed_prekeys` backend table (which already existed, with full CRUD) was never consulted for other ids. Rotating the key in place would therefore make any in-flight prekey message naming the old id fail with `InvalidSignedPreKeyId`. `load_signed_prekey` and `contains_signed_prekey` now fall back to the backend table for non-current ids, which is what makes rotation safe to ship.
 
-Location: `src/features/rotate_key.rs`, `src/store/signal.rs`, `wacore/src/iq/prekeys.rs`, `wacore/src/store/commands.rs`
+**Retry, not NACK, once the id ages past retention:** A sender's `PreKeySignalMessage` can still name a signed pre-key id that has since aged past `SIGNED_PRE_KEY_RETENTION` (3 total: current + 2 rotated-out) — the backend fallback above has nothing left to return, and `InvalidSignedPreKeyId` is the correct, permanent answer. On the 1:1 decrypt path (`src/message/receive.rs`), this now routes to a retry receipt (`RetryReason::InvalidKeyId`) carrying the current bundle, mirroring the sibling `InvalidPreKeyId` arm — instead of falling through to the catch-all `UnhandledError` nack, which would drop the stanza from the offline queue and lose the 1:1 message permanently and silently.
+
+Location: `src/features/rotate_key.rs`, `src/store/signal.rs`, `src/message/receive.rs`, `wacore/src/iq/prekeys.rs`, `wacore/src/store/commands.rs`
 
 ### Re-pair pre-key healing (v0.6)
 

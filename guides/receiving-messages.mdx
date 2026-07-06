@@ -404,6 +404,8 @@ Exceptions where `skmsg` is still processed even without successful session decr
 
 <Note>
   This matches WhatsApp Web's `canDecryptNext` pattern. It prevents unnecessary retry receipts for `skmsg` nodes that can never succeed without the SKDM.
+
+  Beyond `NoSenderKeyState`, a `skmsg` decrypt can also fail with `SignatureValidationFailed`, `InvalidSenderKeySession`, `UnrecognizedMessageVersion`, or `InvalidMessage` (a distinct error variant, separate from `NoSenderKeyState` and `DuplicatedMessage` — a MAC or format failure on an otherwise-recognized sender-key ciphertext) — all recoverable sender-key desyncs (a participant rotated their sender key or re-registered), not corrupt messages. These are classified the same way as `NoSenderKeyState`: the client dispatches `UndecryptableMessage` and sends a retry receipt, which prompts the sender to redistribute the SKDM. Only a genuinely non-Signal error falls through to a terminal NACK, which tells the server to stop retransmitting the stanza. This mirrors WhatsApp Web, which treats every `SignalDecryptionError` on the group path as retryable — the 1:1 decrypt path already applied the same recoverable/terminal split.
 </Note>
 
 <Warning>

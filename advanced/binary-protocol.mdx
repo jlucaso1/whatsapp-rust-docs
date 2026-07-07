@@ -625,6 +625,18 @@ pub enum NodeContentRef<'a> {
 
 Location: `wacore/binary/src/node.rs:10-106`, `465-469`, `437-441`
 
+### Node nesting depth cap
+
+`read_node_ref` decodes `LIST`-typed content recursively — a child `LIST_8`/`LIST_16` node causes `read_node_ref` to call itself for each nested child. Since a single `LIST` node needs only ~4 wire bytes to nest one level (`list_size == 2`, zero attrs, one child), a hostile or malformed frame could otherwise force tens of thousands of recursion levels from a tiny payload and overflow the native call stack.
+
+The decoder rejects this before it happens: recursion depth is tracked through `read_node_ref` → `read_content` → `read_content_from_tag`, and any node nested past `MAX_NODE_DEPTH` (128 levels) returns `BinaryError::MaxDepthExceeded` instead of recursing further. Real WhatsApp stanza trees are well under 20 levels deep, so this only ever rejects pathological input.
+
+```rust
+const MAX_NODE_DEPTH: usize = 128;
+```
+
+Location: `wacore/binary/src/decoder.rs`
+
 ### OwnedNodeRef (yoke zero-copy)
 
 `OwnedNodeRef` is a self-referential type that owns the decompressed network buffer while the inner `NodeRef` borrows string and byte payloads directly from it. This avoids copying payloads out of the buffer during decoding — only container allocations (attribute `Vec`, child `Vec`) occur.
@@ -1033,10 +1045,13 @@ pub enum BinaryError {
     Jid(JidParseError),     // JID parse failures from AttrParser
     LeftoverData(usize),
     Io(std::io::Error),
+    MaxDepthExceeded,        // Node nesting exceeded MAX_NODE_DEPTH (128)
 }
 ```
 
 The `Jid` variant is emitted by `AttrParser::optional_jid` when a string attribute fails to parse as a JID. This ensures malformed JIDs in protocol messages are surfaced as typed errors rather than silently ignored.
+
+The `MaxDepthExceeded` variant is emitted by `read_node_ref` when a decoded frame nests `LIST` nodes past `MAX_NODE_DEPTH` (128 levels) — see [Node nesting depth cap](#node-nesting-depth-cap). Since real stanza trees never approach this depth, callers can treat it the same as any other malformed-frame error (drop the connection / reject the frame).
 
 Location: `wacore/binary/src/error.rs`
 

@@ -212,7 +212,7 @@ The `Event` enum is `#[non_exhaustive]`, so your `match` statements must include
 </Note>
 
 <Note>
-**Payload stability:** payload structs are being sealed with `#[non_exhaustive]` plus a [`bon`](https://docs.rs/bon) builder for construction (`Type::builder()…build()`), so a payload can gain fields without breaking consumers — the seal is rolling out per struct, so not every payload carries it yet (`ServerAck` is the first). Either way, read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring, rather than binding every field. A maybe-absent field is always modeled as `Option<T>` (with a `maybe_*` builder setter once sealed), never an empty-string or zero sentinel.
+**Payload stability:** payload structs are being sealed with `#[non_exhaustive]` plus a [`bon`](https://docs.rs/bon) builder for construction (`Type::builder()…build()`), so a payload can gain fields without breaking consumers — the seal is rolling out per struct. `ServerAck` was sealed first; the notification/presence/contact/group payloads (`SelfPushNameUpdated`, `ChatPresenceUpdate`, `PresenceUpdate`, `PictureUpdate`, `UserAboutUpdate`, `ContactUpdated`, `ContactNumberChanged`, `ContactSyncRequested`, `GroupUpdate`, `PushNameUpdate`) and every app-state-sync mutation payload (`ContactUpdate`, `PinUpdate`, `MuteUpdate`, `ArchiveUpdate`, `StarUpdate`, `MarkChatAsReadUpdate`, `DeleteChatUpdate`, `ClearChatUpdate`, `UserStatusMuteUpdate`, `DeleteMessageForMeUpdate`, `LabelEditUpdate`, `LabelAssociationUpdate`) followed. Payloads not yet sealed (message/newsletter events, pairing events) keep the pre-1.0 unsealed shape for now. Either way, read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring, rather than binding every field. A maybe-absent field is always modeled as `Option<T>` (with a `maybe_*` builder setter once sealed), never an empty-string or zero sentinel.
 </Note>
 
 ## Connection Events
@@ -966,7 +966,7 @@ Server acks cover every outgoing stanza class, not just messages — filter on `
 </Note>
 
 <Note>
-`ServerAck` is the first payload sealed under the stability policy above: it's `#[non_exhaustive]` and constructed via a generated `bon` builder (`ServerAck::builder().id(...).maybe_class(...)…build()`). This only affects code that *constructs* a `ServerAck` (the client itself) or uses exhaustive struct-pattern destructuring (which is already disallowed by the `..` guidance above); accessing fields by name with dot notation (`ack.id`, `ack.class`), as in the example below, is unaffected.
+`ServerAck` was the first payload sealed under the stability policy above: it's `#[non_exhaustive]` and constructed via a generated `bon` builder (`ServerAck::builder().id(...).maybe_class(...)…build()`). This only affects code that *constructs* a `ServerAck` (the client itself) or uses exhaustive struct-pattern destructuring (which is already disallowed by the `..` guidance above); accessing fields by name with dot notation (`ack.id`, `ack.class`), as in the example below, is unaffected.
 </Note>
 
 **Example:**
@@ -989,7 +989,8 @@ Event::ServerAck(ack) => {
 **Emitted:** For typing indicators and recording states
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ChatPresenceUpdate {
     pub source: MessageSource,
     pub state: ChatPresence,
@@ -1031,7 +1032,8 @@ Event::ChatPresence(update) => {
 **Emitted:** For online/offline status and last seen
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PresenceUpdate {
     pub from: Jid,
     pub unavailable: bool,
@@ -1060,7 +1062,8 @@ Event::Presence(update) => {
 **Emitted:** When a user changes their profile picture
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PictureUpdate {
     pub jid: Jid,
     pub author: Option<Jid>,
@@ -1081,7 +1084,8 @@ pub struct PictureUpdate {
 **Emitted:** When a user changes their status/about
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct UserAboutUpdate {
     pub jid: Jid,
     pub status: String,
@@ -1094,7 +1098,8 @@ pub struct UserAboutUpdate {
 **Emitted:** When a contact changes their display name
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PushNameUpdate {
     pub jid: Jid,
     pub message: Box<MessageInfo>,
@@ -1108,7 +1113,8 @@ pub struct PushNameUpdate {
 **Emitted:** When your own push name is updated
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct SelfPushNameUpdated {
     pub from_server: bool,
     pub old_name: String,
@@ -1123,7 +1129,8 @@ pub struct SelfPushNameUpdated {
 **Emitted:** For each action in a group notification (subject changes, participant changes, settings updates, etc.). A single notification may produce multiple `GroupUpdate` events.
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct GroupUpdate {
     pub group_jid: Jid,
     pub participant: Option<Jid>,
@@ -1266,7 +1273,8 @@ These events are emitted from `<notification type="contacts">` stanzas sent by t
 **Emitted:** When a contact's profile changes (server notification)
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ContactUpdated {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -1291,7 +1299,8 @@ Event::ContactUpdated(update) => {
 **Emitted:** When a contact changes their phone number
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ContactNumberChanged {
     /// Old phone number JID.
     pub old_jid: Jid,
@@ -1325,7 +1334,8 @@ Event::ContactNumberChanged(change) => {
 **Emitted:** When the server requests a full contact re-sync
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ContactSyncRequested {
     /// If present, only sync contacts modified after this timestamp.
     pub after: Option<DateTime<Utc>>,
@@ -1351,7 +1361,8 @@ Event::ContactSyncRequested(sync) => {
 **Emitted:** When a contact's information changes via app-state sync (e.g., first name, last name set in your address book)
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ContactUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -1394,7 +1405,8 @@ The server may also send `<add/>` and `<remove/>` child actions in contacts noti
 **Emitted:** When a chat is pinned/unpinned
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PinUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -1408,7 +1420,8 @@ pub struct PinUpdate {
 **Emitted:** When a chat is muted/unmuted
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct MuteUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -1422,7 +1435,8 @@ pub struct MuteUpdate {
 **Emitted:** When a chat is archived/unarchived
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ArchiveUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -1436,7 +1450,8 @@ pub struct ArchiveUpdate {
 **Emitted:** When a message is starred or unstarred
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct StarUpdate {
     pub chat_jid: Jid,
     pub participant_jid: Option<Jid>,
@@ -1469,7 +1484,8 @@ Event::StarUpdate(update) => {
 **Emitted:** When a chat is marked as read or unread across linked devices
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct MarkChatAsReadUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -1491,7 +1507,8 @@ Event::MarkChatAsReadUpdate(update) => {
 **Emitted:** When a chat is deleted across linked devices
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct DeleteChatUpdate {
     pub jid: Jid,
     /// From the index, not the proto — DeleteChatAction only has messageRange.
@@ -1519,7 +1536,8 @@ Event::DeleteChatUpdate(update) => {
 **Emitted:** When a chat's messages are cleared (but the chat is kept) on a linked device
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ClearChatUpdate {
     pub jid: Jid,
     /// From the index, not the proto — ClearChatAction only has messageRange.
@@ -1553,7 +1571,8 @@ See [`clear_chat`](/api/chat-actions#clear_chat) for the outbound API that emits
 **Emitted:** When a contact/group/channel's status updates are muted or unmuted on a linked device
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct UserStatusMuteUpdate {
     pub jid: Jid,
     /// `true` = status muted, `false` = unmuted.
@@ -1583,7 +1602,8 @@ See [`set_user_status_mute`](/api/chat-actions#set_user_status_mute) for the out
 **Emitted:** When a message is deleted locally (not for everyone) across linked devices
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct DeleteMessageForMeUpdate {
     pub chat_jid: Jid,
     pub participant_jid: Option<Jid>,
@@ -1614,7 +1634,8 @@ Event::DeleteMessageForMeUpdate(update) => {
 **Emitted:** When a chat label is created, renamed, recolored, or deleted on a linked device
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct LabelEditUpdate {
     pub label_id: String,
     pub timestamp: DateTime<Utc>,
@@ -1646,7 +1667,8 @@ Event::LabelEditUpdate(update) => {
 **Emitted:** When a label is added to or removed from a chat on a linked device
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct LabelAssociationUpdate {
     pub label_id: String,
     pub chat_jid: Jid,

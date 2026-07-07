@@ -957,7 +957,7 @@ pub struct ServerAck {
 | `id` | Id of the acked stanza (for a sent message, its message id). |
 | `class` | Stanza class the ack refers to (`"message"`, `"receipt"`, `"notification"`, `"call"`, …). `None` when the server omits it. |
 | `from` | Chat/entity the ack refers to, when present and parseable. |
-| `timestamp` | Server timestamp from the ack's `t` attribute, when present. For a message ack this is the authoritative send timestamp — whatsmeow reads the same attribute into `SendResponse.Timestamp`. |
+| `timestamp` | Server timestamp from the ack's `t` attribute, when present. For a message ack this is the authoritative send timestamp — the same attribute the [whatsmeow](https://github.com/tulir/whatsmeow) Go library reads into its own `SendResponse.Timestamp`. |
 | `error` | Nack code (e.g. `"479"`), when the ack is actually a nack; `None` for a plain ack. |
 
 <Note>

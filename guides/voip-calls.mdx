@@ -1,4 +1,3 @@
----
 title: VoIP Calls
 description: Place and answer end-to-end encrypted 1:1 voice calls with whatsapp-rust
 ---
@@ -201,8 +200,10 @@ Call audio is end-to-end encrypted the WhatsApp way:
 
 1. The call key arrives over the peer's Signal session.
 2. E2E-SRTP keys are derived with HKDF + the libsrtp AES-CM KDF.
-3. Audio frames are protected with AES-128-CTR and the WARP integrity tag.
+3. Audio frames are protected with AES-128-CTR and authenticated with a 4-byte WARP MESSAGE-INTEGRITY tag (HMAC-SHA1).
 4. The SFrame layer wraps the SRTP payload.
+
+On receive, the WARP tag is verified in constant time *before* the receiver's SRTP rollover counter (ROC) is advanced. This ordering matters: the ROC is derived per-packet via RFC 3711's guess-index, and folding an unauthenticated packet into it would let an on-path relay desync the receiver's keystream with a couple of forged packets. A packet that fails authentication is rejected outright and never touches the ROC state, so it can't cause a persistent decode failure for subsequent legitimate frames.
 
 The relay never sees plaintext audio.
 

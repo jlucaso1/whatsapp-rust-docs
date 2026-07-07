@@ -509,7 +509,9 @@ sequenceDiagram
 
 ### Re-links skip the verification code
 
-On a **re-link** (the companion already has a prior ADV secret), the client derives an HMAC "handoff proof" from that prior secret and includes it in `<passkey_prologue>`. If the server accepts it as proof of continuity, `Event::PairPasskeyConfirmation.skip_handoff_ux` is `true` and the link can complete without showing the user a code. A brand-new link always shows the code.
+On a **re-link** — the device already has a prior linked identity (`account`, phone number, or LID persisted from an earlier pairing) — the client derives an HMAC "handoff proof" from the stored `adv_secret_key` and includes it in `<passkey_prologue>`. If the server accepts it as proof of continuity, `Event::PairPasskeyConfirmation.skip_handoff_ux` is `true` and the link can complete without showing the user a code.
+
+A **fresh** link (no prior `account`/`pn`/`lid`) never derives a handoff proof, even though `adv_secret_key` itself is always present — it's randomly generated at device creation, so it can't by itself signal continuity with a real prior link. A brand-new link therefore always shows the verification code.
 
 ### `PasskeyAuthenticator` trait
 

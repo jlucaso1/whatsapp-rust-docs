@@ -382,7 +382,7 @@ See [WebSocket & Noise Protocol - Message loop](/advanced/websocket-handling#2-m
 
 ### Keepalive loop
 
-The keepalive loop runs as a **separate spawned task**, fully decoupled from the read loop. This ensures keepalive pings are never blocked by frame processing — even during large offline sync batches that take seconds to drain. The two loops communicate solely through atomic timestamps (`last_data_received_ms`, `last_data_sent_ms`).
+The keepalive loop runs as a **separate spawned task**, fully decoupled from the read loop. This ensures keepalive pings are never blocked by frame processing — even during large offline sync batches that take seconds to drain. The two loops communicate solely through atomic timestamps (`last_data_received_ms`, `last_data_sent_ms`, and `first_send_since_recv_ms` — the dead-socket watchdog anchor).
 
 ```rust
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(15);
@@ -397,7 +397,7 @@ const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
 - Sends ping *before* dead-socket check to prevent false-positive reconnects on idle-but-healthy connections
 - Waits up to 20s for response
 - Checks dead socket on **every** tick (not just after failures) — catches scenarios where pending IQs caused the ping to be skipped, or where the ping succeeded but the connection died immediately after
-- Detects dead socket if no data received for 20s after a send, triggering immediate reconnection
+- Detects dead socket if no data has been received for 20s since the **first** send after the last receive (`first_send_since_recv_ms`) — matching WA Web's `deadSocketTimer.onOrBefore`, subsequent sends do not push this deadline back out, triggering immediate reconnection
 - Fatal errors (`Socket`, `Disconnected`, `NotConnected`, `InternalChannelClosed`) cause the keepalive loop to exit immediately
 - Error classification is exhaustive and compile-time enforced — adding a new error variant without handling it causes a build failure
 

@@ -550,7 +550,15 @@ pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
 The DM send path resolves all known recipient devices and own companion devices from the local device registry, filters out hosted devices, excludes the sender device, and deduplicates for self-DMs — matching WA Web's `WAWebSendUserMsgJob` and `WAWebDBDeviceListFanout` behavior. The local registry is checked first; a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects. Session locks are acquired for all involved devices in sorted order to prevent deadlocks. The `build_session_lock_keys()` helper resolves encryption JIDs (normalizing the recipient to bare form via `to_non_ad()`), sorts by `(server, user, device)` using `cmp_for_lock_order()`, and deduplicates. The `session_mutexes_for()` helper then converts the sorted JIDs to session mutexes, reusing a single `String` buffer to avoid per-JID heap allocations.
 
-The peer message path (single-device) acquires a single lock for the resolved encryption JID. Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`. Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
+The peer message path (single-device) acquires a single lock for the resolved encryption JID.
+
+<Note>
+**Group SKDM fan-out now shares the DM per-device session locks (v0.6).** `prepare_group_stanza`'s pairwise SKDM fan-out (`encrypt_for_devices_with_sessions`) mutates each target device's pairwise Signal session the same way the DM path does, but it was previously only covered by the per-`(group, sender)` sender-key chain lock — a disjoint key from the DM path's per-device session locks. A concurrent DM (or another group send) sharing a device could therefore race that device's pairwise ratchet: both sides load chain index *N* and both store *N+1*, silently dropping one advance. If the lost advance carried the SKDM, that member never received the sender key and every subsequent `skmsg` was undecryptable for it until a retry re-distributed.
+
+`prepare_group_stanza` now acquires the SKDM targets' per-device session locks — via the new `SendContextResolver::lock_device_sessions()` hook, whose `Client` implementation reuses `build_session_lock_keys()` + `session_mutexes_for()` so both paths serialize on the identical mutexes — before taking the sender-key chain lock, and releases them right after the SKDM fan-out (the `skmsg` chain encrypt that follows only touches the sender-key chain, not any pairwise session). Lock order is always session locks → chain lock on every path, so this cannot introduce a deadlock. The hook defaults to a no-op, so custom `SendContextResolver` implementations (tests, benches) are unaffected unless they opt in.
+</Note>
+
+Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
 
 ### Sender-key chain lock (group receive)
 

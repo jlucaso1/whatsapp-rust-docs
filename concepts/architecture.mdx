@@ -552,6 +552,19 @@ The DM send path resolves all known recipient devices and own companion devices 
 
 The peer message path (single-device) acquires a single lock for the resolved encryption JID. Group messages do not hold client-level session locks — each participant device is encrypted separately inside `prepare_group_stanza`. Group stanza preparation uses `sort_dedup_by_user()` to deduplicate participants before device resolution, and `sort_dedup_by_device()` to deduplicate resolved device JIDs after LID conversion — both operate in-place on sorted `Vec<Jid>` without `HashSet` allocations.
 
+### Sender-key chain lock (group receive)
+
+The group receive path (Pass 2 of the [two-pass decryption model](/guides/receiving-messages#two-pass-decryption-model)) acquires a per-`(group, sender)` lock around each `skmsg`'s `group_decrypt` call, keyed by the same `sender_key_name` the sender-key store uses:
+
+```rust
+let chain_lock = adapter.sender_key_store.sender_key_lock(&sender_key_name).await;
+// ...
+let _chain_guard = chain_lock.lock().await;
+let decrypt_result = group_decrypt(ciphertext, &mut adapter.sender_key_store, &sender_key_name).await;
+```
+
+Without this lock, two decrypt workers for the same `(group, sender)` — reachable when a [chat lane](#per-chat-lanes) is capacity-evicted while its worker is still draining, and a later stanza for that chat misses the cache and spawns a second worker at the same connection generation — could both load the sender-key chain, advance it, and store their result, with the last store silently winning and dropping a chain step. This mirrors the per-device session lock the 1:1 send/receive paths already hold around their Signal ratchet mutations.
+
 ### Background Saver
 
 Periodic persistence with dirty flag optimization:

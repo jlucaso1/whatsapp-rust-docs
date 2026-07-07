@@ -212,7 +212,7 @@ The `Event` enum is `#[non_exhaustive]`, so your `match` statements must include
 </Note>
 
 <Note>
-**Payload stability (pre-1.0):** the payload structs themselves are *not* sealed — while the crate is `0.x`, an existing payload may gain new fields in a minor release, so read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring, rather than binding every field. A maybe-absent field is always modeled as `Option<T>`, never an empty-string or zero sentinel. Sealing payloads behind `#[non_exhaustive]` + constructors is deferred to the 1.0 API freeze.
+**Payload stability:** payload structs are being sealed with `#[non_exhaustive]` plus a [`bon`](https://docs.rs/bon) builder for construction (`Type::builder()…build()`), so a payload can gain fields without breaking consumers — the seal is rolling out per struct, so not every payload carries it yet (`ServerAck` is the first). Either way, read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring, rather than binding every field. A maybe-absent field is always modeled as `Option<T>` (with a `maybe_*` builder setter once sealed), never an empty-string or zero sentinel.
 </Note>
 
 ## Connection Events
@@ -942,7 +942,8 @@ Event::UndecryptableMessage(undec) => {
 **Emitted:** Observe-only, for every server `<ack>` stanza that carries an id — dispatched independently of the internal send-waiter resolution, so registering a handler never interacts with the send/phash flow.
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ServerAck {
     pub id: String,
     pub class: Option<String>,
@@ -962,6 +963,10 @@ pub struct ServerAck {
 
 <Note>
 Server acks cover every outgoing stanza class, not just messages — filter on `class` rather than correlating ids blind. Dispatch is gated on a registered handler existing for this event kind, so the hot ack path allocates nothing when no consumer subscribes.
+</Note>
+
+<Note>
+`ServerAck` is the first payload sealed under the stability policy above: it's `#[non_exhaustive]` and constructed via a generated `bon` builder (`ServerAck::builder().id(...).maybe_class(...)…build()`). This only affects code that *constructs* a `ServerAck` (the client itself); reading fields off an event you received, as in the example below, is unaffected.
 </Note>
 
 **Example:**

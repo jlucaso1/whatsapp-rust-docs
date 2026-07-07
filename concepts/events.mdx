@@ -966,7 +966,7 @@ Server acks cover every outgoing stanza class, not just messages — filter on `
 </Note>
 
 <Note>
-`ServerAck` is the first payload sealed under the stability policy above: it's `#[non_exhaustive]` and constructed via a generated `bon` builder (`ServerAck::builder().id(...).maybe_class(...)…build()`). This only affects code that *constructs* a `ServerAck` (the client itself); reading fields off an event you received, as in the example below, is unaffected.
+`ServerAck` is the first payload sealed under the stability policy above: it's `#[non_exhaustive]` and constructed via a generated `bon` builder (`ServerAck::builder().id(...).maybe_class(...)…build()`). This only affects code that *constructs* a `ServerAck` (the client itself) or uses exhaustive struct-pattern destructuring (which is already disallowed by the `..` guidance above); accessing fields by name with dot notation (`ack.id`, `ack.class`), as in the example below, is unaffected.
 </Note>
 
 **Example:**

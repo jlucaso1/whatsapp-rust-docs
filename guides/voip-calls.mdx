@@ -204,7 +204,7 @@ Call audio is end-to-end encrypted the WhatsApp way:
 3. Audio frames are protected with AES-128-CTR and authenticated with a 4-byte WARP MESSAGE-INTEGRITY tag (HMAC-SHA1).
 4. The SFrame layer wraps the SRTP payload.
 
-On receive, the WARP tag is verified in constant time *before* the receiver's SRTP rollover counter (ROC) is advanced. This ordering matters: the ROC is derived per-packet via RFC 3711's guess-index, and folding an unauthenticated packet into it would let an on-path relay desync the receiver's keystream with a couple of forged packets. A packet that fails authentication is rejected outright and never touches the ROC state, so it can't cause a persistent decode failure for subsequent legitimate frames.
+On receive, the ROC is estimated per-packet via RFC 3711's guess-index, then the WARP tag is verified in constant time against that estimate — *before* the ROC is advanced. Committing an unauthenticated packet's index would let an on-path relay desync the receiver's keystream with just a couple of forged packets. A packet that fails authentication is rejected outright and never advances the ROC state, so it can't cause a persistent decode failure for subsequent legitimate frames.
 
 The relay never sees plaintext audio.
 

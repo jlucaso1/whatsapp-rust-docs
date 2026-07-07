@@ -1079,7 +1079,7 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `session_locks_capacity` | 10,000 | Per-device Signal session lock capacity |
+| `session_locks_capacity` | 10,000 | Per-device Signal session lock capacity. Soft cap: a lock a task is actively holding is never evicted, so the map can briefly exceed this under heavy concurrent fan-out (bounded by the number of concurrently-held locks) rather than evicting a live lock and letting two writers race the same session |
 | `chat_lanes_capacity` | 5,000 | Per-chat lane capacity (combined enqueue lock + message queue) |
 | `group_distribution_locks_capacity` | 512 | Per-group cold sender-key distribution lock capacity. Single-flights a group's cold SKDM fan-out: a concurrent send that races the winner's redistribution re-resolves against its warm marking instead of redistributing to every member again |
 

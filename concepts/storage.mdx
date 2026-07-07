@@ -1154,6 +1154,7 @@ By default, whatsapp-rust uses in-process `PortableCache` caches for group metad
 
 `PortableCache` supports:
 - **Maximum capacity** with oldest-inserted (FIFO) eviction
+- **Optional eviction guard** — a capacity-only cache can register a predicate (`evict_guard`) that protects entries a live task still holds (e.g. an `Arc<Mutex>` mid-lock) from FIFO eviction. The per-device session lock cache (`session_locks`) uses this so a lock a task is actively holding is never evicted and re-minted under a different identity, which would let two writers race the same resource; if every entry is currently protected, the cache temporarily exceeds capacity rather than dropping a live one
 - **Time-to-live (TTL)** — entries expire a fixed duration after insertion
 - **Time-to-idle (TTI)** — entries expire after a fixed duration of no access
 - **Monotonic expiry** — TTL/TTI use `wacore::time::Instant` (not the wall clock), so system-clock jumps cannot expire entries early

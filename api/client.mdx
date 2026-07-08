@@ -1050,7 +1050,7 @@ The `LearningSource` enum indicates how a LID-PN mapping was discovered. The sou
 | `Other` | From an unknown/bulk source (e.g. the history-sync `phoneNumberToLidMappings` seed) | Observational — seeds new LIDs only |
 
 <Note>
-  A pair that already matches the cache's current mapping (exact match, or a reverse-only match surviving a capacity-bounded eviction) always re-affirms durability regardless of source — it is never treated as a conflict.
+  A pair that already matches the cache's current mapping always re-affirms durability regardless of source — it is never treated as a conflict. This includes an exact match, and also a reverse-only match: the LID-PN cache is capacity-bounded (see [`lid_pn_cache`](/api/bot#cache-configuration-reference)), so the PN→LID entry can be evicted while the LID→PN entry survives, and a re-learn of that surviving pair still counts as self-consistent.
 </Note>
 
 ### persistence_manager

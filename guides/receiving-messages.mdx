@@ -79,7 +79,7 @@ pub enum Event {
     LoggedOut(LoggedOut),
     
     /// Pairing QR code for scanning
-    PairingQrCode { code: String, timeout: Duration },
+    PairingQrCode(PairingQrCode),
     
     /// Receipt (delivery, read, played)
     Receipt(Receipt),
@@ -187,7 +187,7 @@ See [WAProto API reference](/api/waproto) for the full message type hierarchy.
 ```rust
 match event {
     Event::Messages(batch) => {
-        for InboundMessage { message, info } in batch.iter() {
+        for InboundMessage { message, info, .. } in batch.iter() {
             // Simple text
             if let Some(text) = &message.conversation {
                 println!("Text: {}", text);
@@ -270,7 +270,7 @@ Encrypted channel comments from Community Announcement Groups are decrypted tran
 
 ```rust
 Event::Messages(batch) => {
-    for InboundMessage { message: msg, info } in batch.iter() {
+    for InboundMessage { message: msg, info, .. } in batch.iter() {
         if let Some(parent_key) = &info.comment_target {
             // This item is a decrypted CAG channel comment.
             println!("Comment on post: {:?}", parent_key.id);
@@ -315,7 +315,7 @@ When you send a message from one device, other devices receive it as a `DeviceSe
 // The library handles this automatically - you receive the inner message directly
 match event {
     Event::Messages(batch) => {
-        for InboundMessage { message, info } in batch.iter() {
+        for InboundMessage { message, info, .. } in batch.iter() {
             // If this was originally a DeviceSentMessage, the library has:
             // 1. Extracted the inner message content
             // 2. Merged message_context_info from outer + inner
@@ -716,7 +716,7 @@ See [Signal Protocol](/advanced/signal-protocol) for more on session management.
     match &*event {
         Event::Messages(batch) => {
             // Process each message in the batch
-            for InboundMessage { message, info } in batch.iter() {
+            for InboundMessage { message, info, .. } in batch.iter() {
                 if let Err(e) = process_message(message, info, client.clone()).await {
                     eprintln!("Error processing message {}: {:?}", info.id, e);
                 }
@@ -794,7 +794,7 @@ Spawn tasks for long-running operations:
         let client = client.clone();
         let event = event.clone();
         tokio::spawn(async move {
-            for InboundMessage { message, info } in event.messages() {
+            for InboundMessage { message, info, .. } in event.messages() {
                 process_heavy_task(message, info, client.clone()).await;
             }
         });

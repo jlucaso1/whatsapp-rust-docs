@@ -381,6 +381,7 @@ let mut bot = Bot::builder()
 ### Receipt event structure
 
 ```rust
+#[non_exhaustive]
 pub struct Receipt {
     pub source: MessageSource,
     pub message_ids: Vec<String>,
@@ -389,6 +390,10 @@ pub struct Receipt {
     pub offline: bool,
 }
 ```
+
+<Note>
+`Receipt` is `#[non_exhaustive]` and constructed internally via a `bon` builder (`Receipt::builder()…build()`), so a struct-pattern destructure needs a `..` rest — e.g. `Receipt { source, r#type, .. }`. See [Payload stability](/concepts/events#event-enum) for the full policy.
+</Note>
 
 <ParamField path="source" type="MessageSource">
   Source information:

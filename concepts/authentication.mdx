@@ -84,7 +84,7 @@ use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, PairingQrCode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_runtime(TokioRuntime)
         .on_event(|event, _client| async move {
             match &*event {
-                Event::PairingQrCode { code, timeout } => {
+                Event::PairingQrCode(PairingQrCode { code, timeout, .. }) => {
                     println!("Scan this QR code (valid for {}s):", timeout.as_secs());
                     println!("{}", code);
                 }
@@ -117,15 +117,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### QR code events
 
-**Event:** `Event::PairingQrCode`
+**Event:** `Event::PairingQrCode(PairingQrCode)`
 
 ```rust
 // wacore/src/types/events.rs
-Event::PairingQrCode {
-    code: String,           // ASCII art QR or data string
-    timeout: Duration,      // Validity duration (60s first, 20s subsequent)
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingQrCode {
+    pub code: String,               // ASCII art QR or data string
+    pub timeout: std::time::Duration, // Validity duration (60s first, 20s subsequent)
 }
 ```
+
+<Note>
+Breaking change: `PairingQrCode` moved from inline fields on `Event::PairingQrCode { code, timeout }` to a dedicated `#[non_exhaustive]` struct sealed with a `bon` builder — `Event::PairingQrCode(PairingQrCode)`. Update `match`/`if let` patterns to destructure through the newtype (with a `..` rest), and construct via `PairingQrCode::builder().code(code).timeout(timeout).build()` instead of a struct literal.
+</Note>
 
 **Generated in:** `src/pair.rs:63-116`
 
@@ -146,7 +152,9 @@ for code in codes_clone {
         Duration::from_secs(20)
     };
 
-    client.core.event_bus.dispatch(Event::PairingQrCode { code, timeout });
+    client.core.event_bus.dispatch(Event::PairingQrCode(
+        PairingQrCode::builder().code(code).timeout(timeout).build(),
+    ));
 
     let sleep = client_clone.runtime.sleep(timeout);
     let stop = stop_rx.recv();
@@ -193,7 +201,7 @@ pub const NATIVE_CAMERA_DEEP_LINK_PREFIX: &str = "https://wa.me/settings/linked_
 
 ```rust
 use whatsapp_rust::pair::NATIVE_CAMERA_DEEP_LINK_PREFIX;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, PairingQrCode};
 
 // Depends on the `qrcode` crate:  qrcode = "0.14"
 fn render_qr(payload: &str) {
@@ -208,7 +216,7 @@ fn render_qr(payload: &str) {
 
 // ...inside your event handler:
 .on_event(|event, _client| async move {
-    if let Event::PairingQrCode { code, timeout } = &*event {
+    if let Event::PairingQrCode(PairingQrCode { code, timeout, .. }) = &*event {
         // Prepend the prefix so iOS's native Camera opens WhatsApp directly.
         let deep_link = format!("{NATIVE_CAMERA_DEEP_LINK_PREFIX}{code}");
 
@@ -370,13 +378,15 @@ The server also validates that the display string is 1..=100 bytes.
 
 ### Pair code events
 
-**Event:** `Event::PairingCode`
+**Event:** `Event::PairingCode(PairingCode)`
 
 ```rust
 // wacore/src/types/events.rs
-Event::PairingCode {
-    code: String,           // The 8-character pairing code
-    timeout: Duration,      // Validity (~180 seconds), remaining at time of emission
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingCode {
+    pub code: String,               // The 8-character pairing code
+    pub timeout: std::time::Duration, // Validity (~180 seconds), remaining at time of emission
 }
 ```
 
@@ -391,20 +401,28 @@ let elapsed = wacore::time::now_secs().saturating_sub(code_generation_ts).max(0)
 let remaining = PairCodeUtils::code_validity()
     .saturating_sub(std::time::Duration::from_secs(elapsed));
 
-self.core.event_bus.dispatch(Event::PairingCode {
-    code: code.clone(),
-    timeout: remaining,
-});
+self.core.event_bus.dispatch(Event::PairingCode(
+    PairingCode::builder()
+        .code(code.clone())
+        .timeout(remaining)
+        .build(),
+));
 ```
+
+<Note>
+Breaking change: `PairingCode` and `PairingCodeRefresh` moved from inline enum-variant fields (`Event::PairingCode { code, timeout }`, `Event::PairingCodeRefresh { force_manual }`) to dedicated `#[non_exhaustive]` structs sealed with a `bon` builder — `Event::PairingCode(PairingCode)` / `Event::PairingCodeRefresh(PairingCodeRefresh)`. Destructuring patterns need a `..` rest; construction goes through `PairingCode::builder()…build()`.
+</Note>
 
 ### Pair code refresh events
 
-**Event:** `Event::PairingCodeRefresh`
+**Event:** `Event::PairingCodeRefresh(PairingCodeRefresh)`
 
 ```rust
 // wacore/src/types/events.rs
-Event::PairingCodeRefresh {
-    force_manual: bool,  // true when the server requires an explicit re-request
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingCodeRefresh {
+    pub force_manual: bool,  // true when the server requires an explicit re-request
 }
 ```
 
@@ -642,6 +660,10 @@ Event::PairPasskeyError(PairPasskeyError {
 
 Linking completes through the ordinary [`PairSuccess`/`PairError`](#success-events) events — there is no separate "passkey success" event.
 
+<Note>
+`PairPasskeyRequest`, `PairPasskeyConfirmation`, and `PairPasskeyError` are `#[non_exhaustive]`, sealed with a `bon` builder (e.g. `PairPasskeyRequest::builder().request_options_json(json).build()`). Field access by name (`req.request_options_json`) is unaffected; only an exhaustive struct-pattern destructure would need a `..` rest.
+</Note>
+
 ### Client methods
 
 | Method | Purpose |
@@ -873,7 +895,8 @@ The `is_logged_in()` safety guard in the rotation loop acts as a fallback — ev
 
 ```rust
 // wacore/src/types/events.rs
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PairSuccess {
     pub id: Jid,                // Device JID (e.g., "15551234567.0:1@s.whatsapp.net")
     pub lid: Jid,               // LID JID (e.g., "100000012345678.0:1@lid")
@@ -881,13 +904,21 @@ pub struct PairSuccess {
     pub platform: String,       // Platform identifier
 }
 
-Event::PairSuccess(PairSuccess { id, lid, business_name, platform })
+Event::PairSuccess(
+    PairSuccess::builder()
+        .id(id)
+        .lid(lid)
+        .business_name(business_name)
+        .platform(platform)
+        .build(),
+)
 ```
 
 ### PairError
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PairError {
     pub id: Jid,
     pub lid: Jid,
@@ -896,8 +927,12 @@ pub struct PairError {
     pub error: String,          // Error description
 }
 
-Event::PairError(PairError { /* ... */ })
+Event::PairError(PairError::builder() /* .id(..).lid(..)… */ .build())
 ```
+
+<Note>
+Breaking change: `PairSuccess`, `PairError`, and `LoggedOut` (below) are now `#[non_exhaustive]` and sealed with a `bon` builder. A struct literal from outside `wacore`/`whatsapp-rust` no longer compiles — construct via `Type::builder()…build()`, and add a `..` rest to any destructuring pattern.
+</Note>
 
 ## Error Handling
 
@@ -1008,10 +1043,12 @@ bot.run().await?; // Uses saved session
 client.logout().await?;
 
 // Event emitted:
-Event::LoggedOut(LoggedOut {
-    on_connect: false,
-    reason: ConnectFailureReason::LoggedOut,
-})
+Event::LoggedOut(
+    LoggedOut::builder()
+        .on_connect(false)
+        .reason(ConnectFailureReason::LoggedOut)
+        .build(),
+)
 ```
 
 ## Best Practices
@@ -1042,15 +1079,15 @@ let options = PairCodeOptions {
 ```rust
 .on_event(|event, client| async move {
     match &*event {
-        Event::PairingQrCode { code, timeout } => {
+        Event::PairingQrCode(PairingQrCode { code, timeout, .. }) => {
             // Display QR to user
             println!("Valid for: {}s", timeout.as_secs());
         }
-        Event::PairingCode { code, timeout } => {
+        Event::PairingCode(PairingCode { code, timeout, .. }) => {
             // Display code to user
             println!("Enter {} on your phone", code);
         }
-        Event::PairingCodeRefresh { force_manual } => {
+        Event::PairingCodeRefresh(PairingCodeRefresh { force_manual, .. }) => {
             // Previous code is no longer guaranteed valid — request a new one
             println!("Refresh requested (force_manual={})", force_manual);
         }

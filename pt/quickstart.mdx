@@ -16,7 +16,7 @@ use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
-use wacore::types::events::{Event, InboundMessage};
+use wacore::types::events::{Event, InboundMessage, PairingQrCode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,11 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_runtime(TokioRuntime)
         .on_event(|event, client| async move {
             match &*event {
-                Event::PairingQrCode { code, .. } => {
+                Event::PairingQrCode(PairingQrCode { code, .. }) => {
                     println!("Scan this QR code with WhatsApp:\n{}", code);
                 }
                 Event::Messages(batch) => {
-                    for InboundMessage { message: msg, info } in batch.iter() {
+                    for InboundMessage { message: msg, info, .. } in batch.iter() {
                         println!("Message from {}: {:?}", info.source.sender, msg);
                     }
                 }
@@ -87,11 +87,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   ```rust
   .on_event(|event, client| async move {
       match &*event {
-          Event::PairingQrCode { code, .. } => {
+          Event::PairingQrCode(PairingQrCode { code, .. }) => {
               println!("QR Code:\n{}", code);
           }
           Event::Messages(batch) => {
-              for InboundMessage { message: msg, info } in batch.iter() {
+              for InboundMessage { message: msg, info, .. } in batch.iter() {
                   // Trate a mensagem recebida
               }
           }
@@ -135,11 +135,11 @@ use waproto::whatsapp as wa;
 
 .on_event(|event, client| async move {
     match &*event {
-        Event::PairingQrCode { code, .. } => {
+        Event::PairingQrCode(PairingQrCode { code, .. }) => {
             println!("QR Code:\n{}", code);
         }
         Event::Messages(batch) => {
-            for InboundMessage { message: msg, info } in batch.iter() {
+            for InboundMessage { message: msg, info, .. } in batch.iter() {
                 // Verifica se a mensagem é um texto dizendo "ping"
                 if let Some(text) = msg.text_content() {
                     if text == "ping" {
@@ -176,7 +176,7 @@ use waproto::whatsapp as wa;
 O bot gera automaticamente códigos QR quando não está autenticado. Escaneie com seu celular para vincular:
 
 ```rust
-Event::PairingQrCode { code, .. } => {
+Event::PairingQrCode(PairingQrCode { code, .. }) => {
     println!("Scan this QR code:\n{}", code);
 }
 ```
@@ -187,6 +187,7 @@ Alternativamente, vincule usando um número de telefone e um código de 8 dígit
 
 ```rust
 use whatsapp_rust::pair_code::PairCodeOptions;
+use wacore::types::events::{Event, PairingCode};
 
 let mut bot = Bot::builder()
     .with_backend(backend)
@@ -199,7 +200,7 @@ let mut bot = Bot::builder()
     })
     .on_event(|event, client| async move {
         match &*event {
-            Event::PairingCode { code, .. } => {
+            Event::PairingCode(PairingCode { code, .. }) => {
                 println!("Enter this code on your phone: {}", code);
             }
             _ => {}
@@ -353,7 +354,7 @@ use chrono::{Local, Utc};
 use log::{error, info};
 use std::sync::Arc;
 use wacore::proto_helpers::MessageExt;
-use wacore::types::events::{Event, InboundMessage};
+use wacore::types::events::{Event, InboundMessage, PairingQrCode};
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::TokioRuntime;
@@ -390,11 +391,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_runtime(TokioRuntime)
         .on_event(|event, client| async move {
             match &*event {
-                Event::PairingQrCode { code, .. } => {
+                Event::PairingQrCode(PairingQrCode { code, .. }) => {
                     println!("\n{}", code);
                 }
                 Event::Messages(batch) => {
-                    for InboundMessage { message: msg, info } in batch.iter() {
+                    for InboundMessage { message: msg, info, .. } in batch.iter() {
                         let ctx = MessageContext::from_parts(msg, info, client.clone());
                         handle_message(&ctx).await;
                     }

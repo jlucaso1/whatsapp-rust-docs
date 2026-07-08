@@ -104,6 +104,7 @@ pub trait InboundDurabilityHook {
 Each `InboundMessage` carries:
 
 ```rust
+#[non_exhaustive]
 pub struct InboundMessage {
     pub message: Arc<wa::Message>,
     pub info: Arc<MessageInfo>,

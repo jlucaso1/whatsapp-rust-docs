@@ -104,6 +104,7 @@ pub trait InboundDurabilityHook {
 Each `InboundMessage` carries:
 
 ```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
 #[non_exhaustive]
 pub struct InboundMessage {
     pub message: Arc<wa::Message>,

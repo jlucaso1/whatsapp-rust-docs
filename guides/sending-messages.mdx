@@ -309,7 +309,7 @@ Incoming encrypted comments are decrypted transparently. The comment body is dis
 
 ```rust
 Event::Messages(batch) => {
-    for InboundMessage { message: msg, info } in batch.iter() {
+    for InboundMessage { message: msg, info, .. } in batch.iter() {
         if let Some(parent_key) = &info.comment_target {
             println!("Comment on post: {:?}", parent_key.id);
             if let Some(text) = msg.text_content() {

@@ -311,7 +311,7 @@ Incoming encrypted comments are decrypted transparently on the receive path. The
 
 ```rust
 Event::Messages(batch) => {
-    for InboundMessage { message: msg, info } in batch.iter() {
+    for InboundMessage { message: msg, info, .. } in batch.iter() {
         if let Some(parent_key) = &info.comment_target {
             // This is a channel comment.
             println!("Comment on post: {:?}", parent_key.id);

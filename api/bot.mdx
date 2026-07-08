@@ -35,7 +35,7 @@ let mut bot = Bot::builder()
     .on_event(|event, client| async move {
         match &*event {
             Event::Messages(batch) => {
-                for InboundMessage { message: msg, info } in batch.iter() {
+                for InboundMessage { message: msg, info, .. } in batch.iter() {
                     println!("Message from {}: {:?}", info.source.sender, msg);
                 }
             }
@@ -577,7 +577,7 @@ Configures pair code authentication to run automatically after connecting.
 ```rust
 use whatsapp_rust::pair_code::PairCodeOptions;
 use wacore::companion_reg::CompanionWebClientType;
-use wacore::types::events::Event;
+use wacore::types::events::{Event, PairingCode};
 
 Bot::builder()
     .with_pair_code(PairCodeOptions {
@@ -593,7 +593,7 @@ Bot::builder()
     })
     .on_event(|event, _client| async move {
         match &*event {
-            Event::PairingCode { code, timeout } => {
+            Event::PairingCode(PairingCode { code, timeout, .. }) => {
                 println!("Enter this code on your phone: {}", code);
                 println!("Expires in: {} seconds", timeout.as_secs());
             }
@@ -981,7 +981,7 @@ Newsletter (channel) messages don't flow through `MessageContext::react`. Use [`
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::store::SqliteStore;
-use wacore::types::events::{Event, InboundMessage};
+use wacore::types::events::{Event, InboundMessage, PairingQrCode};
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use waproto::whatsapp as wa;
@@ -1003,7 +1003,7 @@ async fn main() -> anyhow::Result<()> {
             match &*event {
                 Event::Messages(batch) => {
                     // Echo messages back
-                    for InboundMessage { message: msg, info } in batch.iter() {
+                    for InboundMessage { message: msg, info, .. } in batch.iter() {
                         if let Some(text) = &msg.conversation {
                             let reply = wa::Message {
                                 conversation: Some(format!("You said: {}", text)),
@@ -1018,7 +1018,7 @@ async fn main() -> anyhow::Result<()> {
                     // Set status
                     let _ = client.presence().set_available().await;
                 }
-                Event::PairingQrCode { code, .. } => {
+                Event::PairingQrCode(PairingQrCode { code, .. }) => {
                     println!("Scan this QR code:");
                     println!("{}", code);
                 }

@@ -20,7 +20,7 @@ use wacore::types::events::InboundMessage;
 
 match event {
     Event::Messages(batch) => {
-        for InboundMessage { message, info } in batch.iter() {
+        for InboundMessage { message, info, .. } in batch.iter() {
             // Image
             if let Some(img) = message.image_message.as_option() {
                 let data = client.download(img).await?;

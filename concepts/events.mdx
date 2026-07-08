@@ -69,7 +69,7 @@ impl EventHandler for MyHandler {
     fn handle_event(&self, event: Arc<Event>) {
         match &*event {
             Event::Messages(batch) => {
-                for InboundMessage { message: msg, info } in batch.iter() {
+                for InboundMessage { message: msg, info, .. } in batch.iter() {
                     println!("Message from {}: {:?}", info.source.sender, msg);
                 }
             }
@@ -99,9 +99,13 @@ impl EventHandler for MyHandler {
 ```
 
 - **`EventKind`** is a `#[repr(u8)]` discriminant — one variant per `Event` variant (`Messages`, `Connected`, `Receipt`, …). The enum is `#[non_exhaustive]`, so `match` blocks on `EventKind` must include a wildcard arm (`_ => …`); new kinds may be added in minor releases as the library tracks new server events.
-- **`EventKind::CAPACITY`** is a public `u8` constant (currently `64`) that bounds the number of kinds. It exists because each discriminant is packed as a bit in `EventInterest`'s `u64` mask, and a future variant that would overflow it fails compilation rather than silently corrupting the mask at runtime. Treat it as a read-only ceiling — you don't need to check it at runtime.
-- **`EventInterest`** is a 64-bit set of kinds. Build it with `EventInterest::of(&[…])`, `EventInterest::ALL` (the default), `EventInterest::none()`, or chain `.with(kind)`. Query it with `.wants(kind)`.
+- **`EventKind::CAPACITY`** is a public `u8` constant (currently `128`) that bounds the number of kinds. It exists because each discriminant is packed as a bit in `EventInterest`'s `u128` mask, and a future variant that would overflow it fails compilation rather than silently corrupting the mask at runtime. Treat it as a read-only ceiling — you don't need to check it at runtime.
+- **`EventInterest`** is a 128-bit set of kinds. Build it with `EventInterest::of(&[…])`, `EventInterest::ALL` (the default), `EventInterest::none()`, or chain `.with(kind)`. Query it with `.wants(kind)`.
 - The bus exposes `has_handler_for(kind)` and only produces an event when at least one registered handler wants its kind.
+
+<Note>
+`EventInterest` was widened from a `u64` to a `u128` mask (and `EventKind::CAPACITY` from `64` to `128`) as part of the pre-1.0 event-payload API freeze, since the kind count had reached 58/64. The public surface (`EventInterest::of`, `.with(kind)`, `.wants(kind)`, `EventInterest::ALL`) is unchanged — only the internal bit width doubled, giving headroom for future event kinds.
+</Note>
 
 With the [`Bot`](/api/bot) builder, the same narrowing is available via `on_event_for`:
 
@@ -130,9 +134,9 @@ pub enum Event {
     TemporaryBan(TemporaryBan),
 
     // Pairing
-    PairingQrCode { code: String, timeout: Duration },
-    PairingCode { code: String, timeout: Duration },
-    PairingCodeRefresh { force_manual: bool },
+    PairingQrCode(PairingQrCode),
+    PairingCode(PairingCode),
+    PairingCodeRefresh(PairingCodeRefresh),
     PairSuccess(PairSuccess),
     PairError(PairError),
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
@@ -212,7 +216,7 @@ The `Event` enum is `#[non_exhaustive]`, so your `match` statements must include
 </Note>
 
 <Note>
-**Payload stability:** payload structs are being sealed with `#[non_exhaustive]` plus a [`bon`](https://docs.rs/bon) builder for construction (`Type::builder()…build()`), so a payload can gain fields without breaking consumers — the seal is rolling out per struct. `ServerAck` was sealed first; the notification/presence/contact/group payloads (`SelfPushNameUpdated`, `ChatPresenceUpdate`, `PresenceUpdate`, `PictureUpdate`, `UserAboutUpdate`, `ContactUpdated`, `ContactNumberChanged`, `ContactSyncRequested`, `GroupUpdate`, `PushNameUpdate`) and every app-state-sync mutation payload (`ContactUpdate`, `PinUpdate`, `MuteUpdate`, `ArchiveUpdate`, `StarUpdate`, `MarkChatAsReadUpdate`, `DeleteChatUpdate`, `ClearChatUpdate`, `UserStatusMuteUpdate`, `DeleteMessageForMeUpdate`, `LabelEditUpdate`, `LabelAssociationUpdate`) followed. Payloads not yet sealed (message/newsletter events, pairing events) keep the pre-1.0 unsealed shape for now. Either way, read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring, rather than binding every field. A maybe-absent field is always modeled as `Option<T>` (with a `maybe_*` builder setter once sealed), never an empty-string or zero sentinel.
+**Payload stability:** every event payload struct is sealed with `#[non_exhaustive]` plus a [`bon`](https://docs.rs/bon) builder for construction (`Type::builder()…build()`), so a payload can gain fields later without breaking consumers. The freeze rolled out in stages — `ServerAck` first, then the notification/presence/contact/group payloads and the app-state-sync mutation payloads, then the remaining message/newsletter/device/pairing payloads and the four unit-marker events (`Connected`, `ClientOutdated`, `QrScannedWithoutMultidevice`, `StreamReplaced`, each an empty sealed struct built as `Connected::builder().build()`) — and is now complete across the whole `Event` surface. Read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring (required for a `#[non_exhaustive]` struct pattern from outside the defining crate — e.g. `InboundMessage { message, info, .. }`), rather than binding every field. A maybe-absent field is always modeled as `Option<T>` (with a `maybe_*` builder setter), never an empty-string or zero sentinel. The library itself constructs every payload via its builder — a struct literal from outside `wacore`/`whatsapp-rust` no longer compiles (`E0639`).
 </Note>
 
 ## Connection Events
@@ -222,10 +226,11 @@ The `Event` enum is `#[non_exhaustive]`, so your `match` statements must include
 **Emitted:** After successful connection and authentication
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
-pub struct Connected;
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct Connected {}
 
-Event::Connected(Connected)
+Event::Connected(Connected::builder().build())
 ```
 
 **Usage:**
@@ -241,12 +246,13 @@ Event::Connected(_) => {
 **Emitted:** When the connection ends without the client itself intentionally closing or reconnecting it — covers both a routine server-initiated stream recycle and a genuine transport failure (see `reason` below to tell them apart)
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct Disconnected {
     pub reason: DisconnectReason,
 }
 
-Event::Disconnected(Disconnected { reason })
+Event::Disconnected(Disconnected::builder().reason(reason).build())
 ```
 
 **Fields:**
@@ -255,7 +261,7 @@ Event::Disconnected(Disconnected { reason })
 **Behavior:** Client automatically attempts reconnection
 
 <Note>
-Breaking change: `Disconnected` gained the `reason` field (previously a unit struct). Update `Event::Disconnected(Disconnected)` patterns to `Event::Disconnected(Disconnected { reason })` or `Event::Disconnected(_)`.
+Breaking change: `Disconnected` gained the `reason` field (previously a unit struct). `Disconnected` is now `#[non_exhaustive]` too, so a destructuring pattern needs a `..` rest: `Event::Disconnected(Disconnected { reason, .. })`, or just `Event::Disconnected(_)`.
 </Note>
 
 ### ConnectFailure
@@ -263,10 +269,12 @@ Breaking change: `Disconnected` gained the `reason` field (previously a unit str
 **Emitted:** When connection fails with a specific reason
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct ConnectFailure {
     pub reason: ConnectFailureReason,
-    pub message: String,
+    /// The server's `message` attribute on the `<failure>` stanza, when present.
+    pub message: Option<String>,
     pub raw: Option<Node>,
 }
 
@@ -290,6 +298,10 @@ pub enum ConnectFailureReason {
 }
 ```
 
+<Note>
+Breaking change: `ConnectFailure.message` changed from `String` (empty-string sentinel when the server omitted the `message` attribute) to `Option<String>`, matching the "maybe-absent field is always `Option`" convention. `unwrap_or_default()` at a call site becomes `.unwrap_or_default()` on the `Option` (same fallback) or, better, `match`/`if let Some(msg) = &failure.message`.
+</Note>
+
 **Helper methods:**
 ```rust
 if reason.is_logged_out() {
@@ -310,7 +322,8 @@ The 403 variant was renamed `MainDeviceGone` → `AccountLocked` in v0.6 to matc
 **Emitted:** When account is temporarily banned
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct TemporaryBan {
     pub code: TempBanReason,
     pub expire: chrono::Duration,
@@ -339,6 +352,13 @@ Event::TemporaryBan(ban) => {
 **Emitted:** When another device connects with the same credentials (stream error code 409 or `<conflict type="replaced">`)
 
 ```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct StreamReplaced {}
+```
+
+**Usage:**
+```rust
 Event::StreamReplaced(_) => {
     println!("⚠️ Another instance connected - disconnecting");
     // Auto-reconnect is disabled — reconnecting would displace the other client
@@ -352,7 +372,8 @@ Event::StreamReplaced(_) => {
 **Emitted:** When the session is invalidated by the server (stream error code 401 or 516) or when `client.logout()` is called
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct LoggedOut {
     pub on_connect: bool,
     pub reason: ConnectFailureReason,
@@ -379,7 +400,8 @@ Event::LoggedOut(logout) => {
 **Emitted:** For unrecognized stream error codes (codes not matching 401, 409, 429, 503, 515, or 516)
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct StreamError {
     pub code: String,
     pub raw: Option<Node>,
@@ -410,28 +432,43 @@ Recognized stream error codes emit specific events instead of `StreamError`:
 **Emitted:** For each QR code in rotation
 
 ```rust
-Event::PairingQrCode {
-    code: String,           // ASCII art QR or data string
-    timeout: Duration,      // 60s first, 20s subsequent
+/// A QR code the consumer renders during multi-device pairing.
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingQrCode {
+    /// The QR payload to render — ASCII art QR or data string.
+    pub code: String,
+    /// How long this code stays valid before the next one rotates in (60s first, 20s subsequent).
+    pub timeout: std::time::Duration,
 }
 ```
 
 **Example:**
 ```rust
-Event::PairingQrCode { code, timeout } => {
+Event::PairingQrCode(PairingQrCode { code, timeout, .. }) => {
     println!("Scan this QR (valid {}s):", timeout.as_secs());
     println!("{}", code);
 }
 ```
+
+<Note>
+Breaking change: `PairingQrCode` moved from inline fields directly on the `Event::PairingQrCode { code, timeout }` variant to a dedicated sealed struct — `Event::PairingQrCode(PairingQrCode)`. Update destructuring patterns to match through the newtype, with a `..` rest since the inner struct is `#[non_exhaustive]`.
+</Note>
 
 ### PairingCode
 
 **Emitted:** When pair code is generated
 
 ```rust
-Event::PairingCode {
-    code: String,           // 8-character code
-    timeout: Duration,      // ~180 seconds, remaining at time of emission
+/// Generated pair code for phone number linking.
+/// User should enter this code on their phone in WhatsApp > Linked Devices.
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingCode {
+    /// The 8-character pairing code to display.
+    pub code: String,
+    /// Approximate validity duration (~180 seconds).
+    pub timeout: std::time::Duration,
 }
 ```
 
@@ -441,36 +478,52 @@ Event::PairingCode {
 
 **Example:**
 ```rust
-Event::PairingCode { code, .. } => {
+Event::PairingCode(PairingCode { code, .. }) => {
     println!("Enter {} on your phone", code);
 }
 ```
+
+<Note>
+Breaking change: `PairingCode` moved from inline fields on `Event::PairingCode { code, timeout }` to a dedicated sealed struct — `Event::PairingCode(PairingCode)`.
+</Note>
 
 ### PairingCodeRefresh
 
 **Emitted:** When the server asks the companion to refresh an in-progress pair code (WA Web `refreshAltLinkingCode` / `forceManualRefresh`). Only fired while a pair-code flow is outstanding and the server's ref matches it — a `refresh_code` notification for a stale or unrelated flow is silently ignored.
 
 ```rust
-Event::PairingCodeRefresh {
-    force_manual: bool,     // true when the server requires an explicit re-request rather than an auto-rotation
+/// The server asked the companion to refresh an in-progress phone-number
+/// pairing code. The consumer should request a fresh code via
+/// `pair_with_code`; the previous code is no longer guaranteed valid.
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingCodeRefresh {
+    /// `true` when the server set `force_manual_refresh` — the code must be
+    /// re-requested explicitly rather than auto-rotated.
+    pub force_manual: bool,
 }
 ```
 
 **Example:**
 ```rust
-Event::PairingCodeRefresh { force_manual } => {
+Event::PairingCodeRefresh(PairingCodeRefresh { force_manual, .. }) => {
     // The previous code is no longer guaranteed valid — request a new one,
     // e.g. by calling `client.pair_with_code(options)` again.
     println!("Server requested a pair-code refresh (force_manual={force_manual})");
 }
 ```
 
+<Note>
+Breaking change: `PairingCodeRefresh` moved from an inline `Event::PairingCodeRefresh { force_manual }` field to a dedicated sealed struct — `Event::PairingCodeRefresh(PairingCodeRefresh)`. A `matches!` check on the field becomes `matches!(event, Event::PairingCodeRefresh(r) if r.force_manual)`.
+</Note>
+
 ### PairSuccess
 
 **Emitted:** When pairing completes successfully
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PairSuccess {
     pub id: Jid,
     pub lid: Jid,
@@ -493,7 +546,8 @@ Event::PairSuccess(info) => {
 **Emitted:** When pairing fails
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PairError {
     pub id: Jid,
     pub lid: Jid,
@@ -508,7 +562,8 @@ pub struct PairError {
 **Emitted:** During [passkey (SHORTCAKE_PASSKEY) linking](/concepts/authentication#passkey-linking-shortcake_passkey), when the server asks for a WebAuthn assertion to gate the link
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PairPasskeyRequest {
     pub request_options_json: String, // verbatim PublicKeyCredentialRequestOptions JSON
 }
@@ -529,7 +584,8 @@ Event::PairPasskeyRequest(req) => {
 **Emitted:** When the passkey link reaches the verification stage
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PairPasskeyConfirmation {
     pub code: String,          // 8-char "XXXX-XXXX" verification code
     pub skip_handoff_ux: bool, // true on a proven re-link: continuity means the code need not be shown
@@ -552,7 +608,8 @@ Event::PairPasskeyConfirmation(conf) => {
 **Emitted:** When a passkey link attempt fails
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct PairPasskeyError {
     pub error: String,
     pub continuation: bool, // false = failed during the initial request, true = during continuation/verification
@@ -564,8 +621,9 @@ pub struct PairPasskeyError {
 **Emitted:** When a QR code is scanned by a device that does not support multi-device
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
-pub struct QrScannedWithoutMultidevice;
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct QrScannedWithoutMultidevice {}
 ```
 
 **Usage:**
@@ -581,8 +639,9 @@ Event::QrScannedWithoutMultidevice(_) => {
 **Emitted:** When the server rejects the connection because the client version is too old (connect failure code 405)
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
-pub struct ClientOutdated;
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct ClientOutdated {}
 ```
 
 **Usage:**
@@ -604,6 +663,8 @@ Event::ClientOutdated(_) => {
 ```rust
 Event::Messages(MessageBatch)
 
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct InboundMessage {
     pub message: Arc<wa::Message>,
     pub info: Arc<MessageInfo>,
@@ -614,6 +675,8 @@ pub enum BatchOrigin {
     OfflineDrain,  // accumulated batch from the offline drain
 }
 
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct MessageBatch {
     pub messages: Arc<[InboundMessage]>,
     pub origin: BatchOrigin,
@@ -622,6 +685,10 @@ pub struct MessageBatch {
 
 <Note>
 Live traffic dispatches a batch of one, so per-message latency is unchanged from the previous single-message event. During the offline drain the client accumulates decrypted messages and dispatches one `Event::Messages` per durable commit (size/byte/timeout triggers, matching WhatsApp Web's `MessageProcessorCache` — see [Inbound Durability](/advanced/inbound-durability#batching)). `MessageBatch` behaves as a collection: `batch.iter()`, `batch.len()`, `batch.is_empty()`, `batch.first()`, and `for msg in &batch` all work directly. `Event::as_messages()` returns `Option<&MessageBatch>`, and `Event::messages()` returns an iterator over the batch's `InboundMessage`s (empty for any other event kind) — use it to scan a mixed event stream without matching on `Event::Messages` first.
+</Note>
+
+<Note>
+Breaking change: `InboundMessage` and `MessageBatch` are now `#[non_exhaustive]`, sealed with a `bon` builder. A `for InboundMessage { message, info } in batch.iter()` destructuring pattern needs a `..` rest: `for InboundMessage { message, info, .. } in batch.iter()`.
 </Note>
 
 <Note>
@@ -766,7 +833,7 @@ pub struct DeviceSentMeta {
 use waproto::whatsapp as wa;
 
 Event::Messages(batch) => {
-    for InboundMessage { message: msg, info } in batch.iter() {
+    for InboundMessage { message: msg, info, .. } in batch.iter() {
         println!("From: {} in {}", info.source.sender, info.source.chat);
 
         // Text message
@@ -805,7 +872,8 @@ Event::Messages(batch) => {
 **Emitted:** For delivery/read/played receipts
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct Receipt {
     pub source: MessageSource,
     pub message_ids: Vec<MessageId>,
@@ -864,7 +932,8 @@ Event::Receipt(receipt) => {
 When `is_unavailable` is `true`, the message had no encrypted content in the stanza. For `UnavailableType::Unknown`, the client sends a PDO request to your primary phone, and if the phone responds successfully, a follow-up `Event::Messages` is dispatched with the recovered content (event-only — a PDO recovery bypasses the durability hook and the offline-drain batcher, dispatching immediately with `BatchOrigin::Live`). For `ViewOnce`, `Hosted`, and `Bot`, no PDO request is sent — that content is unrecoverable by design, so no follow-up `Event::Messages` should be expected.
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct UndecryptableMessage {
     pub info: Arc<MessageInfo>,
     pub is_unavailable: bool,
@@ -1877,7 +1946,8 @@ pub const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
 **Emitted:** Preview of pending offline sync data when reconnecting
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct OfflineSyncPreview {
     pub total: i32,
     pub app_data_changes: i32,
@@ -1900,7 +1970,8 @@ Event::OfflineSyncPreview(preview) => {
 **Emitted:** When offline sync completes after reconnection
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct OfflineSyncCompleted {
     pub count: i32,
 }
@@ -1926,7 +1997,8 @@ If the server does not complete offline sync within 60 seconds, the client force
 **Emitted:** When a user's device list changes (a companion device is added, removed, or updated)
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct DeviceListUpdate {
     pub user: Jid,
     pub lid_user: Option<Jid>,
@@ -1943,7 +2015,8 @@ pub enum DeviceListUpdateType {
     Update,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct DeviceNotificationInfo {
     pub device_id: u32,
     pub key_index: Option<u32>,
@@ -1968,7 +2041,8 @@ This event is dispatched after the client has already patched its internal devic
 **Emitted:** When a contact reinstalls WhatsApp (their identity key changed). The event fires from two paths: an explicit server `<identity/>` notification, or a locally-detected change discovered while decrypting an incoming message. The `implicit` field distinguishes them.
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct IdentityChange {
     /// The user whose identity changed
     pub user: Jid,
@@ -2041,7 +2115,8 @@ Event::IdentityChange(change) => {
 **Emitted:** When a business account status changes
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct BusinessStatusUpdate {
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
@@ -2073,19 +2148,22 @@ pub enum BusinessUpdateType {
 **Emitted:** When reaction counts change or messages are updated on a newsletter you're subscribed to (via `subscribe_live_updates`).
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct NewsletterLiveUpdate {
     pub newsletter_jid: Jid,
     pub messages: Vec<NewsletterLiveUpdateMessage>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct NewsletterLiveUpdateMessage {
     pub server_id: u64,
     pub reactions: Vec<NewsletterLiveUpdateReaction>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct NewsletterLiveUpdateReaction {
     pub code: String,
     pub count: u64,
@@ -2215,7 +2293,8 @@ Event::IncomingCall(call) => match &call.action {
 **Emitted:** When a contact changes their default disappearing messages setting. Sent by the server as a `<notification type="disappearing_mode">` stanza.
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
 pub struct DisappearingModeChanged {
     pub from: Jid,
     pub duration: u32,
@@ -2286,7 +2365,7 @@ let mut bot = Bot::builder()
         match &*event {
             Event::Messages(batch) => {
                 // Handle each message in the batch
-                for InboundMessage { message: msg, info } in batch.iter() { /* … */ }
+                for InboundMessage { message: msg, info, .. } in batch.iter() { /* … */ }
             }
             Event::Connected(_) => {
                 // Handle connection
@@ -2317,7 +2396,7 @@ Struct-based handlers registered with [`with_event_handler`](/api/bot#with_event
 struct MessageHandler;
 impl EventHandler for MessageHandler {
     fn handle_event(&self, event: Arc<Event>) {
-        for InboundMessage { message: msg, info } in event.messages() {
+        for InboundMessage { message: msg, info, .. } in event.messages() {
             // Handle messages
         }
     }
@@ -2466,7 +2545,7 @@ Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc
 ```rust
 .on_event(|event, client| async move {
     // Only handle events you care about
-    for InboundMessage { message: msg, info } in event.messages() {
+    for InboundMessage { message: msg, info, .. } in event.messages() {
         // These are independent filters, not mutually exclusive cases —
         // a non-self-sent group message enters both blocks.
         if info.source.is_group {
@@ -2489,7 +2568,7 @@ Combined with `LazyHistorySync`'s `OnceLock`, all handlers sharing the same `Arc
 })
 
 async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
-    for InboundMessage { message: msg, info } in event.messages() {
+    for InboundMessage { message: msg, info, .. } in event.messages() {
         process_message(msg, info, client.clone()).await?
     }
     Ok(())
@@ -2505,7 +2584,7 @@ async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
         let event = event.clone(); // Arc clone — O(1)
 
         tokio::spawn(async move {
-            for InboundMessage { message: msg, info } in event.messages() {
+            for InboundMessage { message: msg, info, .. } in event.messages() {
                 process_message(msg, info, &client).await;
             }
         });

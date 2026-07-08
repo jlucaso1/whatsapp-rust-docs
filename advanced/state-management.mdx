@@ -593,11 +593,11 @@ The `get` → mutate → `insert` sequence is **not atomic**. A concurrent notif
 
 ### Where patching is used
 
-| Cache | Patched on | Persisted | Fallback |
+| Cache | Patched on | Persisted | Fallback / conflict behavior |
 | --- | --- | --- | --- |
 | Device registry | Device add/remove/update notifications | Yes (backend store) | Hash-only notifications trigger full invalidation |
 | Group metadata | Participant add/remove notifications and API calls | No (cache-only) | `leave()` and cache eviction trigger server re-fetch |
-| LID-PN mappings | Usync, peer messages, device notifications | Yes (backend store) | Source-aware write policy (see below) prevents stale or unverified overwrites |
+| LID-PN mappings | Directed sources overwrite; observational bulk sources only seed new LIDs (see [`LearningSource`](/api/client#learningsource)) | Yes (backend store) | Conflict: source-aware write policy gates overwrites; observational mismatches queue a live re-resolve |
 
 For LID-PN mappings specifically, "patched on" is no longer a plain write — with the source-aware write policy in [Storage — Granular cache patching](/concepts/storage#granular-cache-patching), the `LearningSource` of an incoming pair also decides whether it may overwrite what the cache already holds; a conflicting observational pair queues a live re-resolve instead of being applied directly.
 

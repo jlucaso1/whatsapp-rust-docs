@@ -1029,21 +1029,29 @@ if let Some(entry) = client.get_lid_pn_entry(&lid_jid).await {
 
 #### LearningSource
 
-The `LearningSource` enum indicates how a LID-PN mapping was discovered:
+The `LearningSource` enum indicates how a LID-PN mapping was discovered. The source is not mere provenance — it also selects the **write policy** applied when the pair reaches the cache, mirroring WhatsApp Web's `createLidPnMappings` (`WAWebDBCreateLidPnMappings`) `switch (learningSource)`:
 
-| Variant | Description |
-|---------|-------------|
-| `Usync` | From a device sync query response |
-| `PeerPnMessage` | From an incoming message with `sender_lid` attribute (sender is PN) |
-| `PeerLidMessage` | From an incoming message with `sender_pn` attribute (sender is LID) |
-| `RecipientLatestLid` | From looking up a recipient's latest LID |
-| `MigrationSyncLatest` | From latest history sync migration |
-| `MigrationSyncOld` | From old history sync records |
-| `BlocklistActive` | From an active blocklist entry |
-| `BlocklistInactive` | From an inactive blocklist entry |
-| `Pairing` | From device pairing (own JID to LID) |
-| `DeviceNotification` | From a device notification with `lid` attribute |
-| `Other` | From an unknown source |
+- **Directed sources** (`Usync`, `PeerPnMessage`, `PeerLidMessage`, `RecipientLatestLid`, `MigrationSyncLatest`, `MigrationSyncOld`, `BlocklistActive`, `BlocklistInactive`) overwrite the cache on any change from what's already stored.
+- **Observational bulk sources** (`Other`, `Pairing`, `DeviceNotification`) only seed a LID that isn't cached yet. If the pair conflicts with an already-known LID for that phone, the observational pair is **not** applied — the client instead fires one background live LID query (`LidQuerySpec`) and learns the authoritative result under `Usync`, which can never itself trigger another reconcile.
+- **Known-stale sources** (`MigrationSyncOld`, `BlocklistInactive`) are additionally stamped with `created_at = 0`, so a fresher mapping for the same phone always outranks them in the cache's most-recent-wins (PN→LID) resolution. This only guards the forward direction — the LID→PN reverse map always takes the latest write.
+
+| Variant | Description | Write policy |
+|---------|-------------|--------------|
+| `Usync` | From a device sync query response | Directed — overwrites on conflict |
+| `PeerPnMessage` | From an incoming message with `sender_lid` attribute (sender is PN) | Directed — overwrites on conflict |
+| `PeerLidMessage` | From an incoming message with `sender_pn` attribute (sender is LID) | Directed — overwrites on conflict |
+| `RecipientLatestLid` | From looking up a recipient's latest LID | Directed — overwrites on conflict |
+| `MigrationSyncLatest` | From the live 1:1 LID migration flow | Directed — overwrites on conflict |
+| `MigrationSyncOld` | From old history sync records | Directed — overwrites on conflict; `created_at = 0` (stale) |
+| `BlocklistActive` | From an active blocklist entry | Directed — overwrites on conflict |
+| `BlocklistInactive` | From an inactive blocklist entry | Directed — overwrites on conflict; `created_at = 0` (stale) |
+| `Pairing` | From device pairing (own JID to LID) | Observational — seeds new LIDs only |
+| `DeviceNotification` | From a device notification with `lid` attribute | Observational — seeds new LIDs only |
+| `Other` | From an unknown/bulk source (e.g. the history-sync `phoneNumberToLidMappings` seed) | Observational — seeds new LIDs only |
+
+<Note>
+  A pair that already matches the cache's current mapping always re-affirms durability regardless of source — it is never treated as a conflict. This includes an exact match, and also a reverse-only match: the LID-PN cache is capacity-bounded (see [`lid_pn_cache`](/api/bot#cache-configuration-reference)), so the PN→LID entry can be evicted while the LID→PN entry survives, and a re-learn of that surviving pair still counts as self-consistent.
+</Note>
 
 ### persistence_manager
 

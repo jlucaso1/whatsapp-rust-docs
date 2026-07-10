@@ -149,6 +149,26 @@ To use a system-installed SQLite instead of the bundled version:
 whatsapp-rust-sqlite-storage = { version = "0.6", default-features = false }
 ```
 
+The optional `whatsapp-rust-chat-store` crate — an event-sourced SQLite chat/message history store, not re-exported through `whatsapp-rust` — has its own feature flag:
+
+| Feature | Description | Included by default |
+|---------|-------------|-----------------|
+| `search` | SQLite FTS5 full-text message search | ❌ No |
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust-chat-store = "0.1"
+```
+
+To enable full-text search, turn on the `search` feature:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust-chat-store = { version = "0.1", features = ["search"] }
+```
+
+See [Chat Store](/api/chat-store) for the full API.
+
 <Note>
   The default features provide everything needed for most use cases. Only customize features if you have specific requirements.
 </Note>

@@ -1,0 +1,317 @@
+---
+title: Chat Store
+description: Optional SQLite-backed chat and message history store
+---
+
+## Overview
+
+`whatsapp-rust-chat-store` is an opt-in crate that materializes the client's event stream into queryable chat/message history tables, so a UI or stateful bot survives a restart without re-syncing from WhatsApp. It has no UI dependencies of its own.
+
+- **Event-sourced.** Register `chat_store.handler()` on the client; a single write-behind writer task applies batched events in one transaction per drained batch, preserving event order. Covers messages, receipts, server acks/nacks, edits, revokes, reactions, history sync, app-state chat updates (pin/mute/archive/read/star/delete/clear), push names, and contact actions.
+- **Proto as source of truth.** Each message row stores the encoded `wa::Message` plus denormalized columns (`kind`, `text`, `status`). New proto fields never require a schema migration.
+- **Query + invalidation, not a second cache.** Reads are async queries (keyset pagination for message pages — stable under concurrent inserts, never `OFFSET`); consumers subscribe to a [`StoreChange`](#storechange) broadcast and re-query what they display.
+- **Shares the device store's database file.** Writes go through [`SqliteStore::shared()`](/api/store#sharing-the-pool-with-sibling-crates), so the chat tables live in the same file as device/session state without a second connection pool contending for the WAL lock. Backing up the full session stays "copy one file". Multi-account ready (`device_id` on every row).
+
+<Note>
+This is a separate, opt-in crate — adding it does not change any behavior for existing `whatsapp-rust` consumers who don't depend on it. It has no integration point in the client beyond the existing `register_handler` mechanism.
+</Note>
+
+## Installation
+
+`ChatStore::new` takes a `&whatsapp_rust_sqlite_storage::SqliteStore` directly (not the `whatsapp_rust::store::SqliteStore` re-export), so add that crate alongside `whatsapp-rust-chat-store`:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust-chat-store = "0.1"
+whatsapp-rust-sqlite-storage = "0.6"
+```
+
+| Feature | Description | Included by default |
+|---------|-------------|-----------------|
+| `search` | SQLite FTS5 full-text message search (see [Full-text search](#full-text-search)). Requires an FTS5-enabled SQLite build — the bundled `whatsapp-rust-sqlite-storage` build already provides it | ❌ No |
+
+## Setting up the store
+
+`ChatStore` binds to an existing [`SqliteStore`](/api/store#sqlitestore-implementation) — it runs its own migrations on first use and shares that store's connection pool and write semaphore via [`SqliteStore::shared()`](/api/store#sharing-the-pool-with-sibling-crates):
+
+```rust
+use whatsapp_rust_chat_store::ChatStore;
+use whatsapp_rust_sqlite_storage::SqliteStore;
+
+let backend = SqliteStore::new("whatsapp.db").await?;
+let chat_store = ChatStore::new(&backend).await?;
+
+client.register_handler(chat_store.handler());
+```
+
+`ChatStore::new` returns `Arc<ChatStore>` — the intended usage is one long-lived shared handle, held alongside the client for the process lifetime.
+
+```rust
+async fn new(store: &SqliteStore) -> Result<Arc<Self>>;
+```
+
+### Recording outgoing messages
+
+Incoming events (messages, receipts, acks) are captured automatically once the handler is registered. Messages the client itself sends need to be recorded explicitly, since sends don't go through the inbound event pipeline:
+
+```rust
+fn record_outgoing(
+    &self,
+    chat: &Jid,
+    msg_id: impl Into<String>,
+    message: &wa::Message,
+    timestamp: DateTime<Utc>,
+) -> Result<()>;
+```
+
+`record_outgoing` is synchronous — it only enqueues onto the writer channel and returns, it does not wait for the write to commit. The row starts at `MessageStatus::Pending` and is lifted by the server ack/receipts that follow. Because the enqueue happens on the same writer queue as inbound events, it cannot race the ack that immediately follows a send. Call [`flush()`](#waiting-for-writes-to-land) if you need to wait for the row to actually land before reading it back.
+
+### Waiting for writes to land
+
+```rust
+async fn flush(&self) -> Result<()>;
+```
+
+Awaits until every write enqueued before the call has committed. Returns `ChatStoreError::WriteBatchFailed` if the batch containing one of those writes rolled back. Mainly useful in tests, or right before reading your own just-sent message back out.
+
+## Querying
+
+All query methods are `async` and run on the shared pool's blocking thread pool.
+
+```rust
+async fn chats(&self, include_archived: bool, limit: i64) -> Result<Vec<ChatEntry>>;
+```
+
+Chat list ordered pinned-first, then by most recent activity. Not cursor-paginated — pass the page size you need.
+
+```rust
+async fn messages(
+    &self,
+    chat: &Jid,
+    before: Option<MessageCursor>,
+    limit: i64,
+) -> Result<Vec<StoredMessage>>;
+```
+
+Newest-first, **keyset-paginated**: pass the [`MessageCursor`](#messagecursor) of the oldest message you already hold (`MessageCursor::from(&stored_message)`) to fetch the page before it. There is no `OFFSET`-based paging — keyset pagination stays stable under concurrent inserts (e.g. a new message arriving while a chat history is being scrolled).
+
+```rust
+async fn message(&self, chat: &Jid, msg_id: &str) -> Result<Option<StoredMessage>>;
+async fn reactions(&self, chat: &Jid, msg_id: &str) -> Result<Vec<ReactionEntry>>;
+async fn receipts(&self, chat: &Jid, msg_id: &str) -> Result<Vec<ReceiptEntry>>;
+async fn contact(&self, jid: &Jid) -> Result<Option<ContactEntry>>;
+async fn unread_total(&self) -> Result<i64>;
+```
+
+`receipts` returns per-user delivery/read state — the group "read by" list. `unread_total` sums only positive unread counters, ignoring the `-1` manually-marked-unread sentinel on individual chats.
+
+```rust
+async fn put_media_ref(
+    &self,
+    file_sha256: Vec<u8>,
+    file_path: String,
+    mime_type: Option<String>,
+    size_bytes: Option<i64>,
+) -> Result<()>;
+async fn media_ref(&self, file_sha256: &[u8]) -> Result<Option<MediaRef>>;
+```
+
+A content-hash-keyed record of where a downloaded media blob was saved locally — call `put_media_ref` after [downloading media](/api/download), then use `media_ref` to check whether a file with the same `file_sha256` was already downloaded before fetching it again.
+
+## Subscribing to changes
+
+```rust
+fn subscribe(&self) -> broadcast::Receiver<StoreChange>;
+```
+
+Emits one [`StoreChange`](#storechange) per committed write batch (deduplicated per kind). The channel buffers 256 messages; a `Lagged` receiver should treat it as "something changed" and re-query whatever it currently displays rather than trying to replay the gap.
+
+```rust
+let mut changes = chat_store.subscribe();
+while let Ok(change) = changes.recv().await {
+    match change {
+        StoreChange::Chats => { /* re-query chat list */ }
+        StoreChange::Messages { chat } => { /* re-query that chat's messages */ }
+        StoreChange::Contacts => { /* re-query contact info */ }
+    }
+}
+```
+
+`StoreChange` is a pure invalidation signal — it never carries row data.
+
+## Full-text search
+
+With the `search` feature enabled, `ChatStore` maintains a SQLite FTS5 index over message text and exposes:
+
+```rust
+async fn search_messages(&self, query: &str, limit: i64) -> Result<Vec<StoredMessage>>;
+```
+
+Best match first. The query is treated as plain whitespace-separated words — each is turned into a quoted prefix term, so FTS5 operator syntax in user input can't reach the query parser. An empty or whitespace-only query returns `ChatStoreError::InvalidSearchQuery`.
+
+The FTS5 virtual table and its sync triggers are created lazily and idempotently in `ChatStore::new()` when the feature is enabled, not via a migration — a build without `search` leaves no FTS objects behind.
+
+<Note>
+The FTS triggers use a single delete+insert per row change rather than a `WHEN`-guarded variant — the guarded form looks equivalent but corrupts FTS5 rank queries under certain update patterns. Don't "simplify" the trigger bodies if you're forking this crate.
+</Note>
+
+## Types
+
+### ChatEntry
+
+```rust
+pub struct ChatEntry {
+    pub jid: Jid,
+    pub name: Option<String>,
+    pub last_message_at: Option<DateTime<Utc>>,
+    pub last_message_preview: Option<String>,
+    pub last_message_kind: Option<MessageKind>,
+    pub unread_count: i32,        // -1 = manually marked unread
+    pub pinned_at: Option<DateTime<Utc>>,
+    pub muted_until: Option<DateTime<Utc>>, // Some(DateTime::MAX_UTC) = muted forever
+    pub archived: bool,
+    pub ephemeral_expiration: Option<u32>,
+}
+```
+
+### StoredMessage
+
+```rust
+pub struct StoredMessage {
+    pub chat_jid: Jid,
+    pub id: String,
+    pub sender_jid: Jid,
+    pub from_me: bool,
+    pub timestamp: DateTime<Utc>,
+    pub kind: MessageKind,
+    pub text: Option<String>,
+    pub message: Option<Box<wa::Message>>, // decoded proto, source of truth when present
+    pub status: MessageStatus,
+    pub starred: bool,
+    pub edited_at: Option<DateTime<Utc>>,
+    pub revoked: bool,
+}
+```
+
+### MessageCursor
+
+```rust
+pub struct MessageCursor {
+    pub timestamp_ms: i64,
+    pub msg_id: String,
+}
+
+impl From<&StoredMessage> for MessageCursor { /* ... */ }
+```
+
+The keyset-pagination cursor used by [`messages()`](#querying).
+
+### MessageKind
+
+```rust
+#[non_exhaustive]
+pub enum MessageKind {
+    Text, Image, Video, VideoNote, Audio, VoiceNote, Sticker, Document,
+    Contact, Location, Poll, Event, GroupInvite, Undecryptable, Unknown,
+    Other(String),
+}
+```
+
+`Other(String)` round-trips a forward-compatible label for message types added after this crate was released.
+
+### MessageStatus
+
+```rust
+#[repr(i32)]
+pub enum MessageStatus {
+    Error = 0,
+    Pending = 1,
+    ServerAck = 2,
+    Delivered = 3,
+    Read = 4,
+    Played = 5,
+}
+```
+
+Mirrors `WebMessageInfo.Status`. Status transitions are enforced monotonic by the writer — a late `Delivered` receipt can never downgrade a row already at `Read`, and a server nack only fails a still-`Pending` row.
+
+### ReactionEntry / ReceiptEntry
+
+```rust
+pub struct ReactionEntry {
+    pub sender_jid: Jid,
+    pub emoji: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+pub struct ReceiptEntry {
+    pub user_jid: Jid,
+    pub status: MessageStatus,
+    pub timestamp: DateTime<Utc>,
+}
+```
+
+### ContactEntry
+
+```rust
+pub struct ContactEntry {
+    pub jid: Jid,
+    pub push_name: Option<String>,
+    pub full_name: Option<String>,
+    pub first_name: Option<String>,
+    pub business_name: Option<String>,
+}
+```
+
+`.display_name()` resolves the name to show, in the same precedence order as WA Web: `full_name` → `first_name` → `push_name` → `business_name`.
+
+### MediaRef
+
+```rust
+pub struct MediaRef {
+    pub file_sha256: Vec<u8>,
+    pub file_path: String,
+    pub mime_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub downloaded_at: DateTime<Utc>,
+}
+```
+
+### StoreChange
+
+```rust
+pub enum StoreChange {
+    Chats,
+    Messages { chat: Jid },
+    Contacts,
+}
+```
+
+## Error handling
+
+```rust
+#[non_exhaustive]
+pub enum ChatStoreError {
+    Store(#[from] wacore::store::error::StoreError),
+    InvalidSearchQuery,
+    WriteBatchFailed(String),
+}
+
+pub type Result<T> = std::result::Result<T, ChatStoreError>;
+```
+
+`WriteBatchFailed` carries the underlying error as text rather than the original typed error, since one failed batch fans out to every pending [`flush()`](#waiting-for-writes-to-land) caller and `StoreError` isn't `Clone`.
+
+## Semantics worth knowing
+
+- **Monotonic status.** Per-message status and per-user group receipts only ever move forward; a late-arriving `delivered` can't downgrade a `read`.
+- **Monotonic read state.** Self-read state is tracked as a keyed cursor (watermark + boundary message id), so same-second siblings resolve deterministically and a stale replayed read/receipt can't resurrect an unread badge. A no-op read still clears a manual-unread marker.
+- **Offline-drain reordering is handled.** If a revoke or edit arrives before the message it targets (common when draining a backlog), the target is materialized as already-revoked/edited up front — the original content's later arrival can't resurrect revoked content or show pre-edit text, and never double-counts unread.
+- **History sync never clobbers live rows** (`ON CONFLICT DO NOTHING`). Live redeliveries and PDO recovery replace content in place instead — an `Undecryptable` placeholder becomes the real message under the same id once it's recovered.
+- **Content refreshes are sender-scoped.** Message ids are sender-chosen, so a different sender reusing an id can't rewrite someone else's message.
+
+## See also
+
+- [Storage Traits](/api/store) - `SqliteStore` and the underlying backend traits
+- [Custom Backends](/guides/custom-backends) - Implementing your own storage backend
+- [Events](/concepts/events) - The event system `ChatStore`'s handler listens to

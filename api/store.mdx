@@ -474,7 +474,7 @@ let store = SqliteStore::new("sqlite://path/to/db.sqlite").await?;
 ### Sharing the pool with sibling crates
 
 ```rust
-fn shared(&self) -> SharedSqlite;
+pub fn shared(&self) -> SharedSqlite;
 ```
 
 `SqliteStore::shared()` returns a clonable `SharedSqlite` handle onto the store's existing r2d2 connection pool and write-serialization semaphore. A sibling crate uses it to run its own queries and migrations against the *same* database file — without opening a second connection pool, which would mean two WAL writers contending for the file lock. This is how [`whatsapp-rust-chat-store`](/api/chat-store) attaches its chat/message tables to the same `whatsapp.db` file as the device store.
@@ -484,7 +484,7 @@ pub struct SharedSqlite { /* ... */ }
 
 impl SharedSqlite {
     /// Acquires a semaphore permit and runs `f` on a pooled connection via `spawn_blocking`.
-    async fn run<F, T>(&self, f: F) -> Result<T>
+    pub async fn run<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&mut SqliteConnection) -> Result<T> + Send + 'static,
         T: Send + 'static;

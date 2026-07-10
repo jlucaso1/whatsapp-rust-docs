@@ -122,6 +122,7 @@
                 "group": "Storage & Backends",
                 "pages": [
                   "api/store",
+                  "api/chat-store",
                   "api/transport",
                   "api/http-client"
                 ]

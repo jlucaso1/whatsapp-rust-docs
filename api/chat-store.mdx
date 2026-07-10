@@ -10,7 +10,7 @@ description: Optional SQLite-backed chat and message history store
 - **Event-sourced.** Register `chat_store.handler()` on the client; a single write-behind writer task applies batched events in one transaction per drained batch, preserving event order. Covers messages, receipts, server acks/nacks, edits, revokes, reactions, history sync, app-state chat updates (pin/mute/archive/read/star/delete/clear), push names, and contact actions.
 - **Proto as source of truth.** Each message row stores the encoded `wa::Message` plus denormalized columns (`kind`, `text`, `status`). New proto fields never require a schema migration.
 - **Query + invalidation, not a second cache.** Reads are async queries (keyset pagination for message pages — stable under concurrent inserts, never `OFFSET`); consumers subscribe to a [`StoreChange`](#storechange) broadcast and re-query what they display.
-- **Shares the device store's database file.** Writes go through [`SqliteStore::shared()`](/api/store#creating-a-store), so the chat tables live in the same file as device/session state without a second connection pool contending for the WAL lock. Backing up the full session stays "copy one file". Multi-account ready (`device_id` on every row).
+- **Shares the device store's database file.** Writes go through [`SqliteStore::shared()`](/api/store#sharing-the-pool-with-sibling-crates), so the chat tables live in the same file as device/session state without a second connection pool contending for the WAL lock. Backing up the full session stays "copy one file". Multi-account ready (`device_id` on every row).
 
 <Note>
 This is a separate, opt-in crate — adding it does not change any behavior for existing `whatsapp-rust` consumers who don't depend on it. It has no integration point in the client beyond the existing `register_handler` mechanism.
@@ -29,7 +29,7 @@ whatsapp-rust-chat-store = "0.1"
 
 ## Setting up the store
 
-`ChatStore` binds to an existing [`SqliteStore`](/api/store#sqlitestore-implementation) — it runs its own migrations on first use and shares that store's connection pool and write semaphore via [`SqliteStore::shared()`](/api/store#creating-a-store):
+`ChatStore` binds to an existing [`SqliteStore`](/api/store#sqlitestore-implementation) — it runs its own migrations on first use and shares that store's connection pool and write semaphore via [`SqliteStore::shared()`](/api/store#sharing-the-pool-with-sibling-crates):
 
 ```rust
 use whatsapp_rust_chat_store::ChatStore;
@@ -52,7 +52,7 @@ async fn new(store: &SqliteStore) -> Result<Arc<Self>>;
 Incoming events (messages, receipts, acks) are captured automatically once the handler is registered. Messages the client itself sends need to be recorded explicitly, since sends don't go through the inbound event pipeline:
 
 ```rust
-async fn record_outgoing(
+fn record_outgoing(
     &self,
     chat: &Jid,
     msg_id: impl Into<String>,
@@ -61,7 +61,7 @@ async fn record_outgoing(
 ) -> Result<()>;
 ```
 
-The row starts at `MessageStatus::Pending` and is lifted by the server ack/receipts that follow. `record_outgoing` is queued on the same writer as inbound events, so it cannot race the ack that immediately follows a send.
+`record_outgoing` is synchronous — it only enqueues onto the writer channel and returns, it does not wait for the write to commit. The row starts at `MessageStatus::Pending` and is lifted by the server ack/receipts that follow. Because the enqueue happens on the same writer queue as inbound events, it cannot race the ack that immediately follows a send. Call [`flush()`](#waiting-for-writes-to-land) if you need to wait for the row to actually land before reading it back.
 
 ### Waiting for writes to land
 
@@ -307,7 +307,7 @@ pub type Result<T> = std::result::Result<T, ChatStoreError>;
 - **History sync never clobbers live rows** (`ON CONFLICT DO NOTHING`). Live redeliveries and PDO recovery replace content in place instead — an `Undecryptable` placeholder becomes the real message under the same id once it's recovered.
 - **Content refreshes are sender-scoped.** Message ids are sender-chosen, so a different sender reusing an id can't rewrite someone else's message.
 
-## See Also
+## See also
 
 - [Storage Traits](/api/store) - `SqliteStore` and the underlying backend traits
 - [Custom Backends](/guides/custom-backends) - Implementing your own storage backend

@@ -471,6 +471,26 @@ let store = SqliteStore::new_for_device("whatsapp.db", 1).await?;
 let store = SqliteStore::new("sqlite://path/to/db.sqlite").await?;
 ```
 
+### Sharing the pool with sibling crates
+
+```rust
+fn shared(&self) -> SharedSqlite;
+```
+
+`SqliteStore::shared()` returns a clonable `SharedSqlite` handle onto the store's existing r2d2 connection pool and write-serialization semaphore. A sibling crate uses it to run its own queries and migrations against the *same* database file — without opening a second connection pool, which would mean two WAL writers contending for the file lock. This is how [`whatsapp-rust-chat-store`](/api/chat-store) attaches its chat/message tables to the same `whatsapp.db` file as the device store.
+
+```rust
+pub struct SharedSqlite { /* ... */ }
+
+impl SharedSqlite {
+    /// Acquires a semaphore permit and runs `f` on a pooled connection via `spawn_blocking`.
+    async fn run<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut SqliteConnection) -> Result<T> + Send + 'static,
+        T: Send + 'static;
+}
+```
+
 ### Features
 
 - **Connection pooling** - Uses Diesel r2d2 with pool size of 2
@@ -819,8 +839,9 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 `StoreError` exposes a helper `is_database_busy_or_locked()` that walks the source chain looking for SQLite `BUSY`/`LOCKED` markers. Retry layers use it to decide whether a database error is transient without depending on a specific backend crate.
 </Note>
 
-## See Also
+## See also
 
 - [Transport Trait](/api/transport) - Network transport abstraction
 - [HTTP Client Trait](/api/http-client) - HTTP client abstraction
 - [Client API](/api/client) - Main client interface
+- [Chat Store](/api/chat-store) - Optional chat/message history built on `SqliteStore::shared()`

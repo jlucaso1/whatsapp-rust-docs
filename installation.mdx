@@ -160,6 +160,13 @@ The optional `whatsapp-rust-chat-store` crate — an event-sourced SQLite chat/m
 whatsapp-rust-chat-store = "0.1"
 ```
 
+To enable full-text search, turn on the `search` feature:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust-chat-store = { version = "0.1", features = ["search"] }
+```
+
 See [Chat Store](/api/chat-store) for the full API.
 
 <Note>

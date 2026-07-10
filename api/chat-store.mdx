@@ -18,9 +18,12 @@ This is a separate, opt-in crate — adding it does not change any behavior for 
 
 ## Installation
 
+`ChatStore::new` takes a `&whatsapp_rust_sqlite_storage::SqliteStore` directly (not the `whatsapp_rust::store::SqliteStore` re-export), so add that crate alongside `whatsapp-rust-chat-store`:
+
 ```toml Cargo.toml
 [dependencies]
 whatsapp-rust-chat-store = "0.1"
+whatsapp-rust-sqlite-storage = "0.6"
 ```
 
 | Feature | Description | Included by default |

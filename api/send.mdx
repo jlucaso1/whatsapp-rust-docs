@@ -43,6 +43,10 @@ pub async fn send_message(
   Contains the `message_id` (unique ID for tracking receipts, edits, revokes) and `to` (resolved recipient JID). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
 </ResponseField>
 
+<Note>
+For DMs, group, and status sends, the outbound Signal ratchet advance is persisted to the backend **synchronously, before the stanza is transmitted** — reusing an outbound counter would reuse its message key and IV, so the advance must be durable before anyone can act on the ciphertext. If that persistence write fails, `send_message` returns `Err` instead of transmitting an advance that couldn't be saved. See [Signal Protocol — flush scheduling](/advanced/signal-protocol#flush-scheduling-send-vs-receive) for the full durability model.
+</Note>
+
 ### SendResult
 
 Result of a successfully sent message. Provides the message ID and a convenience method to construct a `MessageKey` for follow-up operations like album child linking.
@@ -1252,7 +1256,7 @@ pub enum SendError {
 - `Iq` — IQ request required by the send path failed
 - `InvalidRequest` — the send request was malformed (e.g., invalid JID, bad message shape)
 - `Client` — underlying transport/connection error
-- `Internal` — catch-all for errors not yet assigned a typed variant
+- `Internal` — catch-all for errors not yet assigned a typed variant. Includes a failure to durably persist the outbound Signal ratchet advance before the stanza was sent — see the durability note under [`send_message`](#send_message).
 
 **Example:**
 

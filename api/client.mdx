@@ -1455,6 +1455,29 @@ Send pre-marshaled plaintext bytes through the noise socket. The bytes must be a
 This bypasses node logging and `wait_for_sent_node` waiter resolution. Use [`send_node`](#send_node) for normal stanza sending. This method is intended for performance-critical paths where you already have marshaled bytes.
 </Warning>
 
+### flush_pending_signal_state
+
+```rust
+pub async fn flush_pending_signal_state(&self) -> Result<(), anyhow::Error>
+```
+
+Forces any pending write-behind Signal cache state to the backend, returning once the flush completes (or fails).
+
+The live receive path schedules a coalesced flush instead of writing through (sends already flush synchronously before the stanza hits the wire). On success the backend normally trails the cache by about the coalescing window, but that is **not** a hard wall-clock bound — the timer can slip under runtime starvation, and the flush can wait on locks or slow/failing storage (a backend outage extends it until the retry loop succeeds). Use this to settle durability deterministically before reading persisted state directly, or ahead of a non-graceful shutdown. Check the returned `Result` — a failure leaves state pending.
+
+<Warning>
+Call this from a control task, never from inside an event handler or an [`InboundDurabilityHook`](/advanced/inbound-durability). During an offline-sync drain, those run while the processing permit is held, and settling routes through that same permit — re-entering it would deadlock.
+</Warning>
+
+**Example:**
+```rust
+// Force durability before reading Signal state directly, or before a
+// non-graceful shutdown (process kill, container stop).
+client.flush_pending_signal_state().await?;
+```
+
+See [Signal Protocol — flush scheduling](/advanced/signal-protocol#flush-scheduling-send-vs-receive) for the full durability model.
+
 ### generate_message_id
 
 ```rust

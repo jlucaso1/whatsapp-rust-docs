@@ -1133,6 +1133,19 @@ impl SessionStore for SessionAdapter {
 }
 ```
 
+### Flush scheduling: send vs. receive
+
+*When* the dirty Signal cache reaches the backend differs by direction, because the two directions have different recovery properties:
+
+- **Send** (DM, group, and status sends) flushes **synchronously, before the stanza reaches the wire**, and propagates a persistence failure by aborting the send. Reusing an outbound counter reuses its message key and IV, so the ratchet advance must be durable before anyone can act on the ciphertext — the send must not transmit an advance it couldn't save.
+- **Receive** (live traffic, outside the offline-drain batcher) routes through a single-flight coalescing scheduler (`src/signal_flush.rs`) instead of flushing per stanza: a burst of receives folds into one flush per ~25ms window, retried with exponential backoff (up to a 5s cap) on backend failure. This is safe because a lost receive-side advance simply re-derives forward on the next message (the receiving chain derives `CK_n → CK_n+1`), and a consumed one-time prekey stays buffered until its session is durable — a crash inside the window is recoverable.
+
+The scheduler is generation-scoped (embeds the connection generation in its atomic state), so a reconnect during an in-flight flush needs no explicit reset: a stale worker from the previous connection cannot mutate the new generation's state, and stands down when it observes a foreign generation.
+
+The offline drain, retry-receipt recovery, identity-change recovery, and teardown all keep their own **synchronous** flushes — they gate acks, receipts, or follow-up reads on durability and are not routed through the receive coalescer. See [Inbound Durability Hook](/advanced/inbound-durability) for the drain-batch commit ordering, which this coalescing does not change.
+
+Call [`Client::flush_pending_signal_state()`](/api/client#flush_pending_signal_state) to force a deterministic settle — e.g. before reading persisted Signal state directly, or ahead of a non-graceful shutdown. Never call it from inside an `InboundDurabilityHook` or a synchronous, inline `EventHandler::handle_event` implementation, since settling re-enters the processing permit those run under and would deadlock during an offline-sync drain. Ordinary `Bot` closure handlers are unaffected — both default delivery modes run the callback in a detached task off the permit.
+
 ## Security Considerations
 
 ### Identity key trust

@@ -44,7 +44,7 @@ pub async fn send_message(
 </ResponseField>
 
 <Note>
-For DMs, group, and status sends, the outbound Signal ratchet advance is persisted to the backend **synchronously, before the stanza is transmitted** — reusing an outbound counter would reuse its message key and IV, so the advance must be durable before anyone can act on the ciphertext. If that persistence write fails, `send_message` returns `Err` instead of transmitting an advance that couldn't be saved. See [Signal Protocol — flush scheduling](/advanced/signal-protocol#flush-scheduling-send-vs-receive) for the full durability model.
+For DMs, the outbound Signal ratchet advance is persisted through a batched counter lease: the sender-chain counter is reserved 64 at a time, so most sends are already covered by a durable lease and only schedule a coalesced write-behind, while the send that raises the lease (roughly 1 in 64) is persisted to the backend **synchronously, before the stanza is transmitted**. Group and status sends always persist their sender-key ratchet advance synchronously before the stanza is transmitted. Either way, reusing an outbound counter would reuse its message key and IV, so the advance is durable before it can be reused, and if a required persistence write fails, `send_message` returns `Err` instead of transmitting an advance that couldn't be saved. See [Signal Protocol — flush scheduling](/advanced/signal-protocol#flush-scheduling-send-vs-receive) for the full durability model.
 </Note>
 
 ### SendResult

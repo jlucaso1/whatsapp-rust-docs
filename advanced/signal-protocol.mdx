@@ -1144,7 +1144,7 @@ The scheduler is generation-scoped (embeds the connection generation in its atom
 
 The offline drain, retry-receipt recovery, identity-change recovery, and teardown all keep their own **synchronous** flushes — they gate acks, receipts, or follow-up reads on durability and are not routed through the receive coalescer. See [Inbound Durability Hook](/advanced/inbound-durability) for the drain-batch commit ordering, which this coalescing does not change.
 
-Call [`Client::flush_pending_signal_state()`](/api/client#flush_pending_signal_state) to force a deterministic settle — e.g. before reading persisted Signal state directly, or ahead of a non-graceful shutdown. Never call it from inside an event handler or an `InboundDurabilityHook`, since settling re-enters the processing permit those run under and would deadlock during an offline-sync drain.
+Call [`Client::flush_pending_signal_state()`](/api/client#flush_pending_signal_state) to force a deterministic settle — e.g. before reading persisted Signal state directly, or ahead of a non-graceful shutdown. Never call it from inside an `InboundDurabilityHook` or a synchronous, inline `EventHandler::handle_event` implementation, since settling re-enters the processing permit those run under and would deadlock during an offline-sync drain. Ordinary `Bot` closure handlers are unaffected — both default delivery modes run the callback in a detached task off the permit.
 
 ## Security Considerations
 

@@ -57,7 +57,7 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 ### Voice & video calls
 
 - **Incoming and outgoing 1:1 audio and video calls** - Interoperates with the official WhatsApp app over 3G/WiFi/5G, including upgrading an audio call to video and back
-- **Full media plane in Rust** - Mic/camera capture and speaker/display playout are the consumer's job; encode, encrypt, relay, decrypt, and decode of the RTP/SRTP stream is all in Rust
+- **Full media plane in Rust** - Mic/camera capture and speaker/display playout are the consumer's job. Audio encode/decode (MLow) plus encrypt/relay/decrypt of both streams are in Rust; video encode/decode (H.264) stays with the consumer — the library only owns the RTP/SRTP transport around it
 - **Pure Rust MLow codec** - WhatsApp's proprietary audio codec; the `wacore` codec layer is FFI-free and compiles to WASM and embedded targets
 - **Codec-neutral H.264 video** - You hand the library complete Annex-B access units; it owns RTP packetization/reassembly, PLI/FIR keyframe recovery, and encryption — no video codec dependency in `wacore` or `whatsapp-rust`
 - **E2E-SRTP encryption** - Call key from the Signal session, HKDF-derived SRTP keys, AES-128-CTR + WARP integrity, for both audio and video

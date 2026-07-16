@@ -54,7 +54,7 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
                     .audio(mic_source, speaker_sink);
                 if *is_video {
                     // Answer with video too — required for a video-from-the-start offer.
-                    // An audio-only accept can still upgrade later via `CallHandle::accept_video`.
+                    // An audio-only accept can still add video later via `CallHandle::start_video`.
                     call = call.video(camera_source, video_sink);
                 }
                 let handle = call.start().await?;
@@ -110,7 +110,7 @@ The CLI exposes three subcommands, each accepting a trailing `--video`:
 | Subcommand | Description |
 |------------|-------------|
 | `loopback [--video]` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. With `--video`, an ffmpeg source is looped into an ffplay window instead. |
-| `listen [accept] [--video]` | Connect to WhatsApp and print incoming calls. Rejects by default; pass `accept` to auto-answer. With `--video`, an accepted call answers with video media too. |
+| `listen [accept] [--video]` | Connect to WhatsApp and print incoming calls. Rejects by default; pass `accept` to auto-answer. `--video` implies `accept` too (there's no point answering with video and then rejecting), and the accepted call answers with video media. |
 | `call <jid> [--video]` | Connect to WhatsApp and place an outgoing call to the given JID. With `--video` it's a video call from the start. |
 
 During a live call, single-key stdin commands (terminal only) work regardless of how the call started: `v` toggles video — upgrades to video, accepts a pending peer upgrade request, or downgrades back to audio — and `q` performs a signaled hangup.
@@ -189,26 +189,31 @@ impl VideoSink for MyDisplay {
   Bare `async_channel` endpoints work directly here too — `Receiver<Vec<u8>>` implements `VideoSource` (15 fps default stride) and `Sender<VideoFrame>` implements `VideoSink`.
 </Tip>
 
-You can supply video up front with `.video(source, sink)` on the call builder (from-start video), or start/stop it mid-call on the `CallHandle`:
+You can supply video up front with `.video(source, sink)` on the call builder (from-start video), or start/stop it mid-call on the `CallHandle`. The two mid-call flows below are mutually exclusive — you're either the side initiating the upgrade or the side responding to one, never both for the same transition.
+
+**We initiate** — upgrade an audio-only call to video:
 
 ```rust
-// Upgrade an audio-only call to video (we initiate). Sends the upgrade request; the peer's
-// acceptance arrives as CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. }
-// on handle.events().
+// Sends the upgrade request; the peer's acceptance arrives as
+// CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. } on handle.events().
 handle.start_video(camera_source, video_sink).await?;
 
 // On seeing that UpgradeAccept event, complete the handshake. Our local video plane stays
-// gated until this send succeeds — accept_video (below) sends its own Enabled internally,
-// but as the initiator this standalone send is on us.
+// gated until this send succeeds.
 handle.announce_video_enabled().await?;
+```
 
-// Accept a peer's upgrade request, surfaced as
-// CallEvent::VideoStateChanged { state: VideoState::UpgradeRequestV2, .. }. This already
-// sends both the accept and the Enabled stanza — no extra step needed on this side.
+**Peer initiates** — respond to a `CallEvent::VideoStateChanged { state: VideoState::UpgradeRequestV2, .. }` event:
+
+```rust
+// Sends both the accept and the Enabled stanza in one call — no extra step needed on this side.
 handle.accept_video(camera_source, video_sink).await?;
+```
 
-// Downgrade back to audio-only. Idempotent.
-handle.stop_video().await?;
+**Either side** — downgrade back to audio-only:
+
+```rust
+handle.stop_video().await?; // Idempotent.
 ```
 
 <Note>
@@ -287,9 +292,9 @@ WhatsApp's own encoder settings (for interop reference, not enforced by the libr
 Call audio and video are end-to-end encrypted the WhatsApp way:
 
 1. The call key arrives over the peer's Signal session.
-2. E2E-SRTP keys are derived with HKDF + the libsrtp AES-CM KDF, independently for the audio and video SSRCs.
+2. E2E-SRTP keys are derived with HKDF + the libsrtp AES-CM KDF, per participant — the same master keys protect both the audio and video pipelines for that peer; only the SSRC, sequence number, and ROC state are kept separate per media stream.
 3. Media is protected with AES-128-CTR and authenticated with a 4-byte WARP MESSAGE-INTEGRITY tag (HMAC-SHA1).
-4. The SFrame layer wraps the SRTP payload.
+4. On the audio path only, an optional SFrame layer wraps inbound payloads the engine won't decode itself (e.g. a peer that sent GCM-wrapped Opus instead of MLow); video has no SFrame step.
 
 On receive, the ROC is estimated per-packet via RFC 3711's guess-index, then the WARP tag is verified in constant time against that estimate — *before* the ROC is advanced. Committing an unauthenticated packet's index would let an on-path relay desync the receiver's keystream with just a couple of forged packets. A packet that fails authentication is rejected outright and never advances the ROC state, so it can't cause a persistent decode failure for subsequent legitimate frames. Per-sender SRTCP replay windows apply the same authenticate-before-commit rule to RTCP.
 

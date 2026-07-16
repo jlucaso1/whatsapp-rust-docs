@@ -5,7 +5,7 @@ description: Place and answer end-to-end encrypted 1:1 voice and video calls wit
 
 ## Overview
 
-whatsapp-rust supports end-to-end encrypted 1:1 voice and video calls that interoperate with the official WhatsApp app. The full audio media path is implemented in pure Rust: mic capture, encoding, E2E-SRTP encryption, relay transport, decryption, decoding, and playout.
+whatsapp-rust supports end-to-end encrypted 1:1 voice and video calls that interoperate with the official WhatsApp app. The full audio media path is implemented in pure Rust — encoding, E2E-SRTP encryption, relay transport, decryption, and decoding — while you supply mic capture and speaker playout (see Audio I/O below).
 
 Video is **codec-neutral**: you hand the library complete H.264 Annex-B access units and it owns signaling, RTP packetization/reassembly, E2E-SRTP encryption, relay transport, and PLI/FIR-driven keyframe recovery. Encoding, decoding, capture, and display stay outside the library — the bundled CLI example drives them through `ffmpeg`/`ffplay`.
 
@@ -22,7 +22,7 @@ Video is **codec-neutral**: you hand the library complete H.264 Annex-B access u
 ```toml
 [dependencies]
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", features = ["voip"] }
-async-channel = "2"  # needed to implement AudioSource / AudioSink
+async-channel = "2"  # needed to implement AudioSource / AudioSink / VideoSource / VideoSink
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -192,11 +192,19 @@ impl VideoSink for MyDisplay {
 You can supply video up front with `.video(source, sink)` on the call builder (from-start video), or start/stop it mid-call on the `CallHandle`:
 
 ```rust
-// Upgrade an audio-only call to video (we initiate).
+// Upgrade an audio-only call to video (we initiate). Sends the upgrade request; the peer's
+// acceptance arrives as CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. }
+// on handle.events().
 handle.start_video(camera_source, video_sink).await?;
 
+// On seeing that UpgradeAccept event, complete the handshake. Our local video plane stays
+// gated until this send succeeds — accept_video (below) sends its own Enabled internally,
+// but as the initiator this standalone send is on us.
+handle.announce_video_enabled().await?;
+
 // Accept a peer's upgrade request, surfaced as
-// CallEvent::VideoStateChanged { state: VideoState::UpgradeRequestV2, .. }.
+// CallEvent::VideoStateChanged { state: VideoState::UpgradeRequestV2, .. }. This already
+// sends both the accept and the Enabled stanza — no extra step needed on this side.
 handle.accept_video(camera_source, video_sink).await?;
 
 // Downgrade back to audio-only. Idempotent.
@@ -222,7 +230,7 @@ handle.stop_video().await?;
 | `handle.set_muted(true)` | Mute or unmute the local microphone |
 | `handle.start_video(source, sink).await` | Upgrade to video (we initiate); sends the video-upgrade offer and enables the media plane once the peer accepts |
 | `handle.accept_video(source, sink).await` | Accept the peer's pending video-upgrade request |
-| `handle.announce_video_enabled().await` | Send the standalone `Enabled` stanza after a mid-call upgrade completes (not needed for video-from-start) |
+| `handle.announce_video_enabled().await` | Initiator-only: send the standalone `Enabled` stanza once the peer's `UpgradeAccept` arrives, completing a `start_video` upgrade. Not needed by `accept_video` (sends it internally) or for video-from-start |
 | `handle.stop_video().await` | Downgrade to audio-only; idempotent |
 | `handle.events()` | Subscribe to engine events (relay allocate, audio/video state changes, RTCP, failures) |
 

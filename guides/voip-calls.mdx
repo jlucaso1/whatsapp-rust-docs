@@ -191,16 +191,23 @@ impl VideoSink for MyDisplay {
 
 You can supply video up front with `.video(source, sink)` on the call builder (from-start video), or start/stop it mid-call on the `CallHandle`. The two mid-call flows below are mutually exclusive — you're either the side initiating the upgrade or the side responding to one, never both for the same transition.
 
-**We initiate** — upgrade an audio-only call to video:
+**We initiate** — upgrade an audio-only call to video. `start_video` sends the upgrade request and returns immediately; the peer's acceptance arrives later, asynchronously, as an event — it is NOT safe to call `announce_video_enabled` right after `start_video` returns:
 
 ```rust
-// Sends the upgrade request; the peer's acceptance arrives as
-// CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. } on handle.events().
+use whatsapp_rust::voip::{CallEvent, VideoState};
+
 handle.start_video(camera_source, video_sink).await?;
 
-// On seeing that UpgradeAccept event, complete the handshake. Our local video plane stays
-// gated until this send succeeds.
-handle.announce_video_enabled().await?;
+// Elsewhere, driven by your event loop over handle.events():
+let events = handle.events();
+while let Ok(event) = events.recv().await {
+    if let CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. } = event {
+        // The peer accepted. Complete the handshake — our local video plane stays
+        // gated until this send succeeds.
+        handle.announce_video_enabled().await?;
+        break;
+    }
+}
 ```
 
 **Peer initiates** — respond to a `CallEvent::VideoStateChanged { state: VideoState::UpgradeRequestV2, .. }` event:

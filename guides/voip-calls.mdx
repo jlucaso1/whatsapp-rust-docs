@@ -109,7 +109,7 @@ The CLI exposes three subcommands, each accepting a trailing `--video`:
 
 | Subcommand | Description |
 |------------|-------------|
-| `loopback [--video]` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. With `--video`, an ffmpeg source is looped into an ffplay window instead. |
+| `loopback [--video]` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. `--video` replaces this with a separate, video-only loopback: an ffmpeg source is looped straight into an ffplay window. |
 | `listen [accept] [--video]` | Connect to WhatsApp and print incoming calls. Rejects by default; pass `accept` to auto-answer. `--video` implies `accept` too (there's no point answering with video and then rejecting), and the accepted call answers with video media. |
 | `call <jid> [--video]` | Connect to WhatsApp and place an outgoing call to the given JID. With `--video` it's a video call from the start. |
 
@@ -196,10 +196,11 @@ You can supply video up front with `.video(source, sink)` on the call builder (f
 ```rust
 use whatsapp_rust::voip::{CallEvent, VideoState};
 
+// Subscribe before starting, so this can't race a fast peer response.
+let events = handle.events();
 handle.start_video(camera_source, video_sink).await?;
 
-// Elsewhere, driven by your event loop over handle.events():
-let events = handle.events();
+// Elsewhere, driven by your event loop over `events`:
 while let Ok(event) = events.recv().await {
     if let CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. } = event {
         // The peer accepted. Complete the handshake — our local video plane stays

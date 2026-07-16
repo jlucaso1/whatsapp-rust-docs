@@ -53,10 +53,11 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
                     .accept(&incoming)
                     .audio(mic_source, speaker_sink);
                 if *is_video {
-                    // Answer with video too — required for a video-from-the-start offer.
-                    // An audio-only accept can still add video later via `CallHandle::start_video`.
+                    // Required to answer a video-from-the-start offer.
                     call = call.video(camera_source, video_sink);
                 }
+                // If `is_video` was false, `start()` accepts audio-only — video can still be
+                // added later via `CallHandle::start_video`.
                 let handle = call.start().await?;
 
                 // Resolves when either side hangs up

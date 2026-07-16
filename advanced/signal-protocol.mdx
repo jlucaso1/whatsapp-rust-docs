@@ -1162,7 +1162,7 @@ Downgrading to a version that predates the counter lease after running a leased 
 </Warning>
 
 <Warning>
-The pre-wire gate is a point-in-time check, not a lock held across the flush, and this specifically affects **DM sessions**: `needs_pre_wire_flush()` inspects pending reservations once, and `flush()` skips any session entry that is currently checked out by a concurrent `load_session` call (`SessionEntry::CheckedOut`), still returning `Ok` for the entries it did persist. If another task checks out the same session between this send's lock release and its flush, that session's reservation can remain pending even though the flush "succeeded" — the caller proceeds to write its stanza regardless. This is a property of `SignalStoreCache::flush` itself, not specific to retries; it affects any pre-wire-gated DM send that races a concurrent operation on the same session. Sender-key entries have no analogous checked-out state — `get_sender_key` clones an `Arc` without removing the cached record, so every dirty sender-key entry is included in a flush's batch — so group/status sends are not exposed to this race.
+The pre-wire gate is a point-in-time check, not a lock held across the flush, and this specifically affects **DM sessions**: `needs_pre_wire_flush()` inspects pending reservations once, and `flush()` skips any session entry that is currently checked out by a concurrent operation (`SessionEntry::CheckedOut`), still returning `Ok` for the entries it did persist. If another task checks out the same session between this send's lock release and its flush, that session's reservation can remain pending even though the flush "succeeded" — the caller proceeds to write its stanza regardless. This is a property of `SignalStoreCache::flush` itself, not specific to retries; it affects any pre-wire-gated DM send that races a concurrent, *still in-progress* operation on the same session. Sender-key entries have no analogous checked-out state — `get_sender_key` clones an `Arc` without removing the cached record, so every dirty sender-key entry is included in a flush's batch — so group/status sends are not exposed to this race. This is unrelated to what happens if that concurrent operation is then *cancelled*: see [Cancellation-safe session checkouts](#cancellation-safe-session-checkouts) — a dropped checkout restores its entry synchronously rather than leaving it stranded, but the deferred entry still isn't included in a flush that already ran before the restore.
 </Warning>
 
 Deleting a session or sender-key record — an identity change, a session reset, a rotated sender key — creates a tombstone rather than clearing the record's pending gate immediately. If a durability gate was open on the record at delete time, `SignalStoreCache` keeps it open until the backend's `delete_session`/`delete_sender_key` call actually succeeds; a failed delete leaves `needs_pre_wire_flush()` returning `true` and is retried on the next flush. Earlier, the gate was released as soon as the tombstone was applied to the in-memory cache, so a failed delete or a crash in that window could let ciphertext reach the wire while the pre-delete chain state was still loadable from the backend, re-deriving already-used key material on reload. A lossy `clear()` still drops a pending tombstone gate — the tombstone is discarded from the in-memory cache without issuing the backend delete, so the old chain state may remain in the backend.
@@ -1321,14 +1321,22 @@ enum SessionEntry {
     /// instead of deep-cloning the record (KBs with archived states).
     Present(Arc<SessionRecord>),
     Absent,
-    /// Taken by load_session; has_session treats as present, flush/eviction skip.
-    CheckedOut,
+    /// Taken by a destructive-update load; has_session treats as present.
+    /// Carries enough identity to reject a stale owner — see
+    /// "Cancellation-safe session checkouts" below.
+    CheckedOut {
+        had_session: bool,
+        token: NonZeroU64,
+    },
 }
 
 struct SessionStoreState {
     cache: HashMap<Arc<str>, SessionEntry>,  // Objects, not bytes
     dirty: HashSet<Arc<str>>,
     deleted: HashSet<Arc<str>>,
+    incarnation: StoreIncarnation,
+    checkout_generation: u64,
+    next_checkout_token: u64,
 }
 
 // Sender keys use the same object-caching pattern
@@ -1351,7 +1359,7 @@ pub trait SessionStore {
 }
 ```
 
-All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`, `message_decrypt_prekey`, `process_prekey_bundle`) drop the record immediately after storing. Taking ownership eliminates the `.clone()` in the adapter and the compiler enforces no use-after-store.
+All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`, `message_decrypt_prekey`, `process_prekey_bundle`) — plus PreKey setup and group preflight mutations — take ownership of the record and drop it immediately after storing. Taking ownership eliminates the `.clone()` in the adapter and the compiler enforces no use-after-store. As of [#1044](https://github.com/oxidezap/whatsapp-rust/pull/1044), these call sites obtain the record through the `SessionCheckout` guard (below) rather than a bare `load_session`/`store_session` pair, so the zero-cost move still applies but the checkout is now cancellation-safe.
 
 **Per-message hot path impact:**
 
@@ -1363,6 +1371,22 @@ All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`,
 | `store_sender_key` | serialize to bytes + store bytes | store `SenderKeyRecord` object directly |
 | `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |
 | `flush` (batched) | write bytes to DB | serialize sessions + sender keys + write bytes to DB |
+
+### Cancellation-safe session checkouts
+
+As of [#1044](https://github.com/oxidezap/whatsapp-rust/pull/1044), the record backing a `CheckedOut` entry is owned by a `SessionCheckout<'a>` guard (`wacore/libsignal/src/protocol/storage/traits.rs`) instead of being a bare marker. This closes a gap where cancelling the future mid-mutation — a Tokio task abort, a `select!` losing a race, a timeout — could leave only the marker behind: the ratchet advance the future was computing was lost, and a decrypt's ratchet advance could persist without its matching identity write, or vice versa.
+
+`SessionCheckout` is obtained via `SessionCheckout::load` (existing session) or `load_or_create` (synthesizes `SessionRecord::new_fresh()` if absent, tracked via `had_session`), exposes `record()`/`record_mut()` for the protocol layer to mutate in place, and is consumed by either:
+- `commit(self)` — stores the mutated record back through `try_store_session_from_checkout`, or
+- `discard(self)` — releases a deliberately-rejected *fresh* (never-had-a-session) checkout without storing.
+
+If neither runs because the guard is dropped first (the cancellation case), `Drop` synchronously puts the record back itself — no caller code has to remember to handle cancellation. If the sessions mutex is uncontended, restoration is immediate; if a concurrent `flush()` holds the lock, the restore is queued as a `PendingSessionRestore` and replayed the next time any operation acquires the sessions lock, so an aborted task's state is never dropped even though it can't wait for the lock itself. The queue itself (`SyncMutex<Vec<PendingSessionRestore>>`) is unbounded — every lock acquisition drains it first, so it only grows if cancellations under lock contention arrive faster than anything else touches the session store, which does not happen under normal load.
+
+Every checkout carries a `SessionCheckoutKey { generation, token }`: `checkout_generation` increments on every lossy `clear()`, and `token` is assigned monotonically per checkout of a given address. A restore is rejected (rather than silently applied) unless both match the cache's current state — this stops a checkout issued before a session reset from resurrecting stale state, and stops a stale owner from clobbering a newer checkout of the same address.
+
+`flush()` and cache eviction (`clear_after_flush`) now preserve live `CheckedOut` entries — and any PreKey deletion buffered against that address — instead of dropping them; the deferred prekey delete and the session's own persistence both wait for a later flush once the checkout completes, rather than being lost.
+
+`SessionStore` gained five `#[doc(hidden)]` methods with pass-through default bodies (`load_session_for_update`, `try_load_session_for_update`, `try_store_session_from_checkout`, `cancel_session_checkout`, `complete_session_checkout`), so existing custom `SessionStore` implementations keep compiling unchanged — only a backend that wants the destructive-update fast path needs to implement them.
 
 ### Arc previous sessions
 

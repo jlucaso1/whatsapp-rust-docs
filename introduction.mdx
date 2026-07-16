@@ -54,12 +54,13 @@ A high-performance, async Rust library for the WhatsApp Web API. Inspired by [wh
 - **Privacy controls** - Send to all contacts, allow lists, or deny lists
 - **Revocation** - Delete posted status updates
 
-### Voice calls
+### Voice & video calls
 
-- **Incoming and outgoing 1:1 audio calls** - Interoperates with the official WhatsApp app over 3G/WiFi/5G
-- **Full media plane in Rust** - Mic capture, encode, encrypt, relay, decrypt, decode, and playout
+- **Incoming and outgoing 1:1 audio and video calls** - Interoperates with the official WhatsApp app over 3G/WiFi/5G, including upgrading an audio call to video and back
+- **Rust audio codec and media transport** - You own mic/camera capture and speaker/display playout. Rust handles MLow audio encoding and decoding. It also handles encryption, relay transport, and decryption for both streams. You own H.264 encoding and decoding.
 - **Pure Rust MLow codec** - WhatsApp's proprietary audio codec; the `wacore` codec layer is FFI-free and compiles to WASM and embedded targets
-- **E2E-SRTP encryption** - Call key from the Signal session, HKDF-derived SRTP keys, AES-128-CTR + WARP integrity
+- **Codec-neutral H.264 video** - You hand the library complete Annex-B access units; it owns RTP packetization/reassembly, PLI/FIR keyframe recovery, and encryption — no video codec dependency in `wacore` or `whatsapp-rust`
+- **E2E-SRTP encryption** - Call key from the Signal session, HKDF-derived SRTP keys, AES-128-CTR + WARP integrity, for both audio and video
 - **Sans-IO `CallEngine`** - No owned sockets or threads; the `wacore` engine is runtime-agnostic and compiles to WASM and embedded (esp32); the Tokio async driver is added by the top-level `voip` feature (native-only)
 - **Multi-device aware** - Companion answering rekey, sibling dismiss, and offline missed-call surfacing
 - **Opt-in `voip` feature** - Zero impact on default builds; codec and relay deps not compiled unless opted in

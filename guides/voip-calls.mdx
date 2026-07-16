@@ -1,20 +1,22 @@
 ---
 title: VoIP Calls
-description: Place and answer end-to-end encrypted 1:1 voice calls with whatsapp-rust
+description: Place and answer end-to-end encrypted 1:1 voice and video calls with whatsapp-rust
 ---
 
 ## Overview
 
-whatsapp-rust supports end-to-end encrypted 1:1 voice calls that interoperate with the official WhatsApp app. The full media path is implemented in pure Rust: mic capture, encoding, E2E-SRTP encryption, relay transport, decryption, decoding, and playout.
+whatsapp-rust supports end-to-end encrypted 1:1 voice and video calls that interoperate with the official WhatsApp app. The full audio media path is implemented in pure Rust: mic capture, encoding, E2E-SRTP encryption, relay transport, decryption, decoding, and playout.
+
+Video is **codec-neutral**: you hand the library complete H.264 Annex-B access units and it owns signaling, RTP packetization/reassembly, E2E-SRTP encryption, relay transport, and PLI/FIR-driven keyframe recovery. Encoding, decoding, capture, and display stay outside the library — the bundled CLI example drives them through `ffmpeg`/`ffplay`.
 
 <Note>
-  Voice calling is behind the optional `voip` feature flag. The default build is entirely unaffected — none of the codec or relay dependencies are compiled unless you opt in.
+  Voice and video calling are behind the optional `voip` feature flag. The default build is entirely unaffected — none of the codec or relay dependencies are compiled unless you opt in.
 </Note>
 
 ## Enabling the Feature
 
 <Warning>
-  The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) and will be included in the next published release. Until then, depend on the git source:
+  The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) (audio) and [PR #1024](https://github.com/oxidezap/whatsapp-rust/pull/1024) (video) and will be included in the next published release. Until then, depend on the git source:
 </Warning>
 
 ```toml
@@ -46,12 +48,16 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
     match event {
         Event::IncomingCall(incoming) => {
             // Borrow the action so `incoming` is not partially moved before `.accept(&incoming)`.
-            if matches!(&incoming.action, CallAction::Offer { .. }) {
-                let handle = client.voip()
+            if let CallAction::Offer { is_video, .. } = &incoming.action {
+                let mut call = client.voip()
                     .accept(&incoming)
-                    .audio(mic_source, speaker_sink)
-                    .start()
-                    .await?;
+                    .audio(mic_source, speaker_sink);
+                if *is_video {
+                    // Answer with video too — required for a video-from-the-start offer.
+                    // An audio-only accept can still upgrade later via `CallHandle::accept_video`.
+                    call = call.video(camera_source, video_sink);
+                }
+                let handle = call.start().await?;
 
                 // Resolves when either side hangs up
                 handle.wait_ended().await;
@@ -77,6 +83,7 @@ let peer: Jid = "15551234567@s.whatsapp.net".parse()?;
 let handle = client.voip()
     .call(&peer)
     .audio(mic_source, speaker_sink)
+    .video(camera_source, video_sink) // omit for an audio-only call
     .start()
     .await?;
 
@@ -98,13 +105,15 @@ handle.wait_ended().await;
 
 You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip-cli/src/main.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference.
 
-The CLI exposes three subcommands:
+The CLI exposes three subcommands, each accepting a trailing `--video`:
 
 | Subcommand | Description |
 |------------|-------------|
-| `loopback` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. |
-| `listen [accept]` | Connect to WhatsApp and print incoming calls. Rejects by default; pass `accept` to auto-answer. |
-| `call <jid>` | Connect to WhatsApp and place an outgoing call to the given JID. |
+| `loopback [--video]` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. With `--video`, an ffmpeg source is looped into an ffplay window instead. |
+| `listen [accept] [--video]` | Connect to WhatsApp and print incoming calls. Rejects by default; pass `accept` to auto-answer. With `--video`, an accepted call answers with video media too. |
+| `call <jid> [--video]` | Connect to WhatsApp and place an outgoing call to the given JID. With `--video` it's a video call from the start. |
+
+During a live call, single-key stdin commands (terminal only) work regardless of how the call started: `v` toggles video — upgrades to video, accepts a pending peer upgrade request, or downgrades back to audio — and `q` performs a signaled hangup.
 
 To test the audio stack locally without a WhatsApp session:
 
@@ -143,6 +152,61 @@ impl AudioSink for MySpeaker {
   The library owns the call key, relay handshake, codec, and crypto. You only provide mic input and speaker output.
 </Tip>
 
+## Video I/O
+
+Video works the same way, one layer up: you supply `VideoSource` and `VideoSink` implementations that hand the library complete **H.264 Annex-B access units** (start codes included). The library never touches pixels — encoding and decoding are entirely your consumer's responsibility (the CLI example shells out to `ffmpeg`/`ffplay`).
+
+```rust
+use whatsapp_rust::voip::{VideoSource, VideoSink, VideoFrame};
+use async_channel;
+
+struct MyCamera { receiver: async_channel::Receiver<Vec<u8>> }
+struct MyDisplay { sender: async_channel::Sender<VideoFrame> }
+
+impl VideoSource for MyCamera {
+    // Each item is one complete H.264 Annex-B access unit.
+    fn frames(&self) -> async_channel::Receiver<Vec<u8>> {
+        self.receiver.clone()
+    }
+
+    // RTP clock increment between access units (90_000 / fps). Must be non-zero;
+    // defaults to the 15 fps cadence if not overridden.
+    fn rtp_timestamp_stride(&self) -> u32 {
+        90_000 / 20 // 20 fps
+    }
+}
+
+impl VideoSink for MyDisplay {
+    fn playout(&self) -> async_channel::Sender<VideoFrame> {
+        self.sender.clone()
+    }
+}
+```
+
+`VideoFrame` carries the reassembled peer access unit plus `keyframe` (safe point to (re)start a decoder) and `orientation` (from `<video device_orientation>`).
+
+<Tip>
+  Bare `async_channel` endpoints work directly here too — `Receiver<Vec<u8>>` implements `VideoSource` (15 fps default stride) and `Sender<VideoFrame>` implements `VideoSink`.
+</Tip>
+
+You can supply video up front with `.video(source, sink)` on the call builder (from-start video), or start/stop it mid-call on the `CallHandle`:
+
+```rust
+// Upgrade an audio-only call to video (we initiate).
+handle.start_video(camera_source, video_sink).await?;
+
+// Accept a peer's upgrade request, surfaced as
+// CallEvent::VideoStateChanged { state: VideoState::UpgradeRequestV2, .. }.
+handle.accept_video(camera_source, video_sink).await?;
+
+// Downgrade back to audio-only. Idempotent.
+handle.stop_video().await?;
+```
+
+<Note>
+  The engine treats an authenticated peer PLI/FIR as a decoder resync boundary: dependent access units are withheld (without losing RTP/SRTP sequence state) until the next IDR packetizes successfully, then transmission resumes. `stop_video`/disable purges queued, unstarted access units while preserving any batch already on the wire, so reactivation always resumes at a complete IDR.
+</Note>
+
 ## Call Handle
 
 `start()` returns a `CallHandle` for controlling an active call:
@@ -156,7 +220,11 @@ impl AudioSink for MySpeaker {
 | `handle.peer_jid()` | The peer's JID (needed for `terminate`) |
 | `handle.call_creator()` | The call creator's JID (needed for `terminate`) |
 | `handle.set_muted(true)` | Mute or unmute the local microphone |
-| `handle.events()` | Subscribe to engine events (relay allocate, audio, failures) |
+| `handle.start_video(source, sink).await` | Upgrade to video (we initiate); sends the video-upgrade offer and enables the media plane once the peer accepts |
+| `handle.accept_video(source, sink).await` | Accept the peer's pending video-upgrade request |
+| `handle.announce_video_enabled().await` | Send the standalone `Enabled` stanza after a mid-call upgrade completes (not needed for video-from-start) |
+| `handle.stop_video().await` | Downgrade to audio-only; idempotent |
+| `handle.events()` | Subscribe to engine events (relay allocate, audio/video state changes, RTCP, failures) |
 
 ## Multi-Device Behavior
 
@@ -168,12 +236,12 @@ The library handles multi-device call scenarios automatically:
 
 ## Architecture: `CallEngine`
 
-The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket, clock, or thread. You feed it relay packets, mic frames, and timer ticks; it emits transmit packets, playout PCM, call events, and the next deadline.
+The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket, clock, or thread. You feed it relay packets, mic frames, camera access units, and timer ticks; it emits transmit packets, playout PCM/video frames, call events, and the next deadline.
 
 <Warning>
   **Platform support depends on which crate you use:**
 
-  - `wacore` with `features = ["voip"]` — pure Rust (MLow codec, SRTP crypto, `CallEngine`). No FFI. Compiles to WASM and embedded targets (esp32).
+  - `wacore` with `features = ["voip"]` — pure Rust (MLow codec, H.264 RTP media plane, SRTP crypto, `CallEngine`). No FFI. Compiles to WASM and embedded targets (esp32).
   - `whatsapp-rust` with `features = ["voip"]` — adds the Tokio async driver, webrtc-rs (DTLS/SCTP), and libopus FFI. **This will not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
 </Warning>
 
@@ -195,35 +263,45 @@ The decoder operates at a single fixed point:
 | Frame duration | 60 ms (960 samples) |
 | Off-spec frames | Dropped (fail-loud, no desync) |
 
+## H.264 Video Plane
+
+Unlike MLow, whatsapp-rust does **not** implement an H.264 encoder or decoder — the codec is owned by the consumer. What `wacore` does implement, in pure Rust, is the RTP media plane around it:
+
+- **Packetization**: single-NAL and FU-A (fragmented) packet formats.
+- **Reassembly**: single-NAL, STAP-A, and FU-A on receive, with sequence-aware fragment-loss handling and allocation caps.
+- **Keyframe recovery**: an authenticated peer PLI/FIR is treated as a decoder resync boundary — dependent access units are withheld until the next IDR packetizes successfully, matching what the official app expects for recovery.
+- **Backpressure**: a complete access unit is the unit of backpressure, so overload can't leave half an IDR on the wire.
+
+WhatsApp's own encoder settings (for interop reference, not enforced by the library): H.264 Constrained Baseline, repeated SPS/PPS, adapting from a 15 fps low-bandwidth mode up to 1280×720 @ 20 fps / ~2 Mbps.
+
 ## Encryption
 
-Call audio is end-to-end encrypted the WhatsApp way:
+Call audio and video are end-to-end encrypted the WhatsApp way:
 
 1. The call key arrives over the peer's Signal session.
-2. E2E-SRTP keys are derived with HKDF + the libsrtp AES-CM KDF.
-3. Audio frames are protected with AES-128-CTR and authenticated with a 4-byte WARP MESSAGE-INTEGRITY tag (HMAC-SHA1).
+2. E2E-SRTP keys are derived with HKDF + the libsrtp AES-CM KDF, independently for the audio and video SSRCs.
+3. Media is protected with AES-128-CTR and authenticated with a 4-byte WARP MESSAGE-INTEGRITY tag (HMAC-SHA1).
 4. The SFrame layer wraps the SRTP payload.
 
-On receive, the ROC is estimated per-packet via RFC 3711's guess-index, then the WARP tag is verified in constant time against that estimate — *before* the ROC is advanced. Committing an unauthenticated packet's index would let an on-path relay desync the receiver's keystream with just a couple of forged packets. A packet that fails authentication is rejected outright and never advances the ROC state, so it can't cause a persistent decode failure for subsequent legitimate frames.
+On receive, the ROC is estimated per-packet via RFC 3711's guess-index, then the WARP tag is verified in constant time against that estimate — *before* the ROC is advanced. Committing an unauthenticated packet's index would let an on-path relay desync the receiver's keystream with just a couple of forged packets. A packet that fails authentication is rejected outright and never advances the ROC state, so it can't cause a persistent decode failure for subsequent legitimate frames. Per-sender SRTCP replay windows apply the same authenticate-before-commit rule to RTCP.
 
-The relay never sees plaintext audio.
+The relay never sees plaintext audio or video.
 
 ## Validation
 
 The implementation is tested at multiple levels:
 
 - **Byte-exact golden roundtrip** for the MLow codec
-- **Known-answer-test vectors** for the E2E-SRTP crypto
+- **Known-answer-test vectors** for the E2E-SRTP crypto and the H.264 packetization/reassembly/recovery paths
 - **In-tree loopback** DTLS/SCTP transport E2E test
-- **Live tested** end-to-end against the real WhatsApp app over 3G/WiFi/5G
+- **Live tested** end-to-end against the real WhatsApp app over 3G/WiFi/5G, including outbound video from a real V4L2 webcam
 
 ## Roadmap
 
-The 1:1 audio path is the foundation. Natural follow-ups tracked upstream:
+1:1 audio and video are the foundation. Natural follow-ups tracked upstream:
 
 - **Group calls** — the signaling and SFrame/SRTP key management generalize to multi-party; the engine is already participant-aware.
-- **Video calls** — the DTLS/SCTP/SRTP transport is codec-agnostic; video is a second media stream.
-- **Deeper codec coverage** — inband FEC, PLC, CNG, and low-bitrate operating points.
+- **Deeper codec coverage** — inband FEC, PLC, CNG, and low-bitrate operating points for audio.
 - **Embedded demo** — the sans-IO core already builds for esp32.
 
 ## Next Steps

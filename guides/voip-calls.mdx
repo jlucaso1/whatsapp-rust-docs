@@ -13,7 +13,7 @@ Video is **codec-neutral**: you hand the library complete H.264 Annex-B access u
   Voice and video calling are behind the optional `voip` feature flag. The default build is entirely unaffected — none of the codec or relay dependencies are compiled unless you opt in.
 </Note>
 
-## Enabling the Feature
+## Enabling the feature
 
 <Warning>
   The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) (audio) and [PR #1024](https://github.com/oxidezap/whatsapp-rust/pull/1024) (video) and will be included in the next published release. Until then, depend on the git source:
@@ -198,7 +198,11 @@ handle.start_video(camera_source, video_sink).await?;
 ```
 
 <Note>
-  Once the peer accepts, `whatsapp-rust`'s own `<call>` stanza handler completes the handshake for you — it sends the standalone `Enabled` stanza that ungates your local video plane automatically, no further call required. `handle.events()` still surfaces `CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. }` at that point, purely as a notification (e.g. to update your UI) — react to it if you want, but don't call `handle.announce_video_enabled()` in response, or you'll send a redundant second `Enabled`. That method exists for consumers driving call signaling themselves outside the standard handler.
+  Once the peer accepts, `whatsapp-rust`'s `<call>` stanza handler sends the standalone `Enabled` stanza and ungates your local video plane automatically. No further call is required.
+
+  `handle.events()` still emits `CallEvent::VideoStateChanged { state: VideoState::UpgradeAccept, .. }` as a notification. Use it to update your UI if needed.
+
+  Don't call `handle.announce_video_enabled()` in response because that sends a redundant second `Enabled`. Only use that method when you drive call signaling outside the standard handler.
 </Note>
 
 **Peer initiates** — respond to a `CallEvent::VideoStateChanged { state, .. }` event where `state` is `VideoState::UpgradeRequest` (legacy) or `VideoState::UpgradeRequestV2`:
@@ -278,7 +282,7 @@ The decoder operates at a single fixed point:
 | Frame duration | 60 ms (960 samples) |
 | Off-spec frames | Dropped (fail-loud, no desync) |
 
-## H.264 Video Plane
+## H.264 video plane
 
 Unlike MLow, whatsapp-rust does **not** implement an H.264 encoder or decoder — the codec is owned by the consumer. What `wacore` does implement, in pure Rust, is the RTP media plane around it:
 

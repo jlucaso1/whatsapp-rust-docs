@@ -109,7 +109,7 @@ The CLI exposes three subcommands, each accepting a trailing `--video`:
 
 | Subcommand | Description |
 |------------|-------------|
-| `loopback [--video]` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. `--video` replaces this with a separate, video-only loopback: an ffmpeg source is looped straight into an ffplay window. |
+| `loopback [--video]` | Mic → Opus → E2E-SRTP protect/unprotect → Opus → speaker. No WhatsApp connection — hear yourself processed by the full VoIP stack. `--video` replaces this with a separate, video-only loopback: an ffmpeg source is looped straight into an ffplay window with no E2E-SRTP step, unlike the audio path — it's a pipeline check for the capture/encode/render plumbing, not the video RTP/SRTP plane. |
 | `listen [accept] [--video]` | Connect to WhatsApp and print incoming calls. Rejects by default; pass `accept` to auto-answer. `--video` implies `accept` too (there's no point answering with video and then rejecting), and the accepted call answers with video media. |
 | `call <jid> [--video]` | Connect to WhatsApp and place an outgoing call to the given JID. With `--video` it's a video call from the start. |
 

@@ -533,7 +533,7 @@ For bots that don't need chat history, `skip_history_sync()` sends a receipt so 
 
 ### Per-Chat Lanes
 
-Prevents race conditions where a later message is processed before the PreKey message. Each chat gets a lane combining an enqueue lock and an **unbounded** channel into a single cached entry. Backpressure comes from capping the number of cached lanes rather than messages within a lane: the `chat_lanes` cache itself has a capacity (`chat_lanes_capacity`, default **5,000**) and evicts idle lanes once full — see the note below for what counts as idle:
+Prevents race conditions where a later message is processed before the PreKey message. Each chat gets a lane combining an enqueue lock and an **unbounded** channel into a single cached entry. Backpressure comes from capping the number of cached lanes rather than messages within a lane: the `chat_lanes` cache itself has a capacity (`chat_lanes_capacity`, default **5,000**) and evicts idle lanes once full. This is a soft cap — a lane with an in-flight message is protected from eviction (see the note below), so if every cached lane happens to be active at once, the map can briefly exceed capacity rather than evicting a live lane and letting a second worker start on the same chat:
 
 ```rust
 pub(crate) chat_lanes: Cache<Jid, ChatLane>,

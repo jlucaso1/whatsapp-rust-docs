@@ -235,7 +235,7 @@ handle.stop_video().await?; // Idempotent.
 | `handle.peer_jid()` | The peer's JID (needed for `terminate`) |
 | `handle.call_creator()` | The call creator's JID (needed for `terminate`) |
 | `handle.set_muted(true)` | Mute or unmute the local microphone |
-| `handle.start_video(source, sink).await` | Upgrade to video (we initiate); sends the video-upgrade offer and enables the media plane once the peer accepts |
+| `handle.start_video(source, sink).await` | Upgrade to video (we initiate); sends the video-upgrade offer and returns immediately. The media plane enables once the peer accepts — see Video I/O above |
 | `handle.accept_video(source, sink).await` | Accept the peer's pending video-upgrade request |
 | `handle.announce_video_enabled().await` | Send the standalone `Enabled` stanza that completes a `start_video` upgrade. `whatsapp-rust`'s standard `<call>` handler already does this automatically on the peer's `UpgradeAccept` — only call it yourself if you're driving call signaling outside that handler |
 | `handle.stop_video().await` | Downgrade to audio-only; idempotent |

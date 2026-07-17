@@ -45,7 +45,7 @@ tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 | `voip-libopus` | `voip-encoded` plus the optional libopus FFI adapter |
 | `voip` | `voip-mlow` + `voip-libopus` (the full, backward-compatible profile) |
 
-See the full table, including default/publish status, in [Installation](/installation#feature-flags). An application that already produces raw Opus packets (FFmpeg, libopus, a hardware encoder, …) needs only `voip-encoded` — no codec dependency is compiled in. See [Audio Codecs](#audio-codecs) below.
+See the full table, including default/publish status, in [Installation](/installation#feature-flags). An application that already produces raw Opus packets (FFmpeg, libopus, a hardware encoder, …) needs only `voip-encoded` — no codec dependency is compiled in. See [Audio codecs](#audio-codecs) below.
 
 ## Answering an Incoming Call
 
@@ -118,6 +118,10 @@ handle.wait_ended().await;
 
 You supply the audio I/O by implementing the `AudioSource` and `AudioSink` traits. Both traits are channel-based — the library reads from a `Receiver` and writes decoded PCM to a `Sender`. The bundled `examples/voip-cli/src/main.rs` wires up [cpal](https://crates.io/crates/cpal)/PipeWire as a reference.
 
+<Note>
+  This PCM path requires the `voip-mlow` feature (included in the default `voip` aggregate) — the engine encodes/decodes through the bundled MLOW codec. Built with only `voip-libopus` or plain `voip-encoded`, calling `.audio(...)` compiles but fails at call setup ("PCM MLOW audio requires the `voip-mlow` feature"). Use `.encoded_audio(...)` instead in that configuration — see [Audio codecs](#audio-codecs).
+</Note>
+
 The CLI exposes three subcommands, each accepting a trailing `--video`:
 
 | Subcommand | Description |
@@ -165,7 +169,7 @@ impl AudioSink for MySpeaker {
   The library owns the call key, relay handshake, codec, and crypto. You only provide mic input and speaker output.
 </Tip>
 
-## Audio Codecs
+## Audio codecs
 
 The PCM path above is the simplest way in: you hand over 16 kHz mono samples and the library runs its bundled MLOW codec. If you already produce or consume complete codec packets — from FFmpeg, libopus, a hardware encoder, or another Opus implementation — you can bypass MLOW and exchange raw packets through `encoded_audio`, added in [PR #1050](https://github.com/oxidezap/whatsapp-rust/pull/1050).
 
@@ -194,7 +198,7 @@ All current profiles signal `<audio enc="opus" rate="16000">` — the signaled r
 The source sends one complete raw codec packet per `Bytes`, paced every 60 ms. The sink receives the decrypted packet plus its RTP metadata:
 
 ```rust
-use bytes::Bytes;
+use whatsapp_rust::bytes::Bytes;
 use whatsapp_rust::voip::{AudioFormat, EncodedAudioFrame};
 
 let (encoded_tx, encoded_rx) = async_channel::bounded::<Bytes>(3);
@@ -217,7 +221,11 @@ let call = client
   Container data isn't accepted. Ogg pages from `ffmpeg -f opus` must be demuxed first, and FFmpeg RTP output must have its RTP header stripped — this core builds and protects the WhatsApp RTP packet itself. libavcodec integrations can hand each raw `AVPacket` straight through.
 </Warning>
 
-`OPUS_MLOW_16KHZ_60MS` requires CELT-only Opus. Run each outbound packet through `packetize_opus_for_mlow`; decode inbound packets with `depacketize_opus_from_mlow`. Both only rewrite the packet header — SILK/Hybrid Opus, or arbitrary Opus↔MLOW conversion, needs full decode/re-encode, which these helpers don't do.
+<Note>
+  `CallHandle::set_muted` only affects the built-in PCM path (`.audio(...)`) — it gates the mic feed before encoding. For `.encoded_audio(...)` calls, packets you push through `encoded_tx` are forwarded to the engine as-is; mute by pausing your own encoder or withholding packets, not by calling `set_muted`.
+</Note>
+
+`OPUS_MLOW_16KHZ_60MS` requires CELT-only Opus for packets you send: run each outbound packet through `packetize_opus_for_mlow` before pushing it to `encoded_tx`. On receive, a peer using this profile can still fall back to proprietary MLOW, so check each `EncodedAudioFrame`'s `codec` field first — only run `depacketize_opus_from_mlow` when `codec == AudioCodec::Opus`; frames with `codec == AudioCodec::Mlow` need an external MLOW decoder instead. Both packetize/depacketize helpers only rewrite the packet header — SILK/Hybrid Opus, or arbitrary Opus↔MLOW conversion, needs full decode/re-encode, which these helpers don't do.
 
 ### Negotiation
 
@@ -236,7 +244,11 @@ WA_AUDIO_CODEC=mlow cargo run -p whatsapp-rust-voip-cli --release -- listen acce
 WA_AUDIO_CODEC=opus cargo run -p whatsapp-rust-voip-cli --release -- listen accept
 ```
 
-`WA_AUDIO_PROFILE=pt111` selects the 48 kHz RTP variant instead of the PT120 default, and `WA_AUDIO_PROFILE=mlow` selects the CELT-in-MLOW escape.
+`WA_AUDIO_PROFILE` is read only when `WA_AUDIO_CODEC=opus` (it has no effect under the `mlow` default): `WA_AUDIO_PROFILE=pt111` selects the 48 kHz RTP variant instead of the PT120 default, and `WA_AUDIO_PROFILE=mlow` selects the CELT-in-MLOW escape — set both together:
+
+```bash
+WA_AUDIO_CODEC=opus WA_AUDIO_PROFILE=pt111 cargo run -p whatsapp-rust-voip-cli --release -- listen accept
+```
 
 ## Video I/O
 
@@ -360,7 +372,7 @@ The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket
 
 ## MLow Codec
 
-WhatsApp's voice codec ("MLow") is a heavily modified Opus variant. whatsapp-rust includes a **pure Rust** port — no FFI, no C library. It compiles to WASM and embedded targets alongside the rest of the crate and is pinned by a byte-exact golden roundtrip test. It's one of several codec profiles the engine supports; see [Audio Codecs](#audio-codecs) for the full list, native Opus, and the encoded-packet bypass.
+WhatsApp's voice codec ("MLow") is a heavily modified Opus variant. whatsapp-rust includes a **pure Rust** port — no FFI, no C library. It compiles to WASM and embedded targets alongside the rest of the crate and is pinned by a byte-exact golden roundtrip test. It's one of several codec profiles the engine supports; see [Audio codecs](#audio-codecs) for the full list, native Opus, and the encoded-packet bypass.
 
 The decoder operates at a single fixed point:
 
@@ -371,7 +383,7 @@ The decoder operates at a single fixed point:
 | Off-spec frames | Dropped (fail-loud, no desync) |
 
 <Tip>
-  MLOW is broadly compatible and pure Rust, but its analysis-by-synthesis encoder costs more CPU than native Opus. Native Opus avoids MLOW transcoding but a peer may still send proprietary MLOW, so an Opus-only application still needs an external MLOW decoder for that fallback (see `voip-mlow`'s `OPUS_MLOW_16KHZ_60MS` escape in [Audio Codecs](#audio-codecs)).
+  MLOW is broadly compatible and pure Rust, but its analysis-by-synthesis encoder costs more CPU than native Opus. Native Opus avoids MLOW transcoding but a peer may still send proprietary MLOW, so an Opus-only application still needs an external MLOW decoder for that fallback (see `voip-mlow`'s `OPUS_MLOW_16KHZ_60MS` escape in [Audio codecs](#audio-codecs)).
 </Tip>
 
 ## H.264 video plane

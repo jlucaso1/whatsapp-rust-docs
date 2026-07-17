@@ -221,7 +221,9 @@ let call = client
 
 ### Negotiation
 
-MLOW capability index 31 controls which codec the peer sends. A native-Opus answer clears that bit and adds a minimal settings overlay: `encode.use_mlow_codec_v1=false` selects the peer's decoder for the reverse direction, and `options.enable_48khz_rtp_clock` independently selects PT111/48 kHz (`false` is the PT120/16 kHz default). Both are required together for full-duplex native Opus.
+MLOW capability index 31 controls which codec the peer sends. A native-Opus answer clears that bit and adds `encode.use_mlow_codec_v1=false` to select the peer's decoder for the reverse direction — clearing the capability bit and setting `use_mlow_codec_v1=false` are both required together for full-duplex native Opus.
+
+`options.enable_48khz_rtp_clock` is a separate, independent setting: `true` selects PT111/48 kHz, `false` (the default) selects PT120/16 kHz.
 
 An incoming call rejects a locally selected rate that's absent from the peer's offer, and a later incompatible preaccept/accept emits `CallEvent::AudioFormatMismatch` and terminates the call. Codec detection never overrides the negotiated RTP profile.
 

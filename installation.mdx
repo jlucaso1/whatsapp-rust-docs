@@ -101,9 +101,10 @@ whatsapp-rust supports several optional features:
 | `tracing-pii` | Render raw phone numbers in `tracing` fields instead of redacted `pn#<token>`. Local debugging only — never enable in production | ❌ No |
 | `metrics` | Emit `wa_*` counters, histograms, and gauges through the [`metrics`](https://docs.rs/metrics) facade for Prometheus/OTLP dashboards. See [Metrics](/advanced/metrics) | ❌ No |
 | `voip` | 1:1 voice and video calls, full profile: bundled MLow + libopus codec adapters, codec-neutral H.264 video plane, E2E-SRTP encryption, relay transport. Alias for `voip-mlow` + `voip-libopus`. **Requires git source — not in published 0.6** (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
-| `voip-encoded` | Narrower `voip` profile: relay transport and encoded-audio boundary only, no bundled codec — supply raw Opus/MLOW packets from your own encoder/decoder | ❌ No |
-| `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW codec | ❌ No |
-| `voip-libopus` | `voip-encoded` plus the optional libopus FFI codec adapter | ❌ No |
+| `voip-runtime` | Internal base feature enabled by every `voip-*` feature below (Tokio driver, relay transport, DTLS/SCTP). Not meant to be named directly — pick `voip-encoded` or a codec feature instead. **Requires git source — not in published 0.6** | ❌ No |
+| `voip-encoded` | Narrower `voip` profile: relay transport and encoded-audio boundary only, no bundled codec — supply raw Opus/MLOW packets from your own encoder/decoder. **Requires git source — not in published 0.6** | ❌ No |
+| `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW codec. **Requires git source — not in published 0.6** | ❌ No |
+| `voip-libopus` | `voip-encoded` plus the optional libopus FFI codec adapter. **Requires git source — not in published 0.6** | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 

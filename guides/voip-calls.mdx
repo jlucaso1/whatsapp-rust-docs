@@ -39,13 +39,13 @@ tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 
 | Feature | Contents |
 |---------|----------|
-| `voip-runtime` | Tokio driver, relay transport, DTLS/SCTP — no audio codec |
+| `voip-runtime` | Tokio driver, relay transport, DTLS/SCTP — no audio codec. Internal base feature; you'll normally reach for `voip-encoded` or a codec feature below instead of naming this one directly |
 | `voip-encoded` | `voip-runtime` plus the encoded-audio boundary (`encoded_audio`, `AudioFormat`) — bring your own codec, nothing extra linked |
 | `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW adapter |
 | `voip-libopus` | `voip-encoded` plus the optional libopus FFI adapter |
 | `voip` | `voip-mlow` + `voip-libopus` (the full, backward-compatible profile) |
 
-An application that already produces raw Opus packets (FFmpeg, libopus, a hardware encoder, …) needs only `voip-encoded` — no codec dependency is compiled in. See [Audio Codecs](#audio-codecs) below.
+See the full table, including default/publish status, in [Installation](/installation#feature-flags). An application that already produces raw Opus packets (FFmpeg, libopus, a hardware encoder, …) needs only `voip-encoded` — no codec dependency is compiled in. See [Audio Codecs](#audio-codecs) below.
 
 ## Answering an Incoming Call
 
@@ -206,6 +206,9 @@ let call = client
     .encoded_audio(AudioFormat::OPUS_16KHZ_60MS, encoded_rx, playout_tx)
     .start()
     .await?;
+
+// Feed your encoder's output in: encoded_tx.send(packet).await?; (one raw Opus packet per Bytes)
+// Drain decoded frames for playback: while let Ok(frame) = playout_rx.recv().await { play(frame.payload) }
 ```
 
 `AcceptCall` (from `client.voip().accept(&incoming)`) has the same `.encoded_audio(format, source, sink)` builder method alongside `.audio(source, sink)`.

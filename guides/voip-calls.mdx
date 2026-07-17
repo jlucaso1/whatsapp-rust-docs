@@ -212,13 +212,13 @@ let call = client
     .await?;
 
 // Feed your encoder's output in: encoded_tx.send(packet).await?; (one raw Opus packet per Bytes)
-// Drain decoded frames for playback: while let Ok(frame) = playout_rx.recv().await { play(frame.payload) }
+// Drain decoded frames for playback: while let Ok(frame) = playout_rx.recv().await { play(frame.data) }
 ```
 
 `AcceptCall` (from `client.voip().accept(&incoming)`) has the same `.encoded_audio(format, source, sink)` builder method alongside `.audio(source, sink)`.
 
 <Warning>
-  Container data isn't accepted. Ogg pages from `ffmpeg -f opus` must be demuxed first, and FFmpeg RTP output must have its RTP header stripped — this core builds and protects the WhatsApp RTP packet itself. libavcodec integrations can hand each raw `AVPacket` straight through.
+  Container data isn't accepted. Ogg pages from `ffmpeg -f opus` must be demuxed first, and FFmpeg RTP output must have its RTP header stripped — this core builds and protects the WhatsApp RTP packet itself. The engine advances the RTP clock by the selected `AudioFormat`'s fixed step on every `Bytes` it receives, so the encoder must actually be configured for that format's 60 ms frame duration — pushing a shorter-duration `AVPacket` (e.g. libavcodec's default 20 ms Opus frames) straight through desyncs timestamps from real audio content. Once the encoder is configured for 60 ms frames, libavcodec integrations can hand each raw `AVPacket` through unmodified.
 </Warning>
 
 <Note>

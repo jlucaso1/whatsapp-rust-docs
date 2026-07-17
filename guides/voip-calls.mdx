@@ -16,7 +16,7 @@ Video is **codec-neutral**: you hand the library complete H.264 Annex-B access u
 ## Enabling the feature
 
 <Warning>
-  The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) (audio) and [PR #1024](https://github.com/oxidezap/whatsapp-rust/pull/1024) (video) and will be included in the next published release. Until then, depend on the git source:
+  The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) (audio), [PR #1024](https://github.com/oxidezap/whatsapp-rust/pull/1024) (video), and [PR #1050](https://github.com/oxidezap/whatsapp-rust/pull/1050) (encoded audio + native Opus, and the feature split below) and will be included in the next published release. Until then, depend on the git source:
 </Warning>
 
 ```toml
@@ -34,6 +34,18 @@ whatsapp-rust = { version = "0.7", features = ["voip"] }  # update when released
 async-channel = "2"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
 ```
+
+`voip` is a backward-compatible aggregate for `voip-mlow` + `voip-libopus` — both codec adapters linked in. If you only need one codec, or you exchange codec packets with an external encoder/decoder, pick a narrower feature instead:
+
+| Feature | Contents |
+|---------|----------|
+| `voip-runtime` | Tokio driver, relay transport, DTLS/SCTP — no audio codec |
+| `voip-encoded` | `voip-runtime` plus the encoded-audio boundary (`encoded_audio`, `AudioFormat`) — bring your own codec, nothing extra linked |
+| `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW adapter |
+| `voip-libopus` | `voip-encoded` plus the optional libopus FFI adapter |
+| `voip` | `voip-mlow` + `voip-libopus` (the full, backward-compatible profile) |
+
+An application that already produces raw Opus packets (FFmpeg, libopus, a hardware encoder, …) needs only `voip-encoded` — no codec dependency is compiled in. See [Audio Codecs](#audio-codecs) below.
 
 ## Answering an Incoming Call
 
@@ -153,6 +165,74 @@ impl AudioSink for MySpeaker {
   The library owns the call key, relay handshake, codec, and crypto. You only provide mic input and speaker output.
 </Tip>
 
+## Audio Codecs
+
+The PCM path above is the simplest way in: you hand over 16 kHz mono samples and the library runs its bundled MLOW codec. If you already produce or consume complete codec packets — from FFmpeg, libopus, a hardware encoder, or another Opus implementation — you can bypass MLOW and exchange raw packets through `encoded_audio`, added in [PR #1050](https://github.com/oxidezap/whatsapp-rust/pull/1050).
+
+```text
+PCM source ── MLOW adapter ──┐
+                             ├── RTP + SRTP/WARP ── WhatsApp relay
+encoded source/sink ─────────┘
+```
+
+The encoded boundary does not transcode — `AudioFormat` fixes the codec profile, RTP payload type, RTP clock, and 60 ms packet cadence for the whole call.
+
+### Profiles
+
+| Format | Codec | PCM | RTP clock / step | PT |
+|--------|-------|----:|------------------:|---:|
+| `AudioFormat::MLOW_16KHZ_60MS` | MLOW | 16 kHz mono | 16 kHz / 960 | 120 |
+| `AudioFormat::OPUS_MLOW_16KHZ_60MS` | Opus CELT-in-MLOW | 16 kHz mono | 16 kHz / 960 | 120 |
+| `AudioFormat::OPUS_16KHZ_60MS` | Native Opus | 16 kHz mono | 16 kHz / 960 | 120 |
+| `AudioFormat::OPUS_RFC7587_16KHZ_60MS` | Native Opus | 16 kHz mono | 48 kHz / 2880 | 111 |
+| `AudioFormat::OPUS_RFC7587_48KHZ_60MS` | Native Opus | 48 kHz mono | 48 kHz / 2880 | 111 |
+
+All current profiles signal `<audio enc="opus" rate="16000">` — the signaled rate alone doesn't pick the RTP profile. PT120/16 kHz is the production default; PT111/48 kHz is an explicit variant.
+
+### Encoded API
+
+The source sends one complete raw codec packet per `Bytes`, paced every 60 ms. The sink receives the decrypted packet plus its RTP metadata:
+
+```rust
+use bytes::Bytes;
+use whatsapp_rust::voip::{AudioFormat, EncodedAudioFrame};
+
+let (encoded_tx, encoded_rx) = async_channel::bounded::<Bytes>(3);
+let (playout_tx, playout_rx) = async_channel::bounded::<EncodedAudioFrame>(3);
+
+let call = client
+    .voip()
+    .call(&peer)
+    .encoded_audio(AudioFormat::OPUS_16KHZ_60MS, encoded_rx, playout_tx)
+    .start()
+    .await?;
+```
+
+`AcceptCall` (from `client.voip().accept(&incoming)`) has the same `.encoded_audio(format, source, sink)` builder method alongside `.audio(source, sink)`.
+
+<Warning>
+  Container data isn't accepted. Ogg pages from `ffmpeg -f opus` must be demuxed first, and FFmpeg RTP output must have its RTP header stripped — this core builds and protects the WhatsApp RTP packet itself. libavcodec integrations can hand each raw `AVPacket` straight through.
+</Warning>
+
+`OPUS_MLOW_16KHZ_60MS` requires CELT-only Opus. Run each outbound packet through `packetize_opus_for_mlow`; decode inbound packets with `depacketize_opus_from_mlow`. Both only rewrite the packet header — SILK/Hybrid Opus, or arbitrary Opus↔MLOW conversion, needs full decode/re-encode, which these helpers don't do.
+
+### Negotiation
+
+MLOW capability index 31 controls which codec the peer sends. A native-Opus answer clears that bit and adds a minimal settings overlay: `encode.use_mlow_codec_v1=false` selects the peer's decoder for the reverse direction, and `options.enable_48khz_rtp_clock` independently selects PT111/48 kHz (`false` is the PT120/16 kHz default). Both are required together for full-duplex native Opus.
+
+An incoming call rejects a locally selected rate that's absent from the peer's offer, and a later incompatible preaccept/accept emits `CallEvent::AudioFormatMismatch` and terminates the call. Codec detection never overrides the negotiated RTP profile.
+
+### CLI reference
+
+The bundled CLI (`examples/voip-cli`) picks its codec from an environment variable:
+
+```bash
+WA_AUDIO_CODEC=mlow cargo run -p whatsapp-rust-voip-cli --release -- listen accept
+WA_AUDIO_CODEC=opus cargo run -p whatsapp-rust-voip-cli --release -- listen accept
+```
+
+`WA_AUDIO_PROFILE=pt111` selects the 48 kHz RTP variant instead of the PT120 default, and `WA_AUDIO_PROFILE=mlow` selects the CELT-in-MLOW escape.
+
 ## Video I/O
 
 Video works the same way, one layer up: you supply `VideoSource` and `VideoSink` implementations that hand the library complete **H.264 Annex-B access units** (start codes included). The library never touches pixels — encoding and decoding are entirely your consumer's responsibility (the CLI example shells out to `ffmpeg`/`ffplay`).
@@ -259,21 +339,23 @@ The library handles multi-device call scenarios automatically:
 The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket, clock, or thread. You feed it relay packets, mic frames, camera access units, and timer ticks; it emits transmit packets, playout PCM/video frames, call events, and the next deadline.
 
 <Warning>
-  **Platform support depends on which crate you use:**
+  **Platform support depends on which crate and feature you use:**
 
-  - `wacore` with `features = ["voip"]` — pure Rust (MLow codec, H.264 RTP media plane, SRTP crypto, `CallEngine`). No FFI. Compiles to WASM and embedded targets (esp32).
-  - `whatsapp-rust` with `features = ["voip"]` — adds the Tokio async driver, webrtc-rs (DTLS/SCTP), and libopus FFI. **This will not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
+  - `wacore` with `features = ["voip"]` — pure Rust (H.264 RTP media plane, SRTP crypto, encoded-audio boundary, `CallEngine`). No FFI, no bundled audio codec. Compiles to WASM and embedded targets (esp32).
+  - `wacore` with `features = ["voip-mlow"]` — adds the pure-Rust MLOW codec on top of `voip`. Still no FFI; still compiles to WASM/esp32.
+  - `whatsapp-rust` with `features = ["voip-encoded"]` — adds the Tokio async driver and webrtc-rs (DTLS/SCTP), no audio codec linked. **Does not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
+  - `whatsapp-rust` with `features = ["voip-mlow"]` / `["voip-libopus"]` / `["voip"]` — `voip-encoded` plus the corresponding codec adapter(s). Same platform restriction as `voip-encoded`.
 </Warning>
 
 | Target | Supported crate |
 |--------|-----------------|
-| Tokio (servers, desktop) | `whatsapp-rust` with `voip` |
-| WebAssembly (browser) | `wacore` with `voip` + `js` (sans-IO only; `js` enables WASM-compatible random number generation — see [Installation](/installation)) |
-| Embedded (esp32) | `wacore` with `voip` (sans-IO only) |
+| Tokio (servers, desktop) | `whatsapp-rust` with `voip`, or a narrower `voip-*` feature — see [Enabling the feature](#enabling-the-feature) |
+| WebAssembly (browser) | `wacore` with `voip` (+ `voip-mlow` for the bundled codec) and `js` (sans-IO only; `js` enables WASM-compatible random number generation — see [Installation](/installation)) |
+| Embedded (esp32) | `wacore` with `voip` (+ `voip-mlow` for the bundled codec), sans-IO only |
 
 ## MLow Codec
 
-WhatsApp's voice codec ("MLow") is a heavily modified Opus variant. whatsapp-rust includes a **pure Rust** port — no FFI, no C library. It compiles to WASM and embedded targets alongside the rest of the crate and is pinned by a byte-exact golden roundtrip test.
+WhatsApp's voice codec ("MLow") is a heavily modified Opus variant. whatsapp-rust includes a **pure Rust** port — no FFI, no C library. It compiles to WASM and embedded targets alongside the rest of the crate and is pinned by a byte-exact golden roundtrip test. It's one of several codec profiles the engine supports; see [Audio Codecs](#audio-codecs) for the full list, native Opus, and the encoded-packet bypass.
 
 The decoder operates at a single fixed point:
 
@@ -282,6 +364,10 @@ The decoder operates at a single fixed point:
 | Sample rate | 16 kHz wideband |
 | Frame duration | 60 ms (960 samples) |
 | Off-spec frames | Dropped (fail-loud, no desync) |
+
+<Tip>
+  MLOW is broadly compatible and pure Rust, but its analysis-by-synthesis encoder costs more CPU than native Opus. Native Opus avoids MLOW transcoding but a peer may still send proprietary MLOW, so an Opus-only application still needs an external MLOW decoder for that fallback (see `voip-mlow`'s `OPUS_MLOW_16KHZ_60MS` escape in [Audio Codecs](#audio-codecs)).
+</Tip>
 
 ## H.264 video plane
 

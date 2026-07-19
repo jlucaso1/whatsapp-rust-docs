@@ -635,7 +635,9 @@ pub mod video_message {
 ```
 
 <Note>
-buffa generates a **closed** enum: an unrecognized wire value decodes to `None` rather than being preserved, unlike the old prost-generated `Option<i32>` fields which round-tripped any integer. In practice WhatsApp only ever sends in-schema values, so this only matters for forward compatibility with brand-new server-side enum variants.
+buffa generates a **closed** enum by default: an unrecognized wire value decodes to `None` rather than being preserved, unlike the old prost-generated `Option<i32>` fields which round-tripped any integer. In practice WhatsApp only ever sends in-schema values, so this only matters for forward compatibility with brand-new server-side enum variants.
+
+`SyncdMutation.operation` (`SyncdOperation`) is the one deliberate exception: `build.rs` opts it into buffa's **open** enum mode, so the field type is `Option<buffa::EnumValue<SyncdOperation>>` instead of `Option<SyncdOperation>`. An unrecognized wire value decodes to `EnumValue::Unknown(n)` rather than `None`. `wacore_appstate`'s `process_patch` rejects an unknown operation with a typed `AppStateError::UnsupportedSyncdOperation` before mutating any state, instead of silently treating it as `SET` and corrupting the app-state LTHash — which is what the previous closed-enum decode did.
 </Note>
 
 ## Feature flags
@@ -728,10 +730,12 @@ The history-sync wire walkers use these constants internally, and compile-time `
 
 ## Code generation
 
-The build generates protobuf code — `build.rs` always runs. It reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256 against `src/whatsapp.desc.sha256`, snake_cases the proto's upstream camelCase field names for the Rust API, and hands the result to `buffa-build`, writing two files into `OUT_DIR`:
+The build generates protobuf code — `build.rs` always runs. It reads the committed binary descriptor (`src/whatsapp.desc`), verifies its SHA-256 against `src/whatsapp.desc.sha256`, and hands it to `buffa-build`, writing two files into `OUT_DIR`:
 
 - **`whatsapp.rs`** — full buffa-generated structs and enums, including zero-copy view types
 - **`tags.rs`** — `waproto::tags` field-number constants (see [waproto::tags](#waprototags) above)
+
+`whatsapp.proto` stays in its upstream camelCase form; `buffa-build`'s `idiomatic_field_names` option converts field and oneof identifiers to snake_case Rust idents at codegen time (word boundaries match `heck`/prost), so the generated API keeps the prost-style names build.rs used to produce by hand. `buffa-descriptor` and `heck` remain build dependencies — they back the `waproto::tags` generation described above, which reads the original (camelCase) descriptor directly.
 
 Neither generated file is committed. `buffa-build`, `buffa-descriptor`, `heck`, and `sha2` are unconditional build dependencies. `protoc` is only needed to regenerate the descriptor after editing `whatsapp.proto` — normal builds of `waproto` (or anything depending on it) never invoke `protoc`.
 

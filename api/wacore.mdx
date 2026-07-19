@@ -314,6 +314,8 @@ where
     F: for<'a> FnMut(HistoryMsgSecretRecordRef<'a>) -> bool
 ```
 
+`own_user` scopes `from_me` classification to the local account's JID (pass `None` if that check should be skipped). `retain_blob` controls whether the returned `HistorySyncResult` keeps a `Bytes` handle on the original compressed input (`compressed_bytes`, consumed by `LazyHistorySync`) — pass `false` to drop it immediately after parsing.
+
 `process_history_sync_bytes` is a `Bytes`-based sibling of `process_history_sync` (unchanged) — both accept every record. `process_history_sync_bytes_filtered` additionally takes a `record_filter` predicate that runs against a borrowed `HistoryMsgSecretRecordRef<'a>` before its owned `HistoryMsgSecretRecord` counterpart is allocated, so a caller that owns a retention policy (for example, dropping records outside a retention window) can reject them without paying for materialization:
 
 ```rust

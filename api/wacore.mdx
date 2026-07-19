@@ -295,7 +295,7 @@ impl SecretBytes {
 
 Implements `Deref<Target=[u8]>`, `From<&[u8]>`, `From<Vec<u8>>`, `PartialEq`, `Eq`, and `Debug`. Use `as_slice()` or deref for reads; `into_vec()` to convert to `Vec<u8>`.
 
-For streaming ingestion, `wacore::history_sync` also exports:
+For `Bytes`-owned input, `wacore::history_sync` also exports:
 
 ```rust
 pub fn process_history_sync_bytes(
@@ -784,7 +784,7 @@ The library includes several allocation-reduction strategies that the integratio
 - **Inline attribute storage** — `Attrs` uses `AttrsVec` (`SmallVec<[...; 2]>`) instead of `Vec`. Nodes with ≤2 attributes (the common per-recipient fanout shapes `to` and `enc`) keep their attributes on the stack alongside the node, eliminating the per-node allocation for attribute storage. Allocation count: −27% per DM stanza (15→11 allocs); −40% for group fanout with 800 participants (4012→2412 allocs)
 - **Secret-presence pre-scan in history sync** — before buffa decodes a `HistorySyncMsg` (30+ fields, String allocations), a shallow varint walk checks whether the message carries `message_secret` at any level. Messages without a secret are skipped entirely. Bench (20k messages, secret-dense fixture): −29.5% allocations (56,020 → 39,520), −4.3% allocated bytes. Production blobs are secret-sparse so the saving is larger in practice
 - **Inline storage in `HistoryMsgSecretRecord`** — `chat_id` is `Arc<str>` (allocated once per conversation, shared across all records in that conversation), `msg_id` is `CompactString` (inline for typical 20–22 char WA IDs on 64-bit targets; smaller inline limit on 32-bit/wasm32), and `secret` is `SecretBytes` (inline for secrets ≤32 bytes, heap for larger)
-- **Filter-before-materialize in history sync** — `process_history_sync_bytes_filtered` runs a caller-supplied retention predicate against a borrowed [`HistoryMsgSecretRecordRef`](#history-sync-types) before the owned `HistoryMsgSecretRecord` is built; a rejected record is never materialized. Bench (500-conversation blob): allocation churn 21.61 MiB → 14.00 MiB, allocation count ~84k → ~26k
+- **Filter-before-materialize in history sync** — `process_history_sync_bytes_filtered` runs a caller-supplied retention predicate against a borrowed [`HistoryMsgSecretRecordRef`](#history_sync-types) before the owned `HistoryMsgSecretRecord` is built; a rejected record is never materialized. Bench (500-conversation blob): allocation churn 21.61 MiB → 14.00 MiB, allocation count ~84k → ~26k
 - **Borrowed JID parsing** — [`jid::parse_jid_ref`](#wacore-binary) parses common protocol JIDs into a `JidRef` with zero allocation, falling back to `Jid`'s owned parser only for edge cases. Cut allocations 4,093 → 97 in the history-sync task's JID classification path
 - **In-place buffered media decrypt** — non-streaming `HttpClient` downloads now authenticate the already-buffered response body and decrypt AES-256-CBC in place (`DownloadUtils::verify_and_decrypt_in_place`, see [download](/api/download#downloadutils)), truncating the MAC/padding tail instead of allocating a second file-sized output buffer. Streaming clients are unaffected. Buffered download/decrypt span: 4.355 MiB → 2.146 MiB
 

@@ -475,6 +475,7 @@ use whatsapp_rust::download::DownloadUtils;
 | Method | Description |
 |--------|-------------|
 | `verify_and_decrypt(encrypted_payload, media_key, media_type)` | Verifies HMAC and decrypts AES-256-CBC in one call |
+| `verify_and_decrypt_in_place(encrypted_payload, media_key, media_type)` | In-place counterpart to `verify_and_decrypt` — authenticates and decrypts into the same buffer, truncating the trailing MAC/padding, instead of allocating a separate output. Used internally by non-streaming downloads to avoid keeping two file-sized buffers alive at once |
 | `decrypt_stream(reader, media_key, media_type)` | Streaming decryption from a reader (convenience wrapper around `decrypt_stream_to_writer`) |
 | `decrypt_stream_to_writer(reader, media_key, media_type, writer)` | Streaming decryption directly into a writer with constant memory usage |
 | `validate_plaintext_sha256(data, expected_sha256)` | Validates SHA-256 hash of plaintext media (in-memory) |

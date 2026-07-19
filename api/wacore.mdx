@@ -295,6 +295,46 @@ impl SecretBytes {
 
 Implements `Deref<Target=[u8]>`, `From<&[u8]>`, `From<Vec<u8>>`, `PartialEq`, `Eq`, and `Debug`. Use `as_slice()` or deref for reads; `into_vec()` to convert to `Vec<u8>`.
 
+For `Bytes`-owned input, `wacore::history_sync` also exports:
+
+```rust
+pub fn process_history_sync_bytes(
+    compressed_data: Bytes,
+    own_user: Option<&str>,
+    retain_blob: bool,
+) -> Result<HistorySyncResult, HistorySyncError>
+
+pub fn process_history_sync_bytes_filtered<F>(
+    compressed_data: Bytes,
+    own_user: Option<&str>,
+    retain_blob: bool,
+    record_filter: F,
+) -> Result<HistorySyncResult, HistorySyncError>
+where
+    F: for<'a> FnMut(HistoryMsgSecretRecordRef<'a>) -> bool
+```
+
+`own_user` scopes `from_me` classification to the local account's JID (pass `None` if that check should be skipped). `retain_blob` controls whether the returned `HistorySyncResult` keeps a `Bytes` handle on the original compressed input (`compressed_bytes`, consumed by `LazyHistorySync`) — pass `false` to drop it immediately after parsing.
+
+`process_history_sync_bytes` is a `Bytes`-based sibling of `process_history_sync` (unchanged) — both accept every record. `process_history_sync_bytes_filtered` additionally takes a `record_filter` predicate that runs against a borrowed `HistoryMsgSecretRecordRef<'a>` before its owned `HistoryMsgSecretRecord` counterpart is allocated, so a caller that owns a retention policy (for example, dropping records outside a retention window) can reject them without paying for materialization:
+
+```rust
+pub struct HistoryMsgSecretRecordRef<'a> {
+    pub conversation_index: usize,
+    pub chat_id: &'a str,
+    pub from_me: bool,
+    pub key_participant: Option<&'a str>,
+    pub web_msg_participant: Option<&'a str>,
+    pub msg_id: &'a str,
+    pub secret: &'a [u8],
+    pub timestamp: Option<u64>,
+    pub is_poll_or_event: bool,
+    pub is_bot_invocation: bool,
+}
+```
+
+`conversation_index` is a zero-based counter shared across records from the same conversation, letting a filter cache per-conversation classification instead of recomputing it per record. See [Architecture — RAM optimization layers](/concepts/architecture#ram-optimization-layers) for the measured allocation win.
+
 ### Time
 
 ```rust
@@ -483,7 +523,7 @@ let decoded = unmarshal_ref(&bytes)?;
 
 **Key exports:**
 - `CompactString` - Re-export of `compact_str::CompactString`, used by `Jid.user`, `NodeValue::String`, and `NodeContent::String`
-- `jid::{Jid, JidRef, Server, JidExt}` - WhatsApp JID types. `Server` is an enum (`#[repr(u8)]`) with variants for all known WhatsApp server domains (`Pn`, `Lid`, `Group`, `Broadcast`, `Newsletter`, `Hosted`, `HostedLid`, `Messenger`, `Interop`, `Bot`, `Legacy`). `JidExt` provides helper methods (`is_group()`, `is_newsletter()`, etc.) for both owned and borrowed JID types
+- `jid::{Jid, JidRef, Server, JidExt}` - WhatsApp JID types. `Server` is an enum (`#[repr(u8)]`) with variants for all known WhatsApp server domains (`Pn`, `Lid`, `Group`, `Broadcast`, `Newsletter`, `Hosted`, `HostedLid`, `Messenger`, `Interop`, `Bot`, `Legacy`). `JidExt` provides helper methods (`is_group()`, `is_newsletter()`, etc.) for both owned and borrowed JID types. `jid::parse_jid_ref(s: &str) -> Option<JidRef<'_>>` parses the common user/group/LID/bot shapes directly into a borrowed `JidRef` with no allocation; it returns `None` for edge cases the compatibility fallback handles, so callers that need those cases parse via `s.parse::<Jid>()` instead. `Jid`'s own `FromStr` impl is built on top of `parse_jid_ref`
 - `node::{Node, NodeRef, NodeStr, NodeValue, ValueRef, OwnedNodeRef, AttrsVec}` - Protocol node types. `Node` (owned) for building outgoing stanzas, `NodeRef` (borrowed) for reading received stanzas, `NodeStr` for borrowed-or-inline decoded strings, `OwnedNodeRef` for yoke-based zero-copy self-referential nodes shared as `Arc<OwnedNodeRef>`. `AttrsVec` is `SmallVec<[(Cow<'static, str>, NodeValue); 2]>`, the inline-capable backing store for `Attrs` (≤2 attrs stay on the stack; see [Binary Protocol](/advanced/binary-protocol#inline-attribute-storage)). The entire `NodeRef` type family (`NodeRef`, `NodeStr`, `ValueRef`, `JidRef`, `NodeContentRef`, `OwnedNodeRef`) implements `serde::Serialize`, producing output identical to their owned counterparts — enabling zero-copy serialization without converting to `Node` first
 - `builder::NodeBuilder` - Fluent node builder with `new(&'static str)` / `new_dynamic(String)`, `attr()`, `jid_attr()`, `children()`, `bytes()`, `string_content()`, and `apply_content()` chaining methods
 - `marshal::*` - Binary marshaling functions
@@ -746,6 +786,9 @@ The library includes several allocation-reduction strategies that the integratio
 - **Inline attribute storage** — `Attrs` uses `AttrsVec` (`SmallVec<[...; 2]>`) instead of `Vec`. Nodes with ≤2 attributes (the common per-recipient fanout shapes `to` and `enc`) keep their attributes on the stack alongside the node, eliminating the per-node allocation for attribute storage. Allocation count: −27% per DM stanza (15→11 allocs); −40% for group fanout with 800 participants (4012→2412 allocs)
 - **Secret-presence pre-scan in history sync** — before buffa decodes a `HistorySyncMsg` (30+ fields, String allocations), a shallow varint walk checks whether the message carries `message_secret` at any level. Messages without a secret are skipped entirely. Bench (20k messages, secret-dense fixture): −29.5% allocations (56,020 → 39,520), −4.3% allocated bytes. Production blobs are secret-sparse so the saving is larger in practice
 - **Inline storage in `HistoryMsgSecretRecord`** — `chat_id` is `Arc<str>` (allocated once per conversation, shared across all records in that conversation), `msg_id` is `CompactString` (inline for typical 20–22 char WA IDs on 64-bit targets; smaller inline limit on 32-bit/wasm32), and `secret` is `SecretBytes` (inline for secrets ≤32 bytes, heap for larger)
+- **Filter-before-materialize in history sync** — `process_history_sync_bytes_filtered` runs a caller-supplied retention predicate against a borrowed [`HistoryMsgSecretRecordRef`](#history_sync-types) before the owned `HistoryMsgSecretRecord` is built; a rejected record is never materialized. Bench (500-conversation blob, upstream PR's rejection-heavy fixture): allocation churn 21.61 MiB → 14.00 MiB, allocation count ~84k → ~26k. The reduction scales with how much of the record set the predicate rejects — the default `process_history_sync_bytes` (accept-all) sees none of it
+- **Borrowed JID parsing** — [`jid::parse_jid_ref`](#wacore-binary) parses common protocol JIDs into a `JidRef` with zero allocation, falling back to `Jid`'s owned parser only for edge cases. Cut allocations 4,093 → 97 in the history-sync task's JID classification path
+- **In-place buffered media decrypt** — non-streaming `HttpClient` downloads now authenticate the already-buffered response body and decrypt AES-256-CBC in place (`DownloadUtils::verify_and_decrypt_in_place`, see [download](/api/download#downloadutils)), truncating the MAC/padding tail instead of allocating a second file-sized output buffer. Streaming clients are unaffected. Buffered download/decrypt span: 4.355 MiB → 2.146 MiB
 
 ### CI integration
 

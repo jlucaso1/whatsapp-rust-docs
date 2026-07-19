@@ -680,7 +680,7 @@ Protobuf's field-tagged wire format tolerates additive changes (adding or reorde
 No manual migration is needed. The storage layer self-heals lazily on first startup after upgrade:
 
 - A BLOB that cannot be decoded as protobuf (a legacy bincode row or genuine corruption) is treated as **absent** rather than an error.
-- App-state sync keys: the client re-requests the missing key from the primary device, which re-shares it. The next `set_sync_key` call overwrites the row in protobuf format.
+- App-state sync keys: the client discovers the account's other devices and requests the missing key from all of them concurrently, falling back to the primary alone if device discovery fails or returns none, bounded by the same 10-second recovery budget as an active waiter. Whichever device replies first triggers the next `set_sync_key` call, which overwrites the row in protobuf format.
 - App-state versions: the collection resets to version 0 and re-syncs from the server. The first `set_version` call overwrites the row in protobuf format.
 - Server cert chain: rebuilt on the next Noise XX handshake. The following `save_device_data` call overwrites the row in protobuf format.
 

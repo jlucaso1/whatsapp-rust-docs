@@ -1212,14 +1212,15 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:160-172`
 
 ### Self-only protocol message gating
 
-`app_state_sync_key_share` and `history_sync_notification` are protocol messages WhatsApp Web treats as "self-only": they only carry meaning when delivered from your own account to another of your linked devices. v0.6 hardens `handle_decrypted_plaintext` so that incoming copies of these two messages are dropped unless `MessageInfo.source.is_from_me` is `true`, matching WA Web's `WAWebKeyManagementHandleKeyShareApi` and whatsmeow's gating.
+`app_state_sync_key_share`, `app_state_sync_key_request`, and `history_sync_notification` are protocol messages WhatsApp Web treats as "self-only": they only carry meaning when delivered from your own account to another of your linked devices. v0.6 hardens `handle_decrypted_plaintext` so that incoming copies of these messages are dropped unless `MessageInfo.source.is_from_me` is `true`, matching WA Web's `WAWebKeyManagementHandleKeyShareApi` and whatsmeow's gating.
 
 The consequences if the gate is missing:
 
 - A spoofed `app_state_sync_key_share` from a peer would let an attacker inject an app-state encryption key, leading to attacker-controlled mutations of your contacts, blocklist, archive state, etc.
+- A spoofed `app_state_sync_key_request` from a peer would make the client share its app-state encryption keys with an attacker instead of only with the account's own companion devices.
 - A spoofed `history_sync_notification` would point the client at attacker-supplied media for ingestion as your own history.
 
-If you implement a custom message dispatcher, replicate this `is_from_me` check before honoring either protocol message. Other protocol-message types (`REVOKE`, `EPHEMERAL_SETTING`, `MESSAGE_EDIT`, …) keep their existing semantics.
+If you implement a custom message dispatcher, replicate this `is_from_me` check before honoring any of these protocol messages. Other protocol-message types (`REVOKE`, `EPHEMERAL_SETTING`, `MESSAGE_EDIT`, …) keep their existing semantics.
 
 Location: `src/message.rs` (`handle_decrypted_plaintext`)
 

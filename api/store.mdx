@@ -360,7 +360,7 @@ async fn put_msg_secret(
     chat: &str,
     sender: &str,
     msg_id: &str,
-    secret: &[u8],
+    secret: &[u8; 32], // MessageSecret, the protocol-fixed message-secret size
 ) -> Result<()>;
 
 /// Batch upsert. Each MsgSecretEntry carries its own absolute expires_at
@@ -390,7 +390,24 @@ async fn get_msg_secret_with_ts(
 async fn delete_expired_msg_secrets(&self, cutoff_timestamp: i64) -> Result<u32>;
 ```
 
-`MsgSecretEntry` is `{ chat, sender, msg_id, secret, expires_at, message_ts }`. The SQLite table is:
+`get_msg_secret` and `get_msg_secret_with_ts` still return `Vec<u8>` rather than `MessageSecret`. Reads don't carry the same fixed-length guarantee as writes, since the persisted `secret BLOB` column has no length constraint at the SQL level.
+
+```rust
+pub type MessageSecret = [u8; 32]; // wacore::reporting_token::MESSAGE_SECRET_SIZE
+
+pub struct MsgSecretEntry {
+    pub chat: Arc<str>,     // shared per conversation instead of one String per row
+    pub sender: Arc<str>,
+    pub msg_id: Arc<str>,
+    pub secret: MessageSecret,
+    pub expires_at: i64,
+    pub message_ts: i64,
+}
+```
+
+The `chat`, `sender`, and `msg_id` fields are `Arc<str>` rather than `String`. This allows buffered batch inserts to clone entries cheaply. The `secret` field uses the fixed-size `MessageSecret` array rather than `Vec<u8>`. This makes an invalid-length secret unrepresentable, so you no longer need a runtime length check.
+
+This is a breaking change if you build `MsgSecretEntry` directly in a custom backend, or if you override the defaulted `put_msg_secret` method. If you construct entries directly, build the JID/ID fields with `Arc::from(...)` or `.into()`, and pass a `[u8; 32]` for `secret`. If you override `put_msg_secret` (most backends don't — see the Note below), update its signature to take `secret: &[u8; 32]` instead of `secret: &[u8]`. The SQLite table itself is unchanged:
 
 ```sql
 CREATE TABLE msg_secrets (

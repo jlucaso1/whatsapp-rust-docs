@@ -817,6 +817,10 @@ pub struct MsgMetaInfo {
 `server_timestamp_us`, `verified_level`, `verified_name_serial`, `peer_recipient_pn`, plus all five `MsgMetaInfo` additions above were added in v0.6 as part of aligning inbound parsing with WA Web. They are populated only when the server includes the corresponding stanza attribute, so existing consumers that ignore them keep working.
 </Note>
 
+<Note>
+Every `Option<T>` field on `MessageInfo`, `MessageSource`, `MsgBotInfo`, and `MsgMetaInfo` is annotated `#[serde(skip_serializing_if = "Option::is_none")]`. A JSON serialization of these structs (e.g. via `serde_json::to_value`, for structured logging or observability dumps) omits an absent field entirely instead of emitting it as `null`. This applies uniformly across all optional fields as of the allocation/serialization cleanup in whatsapp-rust#1059 — earlier releases only omitted the four v0.6-era fields above, and serialized the remaining optional fields as explicit `null` when absent. Present field values are unchanged; only the JSON output shape for absent fields differs.
+</Note>
+
 **DeviceSentMeta:**
 
 Present on device-synced messages (messages you sent from another device).

@@ -1964,10 +1964,13 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `signal_sessions` | `CollectionStats` | Cached Signal sessions |
 | `signal_identities` | `CollectionStats` | Cached Signal identities |
 | `signal_sender_keys` | `CollectionStats` | Cached sender keys |
+| `history_sync_tasks` | `CollectionStats` | Queued/running history-sync tasks and their logical compressed-payload byte sum. A shared `Bytes` slice may retain a larger backing allocation, whose capacity isn't exposed by the type |
+| `history_sync_tasks_peak` | `u64` | Lifetime high-water mark of queued/running history-sync tasks |
+| `history_sync_payload_bytes_peak` | `u64` | Lifetime high-water mark of logical compressed-payload bytes |
 | `chatstate_handlers` | `usize` | Registered chat state handlers |
 | `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
 
-`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field, and `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown.
+`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field, and `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown, including an `--- In-flight history sync ---` section with the two peak fields above.
 
 **Example:**
 

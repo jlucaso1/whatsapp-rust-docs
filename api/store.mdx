@@ -360,7 +360,7 @@ async fn put_msg_secret(
     chat: &str,
     sender: &str,
     msg_id: &str,
-    secret: &[u8],
+    secret: &[u8; 32], // MessageSecret, the protocol-fixed message-secret size
 ) -> Result<()>;
 
 /// Batch upsert. Each MsgSecretEntry carries its own absolute expires_at
@@ -390,7 +390,20 @@ async fn get_msg_secret_with_ts(
 async fn delete_expired_msg_secrets(&self, cutoff_timestamp: i64) -> Result<u32>;
 ```
 
-`MsgSecretEntry` is `{ chat, sender, msg_id, secret, expires_at, message_ts }`. The SQLite table is:
+```rust
+pub type MessageSecret = [u8; 32]; // wacore::reporting_token::MESSAGE_SECRET_SIZE
+
+pub struct MsgSecretEntry {
+    pub chat: Arc<str>,     // shared per conversation instead of one String per row
+    pub sender: Arc<str>,
+    pub msg_id: Arc<str>,
+    pub secret: MessageSecret,
+    pub expires_at: i64,
+    pub message_ts: i64,
+}
+```
+
+`chat`, `sender`, and `msg_id` are `Arc<str>` rather than `String` so buffered batch inserts can clone entries cheaply, and `secret` is the fixed-size `MessageSecret` array rather than `Vec<u8>` — an invalid-length secret is unrepresentable instead of needing a runtime check. This is a breaking change for custom backends constructing `MsgSecretEntry` directly: build the JID/ID fields with `Arc::from(...)`/`.into()` and pass a `[u8; 32]` for `secret`. The SQLite table itself is unchanged:
 
 ```sql
 CREATE TABLE msg_secrets (

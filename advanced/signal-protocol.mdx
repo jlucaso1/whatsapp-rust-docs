@@ -270,9 +270,20 @@ pub(crate) struct PartitionedDmDevices {
 }
 
 impl PartitionedDmDevices {
-    pub(crate) fn valid_devices(&self) -> &[Jid];      // recipient + own, sender excluded
-    pub(crate) fn recipient_devices(&self) -> &[Jid];   // recipient devices only
-    pub(crate) fn own_other_devices(&self) -> &[Jid];   // own non-sender devices only
+    // recipient + own, sender excluded
+    pub(crate) fn valid_devices(&self) -> &[Jid] {
+        &self.devices
+    }
+
+    // recipient devices only
+    pub(crate) fn recipient_devices(&self) -> &[Jid] {
+        &self.devices[..self.recipient_count]
+    }
+
+    // own non-sender devices only
+    pub(crate) fn own_other_devices(&self) -> &[Jid] {
+        &self.devices[self.recipient_count..]
+    }
 }
 ```
 

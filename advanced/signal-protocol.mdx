@@ -255,24 +255,24 @@ all_dm_jids.retain(|j| !is_sender);
 
 ### Device partitioning
 
-The `partition_dm_devices` function classifies all resolved devices into recipient and own groups, and excludes the exact sender device (the current device) entirely. It partitions `all_devices` in place — swapping recipient devices to the front of the caller's own `Vec` — instead of allocating two new device vectors per send:
+The `partition_dm_devices` function classifies all resolved devices into recipient and own groups, and excludes the exact sender device (the current device) entirely. It partitions `all_devices` in place — swapping recipient devices to the front of the passed-in `Vec` — instead of allocating two new device vectors per send:
 
 ```rust
-fn partition_dm_devices(
+pub(crate) fn partition_dm_devices(
     all_devices: Vec<Jid>,
     own_jid: &Jid,
     own_lid: Option<&Jid>,
 ) -> PartitionedDmDevices
 
-struct PartitionedDmDevices {
+pub(crate) struct PartitionedDmDevices {
     devices: Vec<Jid>,
     recipient_count: usize,
 }
 
 impl PartitionedDmDevices {
-    fn valid_devices(&self) -> &[Jid];      // recipient + own, sender excluded
-    fn recipient_devices(&self) -> &[Jid];   // recipient devices only
-    fn own_other_devices(&self) -> &[Jid];   // own non-sender devices only
+    pub(crate) fn valid_devices(&self) -> &[Jid];      // recipient + own, sender excluded
+    pub(crate) fn recipient_devices(&self) -> &[Jid];   // recipient devices only
+    pub(crate) fn own_other_devices(&self) -> &[Jid];   // own non-sender devices only
 }
 ```
 

@@ -818,7 +818,7 @@ pub struct MsgMetaInfo {
 </Note>
 
 <Note>
-Every `Option<T>` field on `MessageInfo`, `MessageSource`, `MsgBotInfo`, and `MsgMetaInfo` is annotated `#[serde(skip_serializing_if = "Option::is_none")]`. A JSON serialization of these structs (e.g. via `serde_json::to_value`, for structured logging or observability dumps) omits an absent field entirely instead of emitting it as `null`. This applies uniformly across all optional fields as of the allocation/serialization cleanup in whatsapp-rust#1059 — earlier releases only omitted the four v0.6-era fields above, and serialized the remaining optional fields as explicit `null` when absent. Present field values are unchanged; only the JSON output shape for absent fields differs.
+Every `Option<T>` field on `MessageInfo`, `MessageSource`, `MsgBotInfo`, and `MsgMetaInfo` is annotated `#[serde(skip_serializing_if = "Option::is_none")]`. A JSON serialization of these structs (e.g. via `serde_json::to_value`, for structured logging or observability dumps) omits an absent field entirely instead of emitting it as `null`. This applies uniformly across all optional fields as of the allocation/serialization cleanup in [whatsapp-rust#1059](https://github.com/oxidezap/whatsapp-rust/pull/1059) — earlier releases only omitted the four v0.6-era fields above, and serialized the remaining optional fields as explicit `null` when absent. Present field values are unchanged; only the JSON output shape for absent fields differs.
 </Note>
 
 **DeviceSentMeta:**

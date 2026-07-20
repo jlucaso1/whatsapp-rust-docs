@@ -1970,7 +1970,7 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `chatstate_handlers` | `usize` | Registered chat state handlers |
 | `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
 
-`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field, and `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown, including an `--- In-flight history sync ---` section with the two peak fields above.
+`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field. `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown. This output includes an `--- In-flight history sync ---` section with the two peak fields above.
 
 **Example:**
 

@@ -109,9 +109,9 @@ pub async fn encrypt_group_message(
 **Returns:**
 - `(Option<Vec<u8>>, Vec<u8>)` - A tuple of optional SKDM bytes and ciphertext bytes. The SKDM is `Some` only when a new sender key was created (first encrypt for this group or after key rotation). You must distribute the SKDM to all group participants when present.
 
-<Warning>
-  Not safe to call concurrently with `decrypt_group_message` for the same group — sender key state is not internally locked.
-</Warning>
+<Note>
+  Concurrent calls are serialized on a per-`(group_jid, sender_jid)` chain lock (`sender_key_lock`), keyed here by your own JID as the sender. Two overlapping `encrypt_group_message` calls for the same group safely queue behind one another. A concurrent `decrypt_group_message` call only shares this lock when its `sender_jid` is your own JID (an unusual case) — decrypting messages from other participants uses a different chain and runs fully in parallel. See [sender-key chain locking](/advanced/signal-protocol#parallelized-group-encrypt-fan-out).
+</Note>
 
 **Example:**
 ```rust
@@ -147,9 +147,9 @@ pub async fn decrypt_group_message(
 **Returns:**
 - `Vec<u8>` - Raw padded plaintext. Use `MessageUtils::unpad_message_ref` with the stanza's `v` attribute if WhatsApp message unpadding is needed.
 
-<Warning>
-  Not safe to call concurrently with `encrypt_group_message` for the same group — sender key state is not internally locked.
-</Warning>
+<Note>
+  Concurrent calls are serialized on a per-`(group_jid, sender_jid)` chain lock (`sender_key_lock`), so two overlapping `decrypt_group_message` calls for the same sender safely queue behind one another. Calls for different senders in the same group — or a concurrent `encrypt_group_message` call, which uses your own JID as the chain identity — touch a different chain and run in parallel. See [sender-key chain lock (group receive)](/concepts/architecture#sender-key-chain-lock-group-receive).
+</Note>
 
 **Example:**
 ```rust

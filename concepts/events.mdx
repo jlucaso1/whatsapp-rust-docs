@@ -1997,7 +1997,7 @@ If the server does not complete offline sync within 60 seconds, the client force
 
 ### DirtyState
 
-**Emitted:** When the server sends an `<ib><dirty type="..." timestamp="...">` marker, telling the client one of its cached protocol domains is stale server-side.
+**Emitted:** When the server sends an `<ib><dirty type="..." timestamp="...">` marker. This tells your client that a cached protocol domain is stale on the server.
 
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
@@ -2009,11 +2009,11 @@ pub struct DirtyState {
 ```
 
 **Fields:**
-- `dirty_type` - The stale domain, mirroring `wacore::iq::dirty::DirtyType`: `AccountSync`, `Groups`, `SyncdAppState`, `NewsletterMetadata`, or `Other(String)` for a wire value the client doesn't otherwise recognize.
-- `timestamp` - `Option<u64>`, `None` if the `<dirty>` stanza omitted the `timestamp` attribute.
+- `dirty_type` - The stale domain. This mirrors `wacore::iq::dirty::DirtyType`: `AccountSync`, `Groups`, `SyncdAppState`, `NewsletterMetadata`, or `Other(String)` for a wire value your client doesn't otherwise recognize.
+- `timestamp` - An `Option<u64>`. This is `None` if the `<dirty>` stanza omitted the `timestamp` attribute.
 
 <Note>
-This is a pure observability hook — it does not replace or gate the client's built-in handling. The client always sends the matching `<clean>` IQ (throttled behind offline-sync completion for `Groups`/`NewsletterMetadata`, per `WAWebHandleDirtyBits`) and, for `SyncdAppState`, re-syncs all app-state collections, exactly as it did before this event existed. `DirtyState` fires first, right before that built-in work starts, so a handler can refresh its own domain-specific derived state (e.g. invalidate a local groups cache) without parsing raw `<ib>` stanzas via [`RawNode`](#raw-stanza-events) or racing the client's own resync.
+This is a pure observability hook. It does not replace or gate the client's built-in handling. The client always sends the matching `<clean>` IQ, throttled behind offline-sync completion for `Groups`/`NewsletterMetadata` (per `WAWebHandleDirtyBits`), and, for `SyncdAppState`, re-syncs all app-state collections — exactly as it did before this event existed. The bus dispatches `DirtyState` immediately before that built-in work starts, but whether your handler actually finishes first depends on how it's registered. A struct-based [`EventHandler`](#eventhandler-trait) runs `handle_event` inline on the dispatch path, so it completes before the built-in resync begins. A `Bot` closure — under either [`EventDelivery`](#delivery-order-and-backpressure) mode — runs on a separate task, so it is not guaranteed to finish before the built-in resync starts; register a struct-based handler instead if that ordering matters to you. Either way, you don't need to parse raw `<ib>` stanzas via [`RawNode`](#raw-stanza-events) to observe this event.
 </Note>
 
 **Example:**

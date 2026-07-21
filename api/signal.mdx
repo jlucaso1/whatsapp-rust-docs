@@ -624,13 +624,16 @@ let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).aw
 ### Manually migrate a session to LID addressing
 
 ```rust
-if let Some(info) = client.signal().session_info(&pn_jid).await? {
-    println!("existing PN-addressed session, registration_id={}", info.registration_id);
-}
-
+// Migrate first — session_info(&pn_jid) would trigger this same migration as a
+// side effect, which would leave nothing here for migrate_sessions to move.
 let outcome = client.signal().migrate_sessions(&pn_jid, &lid_jid).await?;
 if outcome.has_state_changes() {
     println!("moved {} session(s) to LID addressing", outcome.migrated);
+}
+
+// Inspect the session under its new LID address
+if let Some(info) = client.signal().session_info(&lid_jid).await? {
+    println!("registration_id={}", info.registration_id);
 }
 ```
 

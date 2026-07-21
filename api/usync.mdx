@@ -1,0 +1,247 @@
+---
+title: USync
+description: Typed USync query engine for user sync, device lists, profiles, and bot metadata
+---
+
+USync ("user sync") is the WhatsApp protocol used to batch-query per-user data: registration status, device lists, profile picture/status, business verification, bot profiles, and more. Higher-level helpers like [`is_on_whatsapp`](/api/contacts#is_on_whatsapp), [`get_user_info`](/api/contacts#get_user_info), and [`get_user_devices`](/api/signal#get_user_devices) already build on USync internally.
+
+`Client::query_usync` exposes the same typed query engine directly, for protocol combinations the specialized helpers don't cover — for example fetching a bot's profile, resolving a username, or reading `disappearing_mode`/`text_status` in the same request as a device-list lookup.
+
+<Note>
+Prefer the specialized helpers ([`Contacts`](/api/contacts), [`SignalManager::get_user_devices`](/api/signal#get_user_devices)) for common lookups — they also handle cache population and persistence. `query_usync` is a neutral operation: it only returns decoded wire data.
+</Note>
+
+## Access
+
+`query_usync` is a direct method on `Client` (not behind a sub-accessor):
+
+```rust
+let response = client.query_usync(query).await?;
+```
+
+## Building a query
+
+```rust
+pub fn new(
+    mode: UsyncMode,
+    context: UsyncContext,
+    protocols: Vec<UsyncProtocol>,
+    users: Vec<UsyncUser>,
+) -> Result<Self, UsyncValidationError>
+```
+
+`UsyncQuery::new` validates the whole query before it reaches the network — non-empty protocols/users, no duplicate protocol kinds, and per-user field consistency (e.g. a `tc_token` requires the `Status` protocol to be selected; `device_sync` requires `DevicesV2`). Deserializing a `UsyncQuery` from an external source runs the same validation, so a serialized input can't bypass it.
+
+**UsyncMode:**
+- `Query` (default) — contact lookups
+- `Full` — user info with more detail
+- `Delta` — incremental contact synchronization
+
+**UsyncContext:**
+- `Interactive` (default) — user-initiated operations
+- `Background` — background sync
+- `Message` — message-related operations
+- `Voip` — call setup refreshing device lists
+
+<Warning>
+Neither `UsyncMode` nor `UsyncContext` is `#[non_exhaustive]`. `Delta` and `Voip` are new variants added in this release — an exhaustive `match` over either enum in existing code will fail to compile until the new arms are handled.
+</Warning>
+
+### UsyncUser
+
+Construct a query target from a JID, phone number, or username, then attach protocol-specific inputs with builder methods:
+
+```rust
+pub fn from_jid(jid: Jid) -> Self
+pub fn from_phone(phone: impl Into<CompactString>) -> Self
+pub fn from_username(username: impl Into<CompactString>) -> Self
+pub fn from_pn_jid(pn_jid: Jid) -> Self
+
+pub fn with_id(mut self, jid: Jid) -> Self
+pub fn with_pn_jid(mut self, jid: Jid) -> Self
+pub fn with_phone(mut self, phone: impl Into<CompactString>) -> Self
+pub fn with_known_lid(mut self, lid: Jid) -> Self
+pub fn with_device_sync(mut self, hint: UsyncDeviceSyncHint) -> Self
+pub fn with_persona_id(mut self, persona_id: impl Into<CompactString>) -> Self
+pub fn with_username(mut self, username: impl Into<CompactString>) -> Self
+pub fn with_username_pin(mut self, pin: impl Into<CompactString>) -> Self
+pub fn with_contact_type(mut self, contact_type: impl Into<CompactString>) -> Self
+pub fn with_tc_token(mut self, token: impl Into<Vec<u8>>) -> Self
+```
+
+<Note>
+`from_phone`/`with_phone` accept a digit-only phone string and canonicalize it to E.164 (`+`-prefixed) form automatically. A phone number is rejected by `UsyncQuery::new` (`UsyncValidationError::InvalidPhone`) if it has a leading zero, contains non-digit characters after the `+`, or exceeds 15 digits.
+</Note>
+
+`UsyncDeviceSyncHint` carries cache hints for the `DevicesV2` subprotocol so the server can skip returning an unchanged device list:
+
+```rust
+pub const fn new() -> Self
+pub fn with_device_hash(mut self, device_hash: impl Into<CompactString>) -> Self
+pub const fn with_timestamp(mut self, timestamp: i64) -> Self
+pub const fn with_expected_timestamp(mut self, expected_timestamp: i64) -> Self
+```
+
+### UsyncProtocol
+
+```rust
+pub enum UsyncProtocol {
+    Contact { addressing_mode: UsyncAddressingMode },
+    DevicesV2,
+    Status,
+    TextStatus,
+    DisappearingMode,
+    BusinessVerifiedName,
+    Picture,
+    Lid,
+    Username,
+    BotProfileV1,
+    Features(Vec<UsyncFeature>),
+}
+```
+
+`UsyncAddressingMode` is `Pn` (default) or `Lid`. `UsyncFeature` lists the feature flags the `Features` subprotocol can query (`Document`, `Encrypt`, `EncryptBlocklist`, `EncryptContact`, `EncryptGroupGen2`, `EncryptImage`, `EncryptLocation`, `EncryptUrl`, `EncryptV2`, `Voip`, `MultiAgent`).
+
+## Reading the response
+
+```rust
+pub struct UsyncResponse {
+    pub protocol_states: Vec<UsyncProtocolState>,
+    pub users: Vec<UsyncUserResult>,
+}
+impl UsyncResponse {
+    pub fn protocol_state(&self, protocol: UsyncProtocolKind) -> Option<&UsyncProtocolState>
+}
+
+pub struct UsyncUserResult {
+    pub id: Option<Jid>,      // absent for contact-only results without a JID
+    pub pn_jid: Option<Jid>,
+    pub protocols: Vec<UsyncProtocolResult>,
+}
+impl UsyncUserResult {
+    pub fn protocol(&self, kind: UsyncProtocolKind) -> Option<&UsyncProtocolResult>
+}
+```
+
+Each per-user protocol result is wrapped in `UsyncOutcome<T>`, which is either the decoded value or the server's per-subprotocol error — matching the same "errors don't fail the whole batch" behavior as `is_on_whatsapp`/`get_user_info`:
+
+```rust
+pub enum UsyncOutcome<T> {
+    Value(T),
+    Error(Box<UsyncSubprotocolError>),
+}
+impl<T> UsyncOutcome<T> {
+    pub fn value(&self) -> Option<&T>
+    pub fn error(&self) -> Option<&UsyncSubprotocolError>
+}
+```
+
+`UsyncProtocolResult` carries the typed payload per protocol:
+
+```rust
+pub enum UsyncProtocolResult {
+    Contact(UsyncOutcome<UsyncContactResult>),
+    Devices(UsyncOutcome<UsyncDevicesResult>),
+    Status(UsyncOutcome<UsyncStatusResult>),
+    TextStatus(UsyncOutcome<UsyncTextStatusResult>),
+    DisappearingMode(UsyncOutcome<UsyncDisappearingModeResult>),
+    Business(UsyncOutcome<Box<UsyncBusinessResult>>),
+    Picture(UsyncOutcome<u64>),
+    Lid(UsyncOutcome<Option<Jid>>),
+    Username(UsyncOutcome<Option<CompactString>>),
+    Bot(UsyncOutcome<Box<UsyncBotProfileResult>>),
+    Features(UsyncOutcome<Vec<UsyncFeatureResult>>),
+}
+```
+
+Payload structs, all `#[non_exhaustive]`:
+
+- **`UsyncContactResult`** — `contact_type: CompactString`, `username: Option<CompactString>`, `content: Option<CompactString>`
+- **`UsyncDevicesResult`** — `device_list: Option<UsyncDeviceListResult>`, `key_index: Option<UsyncKeyIndexResult>`
+  - `UsyncDeviceListResult` — `hash: Option<CompactString>`, `devices: Vec<UsyncDeviceResult>`
+  - `UsyncDeviceResult` — `id: u16`, `key_index: Option<u32>`, `is_hosted: bool`
+  - `UsyncKeyIndexResult` — `timestamp: i64`, `signed_key_index_bytes: Option<Vec<u8>>`, `expected_timestamp: Option<i64>`
+- **`UsyncStatusResult`** — `status: Option<CompactString>`, `timestamp: Option<i64>` (WhatsApp Web itself only consumes `status`; the wire timestamp is kept for callers that need it)
+- **`UsyncTextStatusResult`** — `text`, `emoji`, `ephemeral_duration_seconds`, `last_update_time` (all `Option`)
+- **`UsyncDisappearingModeResult`** — `duration_seconds: u32`, `setting_timestamp: i64`, `ephemerality_disabled: bool`
+- **`UsyncBusinessResult`** — `verified_name: Option<VerifiedName>` (see [`is_on_whatsapp`](/api/contacts#is_on_whatsapp) for `VerifiedName` fields)
+- **`UsyncFeatureResult`** — `feature: UsyncFeature`, `value: CompactString`
+- **`UsyncBotProfileResult`** — `name`, `attributes`, `description`, `category`, `is_default`, `prompts: Vec<UsyncBotPrompt>`, `persona_id`, `commands: Vec<UsyncBotCommand>`, `commands_description`, `is_meta_created: Option<bool>`, `creator_name: Option<CompactString>`, `creator_profile_url: Option<CompactString>`, `posing_as_professional: Option<UsyncBotProfessionalType>`
+  - `UsyncBotPrompt` — `emoji: CompactString`, `text: CompactString`
+  - `UsyncBotCommand` — `name: CompactString`, `description: CompactString`
+  - `UsyncBotProfessionalType` — `Unknown`, `Yes`, `No`, or an `Other(String)` catch-all for unrecognized wire values
+
+## Example
+
+```rust
+use whatsapp_rust::usync::{
+    UsyncContext, UsyncMode, UsyncProtocol, UsyncProtocolKind, UsyncProtocolResult,
+    UsyncQuery, UsyncUser,
+};
+
+let query = UsyncQuery::new(
+    UsyncMode::Query,
+    UsyncContext::Interactive,
+    vec![UsyncProtocol::BotProfileV1, UsyncProtocol::Username],
+    vec![UsyncUser::from_jid(jid)],
+)?;
+
+let response = client.query_usync(query).await?;
+
+for user in &response.users {
+    if let Some(bot) = user.protocol(UsyncProtocolKind::Bot)
+        && let UsyncProtocolResult::Bot(outcome) = bot
+        && let Some(profile) = outcome.value()
+    {
+        println!("Bot: {} ({})", profile.name, profile.category);
+    }
+}
+```
+
+## Validation errors
+
+```rust
+#[non_exhaustive]
+pub enum UsyncValidationError {
+    EmptyProtocols,
+    EmptyUsers,
+    DuplicateProtocol(UsyncProtocolKind),
+    EmptyFeatureSet,
+    MissingUserIdentity { index: usize },
+    InvalidUserJid { index: usize, jid: String },
+    InvalidPnJid { index: usize },
+    EmptyPhone { index: usize },
+    InvalidPhone { index: usize },
+    EmptyUsername { index: usize },
+    UsernamePinWithoutUsername { index: usize },
+    InvalidKnownLid { index: usize },
+    EmptyDeviceHash { index: usize },
+    ConflictingContactInputs { index: usize },
+    ContactInputWithoutProtocol { index: usize },
+    DeviceSyncWithoutProtocol { index: usize },
+    TcTokenWithoutProtocol { index: usize },
+    PersonaIdWithoutProtocol { index: usize },
+    KnownLidWithoutProtocol { index: usize },
+    EmptySid,
+}
+```
+
+`Client::query_usync` surfaces a validation failure as `IqError::EncodeError` (the query never reaches the network).
+
+## Hosted addressing
+
+`UsyncDeviceResult.is_hosted` (and the corresponding `is_hosted` field on the persisted `DeviceInfo`/`UsyncDevice` types — see [Store: DeviceListRecord](/api/store#devicelistrecord)) marks a device as belonging to WhatsApp's *hosted* PN/LID address space rather than the regular one. Use `Jid::with_device_hosting(device_id, is_hosted)` to build a correctly-addressed device JID from a device-list entry:
+
+```rust
+let device_jid = user_jid.with_device_hosting(device.id, device.is_hosted);
+```
+
+## Breaking changes
+
+- **`DeviceInfo`** (`wacore::store::traits::DeviceInfo`) and **`UsyncDevice`** (`wacore::usync::UsyncDevice`) both gained an `is_hosted: bool` field. Struct-literal construction (`DeviceInfo { device_id, key_index }`) no longer compiles — use the new constructors instead:
+  ```rust
+  DeviceInfo::new(device_id, key_index).with_hosting(is_hosted)
+  UsyncDevice::new(device, key_index).with_hosting(is_hosted)
+  ```
+  Persisted `DeviceInfo` JSON without `is_hosted` still deserializes correctly (`is_hosted` defaults to `false`) — this only affects Rust struct-literal call sites, not on-disk data.
+- **`UsyncMode::Delta`** and **`UsyncContext::Voip`** are new enum variants (see the warning above).

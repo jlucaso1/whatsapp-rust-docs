@@ -30,7 +30,7 @@ pub fn new(
 ) -> Result<Self, UsyncValidationError>
 ```
 
-`UsyncQuery::new` validates the whole query before it reaches the network — non-empty protocols/users, no duplicate protocol kinds, and per-user field consistency (e.g. a `tc_token` requires the `Status` protocol to be selected; `device_sync` requires `DevicesV2`). Deserializing a `UsyncQuery` from an external source runs the same validation, so a serialized input can't bypass it.
+`UsyncQuery::new` validates the whole query before it reaches the network. It requires at least one protocol and one user, and rejects duplicate protocol kinds. It also enforces per-user field consistency — for example, a `tc_token` requires the `Status` protocol to be selected, and `device_sync` requires `DevicesV2`. Deserializing a `UsyncQuery` from an external source runs this same validation, so a serialized input can't bypass it.
 
 **`UsyncMode`:**
 - `Query` (default) — contact lookups
@@ -238,10 +238,11 @@ let device_jid = user_jid.with_device_hosting(device.id, device.is_hosted);
 
 ## Breaking changes
 
-- **`DeviceInfo`** (`wacore::store::traits::DeviceInfo`) and **`UsyncDevice`** (`wacore::usync::UsyncDevice`) both gained an `is_hosted: bool` field. Struct-literal construction (`DeviceInfo { device_id, key_index }`) no longer compiles — use the new constructors instead:
+- **`DeviceInfo`** (`wacore::store::traits::DeviceInfo`) and **`UsyncDevice`** (`wacore::usync::UsyncDevice`) both gained an `is_hosted: bool` field. This breaks both construction and exhaustive pattern matching. Struct-literal construction (`DeviceInfo { device_id, key_index }`) no longer compiles — use the new constructors instead:
   ```rust
   DeviceInfo::new(device_id, key_index).with_hosting(is_hosted)
   UsyncDevice::new(device, key_index).with_hosting(is_hosted)
   ```
-  Persisted `DeviceInfo` JSON without `is_hosted` still deserializes correctly (`is_hosted` defaults to `false`) — this only affects Rust struct-literal call sites, not on-disk data.
+  An exhaustive destructuring pattern (`let DeviceInfo { device_id, key_index } = info;`) also no longer compiles — add a `..` to the pattern (`let DeviceInfo { device_id, key_index, .. } = info;`) or match on `is_hosted` as well.
+  Persisted `DeviceInfo` JSON without `is_hosted` still deserializes correctly (`is_hosted` defaults to `false`) — this only affects Rust construction and pattern-matching call sites, not on-disk data.
 - **`UsyncMode::Delta`** and **`UsyncContext::Voip`** are new enum variants (see the warning above).

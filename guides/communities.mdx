@@ -89,6 +89,26 @@ for (jid, error_code) in &result.failed_groups {
 
 See [Community API reference](/api/community#link_subgroups) for details.
 
+### Create a new subgroup
+
+Create a brand new group that's already linked as a subgroup of a community, in a single call:
+
+```rust
+let participants = vec![
+    "15551234567@s.whatsapp.net".parse()?,
+];
+
+let result = client.community()
+    .create_subgroup("Announcements", &participants, &community_jid)
+    .await?;
+
+println!("Created subgroup: {} ({})", result.metadata.subject, result.metadata.id);
+```
+
+This is a shortcut for creating a group and then calling `link_subgroups` — both steps happen in a single round-trip instead of two.
+
+See [Community API reference](/api/community#create_subgroup) for details.
+
 ### Unlink subgroups
 
 Unlink subgroups from a community:
@@ -109,6 +129,24 @@ When `remove_orphan_members` is `true`, members who are only in the community th
 
 See [Community API reference](/api/community#unlink_subgroups) for details.
 
+### Remove participants from a community
+
+Remove participants directly from a community (as opposed to from a single subgroup):
+
+```rust
+let to_remove = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.community()
+    .remove_participants(&community_jid, &to_remove)
+    .await?;
+
+for result in results {
+    println!("{}: status {:?}", result.jid, result.status);
+}
+```
+
+See [Community API reference](/api/community#remove_participants) for details.
+
 ### Join a subgroup
 
 Join a linked subgroup via the parent community:
@@ -125,6 +163,20 @@ println!("Joined: {} ({} participants)",
 See [Community API reference](/api/community#join_subgroup) for details.
 
 ## Querying community information
+
+### List communities you're in
+
+Fetch all parent/community groups the logged-in account currently participates in:
+
+```rust
+let communities = client.community().get_participating().await?;
+
+for (jid, metadata) in communities {
+    println!("{}: {} ({} participants)", jid, metadata.subject, metadata.participants.len());
+}
+```
+
+See [Community API reference](/api/community#get_participating) for details.
 
 ### List subgroups
 

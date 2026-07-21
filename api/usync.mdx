@@ -8,7 +8,7 @@ USync ("user sync") is the WhatsApp protocol used to batch-query per-user data: 
 `Client::query_usync` exposes the same typed query engine directly, for protocol combinations the specialized helpers don't cover — for example fetching a bot's profile, resolving a username, or reading `disappearing_mode`/`text_status` in the same request as a device-list lookup.
 
 <Note>
-Prefer the specialized helpers ([`Contacts`](/api/contacts), [`SignalManager::get_user_devices`](/api/signal#get_user_devices)) for common lookups — they also handle cache population and persistence. `query_usync` is a neutral operation: it only returns decoded wire data.
+Prefer the specialized helpers ([`Contacts`](/api/contacts), [`Signal::get_user_devices`](/api/signal#get_user_devices) via `client.signal()`) for common lookups — they also handle cache population and persistence. `query_usync` is a neutral operation: it only returns decoded wire data.
 </Note>
 
 ## Access

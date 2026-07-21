@@ -63,7 +63,7 @@ if let Some(profile) = client.get_business_profile(&jid).await? {
     if let Some(configs) = &profile.business_hours.business_config {
         for config in configs {
             println!(
-                "  {:?}: {:?} ({}–{})",
+                "  {:?}: {:?} ({:?}–{:?})",
                 config.day_of_week,
                 config.mode,
                 config.open_time,
@@ -126,8 +126,8 @@ pub struct BusinessHours {
 pub struct BusinessHoursConfig {
     pub day_of_week: DayOfWeek,
     pub mode: BusinessHourMode,
-    pub open_time: u32,
-    pub close_time: u32,
+    pub open_time: Option<u32>,
+    pub close_time: Option<u32>,
 }
 ```
 

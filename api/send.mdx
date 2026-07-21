@@ -343,7 +343,7 @@ let result = client.send_message_with_options(
 ```
 
 <Note>
-The `ephemeral_expiration` value should match the chat's disappearing messages timer. You can get this from `GroupMetadata.ephemeral_expiration` for groups, or from `MessageInfo.ephemeral_expiration` on received messages. See the [sending messages guide](/guides/sending-messages#ephemeral-disappearing-messages) for a complete walkthrough.
+The `ephemeral_expiration` value should match the chat's disappearing messages timer. You can get this from `GroupMetadata.ephemeral` (via `metadata.ephemeral.as_ref().and_then(|e| e.expiration)`) for groups, or from `MessageInfo.ephemeral_expiration` on received messages. See the [sending messages guide](/guides/sending-messages#ephemeral-disappearing-messages) for a complete walkthrough.
 </Note>
 
 ### Example: Send with extra stanza nodes

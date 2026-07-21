@@ -551,8 +551,13 @@ pub struct DeviceListRecord {
 pub struct DeviceInfo {
     pub device_id: u32,
     pub key_index: Option<u32>,
+    /// Whether the device belongs to WhatsApp's hosted PN/LID address space.
+    #[serde(default)]
+    pub is_hosted: bool,
 }
 ```
+
+`DeviceInfo` gained the `is_hosted` field, populated from usync device-list results. Use `DeviceInfo::new(device_id, key_index).with_hosting(is_hosted)` instead of a struct literal, and add a `..` to any exhaustive destructuring pattern. Persisted JSON without `is_hosted` still deserializes correctly (`is_hosted` defaults to `false`). See [Store: DeviceInfo](/api/store#devicelistrecord) and [USync — Hosted addressing](/api/usync#hosted-addressing) for details.
 
 **TcTokenEntry:**
 ```rust

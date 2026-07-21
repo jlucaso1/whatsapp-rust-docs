@@ -286,17 +286,21 @@ for response in responses {
 
 See [Groups API reference](/api/groups#remove_participants) for details.
 
+To also remove participants from a community group's linked/child groups, use `remove_participants_including_linked_groups` instead — same signature, but the removal cascades to subgroups. See [Groups API reference](/api/groups#remove_participants_including_linked_groups) for details.
+
 ### Promote to admin
 
 ```rust
 let participants = vec!["1234567890@s.whatsapp.net".parse()?];
 
-client.groups().promote_participants(
+let results = client.groups().promote_participants(
     &group_jid,
     &participants,
 ).await?;
 
-println!("Promoted to admin");
+for result in results {
+    println!("Promoted {}: status {:?}", result.jid, result.status);
+}
 ```
 
 See [Groups API reference](/api/groups#promote_participants) for details.
@@ -306,12 +310,14 @@ See [Groups API reference](/api/groups#promote_participants) for details.
 ```rust
 let participants = vec!["1234567890@s.whatsapp.net".parse()?];
 
-client.groups().demote_participants(
+let results = client.groups().demote_participants(
     &group_jid,
     &participants,
 ).await?;
 
-println!("Demoted from admin");
+for result in results {
+    println!("Demoted {}: status {:?}", result.jid, result.status);
+}
 ```
 
 See [Groups API reference](/api/groups#demote_participants) for details.
@@ -723,6 +729,17 @@ client.groups().set_limit_sharing(&group_jid, false).await?;
 ```
 
 See [Groups API reference](/api/groups#set_limit_sharing) for details.
+
+### Member label
+
+Set or clear the bot's per-group member label. This is sent as a message (`ProtocolMessage`), not an IQ, and returns the sent message's ID:
+
+```rust
+let message_id = client.groups().update_member_label_with_id(&group_jid, "VIP").await?;
+println!("Label update sent as message {}", message_id);
+```
+
+See [Groups API reference](/api/groups#update_member_label_with_id) for details.
 
 ## Privacy tokens on group operations
 

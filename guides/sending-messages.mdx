@@ -690,7 +690,7 @@ For groups, read the timer from group metadata:
 
 ```rust
 let metadata = client.groups().get_metadata(&group_jid).await?;
-let expiration = metadata.ephemeral_expiration; // 0 if disabled
+let expiration = metadata.ephemeral.as_ref().and_then(|e| e.expiration).unwrap_or(0);
 ```
 
 For incoming messages, read it from `MessageInfo`:

@@ -51,6 +51,26 @@ if let Some(desc) = &result.metadata.description {
 Since v0.6, `community().create()` returns the full `GroupMetadata` instead of just the JID. The library inlines the community description directly into the create stanza (matching WA Web), so the returned metadata already contains it — no separate `set_description` round-trip is needed. If you previously read `result.gid`, switch to `result.metadata.id` (`GroupMetadata` uses `id: Jid`).
 </Note>
 
+### get_participating
+
+Fetch all parent/community groups the logged-in account currently participates in.
+
+```rust
+pub async fn get_participating(&self) -> Result<HashMap<Jid, GroupMetadata>, CommunityError>
+```
+
+**Returns:**
+- `HashMap<Jid, GroupMetadata>` — Map of community JID to metadata
+
+**Example:**
+```rust
+let communities = client.community().get_participating().await?;
+
+for (jid, metadata) in communities {
+    println!("Community: {} ({})", metadata.subject, jid);
+}
+```
+
 ### deactivate
 
 Deactivate (delete) a community. Subgroups are unlinked but not deleted.
@@ -102,6 +122,44 @@ for (jid, error_code) in &result.failed_groups {
     eprintln!("Failed: {} (error {})", jid, error_code);
 }
 ```
+
+### create_subgroup
+
+Create a new group that is already linked as a subgroup of a community, in one call.
+
+```rust
+pub async fn create_subgroup(
+    &self,
+    name: &str,
+    participants: &[Jid],
+    parent_jid: &Jid,
+) -> Result<CreateCommunityResult, CommunityError>
+```
+
+**Parameters:**
+- `name` — Name of the new subgroup
+- `participants` — Initial participant JIDs to add to the subgroup
+- `parent_jid` — JID of the parent community to link the new subgroup under
+
+**Returns:**
+- `CreateCommunityResult` — Contains the full `metadata: GroupMetadata` for the created subgroup
+
+**Example:**
+```rust
+let participants = vec![
+    "5511999999999@s.whatsapp.net".parse()?,
+];
+
+let result = client.community()
+    .create_subgroup("My Subgroup", &participants, &community_jid)
+    .await?;
+
+println!("Created subgroup: {} ({})", result.metadata.subject, result.metadata.id);
+```
+
+<Note>
+Equivalent to creating a group and then calling [`link_subgroups`](#link_subgroups), but done in a single round-trip.
+</Note>
 
 ### unlink_subgroups
 
@@ -274,6 +332,38 @@ for p in &participants {
 }
 ```
 
+### remove_participants
+
+Remove participants from a community.
+
+```rust
+pub async fn remove_participants(
+    &self,
+    community_jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, CommunityError>
+```
+
+**Parameters:**
+- `community_jid` — JID of the community
+- `participants` — Array of participant JIDs to remove
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` — Result for each participant (see [`ParticipantChangeResponse`](/api/groups#participantchangeresponse))
+
+**Example:**
+```rust
+let to_remove = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.community()
+    .remove_participants(&community_jid, &to_remove)
+    .await?;
+
+for result in results {
+    println!("{}: status {:?}", result.jid, result.status);
+}
+```
+
 ## Types
 
 ### CreateCommunityOptions
@@ -336,6 +426,8 @@ pub struct CommunitySubgroup {
     pub participant_count: Option<u32>,
     pub is_default_sub_group: bool,
     pub is_general_chat: bool,
+    pub creation: Option<u64>,
+    pub owner: Option<Jid>,
 }
 ```
 
@@ -347,6 +439,8 @@ pub struct CommunitySubgroup {
 - `participant_count` — Number of participants (if available)
 - `is_default_sub_group` — Whether this is the default announcement subgroup
 - `is_general_chat` — Whether this is the general chat subgroup
+- `creation` — Subgroup creation timestamp (Unix seconds), if available
+- `owner` — JID of the subgroup owner, if available
 
 ### LinkSubgroupsResult
 

@@ -109,9 +109,9 @@ pub async fn encrypt_group_message(
 **Returns:**
 - `(Option<Vec<u8>>, Vec<u8>)` - A tuple of optional SKDM bytes and ciphertext bytes. The SKDM is `Some` only when a new sender key was created (first encrypt for this group or after key rotation). You must distribute the SKDM to all group participants when present.
 
-<Warning>
-  Not safe to call concurrently with `decrypt_group_message` for the same group — sender key state is not internally locked.
-</Warning>
+<Note>
+  Concurrent calls are serialized on a per-`(group_jid, sender_jid)` chain lock (`sender_key_lock`), keyed here by your own JID as the sender. Two overlapping `encrypt_group_message` calls for the same group safely queue behind one another. A concurrent `decrypt_group_message` call only shares this lock when its `sender_jid` is your own JID (an unusual case) — decrypting messages from other participants uses a different chain and runs fully in parallel. See [sender-key chain locking](/advanced/signal-protocol#parallelized-group-encrypt-fan-out).
+</Note>
 
 **Example:**
 ```rust
@@ -147,9 +147,9 @@ pub async fn decrypt_group_message(
 **Returns:**
 - `Vec<u8>` - Raw padded plaintext. Use `MessageUtils::unpad_message_ref` with the stanza's `v` attribute if WhatsApp message unpadding is needed.
 
-<Warning>
-  Not safe to call concurrently with `encrypt_group_message` for the same group — sender key state is not internally locked.
-</Warning>
+<Note>
+  Concurrent calls are serialized on a per-`(group_jid, sender_jid)` chain lock (`sender_key_lock`), so two overlapping `decrypt_group_message` calls for the same sender safely queue behind one another. Calls for different senders in the same group — or a concurrent `encrypt_group_message` call, which uses your own JID as the chain identity — touch a different chain and run in parallel. See [sender-key chain lock (group receive)](/concepts/architecture#sender-key-chain-lock-group-receive).
+</Note>
 
 **Example:**
 ```rust
@@ -158,6 +158,112 @@ let plaintext = client.signal().decrypt_group_message(
     &sender_jid,
     &ciphertext,
 ).await?;
+```
+
+### sender_key_distribution
+
+Create (or lazily initialize) and serialize the current outgoing sender-key distribution message for a group.
+
+```rust
+pub async fn sender_key_distribution(
+    &self,
+    group_jid: &Jid,
+    sender_jid: &Jid,
+) -> Result<Vec<u8>, SignalError>
+```
+
+**Parameters:**
+- `group_jid` - Group JID
+- `sender_jid` - Your own JID as it should appear to other group members (the sender key chain owner)
+
+**Returns:**
+- `Vec<u8>` - Serialized `SenderKeyDistributionMessage` bytes, ready to send to a new or existing group member (e.g. when adding a participant who needs to decrypt future messages)
+
+This is the same distribution payload [`encrypt_group_message`](#encrypt_group_message) returns automatically on first use — call it directly when you need to (re)distribute a sender key out of band, such as when a new member joins and needs the current chain without waiting for the next group message. The distribution is durably persisted before this method returns.
+
+**Example:**
+```rust
+let distribution = client.signal().sender_key_distribution(&group_jid, &my_jid).await?;
+// Send `distribution` to the new participant, e.g. wrapped in a SenderKeyDistributionMessage protocol node
+```
+
+### process_sender_key_distribution
+
+Process an incoming sender-key distribution message for a group, installing the sender's chain so future `skmsg` stanzas from them can be decrypted.
+
+```rust
+pub async fn process_sender_key_distribution(
+    &self,
+    group_jid: &Jid,
+    sender_jid: &Jid,
+    distribution: &[u8],
+) -> Result<(), SignalError>
+```
+
+**Parameters:**
+- `group_jid` - Group JID
+- `sender_jid` - JID of the participant who distributed the sender key
+- `distribution` - Serialized `SenderKeyDistributionMessage` bytes received from the sender (typically extracted from an incoming SKDM node)
+
+The sender-key chain is durably persisted before this method returns.
+
+**Example:**
+```rust
+client.signal().process_sender_key_distribution(
+    &group_jid,
+    &sender_jid,
+    &distribution_bytes,
+).await?;
+```
+
+### has_sender_key
+
+Check whether sender-key state already exists for a group and sender.
+
+```rust
+pub async fn has_sender_key(
+    &self,
+    group_jid: &Jid,
+    sender_jid: &Jid,
+) -> Result<bool, SignalError>
+```
+
+**Parameters:**
+- `group_jid` - Group JID
+- `sender_jid` - Sender's JID within the group
+
+**Returns:**
+- `bool` - `true` if a sender-key chain is already stored for this `(group_jid, sender_jid)` pair
+
+**Example:**
+```rust
+if !client.signal().has_sender_key(&group_jid, &author_jid).await? {
+    // No chain yet — process the SKDM before decrypting skmsg from this sender
+}
+```
+
+### delete_sender_key
+
+Durably delete a sender-key chain for a group and sender, e.g. on group exit or key rotation.
+
+```rust
+pub async fn delete_sender_key(
+    &self,
+    group_jid: &Jid,
+    sender_jid: &Jid,
+) -> Result<(), SignalError>
+```
+
+**Parameters:**
+- `group_jid` - Group JID
+- `sender_jid` - Sender's JID within the group
+
+The deletion waits for any in-flight chain mutation (e.g. a concurrent `encrypt_group_message` ratchet advance) to finish before removing the chain, and is flushed to the persistent backend before returning.
+
+**Example:**
+```rust
+// On leaving a group, drop the local copy of your own sender key chain
+client.signal().delete_sender_key(&group_jid, &my_jid).await?;
 ```
 
 ### validate_session
@@ -183,6 +289,31 @@ if client.signal().validate_session(&jid).await? {
 }
 ```
 
+### session_info
+
+Inspect an existing pairwise Signal session, migrating legacy PN-addressed state to its resolved LID namespace when needed.
+
+```rust
+pub async fn session_info(&self, jid: &Jid) -> Result<Option<SignalSessionInfo>, SignalError>
+```
+
+**Parameters:**
+- `jid` - JID to inspect. PN JIDs are resolved to LID and `Hosted` JIDs to `HostedLid` when a mapping exists.
+
+**Returns:**
+- `Option<SignalSessionInfo>` - `Some` with the session's base key and remote registration id if a session exists, `None` otherwise
+
+<Note>
+  If only a legacy PN-addressed session exists and the resolved address is a LID, this method migrates it first (moving session and identity state to the LID namespace) and then reports on the migrated session — mirroring the on-the-fly migration used by the decrypt path. This means `session_info` is not a purely read-only probe: it can itself perform the migration, so a subsequent [`migrate_sessions`](#migrate_sessions) call on the same pair may find there is nothing left to move. See [`SignalSessionInfo`](#signalsessioninfo) and [PN→LID session migration](/advanced/signal-protocol).
+</Note>
+
+**Example:**
+```rust
+if let Some(info) = client.signal().session_info(&jid).await? {
+    println!("registration_id={} base_key_len={}", info.registration_id, info.base_key.len());
+}
+```
+
 ### delete_sessions
 
 Delete Signal sessions and identity keys for the given JIDs.
@@ -200,6 +331,72 @@ This matches WhatsApp Web's `deleteRemoteSession` behavior, which removes both t
 ```rust
 // Delete sessions for specific contacts
 client.signal().delete_sessions(&[jid1, jid2]).await?;
+```
+
+### install_prekey_bundle
+
+Durably install a supplied pre-key bundle for a JID, establishing (or replacing) a pairwise session from it.
+
+```rust
+pub async fn install_prekey_bundle(
+    &self,
+    jid: &Jid,
+    bundle: &PreKeyBundle,
+) -> Result<IdentityChange, SignalError>
+```
+
+**Parameters:**
+- `jid` - JID to install the session for. Resolved the same way as [`encrypt_message`](#encrypt_message).
+- `bundle` - A `PreKeyBundle` obtained out of band — e.g. from a manual/custom prekey fetch — rather than through [`assert_sessions`](#assert_sessions)'s normal usync + fetch flow
+
+**Returns:**
+- `IdentityChange` - `IdentityChange::NewOrUnchanged` if the peer had no identity key or it matched, or `IdentityChange::ReplacedExisting` if this bundle's identity key replaced a previously trusted one
+
+The session is durably persisted before this method returns.
+
+**Example:**
+```rust
+let bundle: PreKeyBundle = /* fetched via a custom IQ */;
+let identity_change = client.signal().install_prekey_bundle(&jid, &bundle).await?;
+
+if identity_change == IdentityChange::ReplacedExisting {
+    println!("warning: {jid}'s identity key changed");
+}
+```
+
+### migrate_sessions
+
+Move pairwise session and identity state from one JID namespace to another for the same underlying account (PN→LID, or Hosted→HostedLid).
+
+```rust
+pub async fn migrate_sessions(
+    &self,
+    from: &Jid,
+    to: &Jid,
+) -> Result<SignalSessionMigration, SignalError>
+```
+
+**Parameters:**
+- `from` - Source JID namespace (must be `Pn` or `Hosted`)
+- `to` - Destination JID namespace (must be `Lid` for a `Pn` source, or `HostedLid` for a `Hosted` source)
+
+**Returns:**
+- `SignalSessionMigration` - Counts of sessions and identities moved, discarded, or skipped. See [`SignalSessionMigration`](#signalsessionmigration).
+
+Scans known device slots under `from`, moving each pairwise session and identity to `to` when the destination doesn't already have one, and discarding the stale source entry when it does. This is the same logic the client runs automatically on LID discovery and on-the-fly during decryption — exposed here for callers that want to trigger it manually. See [PN→LID session migration](/advanced/signal-protocol).
+
+Mismatched namespace pairs (e.g. a `Pn` source with a `HostedLid` destination, or two otherwise unrelated JIDs) are rejected with `SignalError::InvalidInput`.
+
+**Example:**
+```rust
+let outcome = client.signal().migrate_sessions(&pn_jid, &lid_jid).await?;
+
+if outcome.has_state_changes() {
+    println!(
+        "migrated {} sessions, {} identities",
+        outcome.migrated, outcome.migrated_identities
+    );
+}
 ```
 
 ### create_participant_nodes
@@ -298,6 +495,48 @@ pub enum EncType {
 
 `EncType` exposes two predicate helpers: `is_session()` (true for `Message` / `PreKeyMessage`, **excludes** `MessageSecret`) and `is_bot_secret()` (true only for `MessageSecret`).
 
+## SignalSessionInfo
+
+Read-only information from a currently open pairwise session, returned by [`session_info`](#session_info):
+
+```rust
+pub struct SignalSessionInfo {
+    /// Local base key identifying the active session state.
+    pub base_key: Vec<u8>,
+    /// Remote registration identifier recorded by the session.
+    pub registration_id: u32,
+}
+```
+
+`SignalSessionInfo` is re-exported from the crate root, so it's also available as `whatsapp_rust::SignalSessionInfo`.
+
+## SignalSessionMigration
+
+Result of moving pairwise session state between address namespaces, returned by [`migrate_sessions`](#migrate_sessions):
+
+```rust
+#[non_exhaustive]
+pub struct SignalSessionMigration {
+    /// Pairwise sessions moved to the destination namespace.
+    pub migrated: usize,
+    /// Pairwise session lookups skipped after a storage error.
+    pub skipped: usize,
+    /// Pairwise sessions found or unsuccessfully queried.
+    pub total: usize,
+    /// Identity records moved when the destination had no identity.
+    pub migrated_identities: usize,
+    /// Source identity records removed in favor of an existing destination.
+    pub discarded_identities: usize,
+    /// Identity lookups skipped after a storage error.
+    pub skipped_identities: usize,
+}
+```
+
+**Methods:**
+- `has_state_changes(self) -> bool` - `true` if any source state was moved or removed (`migrated != 0 || migrated_identities != 0 || discarded_identities != 0`). Useful for deciding whether a migration was a meaningful no-op (nothing to move) versus one that changed persisted state.
+
+`SignalSessionMigration` is `#[non_exhaustive]` and re-exported from the crate root as `whatsapp_rust::SignalSessionMigration`.
+
 ## Bot message decryption (msmsg)
 
 When you message Meta AI or another `@bot` account, the bot's replies arrive as `<enc type="msmsg">` stanzas. These are **not** Signal-session encrypted — they use a dual-HKDF derivation over the 32-byte `messageSecret` from the prompt you sent, then AES-256-GCM.
@@ -357,6 +596,18 @@ if skdm.is_some() {
 }
 ```
 
+### Add a participant to an existing sender-key group
+
+```rust
+// New member needs the current sender key chain to decrypt future skmsg
+if !client.signal().has_sender_key(&group_jid, &my_jid).await? {
+    // Nothing sent to this group yet — no chain to distribute
+} else {
+    let distribution = client.signal().sender_key_distribution(&group_jid, &my_jid).await?;
+    // Send `distribution` to the new participant
+}
+```
+
 ### Reset a broken session
 
 ```rust
@@ -368,6 +619,22 @@ client.signal().assert_sessions(&[jid.clone()]).await?;
 
 // Now encryption should work again
 let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
+```
+
+### Manually migrate a session to LID addressing
+
+```rust
+// Migrate first — session_info(&pn_jid) would trigger this same migration as a
+// side effect, which would leave nothing here for migrate_sessions to move.
+let outcome = client.signal().migrate_sessions(&pn_jid, &lid_jid).await?;
+if outcome.has_state_changes() {
+    println!("moved {} session(s) to LID addressing", outcome.migrated);
+}
+
+// Inspect the session under its new LID address
+if let Some(info) = client.signal().session_info(&lid_jid).await? {
+    println!("registration_id={}", info.registration_id);
+}
 ```
 
 ## Error types
@@ -383,6 +650,8 @@ pub enum SignalError {
     Protocol(#[from] SignalProtocolError),
     #[error("unsupported signal operation: {0}")]
     Unsupported(String),
+    #[error("invalid signal input: {0}")]
+    InvalidInput(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -391,6 +660,7 @@ pub enum SignalError {
 **Variants:**
 - `Protocol` — Signal protocol error (session mismatch, decode failure, etc.)
 - `Unsupported` — Operation not supported for the given parameters
+- `InvalidInput` — The operation is supported but one of its inputs is malformed — e.g. a sender-key distribution message that fails to decode, or a [`migrate_sessions`](#migrate_sessions) call with a source/destination pair that isn't a valid PN→LID or Hosted→HostedLid namespace match
 - `Internal` — Catch-all for other errors
 
 ## See also

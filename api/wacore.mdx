@@ -100,7 +100,7 @@ Type-safe IQ request/response specifications:
 - **`props`** - Server properties and A/B experiment configs. The companion [`abprops`](#a-b-props-registry) module ships the typed flag registry, and `props::WATCHED` lists the flags the library itself reads
 - **`spam_report`** - Spam reporting
 - **`tctoken`** - Temporary client tokens
-- **`usync`** - User synchronization
+- **`usync`** - User synchronization. Ships a typed query/response model (`UsyncQuery`, `UsyncProtocol`, `UsyncResponse`, ...) covering every USync subprotocol observed in WhatsApp Web (device lists, contact/LID/username lookup, status, bot profiles, features). See [USync](/api/usync)
 
 See [Architecture](/concepts/architecture) for the IQ protocol pattern.
 
@@ -776,7 +776,7 @@ The `bench-integration` test suite (`tests/bench-integration/`) measures real-wo
 #### Scenarios
 
 | Scenario | What it measures |
-|----------|------------------|
+|----------|-------------------|
 | `connect_to_ready` | Client creation through `Connected` event — includes transport connect, Noise handshake, and initial sync |
 | `send_message` | Single DM send (sender side) — protobuf encoding, Signal encrypt, node marshal, and WebSocket write. Also measures amortized cost over 20 consecutive sends |
 | `send_and_receive_message` | Full round-trip — send a DM and wait for delivery on the receiver. Also measures amortized cost over 20 round-trips |

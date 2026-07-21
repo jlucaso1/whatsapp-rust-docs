@@ -32,12 +32,12 @@ pub fn new(
 
 `UsyncQuery::new` validates the whole query before it reaches the network — non-empty protocols/users, no duplicate protocol kinds, and per-user field consistency (e.g. a `tc_token` requires the `Status` protocol to be selected; `device_sync` requires `DevicesV2`). Deserializing a `UsyncQuery` from an external source runs the same validation, so a serialized input can't bypass it.
 
-**UsyncMode:**
+**`UsyncMode`:**
 - `Query` (default) — contact lookups
 - `Full` — user info with more detail
 - `Delta` — incremental contact synchronization
 
-**UsyncContext:**
+**`UsyncContext`:**
 - `Interactive` (default) — user-initiated operations
 - `Background` — background sync
 - `Message` — message-related operations
@@ -47,7 +47,7 @@ pub fn new(
 Neither `UsyncMode` nor `UsyncContext` is `#[non_exhaustive]`. `Delta` and `Voip` are new variants added in this release — an exhaustive `match` over either enum in existing code will fail to compile until the new arms are handled.
 </Warning>
 
-### UsyncUser
+### `UsyncUser`
 
 Construct a query target from a JID, phone number, or username, then attach protocol-specific inputs with builder methods:
 
@@ -82,7 +82,7 @@ pub const fn with_timestamp(mut self, timestamp: i64) -> Self
 pub const fn with_expected_timestamp(mut self, expected_timestamp: i64) -> Self
 ```
 
-### UsyncProtocol
+### `UsyncProtocol`
 
 ```rust
 pub enum UsyncProtocol {

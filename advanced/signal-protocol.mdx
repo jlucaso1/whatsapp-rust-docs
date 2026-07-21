@@ -1235,7 +1235,7 @@ Call [`Client::flush_pending_signal_state()`](/api/client#flush_pending_signal_s
 
 ## Record components
 
-For callers that need to interchange or inspect session and sender-key record state without depending on the generated protobuf schema directly — custom store implementations, migration tooling, offline debugging — `wacore-libsignal` exposes owned, validated projections of `SessionRecord` and `SenderKeyRecord` called **components**. This is purely additive: the protobuf-backed `serialize()`/`deserialize()` path is unchanged, and a canonical record round-trips losslessly through `into_components()` → `from_components()` → `serialize()`.
+`wacore-libsignal` exposes owned, validated projections of `SessionRecord` and `SenderKeyRecord` called **components**. Use them when you need to interchange or inspect session and sender-key record state without depending on the generated protobuf schema directly — for example in custom store implementations, migration tooling, or offline debugging. This API is purely additive: the protobuf-backed `serialize()`/`deserialize()` path is unchanged. A record does not round-trip through `into_components()` → `from_components()` → `serialize()` byte-for-byte — the conversion applies the validated, normalized export rules described below (counter-lease advancement, stale-chain removal, and bounded truncation), so treat it as a safe normalized re-encoding rather than a lossless copy.
 
 ```rust
 // wacore/libsignal/src/protocol/record_components.rs, re-exported from
@@ -1887,4 +1887,3 @@ See [Signal API reference](/api/signal) for full method documentation and exampl
 - [libsignal Repository](https://github.com/signalapp/libsignal)
 - Source: `wacore/libsignal/src/protocol/`
 - Storage: `src/store/signal.rs`, `src/store/signal_adapter.rs`, `wacore/src/store/signal_cache.rs`
-

@@ -153,6 +153,10 @@ if let Some(pic) = client.contacts().get_profile_picture(&group_jid, true).await
 }
 ```
 
+<Note>
+To override the default request timeout for a single fetch, use `get_profile_picture_with_timeout(jid, preview, timeout)`, which takes an extra `timeout: Option<Duration>` argument. Internally the request is built via `ProfilePictureSpec`'s `with_timeout(...)` builder method; pass `None` to fall back to the default timeout.
+</Note>
+
 ### get_user_info
 
 Get user information by JID.

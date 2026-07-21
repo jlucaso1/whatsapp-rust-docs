@@ -186,6 +186,7 @@ pub enum Event {
     HistorySync(Box<LazyHistorySync>),
     OfflineSyncPreview(OfflineSyncPreview),
     OfflineSyncCompleted(OfflineSyncCompleted),
+    DirtyState(DirtyState),
 
     // Device Updates
     DeviceListUpdate(DeviceListUpdate),
@@ -1993,6 +1994,40 @@ Offline sync happens automatically when the client reconnects after being discon
 
 If the server does not complete offline sync within 60 seconds, the client forces completion via a timeout fallback — `OfflineSyncCompleted` is still emitted with the count of items processed so far. This prevents startup from blocking indefinitely.
 </Note>
+
+### DirtyState
+
+**Emitted:** When the server sends an `<ib><dirty type="..." timestamp="...">` marker, telling the client one of its cached protocol domains is stale server-side.
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct DirtyState {
+    pub dirty_type: DirtyType,
+    pub timestamp: Option<u64>,
+}
+```
+
+**Fields:**
+- `dirty_type` - The stale domain, mirroring `wacore::iq::dirty::DirtyType`: `AccountSync`, `Groups`, `SyncdAppState`, `NewsletterMetadata`, or `Other(String)` for a wire value the client doesn't otherwise recognize.
+- `timestamp` - `Option<u64>`, `None` if the `<dirty>` stanza omitted the `timestamp` attribute.
+
+<Note>
+This is a pure observability hook — it does not replace or gate the client's built-in handling. The client always sends the matching `<clean>` IQ (throttled behind offline-sync completion for `Groups`/`NewsletterMetadata`, per `WAWebHandleDirtyBits`) and, for `SyncdAppState`, re-syncs all app-state collections, exactly as it did before this event existed. `DirtyState` fires first, right before that built-in work starts, so a handler can refresh its own domain-specific derived state (e.g. invalidate a local groups cache) without parsing raw `<ib>` stanzas via [`RawNode`](#raw-stanza-events) or racing the client's own resync.
+</Note>
+
+**Example:**
+```rust
+use wacore::iq::dirty::DirtyType;
+
+Event::DirtyState(DirtyState { dirty_type, timestamp, .. }) => {
+    match dirty_type {
+        DirtyType::Groups => println!("groups cache is stale (as of {timestamp:?})"),
+        DirtyType::SyncdAppState => println!("app-state re-sync incoming"),
+        other => println!("dirty: {other:?} at {timestamp:?}"),
+    }
+}
+```
 
 ## Device Events
 

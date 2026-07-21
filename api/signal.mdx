@@ -291,7 +291,7 @@ if client.signal().validate_session(&jid).await? {
 
 ### session_info
 
-Inspect an existing pairwise Signal session without mutating it.
+Inspect an existing pairwise Signal session, migrating legacy PN-addressed state to its resolved LID namespace when needed.
 
 ```rust
 pub async fn session_info(&self, jid: &Jid) -> Result<Option<SignalSessionInfo>, SignalError>
@@ -303,7 +303,9 @@ pub async fn session_info(&self, jid: &Jid) -> Result<Option<SignalSessionInfo>,
 **Returns:**
 - `Option<SignalSessionInfo>` - `Some` with the session's base key and remote registration id if a session exists, `None` otherwise
 
-If only a legacy PN-addressed session exists and the resolved address is a LID, this method migrates it first (moving session and identity state to the LID namespace) and then reports on the migrated session — mirroring the on-the-fly migration used by the decrypt path. See [`SignalSessionInfo`](#signalsessioninfo) and [PN→LID session migration](/advanced/signal-protocol).
+<Note>
+  If only a legacy PN-addressed session exists and the resolved address is a LID, this method migrates it first (moving session and identity state to the LID namespace) and then reports on the migrated session — mirroring the on-the-fly migration used by the decrypt path. This means `session_info` is not a purely read-only probe: it can itself perform the migration, so a subsequent [`migrate_sessions`](#migrate_sessions) call on the same pair may find there is nothing left to move. See [`SignalSessionInfo`](#signalsessioninfo) and [PN→LID session migration](/advanced/signal-protocol).
+</Note>
 
 **Example:**
 ```rust

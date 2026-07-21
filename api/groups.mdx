@@ -67,25 +67,37 @@ This map is keyed by `Jid`. Call `.to_string()` on the key if you need the strin
 **GroupMetadata fields:**
 - `id: Jid` - Group JID
 - `subject: String` - Group name
+- `notify: Option<String>` - Display notification string reported by the server (from the `notify` attribute)
 - `participants: Vec<GroupParticipant>` - List of participants
 - `addressing_mode: AddressingMode` - Phone number or LID mode
 - `creator: Option<Jid>` - Group creator JID
+- `creator_pn: Option<Jid>` - Creator's phone-number JID, when `creator` is a LID
+- `creator_username: Option<String>` - Creator's Meta username, when present
+- `creator_country_code: Option<String>` - Creator's ISO country code, when present
 - `creation_time: Option<u64>` - Group creation timestamp (Unix seconds)
+- `participant_version_id: Option<String>` - Participant-list version identifier (from `p_v_id`)
+- `admin_version_id: Option<String>` - Admin-list version identifier (from `a_v_id`)
+- `open_thread_id: Option<String>` - Open thread identifier associated with the group
+- `has_missing_participant_identification: bool` - Whether participant identity information was incomplete in this response
 - `subject_time: Option<u64>` - Subject modification timestamp (Unix seconds)
 - `subject_owner: Option<Jid>` - Subject owner JID
+- `subject_owner_pn: Option<Jid>` - Subject owner's phone-number JID (from `s_o_pn`)
+- `subject_owner_username: Option<String>` - Subject owner's Meta username (from `s_o_username`)
 - `description: Option<String>` - Group description body text
 - `description_id: Option<String>` - Description ID (for conflict detection)
 - `description_owner: Option<Jid>` - JID of the participant who set the description
+- `description_owner_pn: Option<Jid>` - Description owner's phone-number JID
+- `description_owner_username: Option<String>` - Description owner's Meta username
 - `description_time: Option<u64>` - Timestamp when the description was set (Unix seconds)
 - `is_locked: bool` - Whether only admins can edit group info
 - `is_announcement: bool` - Whether only admins can send messages
-- `ephemeral_expiration: u32` - Disappearing messages timer in seconds (0 = disabled)
-- `ephemeral_trigger: Option<u32>` - Disappearing mode trigger value (from the `trigger` attribute on `<ephemeral>`)
+- `ephemeral: Option<GroupEphemeralSettings>` - Disappearing-message settings. `None` when the server response has no `<ephemeral>` node at all; `Some(GroupEphemeralSettings { expiration, trigger })` when the node is present — `expiration` is `None` if the node omitted the attribute, which is distinct from `Some(0)` (timer explicitly disabled)
 - `membership_approval: bool` - Whether admin approval is required to join
 - `member_add_mode: Option<MemberAddMode>` - Who can add members
 - `member_link_mode: Option<MemberLinkMode>` - Who can use invite links
 - `size: Option<u32>` - Total participant count
 - `is_parent_group: bool` - Whether this group is a community parent group
+- `parent_membership_approval_required: bool` - Whether joins to this parent group require approval by default
 - `parent_group_jid: Option<Jid>` - JID of the parent community (for subgroups)
 - `is_default_sub_group: bool` - Whether this is the default announcement subgroup of a community
 - `is_general_chat: bool` - Whether this is the general chat subgroup of a community
@@ -94,11 +106,25 @@ This map is keyed by `Jid`. Call `.to_string()` on the key if you need the strin
 - `member_share_history_mode: Option<MemberShareHistoryMode>` - Who can share message history with new members
 - `growth_locked: Option<GrowthLockInfo>` - Growth lock status (invite links temporarily disabled by the system)
 - `is_suspended: bool` - Whether the group is suspended
+- `suspension_can_auto_file: bool` - Whether a suspension appeal may be filed automatically
+- `appeal_status: Option<GroupAppealStatus>` - Current suspension-appeal state
+- `appeal_update_time: Option<u64>` - Last suspension-appeal update timestamp (Unix seconds)
+- `is_support_group: bool` - Whether the group is marked as a support group
 - `allow_admin_reports: bool` - Whether admin reports are allowed
 - `is_hidden_group: bool` - Whether the group is hidden
 - `is_incognito: bool` - Whether incognito mode is enabled
 - `has_group_history: bool` - Whether group history is enabled
+- `is_auto_add_disabled: bool` - Whether automatic participant addition is disabled
+- `has_capi: bool` - Whether the group carries the CAPI capability marker
+- `evolution_version: Option<u32>` - Group schema evolution version
+- `has_group_safety_check: bool` - Whether the group safety-check feature is enabled
+- `participant_label_enabled: bool` - Whether participant labels are enabled
 - `is_limit_sharing_enabled: bool` - Whether limit sharing is enabled
+- `limit_sharing_trigger: Option<u32>` - Source trigger for limit-sharing enablement
+
+<Note>
+`ephemeral_expiration: u32` and `ephemeral_trigger: Option<u32>` were replaced by the single `ephemeral: Option<GroupEphemeralSettings>` field. Migrate reads like `metadata.ephemeral_expiration` to `metadata.ephemeral.as_ref().and_then(|e| e.expiration).unwrap_or(0)`.
+</Note>
 
 See [Community API](/api/community) for community-specific operations.
 
@@ -107,7 +133,10 @@ See [Community API](/api/community) for community-specific operations.
 **GroupParticipant fields:**
 - `jid: Jid` - Participant JID
 - `phone_number: Option<Jid>` - Phone number JID (for LID groups)
+- `lid: Option<Jid>` - Participant's LID JID, when the server includes one
+- `username: Option<CompactString>` - Participant's Meta username, when present
 - `participant_type: ParticipantType` - Participant role (member, admin, or super admin)
+- `details: Option<Box<GroupParticipantDetails>>` - Less-common participant metadata (label, join time, display name, etc.); boxed and only populated when at least one field is present
 
 **Example:**
 ```rust
@@ -340,6 +369,33 @@ let to_remove = vec!["15551234567@s.whatsapp.net".parse()?];
 client.groups().remove_participants(&group_jid, &to_remove).await?;
 ```
 
+### remove_participants_including_linked_groups
+
+Remove participants from a group and cascade the removal to its linked/child groups. Used for community-linked groups, where removing someone from the community should also remove them from subgroups.
+
+```rust
+pub async fn remove_participants_including_linked_groups(
+    &self,
+    jid: &Jid,
+    participants: &[Jid],
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
+```
+
+**Parameters:**
+- `jid` - Group JID (typically the community parent group)
+- `participants` - Array of participant JIDs to remove
+
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let to_remove = vec!["15551234567@s.whatsapp.net".parse()?];
+
+let results = client.groups().remove_participants_including_linked_groups(&group_jid, &to_remove).await?;
+```
+
 ### promote_participants
 
 Promote participants to admin.
@@ -349,20 +405,31 @@ pub async fn promote_participants(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<(), GroupError>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
 - `jid` - Group JID
 - `participants` - Array of participant JIDs to promote
 
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
 **Example:**
 ```rust
 let group_jid: Jid = "123456789@g.us".parse()?;
 let to_promote = vec!["15551234567@s.whatsapp.net".parse()?];
 
-client.groups().promote_participants(&group_jid, &to_promote).await?;
+let results = client.groups().promote_participants(&group_jid, &to_promote).await?;
+
+for result in results {
+    println!("Promoted {}: status {:?}", result.jid, result.status);
+}
 ```
+
+<Note>
+`promote_participants` returns `Vec<ParticipantChangeResponse>` (one entry per participant) instead of `()`.
+</Note>
 
 ### demote_participants
 
@@ -373,20 +440,31 @@ pub async fn demote_participants(
     &self,
     jid: &Jid,
     participants: &[Jid],
-) -> Result<(), GroupError>
+) -> Result<Vec<ParticipantChangeResponse>, GroupError>
 ```
 
 **Parameters:**
 - `jid` - Group JID
 - `participants` - Array of admin JIDs to demote
 
+**Returns:**
+- `Vec<ParticipantChangeResponse>` - Result for each participant
+
 **Example:**
 ```rust
 let group_jid: Jid = "123456789@g.us".parse()?;
 let to_demote = vec!["15551234567@s.whatsapp.net".parse()?];
 
-client.groups().demote_participants(&group_jid, &to_demote).await?;
+let results = client.groups().demote_participants(&group_jid, &to_demote).await?;
+
+for result in results {
+    println!("Demoted {}: status {:?}", result.jid, result.status);
+}
 ```
+
+<Note>
+`demote_participants` returns `Vec<ParticipantChangeResponse>` (one entry per participant) instead of `()`.
+</Note>
 
 ### get_invite_link
 
@@ -971,6 +1049,36 @@ let group_jid: Jid = "123456789@g.us".parse()?;
 client.groups().acknowledge(&group_jid).await?;
 ```
 
+### update_member_label_with_id
+
+Set or clear the bot's per-group member label, sent as a `ProtocolMessage` over the normal message path (not an IQ). Returns the sent stanza's message ID.
+
+```rust
+pub async fn update_member_label_with_id(
+    &self,
+    group_jid: &Jid,
+    label: impl Into<String>,
+) -> Result<String, GroupError>
+```
+
+**Parameters:**
+- `group_jid` - Group JID
+- `label` - New label text, or an empty string to clear the label
+
+**Returns:**
+- `String` - Message ID of the sent stanza
+
+**Example:**
+```rust
+let group_jid: Jid = "123456789@g.us".parse()?;
+let message_id = client.groups().update_member_label_with_id(&group_jid, "VIP").await?;
+println!("Label update sent as message {}", message_id);
+```
+
+<Note>
+`update_member_label` is a thin wrapper around `update_member_label_with_id` that discards the message ID and returns `Result<(), GroupError>`, for callers that don't need it.
+</Note>
+
 ### batch_get_info
 
 Batch query group info for multiple groups at once.
@@ -1180,6 +1288,17 @@ impl GroupDescription {
 }
 ```
 
+### GroupEphemeralSettings
+
+Disappearing-message settings carried by a group's `<ephemeral>` node.
+
+```rust
+pub struct GroupEphemeralSettings {
+    pub expiration: Option<u32>,
+    pub trigger: Option<u32>,
+}
+```
+
 ### MemberAddMode
 
 ```rust
@@ -1203,6 +1322,26 @@ pub enum ParticipantType {
 
 **Methods:**
 - `is_admin(&self) -> bool` - Returns `true` if admin or super admin
+
+### GroupParticipantDetails
+
+Less-common participant metadata. Boxed on `GroupParticipant`/`GroupParticipantResponse` and only populated when at least one field is present.
+
+```rust
+#[non_exhaustive]
+pub struct GroupParticipantDetails {
+    pub participant_label: Option<CompactString>,
+    pub participant_label_mtime: Option<u64>,
+    pub join_time: Option<u64>,
+    pub group_history_sent: Option<bool>,
+    pub display_name: Option<CompactString>,
+    pub is_addressable: bool,
+}
+```
+
+<Note>
+`GroupParticipantDetails` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
+</Note>
 
 ### MemberLinkMode
 
@@ -1232,6 +1371,19 @@ pub enum MemberShareHistoryMode {
 pub enum MembershipApprovalMode {
     Off,  // No approval required
     On,   // Admin approval required
+}
+```
+
+### GroupAppealStatus
+
+Review state for an appeal on a suspended group.
+
+```rust
+pub enum GroupAppealStatus {
+    Approved,
+    InReview,
+    NoAppeal,
+    Rejected,
 }
 ```
 

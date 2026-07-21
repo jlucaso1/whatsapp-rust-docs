@@ -1233,6 +1233,136 @@ Retry-receipt recovery (`handle_retry_receipt` resending to a DM or group reques
 
 Call [`Client::flush_pending_signal_state()`](/api/client#flush_pending_signal_state) to force a deterministic settle — e.g. before reading persisted Signal state directly, or ahead of a non-graceful shutdown. Never call it from inside an `InboundDurabilityHook` or a synchronous, inline `EventHandler::handle_event` implementation, since settling re-enters the processing permit those run under and would deadlock during an offline-sync drain. Ordinary `Bot` closure handlers are unaffected — both default delivery modes run the callback in a detached task off the permit.
 
+## Record components
+
+`wacore-libsignal` exposes owned, validated projections of `SessionRecord` and `SenderKeyRecord` called **components**. Use them when you need to interchange or inspect session and sender-key record state without depending on the generated protobuf schema directly — for example in custom store implementations, migration tooling, or offline debugging. This API is purely additive: the protobuf-backed `serialize()`/`deserialize()` path is unchanged. A record does not round-trip through `into_components()` → `from_components()` → `serialize()` byte-for-byte — the conversion applies the validated, normalized export rules described below (counter-lease advancement, stale-chain removal, and bounded truncation), so treat it as a safe normalized re-encoding rather than a lossless copy.
+
+```rust
+// wacore/libsignal/src/protocol/record_components.rs, re-exported from
+// wacore/libsignal/src/protocol/mod.rs
+pub use record_components::{
+    PendingKeyExchangeComponents, PendingPreKeyComponents, SenderChainKeyComponents,
+    SenderKeyRecordComponents, SenderKeyStateComponents, SenderMessageKeyComponents,
+    SenderSigningKeyComponents, SessionChainComponents, SessionChainKeyComponents,
+    SessionComponents, SessionMessageKeyComponents, SessionMessageKeyMaterial,
+    SessionRecordComponents,
+};
+```
+
+### Session and sender-key shapes
+
+`SessionRecordComponents` mirrors the `current_session` / archived `previous_sessions` split already described in [Arc previous sessions](#arc-previous-sessions); `SenderKeyRecordComponents` mirrors a `SenderKeyRecord`'s state list:
+
+```rust
+pub struct SessionRecordComponents {
+    pub current_session: Option<SessionComponents>,
+    pub previous_sessions: Vec<SessionComponents>,
+}
+
+pub struct SessionComponents {
+    pub session_version: Option<u32>,
+    pub local_identity_public: Option<Vec<u8>>,
+    pub remote_identity_public: Option<Vec<u8>>,
+    pub root_key: Option<Vec<u8>>,
+    pub previous_counter: Option<u32>,
+    pub sender_chain: Option<SessionChainComponents>,
+    pub receiver_chains: Vec<SessionChainComponents>,
+    pub pending_key_exchange: Option<PendingKeyExchangeComponents>,
+    pub pending_pre_key: Option<PendingPreKeyComponents>,
+    pub remote_registration_id: Option<u32>,
+    pub local_registration_id: Option<u32>,
+    pub needs_refresh: Option<bool>,
+    pub alice_base_key: Option<Vec<u8>>,
+}
+
+pub struct SessionChainComponents {
+    pub sender_ratchet_key: Option<Vec<u8>>,
+    pub sender_ratchet_key_private: Option<Vec<u8>>,
+    pub chain_key: Option<SessionChainKeyComponents>,
+    pub message_keys: Vec<SessionMessageKeyComponents>,
+}
+
+pub struct SenderKeyRecordComponents {
+    pub states: Vec<SenderKeyStateComponents>,
+}
+
+pub struct SenderKeyStateComponents {
+    pub key_id: u32,
+    pub chain_key: SenderChainKeyComponents,           // { iteration: u32, seed: Vec<u8> }
+    pub signing_key: SenderSigningKeyComponents,        // { public: Vec<u8>, private: Option<Vec<u8>> }
+    pub message_keys: Vec<SenderMessageKeyComponents>,  // { iteration: u32, seed: Vec<u8> }
+}
+```
+
+`SessionMessageKeyComponents` and `SenderMessageKeyComponents` hold skipped out-of-order message keys, keyed by chain index/iteration. A session message key's secret material is `SessionMessageKeyMaterial`, either the compact `Seed(Vec<u8>)` import form (expanded through the same canonical derivation used elsewhere — see [`MessageKeyGenerator`](#chain-key-ratcheting)) or the `Derived { cipher_key, mac_key, iv }` form that `into_components()` always produces on export.
+
+Conversions:
+
+```rust
+impl SessionRecord {
+    pub fn from_components(value: SessionRecordComponents) -> Result<Self, SignalProtocolError>;
+    pub fn into_components(mut self) -> Result<SessionRecordComponents, SignalProtocolError>;
+}
+impl SenderKeyRecord {
+    pub fn from_components(value: SenderKeyRecordComponents) -> Result<Self, SignalProtocolError>;
+    pub fn into_components(mut self) -> Result<SenderKeyRecordComponents, SignalProtocolError>;
+}
+```
+
+### Import validation
+
+`from_components` enforces the same structural invariants the canonical protobuf reader relies on elsewhere in this codebase, rather than accepting whatever shape the caller hands it:
+
+- A **sender chain** (the local sending ratchet chain within a pairwise session — not to be confused with a group sender-key chain) must be structurally complete: ratchet public key present, a 32-byte ratchet private key, and a chain key with both its index and 32-byte secret set. An incomplete sender chain fails with `SignalProtocolError::InvalidArgument`; a session with *no* sender chain at all (e.g. one just received and not yet replied to) is fine and imports as `sender_chain: None`.
+- A **receiver chain** must never carry `sender_ratchet_key_private` — receiver chains never own the remote party's private key, so import fails if one is set. Symmetrically, projecting a persisted record into components always reports a receiver chain's `sender_ratchet_key_private` as `None`, silently dropping any non-canonical private material a legacy record might contain, matching how the canonical reader already treats that field.
+- Raw 32-byte public keys and canonically-serialized public keys (type byte + 32 bytes) are both accepted on import; whichever form was imported, `into_components()` always exports canonical serialization.
+
+### Export normalization
+
+`into_components()` never hands back a session or sender-key chain whose counter could be replayed on re-import:
+
+- Any durably reserved sender-chain counter range — see the counter-lease mechanics in [Flush scheduling: send vs. receive](#flush-scheduling-send-vs-receive) — is advanced to its exclusive ceiling before export. Re-importing the exported components can't reuse a counter value that was only reserved, not yet actually sent.
+- A sender chain too stale to fast-forward past its reservation is dropped from the exported chain rather than aborting the whole export — the rest of the record (receiver chains, other archived sessions) still exports normally.
+- `SessionRecordComponents.previous_sessions` is truncated to `ARCHIVED_STATES_MAX_LENGTH` (40) and `SenderKeyRecordComponents.states` is truncated to `MAX_SENDER_KEY_STATES` (5) — the same bounds the records themselves already enforce. See [Protocol safety limits](#protocol-safety-limits).
+
+### `has_usable_sender_chain`
+
+```rust
+impl SessionState {
+    pub fn has_usable_sender_chain(&self) -> Result<bool, InvalidSessionError>;
+}
+impl SessionRecord {
+    pub fn has_usable_sender_chain(&self) -> Result<bool, SignalProtocolError>;
+}
+```
+
+Checks whether a session has a sender chain it could actually encrypt with, rather than assuming one exists. Previously this was effectively best-effort/always-true; the current implementation returns `Ok(false)` (not an error) when no sender chain is set at all, and otherwise structurally validates the ratchet public key, the ratchet private key, and the chain key are all present before returning `Ok(true)` — the same completeness check `from_components` applies on import. `SessionRecord::has_usable_sender_chain` delegates to the current session's check, returning `Ok(false)` when there is no current session.
+
+Location: `wacore/libsignal/src/protocol/state/session.rs`
+
+### Debug output redacts secrets
+
+`Debug` on every `*Components` type — `SessionComponents`, `SessionChainComponents`, `SessionChainKeyComponents`, `PendingKeyExchangeComponents`, `PendingPreKeyComponents`, `SenderChainKeyComponents`, `SenderSigningKeyComponents`, `SenderMessageKeyComponents`, and `SessionMessageKeyMaterial` — prints private keys, chain/root keys, seeds, and cipher/mac/IV material as `<redacted>`, while structural fields (indices, counters, iteration numbers, key presence) print plainly:
+
+```rust
+println!("{chain:?}");
+// SessionChainKeyComponents { index: Some(7), key: <redacted> }
+```
+
+This makes it safe to log or assert against a `*Components` value in application code without writing a custom `Debug` impl to avoid leaking key material.
+
+**Example — inspecting whether a session can currently send, without touching protobuf types:**
+
+```rust
+// `record: SessionRecord` loaded from your store
+if record.has_usable_sender_chain()? {
+    let components = record.into_components()?;
+    println!("{:?}", components.current_session); // secrets redacted
+}
+```
+
+Location: `wacore/libsignal/src/protocol/record_components.rs`
+
 ## Security Considerations
 
 ### Identity key trust

@@ -776,7 +776,7 @@ The `bench-integration` test suite (`tests/bench-integration/`) measures real-wo
 #### Scenarios
 
 | Scenario | What it measures |
-|----------|-------------------|
+|----------|------------------|
 | `connect_to_ready` | Client creation through `Connected` event — includes transport connect, Noise handshake, and initial sync |
 | `send_message` | Single DM send (sender side) — protobuf encoding, Signal encrypt, node marshal, and WebSocket write. Also measures amortized cost over 20 consecutive sends |
 | `send_and_receive_message` | Full round-trip — send a DM and wait for delivery on the receiver. Also measures amortized cost over 20 round-trips |

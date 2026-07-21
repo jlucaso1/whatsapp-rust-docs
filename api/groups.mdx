@@ -229,7 +229,7 @@ for participant in &result.metadata.participants {
 ```
 
 <Note>
-Since v0.6, `create_group` returns the full `GroupMetadata` (matching `get_metadata`) instead of just the JID. Inspect `result.metadata` for participants, addressing mode, ephemeral timer, and parent linkage in a single round-trip. `GroupMetadata.participants` is a `Vec<GroupParticipant>` (the IQ-response shape), not the `GroupParticipantInfo` used by group notification events — so masked-number `display_name` labels are only available on the event-side `GroupParticipantInfo`, not here.
+Since v0.6, `create_group` returns the full `GroupMetadata` (matching `get_metadata`) instead of just the JID. Inspect `result.metadata` for participants, addressing mode, ephemeral timer, and parent linkage in a single round-trip. `GroupMetadata.participants` is a `Vec<GroupParticipant>` (the IQ-response shape), not the `GroupParticipantInfo` used by group notification events — but masked-number `display_name` labels are available here too, via `participant.details.as_ref().and_then(|d| d.display_name.as_deref())`, in addition to the event-side `GroupParticipantInfo.display_name` for live group-update events.
 </Note>
 
 ### set_subject
@@ -1543,7 +1543,7 @@ pub struct CreateGroupResult {
 `CreateGroupResult` is `#[non_exhaustive]`. Field reads are unaffected; only exhaustive struct destructuring from outside the crate requires adding `..`.
 </Note>
 
-The `metadata` field carries the full group state returned by the server (same shape as [`get_metadata`](#get_metadata)). `metadata.participants` is `Vec<GroupParticipant>` — note that masked-number `display_name` labels live on `GroupParticipantInfo` (which carries `<participant>` children of *notification* events), not on `GroupParticipant` here.
+The `metadata` field carries the full group state returned by the server (same shape as [`get_metadata`](#get_metadata)). `metadata.participants` is `Vec<GroupParticipant>` — masked-number `display_name` labels are reachable via `participant.details.as_ref().and_then(|d| d.display_name.as_deref())`, or from the event-side `GroupParticipantInfo` (which carries `<participant>` children of *notification* events) when handling live group-update events.
 
 <Note>
 Prior to v0.6 this struct only exposed a `gid: Jid`. Replace `result.gid` with `result.metadata.id` when upgrading (`GroupMetadata.id`, not `jid`). The same migration applies to `CreateCommunityResult`.

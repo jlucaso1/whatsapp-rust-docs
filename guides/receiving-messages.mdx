@@ -433,7 +433,8 @@ The library automatically:
 5. Falls back to immediate PDO as last resort when retries are exhausted
 
 ```rust
-// Retry reasons (internal, handled automatically)
+// Retry reasons (handled automatically; also exported as `RetryReason`
+// for callers driving retries manually, see below)
 enum RetryReason {
     NoSession = 1,        // No session exists
     InvalidKey = 2,       // Invalid key
@@ -442,6 +443,38 @@ enum RetryReason {
     // ... other reasons
 }
 ```
+
+#### Requesting a retry manually
+
+`Client::request_message_retry` exposes the same retry-receipt path the automatic pipeline uses, for callers that intercept raw stanzas themselves (custom transports, replay tooling):
+
+```rust
+pub async fn request_message_retry(
+    self: &Arc<Self>,
+    stanza: &NodeRef<'_>,
+    options: RetryRequestOptions,
+) -> Result<RetryRequestOutcome, RetryRequestError>
+```
+
+`stanza` must be a `<message>` node with `id` and `from` attrs — the client parses it once via the canonical message-info parser rather than reusing whatever metadata the caller already extracted. `RetryRequestOptions` is a small builder:
+
+```rust
+RetryRequestOptions::new()
+    .with_reason(RetryReason::BadMac)       // diagnostic reason sent to the sender, default UnknownError
+    .with_force_include_keys(true)          // request the local key bundle even below the normal threshold
+```
+
+`RetryRequestOutcome` reports what happened without the caller needing to inspect internal counters:
+
+- `Sent { retry_count, included_keys }` — the retry receipt reached the transport
+- `Suppressed { retry_count }` — the protocol excludes this sender/chat combination from retry receipts, but the shared counter still advanced
+- `LimitReached` — the shared retry counter had already hit its cap (5 attempts)
+
+This call only sends the retry receipt; a transport ack (to clear the stanza from the server's offline queue) remains the caller's responsibility — see [Manual stanza acknowledgement](/advanced/binary-protocol#manual-stanza-acknowledgement).
+
+<Note>
+Key material is attached to a retry receipt only when `retry_count >= 2`, `force_include_keys` is explicitly set, or the destination is stateless/hosted — never on the strength of `reason` alone. The diagnostic `RetryReason` only affects what's reported to the sender, not whether keys go out.
+</Note>
 
 ### Unavailable message recovery via PDO
 

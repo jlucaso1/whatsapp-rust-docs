@@ -503,7 +503,9 @@ MessageRetransmission::new(chat, requester, message, message_id, retry_count)
 
 `retransmit_message` validates every field before touching Signal ratchet state. `chat` and `requester` must be non-empty. `message_id` must be non-empty. `retry_count` must fall in `1..MAX_RETRY_COUNT`. `requester` must be a user device JID, not a group/broadcast/server JID. `recipient` is rejected outside the direct+local/bot case described above. Any violation returns `SendError::InvalidRequest` before ratchet advancement or persistence.
 
-For a group retransmission, the client re-resolves group metadata under your requested freshness policy and preserves the group's addressing mode; broadcast-list retransmissions omit it. For a status retransmission, the client rebuilds the sender key immediately for just the requesting device — including sender-key distribution when required — without fanning out to the rest of the audience. The status retry count itself stays operation-level state, since the captured WhatsApp Web wire format doesn't encode it on the status receipt.
+For a group retransmission, the client re-resolves group metadata under your requested freshness policy. It preserves the group's addressing mode on the outgoing stanza. A broadcast-list retransmission omits the addressing mode entirely.
+
+For a status retransmission, the client rebuilds the sender key immediately, but only for the requesting device. It distributes the sender key too, when the requesting device needs it. It never fans out to the rest of the status audience. The status retry count itself stays operation-level state — the captured WhatsApp Web wire format has no field for it on the status receipt.
 
 **Example:**
 ```rust

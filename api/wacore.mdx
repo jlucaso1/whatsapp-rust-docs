@@ -100,7 +100,7 @@ Type-safe IQ request/response specifications:
 - **`props`** - Server properties and A/B experiment configs. The companion [`abprops`](#a-b-props-registry) module ships the typed flag registry, and `props::WATCHED` lists the flags the library itself reads
 - **`spam_report`** - Spam reporting
 - **`tctoken`** - Temporary client tokens
-- **`usync`** - User synchronization
+- **`usync`** - User synchronization. Ships a typed query/response model (`UsyncQuery`, `UsyncProtocol`, `UsyncResponse`, ...) covering every USync subprotocol observed in WhatsApp Web (device lists, contact/LID/username lookup, status, bot profiles, features). See [USync](/api/usync)
 
 See [Architecture](/concepts/architecture) for the IQ protocol pattern.
 

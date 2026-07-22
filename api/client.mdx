@@ -878,6 +878,16 @@ These are low-level APIs that bypass the high-level message sending pipeline. Mo
 
 See [Signal API](/api/signal) for full documentation.
 
+### `query_usync`
+
+```rust
+pub async fn query_usync(&self, query: UsyncQuery) -> Result<UsyncResponse, IqError>
+```
+
+Executes a typed USync ("user sync") query directly — the same protocol engine that powers [`contacts()`](#contacts) and [`signal().get_user_devices()`](#signal) under the hood. Use it for protocol combinations not covered by a specialized helper (bot profile lookup, username resolution, `disappearing_mode`/`text_status`, feature flags). This is a neutral operation: it only returns decoded wire data, with no cache or persistence side effects.
+
+See [USync API](/api/usync) for the full `UsyncQuery`/`UsyncResponse` model and examples.
+
 ---
 
 ## Public fields

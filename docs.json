@@ -115,7 +115,8 @@
                   "api/events",
                   "api/spam-report",
                   "api/tctoken",
-                  "api/signal"
+                  "api/signal",
+                  "api/usync"
                 ]
               },
               {

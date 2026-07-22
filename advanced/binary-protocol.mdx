@@ -971,6 +971,52 @@ pub enum NackReason {
 
 Each variant maps to the integer reason code WA Web sends on the wire. The client picks the variant from the decrypt failure path — `ParsingError` for malformed binary, `InvalidProtobuf` for wa::Message decode failures, `MaxRetryReached` after the PDO recovery state machine gives up, and so on. Consumers building custom transports can reuse the enum to produce wire-compatible nacks.
 
+### Manual stanza acknowledgement
+
+The automatic receive pipeline already acks and nacks stanzas as it processes them. Callers that intercept raw nodes themselves — custom transports, replay tooling, mock servers — can respond explicitly instead:
+
+```rust
+pub async fn acknowledge_stanza(
+    &self,
+    stanza: &NodeRef<'_>,
+) -> Result<(), StanzaResponseError>
+
+pub async fn reject_stanza(
+    &self,
+    stanza: &NodeRef<'_>,
+    rejection: StanzaRejection,
+) -> Result<(), StanzaResponseError>
+```
+
+`acknowledge_stanza` sends a plain `<ack/>` built from the stanza's `id`/`from` (and, for `message` stanzas, the local device's PN — this fails with `StanzaResponseError::MissingLocalIdentity` if pairing hasn't completed). It always preserves the stanza's `participant` attribute, unlike the automatic pipeline, which omits a `participant` that merely duplicates the `from` JID on `<receipt>` stanzas.
+
+`reject_stanza` sends `<ack error="…">` built from a `StanzaRejection`:
+
+```rust
+impl StanzaRejection {
+    pub const fn new(reason: NackReason) -> Self;
+    pub const fn invalid_protobuf(failure_reason: Option<i32>) -> Self;
+    pub const fn reason(self) -> NackReason;
+    pub const fn failure_reason(self) -> Option<i32>;
+}
+```
+
+`invalid_protobuf` is the only constructor that can carry a `failure_reason` — the typed detail from a `wa::Message` decode failure; every other rejection reason encodes `None`.
+
+`acknowledge_stanza` accepts any stanza class; `reject_stanza` accepts only `message`, `receipt`, and `notification` stanzas, unless `rejection.reason()` is `NackReason::UnrecognizedStanza`, in which case any class is accepted — matching the protocol's own catch-all nack path. Malformed input (missing `id`/`from`, or `reject_stanza` called on an unsupported class) is returned to the caller as a typed `StanzaResponseError` instead of being silently dropped, unlike the tolerant automatic receive path:
+
+```rust
+pub enum StanzaResponseError {
+    MissingAttribute(&'static str),
+    MissingLocalIdentity,
+    UnsupportedStanzaClass,
+    Encoding(wacore_binary::error::BinaryError),
+    Client(ClientError),
+}
+```
+
+See [Decryption retry mechanism](/guides/receiving-messages#requesting-a-retry-manually) for the equivalent manual entry point into retry receipts.
+
 ## Wire format examples
 
 ### Simple Message

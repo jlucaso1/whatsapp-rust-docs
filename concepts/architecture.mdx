@@ -453,6 +453,8 @@ The Meta AI bot's `msmsg` (`<enc type="msmsg">`) encryption type was the origina
 
 **Ack SKDM-only session decrypts:** A `pkmsg`/`msg` that decrypts successfully but carries only a Sender Key Distribution Message (no user-facing content to dispatch) is now explicitly acked. Previously it could decrypt, skip event dispatch, and leave no ack — so the server kept replaying it from the offline queue. The fix closes that gap so SKDM-only stanzas drain like any other processed message.
 
+**Nack unparseable message stanzas:** A `<message>` stanza whose required `id`/`from` attrs (and `participant`, for group/status messages) are missing or carry an invalid JID now gets an immediate `<ack error="487">` (`NackReason::ParsingError`) instead of a bare warning log and silent drop. `parse_message_info` itself became fail-fast for the same fields — it no longer falls back to a lenient default JID. Consumers driving their own ack/nack flow for intercepted stanzas can reach the same typed responses via `Client::acknowledge_stanza`/`reject_stanza` — see [Manual stanza acknowledgement](/advanced/binary-protocol#manual-stanza-acknowledgement).
+
 ### Critical app-state sync (pairing bootstrap)
 
 Right after a fresh pairing (and on any reconnect before the account's critical app-state collections have synced), the client fetches the `CriticalBlock` and `CriticalUnblockLow` collections — blocked contacts and push name — via a batched IQ, before dispatching `Connected`. Decoding those snapshots requires the app-state **sync-key-share**, an E2E message the primary phone sends automatically, which can arrive late if a heavy history sync is saturating the stream at the same time.

@@ -68,7 +68,8 @@
                   "advanced/observability",
                   "advanced/metrics",
                   "advanced/inbound-durability",
-                  "advanced/retry-admission"
+                  "advanced/retry-admission",
+                  "advanced/plugins"
                 ]
               }
             ]

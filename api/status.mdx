@@ -24,7 +24,7 @@ pub async fn send_text(
     &self,
     text: &str,
     background_argb: u32,
-    font: i32,
+    font: wa::message::extended_text_message::FontType,
     recipients: &[Jid],
     options: StatusSendOptions,
 ) -> Result<SendResult, SendError>
@@ -33,7 +33,7 @@ pub async fn send_text(
 **Parameters:**
 - `text` - Status text content
 - `background_argb` - Background color as ARGB (e.g., `0xFF1E6E4F`)
-- `font` - Font style index (0-4)
+- `font` - Status font. `FontType` is a typed protocol enum, so a value outside it can't be passed (an older `i32` form silently dropped out-of-range values at encode time)
 - `recipients` - Slice of recipient JIDs
 - `options` - Privacy and delivery options
 
@@ -42,6 +42,7 @@ pub async fn send_text(
 
 **Example:**
 ```rust
+use waproto::whatsapp as wa;
 use whatsapp_rust::{Jid, StatusSendOptions};
 
 let recipients = [
@@ -53,7 +54,7 @@ let result = client.status()
     .send_text(
         "Hello from Rust!",
         0xFF1E6E4F, // Green background
-        0,          // Default font
+        wa::message::extended_text_message::FontType::SYSTEM,
         &recipients,
         StatusSendOptions::default(),
     )
@@ -279,21 +280,33 @@ Options for sending status updates.
 
 ```rust
 pub struct StatusSendOptions {
-    /// Privacy setting for this status
+    /// Privacy setting for this status. Sent in the `<meta>` stanza node.
     pub privacy: StatusPrivacySetting,
+    /// Override the generated message ID.
+    pub message_id: Option<String>,
+    /// Extra child nodes appended to the status stanza.
+    pub extra_stanza_nodes: Vec<Node>,
+    /// Freshness policy for the recipient device lists used by this send.
+    pub device_freshness: Freshness,
 }
 ```
 
+- `message_id` - Same override use case as `SendOptions::message_id` on 1:1/group sends (see [Send API — SendOptions](/api/send#sendoptions)): resending a failed status with the same ID, or ensuring idempotency. Leave `None` to auto-generate.
+- `extra_stanza_nodes` - Neutral children appended to the outgoing `<message>` stanza. Structural children owned by the send path (e.g. `<enc>`, `<participants>`) are rejected before any cryptographic state changes; use this only for genuinely additional nodes.
+- `device_freshness` - `Freshness::CachePreferred` (default) reuses the cached recipient device list; `Freshness::Refresh` forces a fresh device-list fetch before sending. See [`Freshness`](/api/groups#freshness).
+
 **Example:**
 ```rust
-use whatsapp_rust::{StatusSendOptions, StatusPrivacySetting};
+use whatsapp_rust::{Freshness, StatusSendOptions, StatusPrivacySetting};
 
 // Send to all contacts
 let options = StatusSendOptions::default();
 
-// Send to allow list only
+// Send to allow list only, forcing a fresh device-list fetch
 let options = StatusSendOptions {
     privacy: StatusPrivacySetting::AllowList,
+    device_freshness: Freshness::Refresh,
+    ..Default::default()
 };
 ```
 

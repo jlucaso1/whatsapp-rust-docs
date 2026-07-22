@@ -33,7 +33,7 @@ pub async fn send_text(
 **Parameters:**
 - `text` - Status text content
 - `background_argb` - Background color as ARGB (e.g., `0xFF1E6E4F`)
-- `font` - Status font. `FontType` is a typed protocol enum, so a value outside it can't be passed (an older `i32` form silently dropped out-of-range values at encode time)
+- `font` - Pass one of the `FontType` variants (e.g. `FontType::SYSTEM`). This is a typed protocol enum, so you can't pass a value it doesn't define — an older `i32` form silently dropped out-of-range values at encode time
 - `recipients` - Slice of recipient JIDs
 - `options` - Privacy and delivery options
 
@@ -201,9 +201,11 @@ pub async fn revoke(
 
 **Example:**
 ```rust
+use waproto::whatsapp::message::extended_text_message::FontType;
+
 // Send a status
 let result = client.status()
-    .send_text("Temporary status", 0xFF000000, 0, &recipients, Default::default())
+    .send_text("Temporary status", 0xFF000000, FontType::SYSTEM, &recipients, Default::default())
     .await?;
 
 // Later, revoke it
@@ -291,9 +293,9 @@ pub struct StatusSendOptions {
 }
 ```
 
-- `message_id` - Same override use case as `SendOptions::message_id` on 1:1/group sends (see [Send API — SendOptions](/api/send#sendoptions)): resending a failed status with the same ID, or ensuring idempotency. Leave `None` to auto-generate.
-- `extra_stanza_nodes` - Neutral children appended to the outgoing `<message>` stanza. Structural children owned by the send path (e.g. `<enc>`, `<participants>`) are rejected before any cryptographic state changes; use this only for genuinely additional nodes.
-- `device_freshness` - `Freshness::CachePreferred` (default) reuses the cached recipient device list; `Freshness::Refresh` forces a fresh device-list fetch before sending. See [`Freshness`](/api/groups#freshness).
+- `message_id` - Set this to resend a failed status with its original ID, or to otherwise ensure idempotency. Leave it `None` to auto-generate an ID. Same override use case as `SendOptions::message_id` on 1:1/group sends — see [Send API — SendOptions](/api/send#sendoptions).
+- `extra_stanza_nodes` - Add neutral child nodes here to include them on the outgoing `<message>` stanza. Don't use this for structural children the send path owns (e.g. `<enc>`, `<participants>`) — those are rejected before any cryptographic state changes.
+- `device_freshness` - Leave this at `Freshness::CachePreferred` (default) to reuse the cached recipient device list, or set `Freshness::Refresh` to force a fresh device-list fetch before sending. See [`Freshness`](/api/groups#freshness).
 
 **Example:**
 ```rust

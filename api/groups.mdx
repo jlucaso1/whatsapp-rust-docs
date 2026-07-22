@@ -47,7 +47,7 @@ tokio::spawn(async move {
 });
 ```
 
-### query_info_with_freshness
+### `query_info_with_freshness`
 
 Query group information with an explicit cache [`Freshness`](#freshness) policy, instead of the always-cache-preferred behavior of `query_info`.
 
@@ -1259,7 +1259,7 @@ for pic in pictures {
 
 ## Types
 
-### Freshness
+### `Freshness`
 
 Selects whether an operation may return an existing cached snapshot or must consult its source before returning. Shared across the SDK wherever a cache-backed lookup accepts an explicit staleness policy — `Groups::query_info_with_freshness` here, and `StatusSendOptions::device_freshness` (see [Status](/api/status#statussendoptions)).
 
@@ -1274,7 +1274,7 @@ pub enum Freshness {
 }
 ```
 
-`Freshness` is re-exported from the crate root. `Refresh` never leaves a caller-visible gap: the previous snapshot stays servable until the new one is published.
+`Freshness` is re-exported from the crate root, so you can import it directly: `use whatsapp_rust::Freshness;`. When you pass `Refresh`, you never see a caller-visible gap — the previous snapshot stays servable until the new one is published.
 
 ### GroupInfo
 

@@ -33,7 +33,7 @@ Once a release that includes `plugins` is published, you can switch to the versi
 whatsapp-rust = { version = "0.7", features = ["plugins"] }  # update when released
 ```
 
-A default build has neither plugin fields nor their runtime branches — enabling `plugins` is required both in your own crate and, if you're publishing a reusable plugin crate, in its own `whatsapp-rust` dependency. Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) activates the host for the final binary automatically, so a plugin crate doesn't need its consumers to remember to opt in themselves.
+A default build has neither plugin fields nor their runtime branches. If you're implementing a plugin directly in your application, enable `plugins` there. If you're publishing a reusable plugin crate, enable `plugins` on its own `whatsapp-rust` dependency instead — Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) then activates the host for any application that depends on your crate, so its `Cargo.toml` doesn't need to enable `plugins` itself.
 
 See [Installation — feature flags](/installation#feature-flags) for where `plugins` and `client-lifecycle` sit relative to the rest of the feature matrix.
 
@@ -45,7 +45,7 @@ A plugin implements `ClientPlugin`, chooses an associated `Api` type, and return
 use std::sync::Arc;
 
 use whatsapp_rust::anyhow::Result;
-use whatsapp_rust::{ClientPlugin, PluginContext, PluginFuture, PluginManifest};
+use whatsapp_rust::{ClientPlugin, PluginCapability, PluginContext, PluginFuture, PluginManifest};
 
 struct SearchPlugin;
 
@@ -111,15 +111,36 @@ A plugin's manifest requests capabilities, and `PluginContext` only exposes the 
 
 | Capability | Handle | Grants |
 | --- | --- | --- |
-| `events.core.observe` | `PluginCoreEvents` | Selective, non-blocking observation of sealed core events |
-| `tasks.spawn` | `PluginTasks` / `PluginConnectionTasks` | Runtime-agnostic, cancellation-tracked background work |
-| `messaging.send` | `PluginMessaging` | High-level message sends |
-| `iq.execute` | `PluginIq` | Typed `IqSpec` execution |
-| `events.plugin.publish` | `PluginEvents` | Publishing custom events, scoped to the plugin's own namespace |
+| `PluginCapability::CoreEvents` | `PluginCoreEvents` | Selective, non-blocking observation of sealed core events |
+| `PluginCapability::Tasks` | `PluginTasks` / `PluginConnectionTasks` | Runtime-agnostic, cancellation-tracked background work |
+| `PluginCapability::Messaging` | `PluginMessaging` | High-level message sends |
+| `PluginCapability::Iq` | `PluginIq` | Typed `IqSpec` execution |
+| `PluginCapability::PluginEvents` | `PluginEvents` | Publishing custom events, scoped to the plugin's own namespace |
 
 <Note>
 This is API shaping, not a sandbox: a native plugin is trusted in-process Rust code and can use any dependency available to your build. It exists so a plugin's `install` signature documents what it actually touches, and so `PluginContext` never hands out the raw backend or Signal stores.
 </Note>
+
+Request a capability by chaining `with_capability` on the manifest, then retrieve its handle from the `PluginContext` passed into `install`. Continuing the `SearchPlugin` example above, requesting `CoreEvents` and storing its handle on `SearchApi` looks like this:
+
+```rust
+fn manifest(&self) -> PluginManifest {
+    PluginManifest::new("example.search", "0.1.0")
+        .with_capability(PluginCapability::CoreEvents)
+}
+
+fn install(&self, context: PluginContext) -> PluginFuture<'_, Result<Arc<Self::Api>>> {
+    Box::pin(async move {
+        let core_events = context
+            .core_events()
+            .cloned()
+            .expect("CoreEvents capability was requested in the manifest above");
+        Ok(Arc::new(SearchApi { core_events }))
+    })
+}
+```
+
+The other capabilities follow the same pattern: `context.tasks()`, `context.messaging()`, `context.iq()`, and `context.plugin_events()` each return `Option<&Plugin*>`, populated only when the matching `PluginCapability` was requested in `manifest()`.
 
 Capability handles hold a weak reference to the client internally and reject calls once the client has shut down, so a plugin API that outlives the client (for example, one your application keeps an `Arc` to) fails safely instead of resurrecting it.
 
@@ -148,7 +169,9 @@ install once
 
 ## Custom events
 
-Plugins can publish and subscribe to their own events without going through the sealed core `Event` enum. `PluginEventRouter` routes by an exact `(plugin_id, topic)` selector, and every subscriber gets an independently bounded queue with a configurable overflow policy (`DropNewest` or `DropOldest`) via `PluginEventEndpointConfig`. Each delivered envelope carries the plugin ID, topic, schema version, payload bytes, the connection generation at publish time, and a route-local monotonic sequence number, so a subscriber can detect gaps left by dropped events.
+Plugins can publish and subscribe to their own events, without going through the sealed core `Event` enum. `PluginEventRouter` routes each event by an exact `(plugin_id, topic)` selector. Every subscriber gets its own independently bounded queue. `PluginEventEndpointConfig` sets that queue's overflow policy: either `DropNewest` or `DropOldest`.
+
+Each delivered envelope carries six fields: the plugin ID, the topic, a schema version, the payload bytes, the connection generation at publish time, and a route-local monotonic sequence number. A subscriber uses that sequence number to detect gaps left by dropped events.
 
 `PluginEventSubscription` is an RAII endpoint — dropping it removes all of that subscriber's selectors from the router at once.
 

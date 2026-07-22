@@ -47,6 +47,38 @@ tokio::spawn(async move {
 });
 ```
 
+### `query_info_with_freshness`
+
+Query group information with an explicit cache [`Freshness`](#freshness) policy, instead of the always-cache-preferred behavior of `query_info`.
+
+```rust
+pub async fn query_info_with_freshness(
+    &self,
+    jid: &Jid,
+    freshness: Freshness,
+) -> Result<Arc<GroupInfo>, GroupError>
+```
+
+**Parameters:**
+- `jid` - Group JID (must end with `@g.us`)
+- `freshness` - `Freshness::CachePreferred` (same as `query_info`) or `Freshness::Refresh` to force a network round-trip
+
+**Returns:**
+- `Arc<GroupInfo>` - Same shared snapshot type as `query_info`
+
+A `Refresh` query leaves the currently cached snapshot readable to concurrent callers while the network request is in flight, then atomically replaces it once the response arrives — there is no window where the cache is empty.
+
+**Example:**
+```rust
+use whatsapp_rust::Freshness;
+
+// Force a refresh after a notification implies the cached snapshot is stale.
+let info = client
+    .groups()
+    .query_info_with_freshness(&group_jid, Freshness::Refresh)
+    .await?;
+```
+
 ### get_participating
 
 Get all groups the client is participating in.
@@ -1226,6 +1258,23 @@ for pic in pictures {
 ```
 
 ## Types
+
+### `Freshness`
+
+Selects whether an operation may return an existing cached snapshot or must consult its source before returning. Shared across the SDK wherever a cache-backed lookup accepts an explicit staleness policy — `Groups::query_info_with_freshness` here, and `StatusSendOptions::device_freshness` (see [Status](/api/status#statussendoptions)).
+
+```rust
+#[non_exhaustive]
+pub enum Freshness {
+    /// Return a cached snapshot when available and consult the source on a miss (default).
+    CachePreferred,
+    /// Consult the source and publish the resulting snapshot without clearing the
+    /// previous one first.
+    Refresh,
+}
+```
+
+`Freshness` is re-exported from the crate root, so you can import it directly: `use whatsapp_rust::Freshness;`. When you pass `Refresh`, you never see a caller-visible gap — the previous snapshot stays servable until the new one is published.
 
 ### GroupInfo
 

@@ -476,6 +476,57 @@ This call only sends the retry receipt; a transport ack (to clear the stanza fro
 Key material is attached to a retry receipt only when `retry_count >= 2`, `force_include_keys` is explicitly set, or the destination is stateless/hosted — never on the strength of `reason` alone. The diagnostic `RetryReason` only affects what's reported to the sender, not whether keys go out.
 </Note>
 
+#### Retransmitting a message manually
+
+`Client::retransmit_message` is the sending-side counterpart to `request_message_retry` above: for callers that intercept `<receipt type="retry">` stanzas themselves, it exposes the same targeted-resend path the automatic pipeline uses to answer one.
+
+```rust
+pub async fn retransmit_message(
+    &self,
+    request: MessageRetransmission,
+) -> Result<(), SendError>
+```
+
+The client derives the wire stanza from the native `wa::Message` and keeps ownership of routing, encryption, session/sender-key state, persistence, and transport — `MessageRetransmission` never accepts a pre-built stanza. `MessageRetransmission` is a small builder:
+
+```rust
+MessageRetransmission::new(chat, requester, message, message_id, retry_count)
+    .with_recipient(recipient)                                  // direct retransmissions only
+    .with_group_metadata_freshness(Freshness::CachePreferred)   // default; see below
+```
+
+- `chat` — the conversation the original message belongs to. Its JID class selects the route. Pass a group JID (`@g.us`) to retransmit over the group's sender-key path. Pass `status@broadcast` to retransmit over the status sender-key path. Pass a broadcast-list JID to retransmit pairwise. Pass any other user JID for a direct (1:1) retransmission.
+- `requester` — the requesting device's JID. Retransmissions are always pairwise to this one device. Group and broadcast retries never fan out to the full audience — this matches the requesting participant's own retry receipt.
+- `message` / `message_id` / `retry_count` — the original message content, its original ID, and the retry count carried on the requesting receipt. The client preserves `message_id` verbatim on the outgoing stanza. It preserves `retry_count` too, except on the status route — see below, where the wire format has no field for it.
+- `with_recipient` — only accepted for a direct retransmission. Set it when `requester` is one of your own companion devices: a self-device retransmission must say which device the message is actually addressed to. Leave it unset otherwise. When you do set it, `requester` must be a local companion device or a bot. This mirrors the `recipient` attribute WA Web propagates on self-device and bot retry receipts.
+- `with_group_metadata_freshness` — for group retransmissions, selects the [`Freshness`](/api/groups#freshness) policy used to load the group's participant list and addressing mode. Use `CachePreferred` (default) to reuse a cached snapshot, or `Refresh` to force a fresh fetch first.
+
+`retransmit_message` validates every field before touching Signal ratchet state. `chat` and `requester` must be non-empty. `message_id` must be non-empty. `retry_count` must fall in `1..MAX_RETRY_COUNT`. `requester` must be a user device JID, not a group/broadcast/server JID. `recipient` is rejected outside the direct+local/bot case described above. Any violation returns `SendError::InvalidRequest` before ratchet advancement or persistence.
+
+For a group retransmission, the client re-resolves group metadata under your requested freshness policy. It preserves the group's addressing mode on the outgoing stanza. A broadcast-list retransmission omits the addressing mode entirely.
+
+For a status retransmission, the client rebuilds the sender key immediately, but only for the requesting device. It distributes the sender key too, when the requesting device needs it. It never fans out to the rest of the status audience. The status retry count itself stays operation-level state — the captured WhatsApp Web wire format has no field for it on the status receipt.
+
+**Example:**
+```rust
+use whatsapp_rust::{Freshness, MessageRetransmission};
+
+// requester is the device JID from an intercepted <receipt type="retry"> stanza
+let request = MessageRetransmission::new(
+    chat_jid.clone(),
+    requester_jid,
+    original_message.clone(),
+    original_message_id.clone(),
+    retry_count,
+);
+
+client.retransmit_message(request).await?;
+```
+
+<Note>
+Like `request_message_retry`, this only performs the resend; acking the original stanza that triggered the retry (if any) remains the caller's responsibility — see [Manual stanza acknowledgement](/advanced/binary-protocol#manual-stanza-acknowledgement).
+</Note>
+
 ### Unavailable message recovery via PDO
 
 When the server delivers a message with an `<unavailable>` child node instead of `<enc>` nodes, the message content is not present in the stanza. The client classifies the `<unavailable>` node into an `UnavailableType`:

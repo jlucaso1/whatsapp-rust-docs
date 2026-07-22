@@ -456,7 +456,7 @@ pub async fn request_message_retry(
 ) -> Result<RetryRequestOutcome, RetryRequestError>
 ```
 
-`stanza` must be a `<message>` node with `id` and `from` attrs — the client parses it once via the canonical message-info parser rather than reusing whatever metadata the caller already extracted. `RetryRequestOptions` is a small builder:
+`stanza` must be a `<message>` node with `id` and `from` attrs, or the call fails fast with `RetryRequestError::UnsupportedStanzaClass`/`MissingAttribute` before any I/O. The client then parses the stanza once via the canonical message-info parser rather than reusing whatever metadata the caller already extracted — for a group or status-broadcast `from`, that parser also requires a valid `participant` attr, surfacing as `RetryRequestError::InvalidStanza` if it's missing or unparseable. `RetryRequestOptions` is a small builder:
 
 ```rust
 RetryRequestOptions::new()

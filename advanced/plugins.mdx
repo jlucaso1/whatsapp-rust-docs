@@ -45,7 +45,7 @@ A plugin implements `ClientPlugin`, chooses an associated `Api` type, and return
 use std::sync::Arc;
 
 use whatsapp_rust::anyhow::Result;
-use whatsapp_rust::{ClientPlugin, PluginCapability, PluginContext, PluginFuture, PluginManifest};
+use whatsapp_rust::{ClientPlugin, PluginContext, PluginFuture, PluginManifest};
 
 struct SearchPlugin;
 
@@ -121,22 +121,32 @@ A plugin's manifest requests capabilities, and `PluginContext` only exposes the 
 This is API shaping, not a sandbox: a native plugin is trusted in-process Rust code and can use any dependency available to your build. It exists so a plugin's `install` signature documents what it actually touches, and so `PluginContext` never hands out the raw backend or Signal stores.
 </Note>
 
-Request a capability by chaining `with_capability` on the manifest, then retrieve its handle from the `PluginContext` passed into `install`. Continuing the `SearchPlugin` example above, requesting `CoreEvents` and storing its handle on `SearchApi` looks like this:
+Request a capability by chaining `with_capability` on the manifest, then retrieve its handle from the `PluginContext` passed into `install`. Extending `SearchPlugin` above to request `CoreEvents` means giving `SearchApi` a field for the handle and updating `manifest`/`install` to match:
 
 ```rust
-fn manifest(&self) -> PluginManifest {
-    PluginManifest::new("example.search", "0.1.0")
-        .with_capability(PluginCapability::CoreEvents)
+use whatsapp_rust::{PluginCapability, PluginCoreEvents};
+
+struct SearchApi {
+    core_events: PluginCoreEvents,
 }
 
-fn install(&self, context: PluginContext) -> PluginFuture<'_, Result<Arc<Self::Api>>> {
-    Box::pin(async move {
-        let core_events = context
-            .core_events()
-            .cloned()
-            .expect("CoreEvents capability was requested in the manifest above");
-        Ok(Arc::new(SearchApi { core_events }))
-    })
+impl ClientPlugin for SearchPlugin {
+    type Api = SearchApi;
+
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::new("example.search", "0.1.0")
+            .with_capability(PluginCapability::CoreEvents)
+    }
+
+    fn install(&self, context: PluginContext) -> PluginFuture<'_, Result<Arc<Self::Api>>> {
+        Box::pin(async move {
+            let core_events = context
+                .core_events()
+                .cloned()
+                .expect("CoreEvents capability was requested in the manifest above");
+            Ok(Arc::new(SearchApi { core_events }))
+        })
+    }
 }
 ```
 
@@ -163,7 +173,9 @@ install once
 - `on_ready` runs, in dependency order, after authentication succeeds for that connection generation.
 - A reconnect or terminal teardown cancels the current generation's scope synchronously; the host then waits (up to a configurable deadline) for tasks to drain before calling `on_closed`, in reverse dependency order.
 
-`PluginTasks::spawn` (install-scoped) and `PluginConnectionTasks::spawn` (generation-scoped) drop the spawned future outright when cancellation wins a race. If your task needs to observe cancellation and wind down instead of being dropped mid-flight, use `spawn_cooperative` and poll `shutdown_signal()` / `cancellation_signal()` inside the task — the host still only waits up to its configured drain deadline, after which it proceeds and marks the plugin degraded if work remains.
+`PluginTasks::spawn` (install-scoped) and `PluginConnectionTasks::spawn` (generation-scoped) drop the spawned future outright when cancellation wins a race.
+
+Use `spawn_cooperative` instead when a task needs to wind down cleanly rather than being dropped mid-flight. A cooperative task must poll `shutdown_signal()` (install-scoped) or `cancellation_signal()` (generation-scoped) and return once it observes cancellation. The host still only waits up to its configured drain deadline for that task to finish. Past that deadline, the host proceeds anyway and marks the plugin degraded if the task hasn't returned.
 
 `PluginHostConfig` lets you tune the installation deadline (default 30s), and the per-callback and per-task-drain deadlines (default 5s each; none accept zero). Callbacks are serialized, bounded by their timeout, and isolated from panics — one misbehaving plugin's `on_ready`/`on_closed` panic doesn't suppress another plugin's callback.
 

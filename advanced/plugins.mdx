@@ -1,0 +1,159 @@
+---
+title: Native Plugins
+description: Build type-safe, capability-scoped extensions for whatsapp-rust behind the opt-in plugins feature, with build-time registration and generation-scoped lifecycle ownership.
+---
+
+## Overview
+
+whatsapp-rust supports **native plugins**: build-time, type-safe extensions that get scoped access to core events, tasks, messaging, and IQ execution through a capability model, without touching the client's internals directly.
+
+This is a low-level extension seam. If you're writing an application that just sends and receives messages, use [`Bot`](/api/bot) directly — you don't need this page. Reach for native plugins when you're building a **reusable component** (metrics, a search index, a moderation layer) that should install once, observe events non-blockingly, own its own background tasks across reconnects, and expose a typed API to the rest of your application.
+
+<Note>
+The plugin host is intentionally native-only today: it is trusted in-process Rust code, not a sandboxed or dynamically-loaded extension model. There is no dynamic (`.so`/`.wasm`) loading, no ingress interception of inbound stanzas, and no pre-ack decision hook.
+</Note>
+
+## Enabling the feature
+
+Native plugins live behind the opt-in `plugins` feature, which also enables the lower-level `client-lifecycle` feature:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { version = "0.6", features = ["plugins"] }
+```
+
+A default build has neither plugin fields nor their runtime branches — enabling `plugins` is required both in your own crate and, if you're publishing a reusable plugin crate, in its own `whatsapp-rust` dependency. Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) activates the host for the final binary automatically, so a plugin crate doesn't need its consumers to remember to opt in themselves.
+
+See [Installation — feature flags](/installation#feature-flags) for where `plugins` and `client-lifecycle` sit relative to the rest of the feature matrix.
+
+## Defining a plugin
+
+A plugin implements `ClientPlugin`, chooses an associated `Api` type, and returns it from an async `install` hook:
+
+```rust
+use std::sync::Arc;
+
+use anyhow::Result;
+use whatsapp_rust::{ClientPlugin, PluginContext, PluginFuture, PluginManifest};
+
+struct SearchPlugin;
+
+struct SearchApi {
+    // Clone capability handles or plugin-owned state here.
+}
+
+impl SearchApi {
+    async fn search(&self, query: &str) -> Result<Vec<String>> {
+        // Plugin-specific behavior.
+        Ok(vec![query.to_owned()])
+    }
+}
+
+impl ClientPlugin for SearchPlugin {
+    type Api = SearchApi;
+
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::new("example.search", "0.1.0")
+    }
+
+    fn install(&self, _context: PluginContext) -> PluginFuture<'_, Result<Arc<Self::Api>>> {
+        Box::pin(async { Ok(Arc::new(SearchApi {})) })
+    }
+}
+```
+
+`PluginManifest` carries a stable string ID and a semver version. Duplicate IDs, duplicate marker types, malformed versions, and dependency cycles between plugins all fail before the client is assembled — not at first use.
+
+## Registering plugins with `ClientBuilder`
+
+`ClientBuilder` is the canonical low-level construction path — `BotBuilder` delegates to the same path and remains the typestate-preserving facade for everyday bot code. Register plugins with `with_plugin` before calling `build`:
+
+```rust
+let client = Client::builder()
+    // platform dependencies: backend, transport, http client, runtime...
+    .with_plugin(SearchPlugin)
+    .build()
+    .await?
+    .into_client();
+
+let search: Arc<SearchApi> = client
+    .plugin::<SearchPlugin>()
+    .expect("search plugin is installed");
+let matches = search.search("hello").await?;
+```
+
+`Client::plugin::<P>()` returns `Option<Arc<P::Api>>` — the registry is keyed by the `TypeId` of the plugin marker `P`, not by the API type, so two different plugins can expose the same `Api` type without colliding. The `Option` reflects that the installed plugin set is decided at runtime by whichever builder call assembled this particular client.
+
+Construction follows one publication boundary: dependencies and manifests are validated, plugin dependencies are resolved topologically, an inert client is assembled, plugins are installed while their APIs are staged, client services start, and only then are lifecycle and plugin resources atomically activated and the completed client published. Tasks a plugin requests during installation stay parked until that final activation — nothing a plugin schedules can run against a client that hasn't finished construction.
+
+Installation is transactional: if a plugin's `install` fails, is cancelled, panics, or races a terminal shutdown, every already-staged plugin resource closes synchronously and any asynchronous shutdown hooks run in reverse installation order. A plugin is install-once for the lifetime of one `Client` — reconnecting never replaces the plugin instance or its exposed API.
+
+### Runtime-defined plugins
+
+The typed `with_plugin` / `Client::plugin::<P>()` path assumes the plugin's Rust type is known at compile time. For an adapter that hosts a dynamic or runtime-defined set of extensions (for example, a future foreign-language bridge), implement `UntypedClientPlugin` instead and register instances with `with_untyped_plugin` (or `with_untyped_plugin_arc` to register a trait object). Untyped instances are keyed only by their manifest ID, may share a single concrete adapter type, and don't appear in `Client::plugin::<P>()`.
+
+## Capabilities
+
+A plugin's manifest requests capabilities, and `PluginContext` only exposes the small handle for each one it was granted:
+
+| Capability | Handle | Grants |
+| --- | --- | --- |
+| `events.core.observe` | `PluginCoreEvents` | Selective, non-blocking observation of sealed core events |
+| `tasks.spawn` | `PluginTasks` / `PluginConnectionTasks` | Runtime-agnostic, cancellation-tracked background work |
+| `messaging.send` | `PluginMessaging` | High-level message sends |
+| `iq.execute` | `PluginIq` | Typed `IqSpec` execution |
+| `events.plugin.publish` | `PluginEvents` | Publishing custom events, scoped to the plugin's own namespace |
+
+<Note>
+This is API shaping, not a sandbox: a native plugin is trusted in-process Rust code and can use any dependency available to your build. It exists so a plugin's `install` signature documents what it actually touches, and so `PluginContext` never hands out the raw backend or Signal stores.
+</Note>
+
+Capability handles hold a weak reference to the client internally and reject calls once the client has shut down, so a plugin API that outlives the client (for example, one your application keeps an `Arc` to) fails safely instead of resurrecting it.
+
+`PluginCoreEvents::subscribe` returns an RAII token for the registration. Dropping it, or explicitly unsubscribing, removes the handler immediately.
+
+## Lifecycle and task scopes
+
+Plugin work is either **install-scoped** (runs once, for the life of the client) or **connection-scoped** (tied to one `connection_generation` — cancelled on every reconnect and every terminal shutdown):
+
+```text
+install once
+    |
+    +-- install-scoped tasks ---------------------------> terminal shutdown
+    |
+    +-- generation N: ready -> cancel -> closed
+    +-- generation N+1: ready -> cancel -> closed
+```
+
+- `install` runs once while the client is still inert.
+- `on_ready` runs, in dependency order, after authentication succeeds for that connection generation.
+- A reconnect or terminal teardown cancels the current generation's scope synchronously; the host then waits (up to a configurable deadline) for tasks to drain before calling `on_closed`, in reverse dependency order.
+
+`PluginTasks::spawn` (install-scoped) and `PluginConnectionTasks::spawn` (generation-scoped) drop the spawned future outright when cancellation wins a race. If your task needs to observe cancellation and wind down instead of being dropped mid-flight, use `spawn_cooperative` and poll `shutdown_signal()` / `cancellation_signal()` inside the task — the host still only waits up to its configured drain deadline, after which it proceeds and marks the plugin degraded if work remains.
+
+`PluginHostConfig` lets you tune the installation deadline (default 30s), and the per-callback and per-task-drain deadlines (default 5s each; none accept zero). Callbacks are serialized, bounded by their timeout, and isolated from panics — one misbehaving plugin's `on_ready`/`on_closed` panic doesn't suppress another plugin's callback.
+
+## Custom events
+
+Plugins can publish and subscribe to their own events without going through the sealed core `Event` enum. `PluginEventRouter` routes by an exact `(plugin_id, topic)` selector, and every subscriber gets an independently bounded queue with a configurable overflow policy (`DropNewest` or `DropOldest`) via `PluginEventEndpointConfig`. Each delivered envelope carries the plugin ID, topic, schema version, payload bytes, the connection generation at publish time, and a route-local monotonic sequence number, so a subscriber can detect gaps left by dropped events.
+
+`PluginEventSubscription` is an RAII endpoint — dropping it removes all of that subscriber's selectors from the router at once.
+
+## Diagnostics
+
+`Client::plugin_stats()` returns a `PluginStats` snapshot per installed plugin: lifecycle state (`PluginState`), sticky health (`PluginHealth`), callback failures, spawned-task panics, drain timeouts, active task scopes, and subscription/publisher counters. `PluginEventRouter::stats()` and `PluginEvents::stats()` report queue depth and backpressure totals for custom events. `Client::memory_report()` folds in plugin resource accounting.
+
+These snapshots are on-demand and approximate under concurrency, and — matching the rest of the client's [observability](/advanced/observability) surface — never include JIDs, phone numbers, or message bodies.
+
+## Reference example
+
+The workspace ships `plugins/metrics` as a public-API conformance example: a metrics plugin built only against the same public API documented on this page, with no private access to the main crate. It's a good starting point for structuring your own plugin crate — manifest, capability requests, an `Api` type, and lifecycle hooks.
+
+## What's not supported yet
+
+The current host deliberately does not support dynamic plugin loading, ingress interception or pre-ack decisions on inbound stanzas, a foreign (non-Rust) wire protocol, or process isolation/sandboxing. These are real design commitments, not just missing features, and would only be added behind a concrete consumer need.
+
+## See also
+
+- [Observability](/advanced/observability) — the `tracing` instrumentation that plugin diagnostics complement.
+- [Custom backends](/guides/custom-backends) — the other `ClientBuilder` seam, for swapping storage/transport/runtime instead of adding behavior.

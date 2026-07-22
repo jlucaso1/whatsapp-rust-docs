@@ -1,5 +1,5 @@
 ---
-title: Native Plugins
+title: Native plugins
 description: Build type-safe, capability-scoped extensions for whatsapp-rust behind the opt-in plugins feature, with build-time registration and generation-scoped lifecycle ownership.
 ---
 
@@ -44,7 +44,7 @@ A plugin implements `ClientPlugin`, chooses an associated `Api` type, and return
 ```rust
 use std::sync::Arc;
 
-use anyhow::Result;
+use whatsapp_rust::anyhow::Result;
 use whatsapp_rust::{ClientPlugin, PluginContext, PluginFuture, PluginManifest};
 
 struct SearchPlugin;
@@ -95,7 +95,9 @@ let matches = search.search("hello").await?;
 
 `Client::plugin::<P>()` returns `Option<Arc<P::Api>>` — the registry is keyed by the `TypeId` of the plugin marker `P`, not by the API type, so two different plugins can expose the same `Api` type without colliding. The `Option` reflects that the installed plugin set is decided at runtime by whichever builder call assembled this particular client.
 
-Construction follows one publication boundary: dependencies and manifests are validated, plugin dependencies are resolved topologically, an inert client is assembled, plugins are installed while their APIs are staged, client services start, and only then are lifecycle and plugin resources atomically activated and the completed client published. Tasks a plugin requests during installation stay parked until that final activation — nothing a plugin schedules can run against a client that hasn't finished construction.
+`ClientBuilder` follows one publication boundary. It validates dependencies and plugin manifests, then resolves plugin dependencies topologically. It assembles an inert client, installs plugins while staging their APIs, and starts client services. Only then does it atomically activate lifecycle and plugin resources and publish the completed client.
+
+Tasks a plugin requests during installation stay parked until that final activation — nothing a plugin schedules can run against a client that hasn't finished construction.
 
 Installation is transactional: if a plugin's `install` fails, is cancelled, panics, or races a terminal shutdown, every already-staged plugin resource closes synchronously and any asynchronous shutdown hooks run in reverse installation order. A plugin is install-once for the lifetime of one `Client` — reconnecting never replaces the plugin instance or its exposed API.
 

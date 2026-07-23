@@ -157,6 +157,10 @@ if let Some(pic) = client.contacts().get_profile_picture(&group_jid, true).await
 To override the default request timeout for a single fetch, use `get_profile_picture_with_timeout(jid, preview, timeout)`, which takes an extra `timeout: Option<Duration>` argument. Internally the request is built via `ProfilePictureSpec`'s `with_timeout(...)` builder method; pass `None` to fall back to the default timeout.
 </Note>
 
+<Note>
+The system/announcements JID (`0@s.whatsapp.net`, and its legacy form `0@c.us`) never answers this IQ, so it's short-circuited client-side: both `get_profile_picture` and `get_profile_picture_with_timeout` return `Ok(None)` immediately for it instead of waiting out the full request timeout. This mirrors WhatsApp Web, which never sends the request for this JID in the first place.
+</Note>
+
 ### get_user_info
 
 Get user information by JID.
@@ -170,6 +174,10 @@ pub async fn get_user_info(
 
 **Parameters:**
 - `jids` - Array of JIDs to query
+
+<Note>
+The system/announcements JID (`0@s.whatsapp.net`, and its legacy form `0@c.us`) is filtered out of the batch before it's sent — it's not usync-eligible and the server never answers for it. If it's the only JID passed in, `get_user_info` returns an empty map without making a request; if it's mixed with other JIDs, the remaining JIDs are still queried normally.
+</Note>
 
 **Returns:**
 - `HashMap<Jid, UserInfo>` - Map of JID to user info

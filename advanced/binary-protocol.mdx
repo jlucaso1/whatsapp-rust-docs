@@ -226,6 +226,7 @@ assert!(!jid.is_group());    // false — not a @g.us JID
 | `is_messenger()` | Server is `Messenger` and device > 0 |
 | `is_empty()` | User is empty |
 | `is_same_user_as(other)` | Both JIDs share the same user |
+| `is_psa()` | Server is `Pn` or `Legacy` and user is `"0"` — the system/announcements account (`0@s.whatsapp.net` / `0@c.us`) |
 
 The trait also exposes basic accessor methods (`user() -> &str`, `server() -> Server`, `device() -> u16`, `integrator() -> u16`) that work uniformly across owned and borrowed JID types. Additional helper methods `is_pn()` and `is_lid()` are available directly on `Jid` for the most common server checks.
 

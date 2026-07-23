@@ -820,6 +820,8 @@ pub struct MsgMetaInfo {
 
 <Note>
 Breaking change: `verified_name` changed from the raw, never-populated `wa::VerifiedNameCertificate` to `Option<Box<VerifiedName>>` — the decoded business display name (see [`VerifiedName`](/api/contacts#is_on_whatsapp) for its `name`/`serial`/`issuer`/`certificate` fields). Business senders attach this cert to the `<message>` stanza's `<verified_name>` child; it's now decoded the same way the usync and business-notification parsers already did, so a WABA sender's display name (e.g. "HDFC Bank Ltd") reaches this field instead of being silently dropped. It's boxed since most messages carry none. Undecodable cert bytes don't fail message parsing — the field is just `None` in that case.
+
+`verified_name_serial` is unrelated to and unchanged by this: it's parsed from the envelope's own `verified_name` **attribute** (an integer), while `verified_name.serial` is decoded from the child cert's `Details.serial` field (a string). Both name the same certificate serial in a well-formed stanza, but they're read from two different places on the wire and can be populated independently — a stanza could in principle carry one without the other.
 </Note>
 
 <Note>

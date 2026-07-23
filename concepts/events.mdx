@@ -713,7 +713,7 @@ pub struct MessageInfo {
     pub edit: EditAttribute,
     pub bot_info: Option<MsgBotInfo>,
     pub meta_info: MsgMetaInfo,
-    pub verified_name: Option<wa::VerifiedNameCertificate>,
+    pub verified_name: Option<Box<VerifiedName>>,
     pub verified_level: Option<String>,
     pub verified_name_serial: Option<String>,
     pub device_sent_meta: Option<DeviceSentMeta>,
@@ -816,6 +816,10 @@ pub struct MsgMetaInfo {
 
 <Note>
 `server_timestamp_us`, `verified_level`, `verified_name_serial`, `peer_recipient_pn`, plus all five `MsgMetaInfo` additions above were added in v0.6 as part of aligning inbound parsing with WA Web. They are populated only when the server includes the corresponding stanza attribute, so existing consumers that ignore them keep working.
+</Note>
+
+<Note>
+Breaking change: `verified_name` changed from the raw, never-populated `wa::VerifiedNameCertificate` to `Option<Box<VerifiedName>>` — the decoded business display name (see [`VerifiedName`](/api/contacts#is_on_whatsapp) for its `name`/`serial`/`issuer`/`certificate` fields). Business senders attach this cert to the `<message>` stanza's `<verified_name>` child; it's now decoded the same way the usync and business-notification parsers already did, so a WABA sender's display name (e.g. "HDFC Bank Ltd") reaches this field instead of being silently dropped. It's boxed since most messages carry none. Undecodable cert bytes don't fail message parsing — the field is just `None` in that case.
 </Note>
 
 <Note>

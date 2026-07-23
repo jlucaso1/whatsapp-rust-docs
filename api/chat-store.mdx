@@ -265,6 +265,10 @@ pub struct ContactEntry {
 
 `.display_name()` resolves the name to show, in the same precedence order as WA Web: `full_name` → `first_name` → `push_name` → `business_name`.
 
+<Note>
+`business_name` is learned live from inbound messages: a business sender's `<verified_name>` cert (decoded into [`MessageInfo.verified_name`](/concepts/events#messages)) is written to the contact row the same way `push_name` already is. A message without a cert never clobbers a name learned from an earlier one.
+</Note>
+
 ### MediaRef
 
 ```rust

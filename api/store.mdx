@@ -562,7 +562,7 @@ pub type ConnectionInitHook = Arc<
 The canonical use is SQLCipher-style keying, where `PRAGMA key` must be the first statement executed on a fresh connection, ideally followed by a verification query:
 
 ```rust
-use whatsapp_rust_sqlite_storage::SqliteStoreConfig;
+use whatsapp_rust_sqlite_storage::{SqliteStore, SqliteStoreConfig};
 use diesel::prelude::*;
 
 let config = SqliteStoreConfig::default().with_connection_init(move |conn| {

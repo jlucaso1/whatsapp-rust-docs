@@ -212,10 +212,13 @@ The keyset-pagination cursor used by [`messages()`](#querying).
 #[non_exhaustive]
 pub enum MessageKind {
     Text, Image, Video, VideoNote, Audio, VoiceNote, Sticker, Document,
-    Contact, Location, Poll, Event, GroupInvite, Undecryptable, Unknown,
-    Other(String),
+    Contact, Location, Poll, Event, GroupInvite, Template, TemplateReply,
+    Buttons, ButtonsResponse, List, ListResponse, Interactive,
+    InteractiveResponse, Undecryptable, Unknown, Other(String),
 }
 ```
+
+`Template`/`Buttons`/`List`/`Interactive` are WABA business content — a template notification, a message with quick-reply buttons, a list picker, or a flow/native-flow interactive message. Each has a `*Reply`/`*Response` counterpart for what a user's tap materializes as. `text` is extracted per type mirroring WA Web's parsers (e.g. a template's `hydrated_content_text`, a list's `description`, a response's `selected_display_text`); footer text and button labels stay in the stored proto rather than `text`. A non-hydrated template still classifies as `Template` with `text: None`.
 
 `Other(String)` round-trips a forward-compatible label for message types added after this crate was released.
 

@@ -547,6 +547,41 @@ When set to a non-zero value, this emits `PRAGMA mmap_size = <bytes>;`, moving r
   mmap I/O covers *reads* of the main database file only. In WAL mode (this store's default), writes still go through the WAL, and a checkpoint briefly falls back to non-mmap I/O. `SqliteStore::resource_report()` (see [`DeviceStore::resource_report`](#resource_report)) does not account for `mmap_size` — with mmap enabled, some reads bypass the heap page cache it measures, so the reported estimate can overstate actual process-heap residency for that session.
 </Warning>
 
+### Connection init hook
+
+`SqliteStoreConfig` also exposes an optional `connection_init: Option<ConnectionInitHook>` field, set via the builder-style `with_connection_init(hook)`. The hook runs first in r2d2's `on_acquire` customizer on every pooled connection — before the store's own pragmas, and (because WAL setup and migrations also run on a pooled connection) before those too:
+
+```rust
+pub type ConnectionInitHook = Arc<
+    dyn Fn(&mut SqliteConnection) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>
+        + Send
+        + Sync,
+>;
+```
+
+The canonical use is SQLCipher-style keying, where `PRAGMA key` must be the first statement executed on a fresh connection, ideally followed by a verification query:
+
+```rust
+use whatsapp_rust_sqlite_storage::{SqliteStore, SqliteStoreConfig};
+use diesel::prelude::*;
+
+let config = SqliteStoreConfig::default().with_connection_init(move |conn| {
+    diesel::sql_query("PRAGMA key = 'my-passphrase';").execute(conn)?;
+    // Verify the key: this fails on a wrongly-keyed database.
+    diesel::sql_query("SELECT count(*) FROM sqlite_master;").execute(conn)?;
+    Ok(())
+});
+let store = SqliteStore::with_config("whatsapp.db", config).await?;
+```
+
+Linking a SQLCipher-enabled SQLite is the caller's responsibility: disable this crate's default `bundled-sqlite` feature and depend on `libsqlite3-sys` with a SQLCipher build (e.g. its `bundled-sqlcipher` feature) instead. The crate itself gains no SQLCipher, key-type, or zeroization coupling — the hook is a generic per-connection seam that equally serves loading extensions or custom per-connection pragmas.
+
+If the hook returns `Err`, the connection is rejected — this surfaces as a pool/build error at store construction (e.g. `SqliteStore::with_config` fails outright) rather than on a later query, which matters for a wrong-key error: it should fail fast, not after migrations already ran against an unreadable database.
+
+<Note>
+The hook must be idempotent per connection and cheap: r2d2 calls it once for every connection it opens, including replacements after errors. `VACUUM INTO` snapshots run on a pooled (already-keyed) connection, so backups of an encrypted database stay encrypted with no extra work.
+</Note>
+
 ### Usage Example
 
 ```rust

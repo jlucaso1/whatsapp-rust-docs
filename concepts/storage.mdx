@@ -901,6 +901,9 @@ pub struct SqliteStoreConfig {
     /// Optional shared r2d2 thread pool. When `None`, the store uses the
     /// process-wide lazy pool. Inject a custom pool (e.g. for tests) via this field.
     pub thread_pool: Option<Arc<scheduled_thread_pool::ScheduledThreadPool>>,
+    /// Optional hook run first on every new pooled connection, before the store's own
+    /// pragmas, WAL setup, and migrations. See [Connection init hook](/api/store#connection-init-hook).
+    pub connection_init: Option<ConnectionInitHook>,
 }
 ```
 

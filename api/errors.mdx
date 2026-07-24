@@ -344,7 +344,7 @@ Both `ConnectError` and `ConnectStage` are re-exported from the crate root (`wha
 
 ### SignalMaintenanceError
 
-Returned by [`Client::rotate_signed_pre_key`](/api/client#signed-pre-key-rotation) and [`Client::flush_pending_signal_state`](/api/client#flush_pending_signal_state). Added in PR #1090, replacing bare `anyhow::Error` on both methods. The split that matters to a caller is corruption versus everything else: `CorruptKey` will keep failing until the stored material is replaced, while `Storage`, `Iq`, and `DrainCommitFailed` are worth retrying on the same client. `DrainShuttingDown` is different again — it fires because the client itself is being torn down, so retrying the same call on that instance fails the same way; the only recovery is a fresh client.
+Returned by [`Client::rotate_signed_pre_key`](/api/client#signed-pre-key-rotation) and [`Client::flush_pending_signal_state`](/api/client#flush_pending_signal_state). Added in PR #1090, replacing bare `anyhow::Error` on both methods. The split that matters to a caller is corruption versus everything else: `CorruptKey` will keep failing until the stored material is replaced, while `Storage`, `Iq`, `Signal`, and `DrainCommitFailed` are worth retrying on the same client — none of them mean the local key material itself is bad. `DrainShuttingDown` is different again — it fires because the client itself is being torn down, so retrying the same call on that instance fails the same way; the only recovery is a fresh client.
 
 ```rust
 #[non_exhaustive]

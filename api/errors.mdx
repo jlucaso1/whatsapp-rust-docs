@@ -3,7 +3,9 @@ title: Error Types
 description: Typed error reference for all whatsapp-rust public APIs
 ---
 
-As of PR #893, all feature-domain APIs return a typed, domain-specific error instead of `anyhow::Error`. Use `?` to propagate errors into any `anyhow` context — all types implement `std::error::Error` and are `#[non_exhaustive]`, so your existing error-handling code compiles unchanged. Lower-level APIs such as `Client::connect` and media upload/download are not covered by this page and may still surface `anyhow::Error` directly.
+As of PR #893, all feature-domain APIs return a typed, domain-specific error instead of `anyhow::Error`. Use `?` to propagate errors into any `anyhow` context — all types implement `std::error::Error` and are `#[non_exhaustive]`, so your existing error-handling code compiles unchanged. Lower-level APIs such as media upload/download are not covered by this page and may still surface `anyhow::Error` directly.
+
+As of PR #1090, the connect/lifecycle surface (`Client::connect`, `wait_for_socket`, `wait_for_connected`), the background Signal maintenance surface (`Client::rotate_signed_pre_key`, `Client::flush_pending_signal_state`), and the message-edit target-key resolvers (`EncryptedEdit::original_sender_jid`, `SecretEncrypted::original_sender_jid`/`original_sender_for_dispatch`) also return typed errors — see [`ConnectError`](#connecterror), [`SignalMaintenanceError`](#signalmaintenanceerror), and [`MessageEditError`](#messageediterror) below. `Client::logout()` is now infallible (`()`, not `Result<(), _>`): the deregistration IQ it sends is best-effort, so there was nothing for a caller to branch on.
 
 ## Error hierarchy
 
@@ -12,10 +14,29 @@ ClientError          (transport/connection base — embedded by select domain er
   ├── NotConnected
   ├── Socket(SocketError)
   ├── EncryptSend(EncryptSendError)
-  ├── AlreadyConnected
   ├── NotLoggedIn
   ├── Iq(IqError)
   └── Internal(anyhow::Error)
+
+ConnectError          (Client::connect, wait_for_socket, wait_for_connected)
+  ├── AlreadyConnected
+  ├── NotActivated
+  ├── Timeout { stage: ConnectStage, timeout: Duration }
+  ├── Version(anyhow::Error)
+  ├── Transport(anyhow::Error)
+  └── Handshake(HandshakeError)
+
+SignalMaintenanceError  (Client::rotate_signed_pre_key, Client::flush_pending_signal_state)
+  ├── CorruptKey(String)
+  ├── Storage(anyhow::Error)
+  ├── Iq(IqError)
+  ├── Signal(SignalProtocolError)
+  ├── DrainCommitFailed
+  └── DrainShuttingDown
+
+MessageEditError      (EncryptedEdit / SecretEncrypted target-key resolvers)
+  ├── InvalidTargetJid { field, source: JidError }
+  └── MissingTargetSender
 
 IqError              (IQ request failures — embedded by most domain errors)
   ├── Timeout
@@ -32,6 +53,10 @@ IqError              (IQ request failures — embedded by most domain errors)
 ```
 
 Domain errors that embed `IqError` or `ClientError` via `#[from]` propagate those failures automatically via `?`. Some errors (e.g. `AppStateError`, `SignalError`) use internal `anyhow::Error` wrapping instead and do not have `Iq` or `Client` variants.
+
+<Note>
+`ConnectError` and `SignalMaintenanceError` are **not** variants of `ClientError` — they are separate top-level error types returned directly by their respective methods (previously those methods returned bare `anyhow::Error`). `ClientError::AlreadyConnected` was removed in PR #1090; the equivalent case now lives on `ConnectError::AlreadyConnected`.
+</Note>
 
 ## Domain error types
 
@@ -51,6 +76,9 @@ Domain errors that embed `IqError` or `ClientError` via `#[from]` propagate thos
 | `TcTokenError` | All `TcToken::*` methods | `whatsapp_rust` |
 | `MediaReuploadError` | `MediaReupload::request` | `whatsapp_rust` |
 | `PresenceError` | All `Presence::*` methods | `whatsapp_rust` |
+| `ConnectError` | `Client::connect`, `Client::wait_for_socket`, `Client::wait_for_connected` | `whatsapp_rust` |
+| `SignalMaintenanceError` | `Client::rotate_signed_pre_key`, `Client::flush_pending_signal_state` | `whatsapp_rust` |
+| `MessageEditError` | `EncryptedEdit::original_sender_jid`, `SecretEncrypted::original_sender_jid`, `SecretEncrypted::original_sender_for_dispatch` | `whatsapp_rust` |
 
 ## Type definitions
 
@@ -262,6 +290,116 @@ pub enum PresenceError {
 }
 ```
 
+### ConnectError
+
+Returned by [`Client::connect`](/api/client#connect), [`Client::wait_for_socket`](/api/client#wait_for_socket), and [`Client::wait_for_connected`](/api/client#wait_for_connected). Added in PR #1090, replacing bare `anyhow::Error` on all three methods.
+
+```rust
+#[non_exhaustive]
+pub enum ConnectError {
+    #[error("client is already connected")]
+    AlreadyConnected,
+    #[error("client construction did not activate")]
+    NotActivated,
+    #[error("{stage} timed out after {timeout:?}")]
+    Timeout {
+        stage: ConnectStage,
+        timeout: std::time::Duration,
+    },
+    #[error("failed to resolve app version")]
+    Version(#[source] anyhow::Error),
+    #[error("failed to open transport")]
+    Transport(#[source] anyhow::Error),
+    #[error(transparent)]
+    Handshake(#[from] crate::handshake::HandshakeError),
+}
+```
+
+**Variants:**
+- `AlreadyConnected` — a connection is already up, or another `connect()` attempt is already in flight. This is the old `ClientError::AlreadyConnected` case, moved here.
+- `NotActivated` — construction never completed (only reachable with the `client-lifecycle` feature), so the attempt was rejected before any I/O.
+- `Timeout` — a step of the connect flow ran out of time. `stage` says which one (see [`ConnectStage`](#connectstage) below); `wait_for_socket`/`wait_for_connected` always report `Socket`/`Ready` respectively.
+- `Version` / `Transport` — the app-version resolution or transport factory failed outright (not a timeout).
+- `Handshake` — the Noise handshake failed after the transport was up. Wraps `HandshakeError` (see [WebSocket & Noise Protocol](/advanced/websocket-handling#handshake-errors)) via `#[from]`, so `?` still works and `matches!(err, ConnectError::Handshake(e) if e.is_transient())` replaces the old `err.downcast_ref::<HandshakeError>()` pattern for deciding whether a failed reconnect attempt is worth retrying.
+
+#### ConnectStage
+
+The step of the connect flow a `ConnectError::Timeout` refers to:
+
+```rust
+#[non_exhaustive]
+pub enum ConnectStage {
+    /// Resolving the app version advertised to the server.
+    VersionFetch,
+    /// Opening the underlying transport.
+    Transport,
+    /// Waiting for the noise socket, which is ready before login.
+    Socket,
+    /// Waiting for login plus the critical app state sync to finish.
+    Ready,
+}
+```
+
+Both `ConnectError` and `ConnectStage` are re-exported from the crate root (`whatsapp_rust::ConnectError`, `whatsapp_rust::ConnectStage`) and from `whatsapp_rust::prelude`.
+
+### SignalMaintenanceError
+
+Returned by [`Client::rotate_signed_pre_key`](/api/client#signed-pre-key-rotation) and [`Client::flush_pending_signal_state`](/api/client#flush_pending_signal_state). Added in PR #1090, replacing bare `anyhow::Error` on both methods. The split that matters to a caller is corruption versus everything else: `CorruptKey` will keep failing until the stored material is replaced, while `Storage`, `Iq`, `Signal`, and `DrainCommitFailed` are worth retrying on the same client — none of them mean the local key material itself is bad. `DrainShuttingDown` is different again — it fires because the client itself is being torn down, so retrying the same call on that instance fails the same way; the only recovery is a fresh client.
+
+```rust
+#[non_exhaustive]
+pub enum SignalMaintenanceError {
+    #[error("corrupt signed pre-key material: {0}")]
+    CorruptKey(String),
+    #[error("signal storage failure: {0}")]
+    Storage(#[source] anyhow::Error),
+    #[error("IQ request failed: {0}")]
+    Iq(#[from] IqError),
+    #[error(transparent)]
+    Signal(#[from] SignalProtocolError),
+    #[error(
+        "inbound drain batch commit failed; Signal cache left unflushed so the server redelivers"
+    )]
+    DrainCommitFailed,
+    #[error("client dropping while inbound drain is active; skipping Signal flush")]
+    DrainShuttingDown,
+}
+```
+
+**Variants:**
+- `CorruptKey` — key material is unusable: bad encoding, or a missing/wrong-sized field on a staged signed pre-key. Almost always means a retry would read back the same bytes, so this is not worth retrying without intervention.
+- `Storage` — the storage backend failed a read, write, or flush. The typed backend error stays reachable via `std::error::Error::source()`.
+- `Iq` — the rotation IQ was rejected by the server or never reached it (embeds [`IqError`](#iqerror-base-type) via `#[from]`).
+- `Signal` — a Signal primitive failed (e.g. signing the new signed pre-key).
+- `DrainCommitFailed` — the inbound drain batch could not be committed, so the Signal cache was deliberately left unflushed and the server will redeliver.
+- `DrainShuttingDown` — the client is going away while an inbound drain is active; flushing would persist ratchet advances whose messages have no durable row. Not worth retrying on this client — it will report the same error until the client is dropped and replaced.
+
+`SignalMaintenanceError` is re-exported from the crate root as `whatsapp_rust::SignalMaintenanceError`. `Signal::*` methods on the [`Signal`](/api/signal) struct are unaffected — `SignalError` already had `Internal`/`Protocol` variants and now converts `SignalMaintenanceError` via `From` (mapping `Signal(e)` to `SignalError::Protocol(e)` and everything else to `SignalError::Internal`).
+
+### MessageEditError
+
+Returned by `EncryptedEdit::original_sender_jid`, `SecretEncrypted::original_sender_jid`, and `SecretEncrypted::original_sender_for_dispatch` — the target-key sender resolvers used when decrypting `secret_encrypted_message` envelopes (message edits, poll edits/add-option, event edits). Added in PR #1090, replacing bare `anyhow::Error`. See [Decrypting secret-encrypted envelopes](/api/polls#decrypting-secret-encrypted-envelopes) for how these methods are used.
+
+```rust
+#[non_exhaustive]
+pub enum MessageEditError {
+    #[error("invalid {field} in target message key")]
+    InvalidTargetJid {
+        field: &'static str,
+        #[source]
+        source: JidError,
+    },
+    #[error("target message key missing participant and remote_jid")]
+    MissingTargetSender,
+}
+```
+
+**Variants:**
+- `InvalidTargetJid` — a JID carried by the target message key did not parse. `field` names the offending wire field (`"participant"` or `"remoteJid"`); the underlying `JidError` is available via `source()`.
+- `MissingTargetSender` — the target key carried neither `participant` nor `remote_jid`, and `from_me` was not `Some(true)`, so no author can be derived from it.
+
+Both variants mean the peer sent a target message key that cannot be attributed — retrying the same envelope yields the same result. `MessageEditError` is re-exported from the crate root as `whatsapp_rust::MessageEditError`.
+
 ### ClientError (base type)
 
 ```rust
@@ -269,8 +407,6 @@ pub enum PresenceError {
 pub enum ClientError {
     #[error("client is not connected")]
     NotConnected,
-    #[error("client is already connected")]
-    AlreadyConnected,
     #[error("client is not logged in")]
     NotLoggedIn,
     #[error("socket error: {0}")]
@@ -283,6 +419,10 @@ pub enum ClientError {
     Internal(#[from] anyhow::Error),
 }
 ```
+
+<Note>
+`AlreadyConnected` was removed from `ClientError` in PR #1090 — it had no remaining constructor once `Client::connect()` moved to [`ConnectError`](#connecterror). If you matched on `ClientError::AlreadyConnected`, switch to `ConnectError::AlreadyConnected`.
+</Note>
 
 ### IqError (base type)
 
@@ -360,4 +500,25 @@ Err(IqError::ClientState(e)) => { /* e: ClientError */ }
 
 // After — dereference the box
 Err(IqError::ClientState(e)) => { /* *e: ClientError */ }
+```
+
+### From PR #1090: `connect()`/`logout()`/Signal maintenance
+
+```rust
+// Before
+if let Err(e) = client.connect().await {
+    if e.downcast_ref::<ClientError>().is_some_and(|e| matches!(e, ClientError::AlreadyConnected)) {
+        // ...
+    }
+}
+client.logout().await?;
+
+// After
+use whatsapp_rust::ConnectError;
+if let Err(e) = client.connect().await {
+    if matches!(e, ConnectError::AlreadyConnected) {
+        // ...
+    }
+}
+client.logout().await; // infallible — no `?` needed anymore
 ```

@@ -93,6 +93,16 @@ fn reconcile_chat(&self, chat: &Jid) -> Result<()>;
 
 Reconcile a 1:1 peer's PN- and LID-keyed rows into a single thread on demand. Idempotent — a peer with one thread (or no LID mapping yet) is a no-op. Like `record_outgoing`, this goes through the writer queue and returns immediately; call [`flush()`](#waiting-for-writes-to-land) to await completion.
 
+### Companion-device identities
+
+A peer's linked device (WhatsApp Web/Desktop) addresses traffic under a device-suffixed JID — `10203040506070:48@lid` rather than the peer's bare `10203040506070@lid`. Every row the store keys on identity (chats, contacts, message receipts) uses the bare form, so a companion device's traffic is normalized rather than filed under a key nothing else reads:
+
+- **Receipts from a companion device count.** Multi-device delivery/read semantics are any-device — WhatsApp emits the receipt once, from whichever of the peer's devices acted first, and never re-sends it from the primary — so `messages.status` advances the same whether the ack came from the peer's phone or their linked device.
+- **One "read by" row per participant, not per device.** A group member reading on their phone and again on Web still produces a single row in [`receipts()`](#querying).
+- **`contact()` resolves either form.** A caller holding a message's `sender` (which keeps its device by design) finds the same [`ContactEntry`](#contactentry) as a caller holding the peer's bare identity — both look up the same row.
+
+This is unrelated to [PN/LID identity aliasing](#pnlid-identity-aliasing) above: it normalizes the device suffix on one identity, not which of the two identities a thread is keyed by.
+
 ## Querying
 
 All query methods are `async` and run on the shared pool's blocking thread pool.
@@ -338,6 +348,7 @@ pub type Result<T> = std::result::Result<T, ChatStoreError>;
 - **History sync never clobbers live rows** (`ON CONFLICT DO NOTHING`). Live redeliveries and PDO recovery replace content in place instead — an `Undecryptable` placeholder becomes the real message under the same id once it's recovered.
 - **Content refreshes are sender-scoped.** Message ids are sender-chosen, so a different sender reusing an id can't rewrite someone else's message.
 - **PN/LID splits heal, they don't recur.** Once live traffic (or [`reconcile_chat`](#pnlid-identity-aliasing)) merges a peer's phone-number- and LID-keyed rows into one thread, later traffic under either identity keeps routing to that same thread — it can't re-split.
+- **Companion-device traffic never forks a thread.** A device-suffixed identity is normalized to the bare peer before it reaches routing, so a linked device can't materialize a chat, contact, or receipt row of its own — see [Companion-device identities](#companion-device-identities).
 
 ## See also
 

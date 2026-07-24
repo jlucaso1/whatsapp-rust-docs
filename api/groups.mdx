@@ -306,34 +306,45 @@ Set or delete the group description.
 ```rust
 pub async fn set_description(
     &self,
-    jid: &Jid,
+    jid: impl Into<Jid>,
     description: Option<GroupDescription>,
-    prev: Option<&str>,
+    prev: PreviousDescription<'_>,
 ) -> Result<(), GroupError>
 ```
 
 **Parameters:**
 - `jid` - Group JID
 - `description` - New description (max 2048 characters) or `None` to delete
-- `prev` - Current description ID for conflict detection, borrowed as `Option<&str>` (pass `None` if unknown)
+- `prev` - The description this update replaces, as a [`PreviousDescription`](#previousdescription). The server accepts the update only when this token matches the group's current description id — a group that already has a description cannot be updated without it.
 
 <Note>
-`prev` borrows the id (`Option<&str>`). Pass `Some("PREV_ID")` or `None`.
+[`PreviousDescription::Resolve`](#previousdescription) (the default) reads the current id from the server first, which always works but costs one extra query. If you already hold fresh [`GroupMetadata::description_id`](#groupmetadata), pass it directly — `metadata.description_id.as_deref().into()` — to skip that query. Use `PreviousDescription::Absent` for a group you know has no description yet, such as one you just created.
 </Note>
+
+Returns [`GroupError::DescriptionConflict`](#grouperror) if the group's description changed on the server between the read and this update (for example, another device changed it first).
 
 **Example:**
 ```rust
+use whatsapp_rust::features::groups::PreviousDescription;
+
 let group_jid: Jid = "123456789@g.us".parse()?;
 let desc = GroupDescription::new("This is our group chat")?;
 
-client.groups().set_description(&group_jid, Some(desc), None).await?;
+// Resolves the current description id from the server automatically
+client.groups().set_description(&group_jid, Some(desc), PreviousDescription::Resolve).await?;
 
-// Replace an existing description, passing the previous description id for conflict detection
+// Skip the extra round trip with a token already on hand
 let updated = GroupDescription::new("Updated topic")?;
-client.groups().set_description(&group_jid, Some(updated), Some("PREV_ID")).await?;
+let metadata = client.groups().get_metadata(&group_jid).await?;
+client.groups()
+    .set_description(&group_jid, Some(updated), metadata.description_id.as_deref().into())
+    .await?;
+
+// A freshly created group has no description yet
+client.groups().set_description(&group_jid, Some(desc), PreviousDescription::Absent).await?;
 
 // Delete description
-client.groups().set_description(&group_jid, None, None).await?;
+client.groups().set_description(&group_jid, None, PreviousDescription::Resolve).await?;
 ```
 
 ### leave
@@ -1352,6 +1363,26 @@ impl GroupDescription {
 }
 ```
 
+### PreviousDescription
+
+The description a [`set_description`](#set_description) call expects to replace — the server's optimistic-concurrency token for the group's description.
+
+```rust
+pub enum PreviousDescription<'a> {
+    Resolve,      // default
+    Absent,
+    Id(&'a str),
+}
+
+impl<'a> From<Option<&'a str>> for PreviousDescription<'a>
+```
+
+- `Resolve` (default) — read the group's current description id from the server before sending. The only variant that's correct without knowing anything about the group, and the only one that costs a round trip.
+- `Absent` — the group carries no description yet (e.g. one you just created), so no token is sent.
+- `Id(&str)` — a description id you already hold, typically [`GroupMetadata::description_id`](#groupmetadata) from a recent [`get_metadata`](#get_metadata) call.
+
+`From<Option<&str>>` lets you turn a held `GroupMetadata::description_id` into a token directly: `None` maps to `Absent` (that metadata says the group has no description), `Some(id)` maps to `Id(id)`. Use `Resolve` instead when the metadata's age is unknown, since stale metadata that missed a description added since would otherwise surface as `GroupError::DescriptionConflict`.
+
 ### GroupEphemeralSettings
 
 Disappearing-message settings carried by a group's `<ephemeral>` node.
@@ -1675,6 +1706,8 @@ pub enum GroupError {
     Mex(#[from] MexError),
     #[error("invalid group request: {0}")]
     InvalidRequest(String),
+    #[error("the group description changed since it was read")]
+    DescriptionConflict,
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -1684,6 +1717,7 @@ pub enum GroupError {
 - `Iq` — IQ request failed (timeout, server rejection, etc.)
 - `Mex` — MEX protocol error (for methods using the MEX transport)
 - `InvalidRequest` — malformed request (expired invite, missing fields, etc.)
+- `DescriptionConflict` — [`set_description`](#set_description)'s `prev` token no longer matches the group's current description (the server answered `409 conflict`); another device changed it first. Kept distinct from a permission refusal so a caller can re-read the description and retry instead of giving up.
 - `Internal` — catch-all for other errors
 
 ```rust

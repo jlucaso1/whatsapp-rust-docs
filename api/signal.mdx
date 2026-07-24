@@ -44,7 +44,7 @@ pub async fn encrypt_message(
 
 **Example:**
 ```rust
-use wacore::message_processing::EncType;
+use whatsapp_rust::EncType;
 
 let plaintext = b"Hello, world!";
 let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
@@ -494,6 +494,10 @@ pub enum EncType {
 ```
 
 `EncType` exposes two predicate helpers: `is_session()` (true for `Message` / `PreKeyMessage`, **excludes** `MessageSecret`) and `is_bot_secret()` (true only for `MessageSecret`).
+
+<Note>
+`EncType` is re-exported from the crate root as `whatsapp_rust::EncType` — prefer that over the internal `wacore::message_processing::EncType` path shown in older examples.
+</Note>
 
 ## SignalSessionInfo
 

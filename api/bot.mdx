@@ -785,6 +785,10 @@ pub enum BotBuilderError {
 Missing required components (backend, transport, HTTP client, runtime) are caught at **compile time** via the typestate pattern — `build()` is only available when all four type parameters are `Provided`. You won't see runtime errors for missing components.
 </Note>
 
+<Note>
+`BotBuilder` is `#[must_use]` — building it does nothing until you call `.build()`, so a builder chain left unbound (or dropped before `.build()`) now triggers a compiler warning.
+</Note>
+
 ### client
 
 ```rust
@@ -804,7 +808,7 @@ let bot = Bot::builder()
     .await?;
 
 let client = bot.client();
-let jid = client.get_pn();
+let jid = client.pn();
 ```
 
 ### run
@@ -831,7 +835,7 @@ handle.await?;
 ```
 
 <Warning>
-You must call `.await?` on the returned handle to keep the bot running. If you drop the handle, the bot will continue running in the background.
+`BotHandle` is `#[must_use]`: dropping it aborts the bot task instead of leaving it running in the background. Bind it and either `.await` it or call `.shutdown()`/`.abort()` explicitly — do not let it fall out of scope while you expect the bot to keep running.
 </Warning>
 
 <Note>

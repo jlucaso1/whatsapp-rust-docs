@@ -229,7 +229,7 @@ Since v0.6 this is an `async` instance method (`&self`) rather than a static hel
 **Example:**
 
 ```rust
-use whatsapp_rust::features::Polls;
+use whatsapp_rust::Polls;
 
 let selected_hashes = client
     .polls()
@@ -290,7 +290,7 @@ Also async + `&self` since v0.6 for the same LID↔PN reasons. Migrate `Polls::a
 **Example:**
 
 ```rust
-use whatsapp_rust::features::{Polls, PollOptionResult};
+use whatsapp_rust::{Polls, PollOptionResult};
 
 let options = vec!["Yes".to_string(), "No".to_string()];
 
@@ -331,6 +331,10 @@ pub struct PollOptionResult {
 |-------|------|-------------|
 | `name` | `String` | The option name |
 | `voters` | `Vec<String>` | JID strings of voters who selected this option |
+
+<Note>
+`Polls`, `PollOptionResult`, and `PollVoteCiphertext` are re-exported from the crate root. `whatsapp_rust::Polls` and `whatsapp_rust::PollOptionResult` (shown in the examples above) are now the preferred paths; the legacy `whatsapp_rust::features::` import path continues to work as well.
+</Note>
 
 ## Low-level utilities
 

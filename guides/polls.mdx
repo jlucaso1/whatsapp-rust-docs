@@ -82,7 +82,7 @@ You can only vote on polls where you have the `message_secret`. This secret is g
 When you receive poll update events, the vote payload is encrypted. Use `decrypt_vote` to retrieve the selected option hashes:
 
 ```rust
-use whatsapp_rust::features::PollOptionResult;
+use whatsapp_rust::PollOptionResult;
 
 let selected_hashes = client
     .polls()
@@ -108,7 +108,7 @@ Each returned hash is a 32-byte SHA-256 hash of the option name. To map hashes b
 For tallying votes across multiple voters, use `aggregate_votes`. This handles vote replacement (last-vote-wins) and maps hashes back to option names. Voters are deduped by canonical identity, so a voter who re-votes under the opposite namespace counts once:
 
 ```rust
-use whatsapp_rust::features::PollOptionResult;
+use whatsapp_rust::PollOptionResult;
 
 let poll_options = vec![
     "Option A".to_string(),

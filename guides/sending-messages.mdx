@@ -362,9 +362,7 @@ let edit_id = client.edit_message_with_options(
         conversation: Some("This is the edited text".to_string()),
         ..Default::default()
     },
-    EditOptions {
-        stanza_id: Some(existing_message_id.clone()),
-    },
+    EditOptions::default().with_stanza_id(existing_message_id.clone()),
 ).await?;
 ```
 
@@ -690,10 +688,7 @@ let message = wa::Message {
     ..Default::default()
 };
 
-let options = SendOptions {
-    ephemeral_expiration: Some(604800), // 7 days, matching the chat's timer
-    ..Default::default()
-};
+let options = SendOptions::default().with_ephemeral_expiration(604800); // 7 days, matching the chat's timer
 
 let result = client.send_message_with_options(chat_jid, message, options).await?;
 ```
@@ -794,15 +789,12 @@ See [Send API reference](/api/send#sendoptions) for the full `SendOptions` type.
 
 ### Specifying a custom message ID
 
-You can override the auto-generated message ID by setting `message_id` on `SendOptions`. This is useful for resending a failed message with the same ID or ensuring idempotency:
+You can override the auto-generated message ID by setting `message_id` via `SendOptions`. This is useful for resending a failed message with the same ID or ensuring idempotency:
 
 ```rust
 use whatsapp_rust::send::SendOptions;
 
-let options = SendOptions {
-    message_id: Some("3EB0ABC123".to_string()),
-    ..Default::default()
-};
+let options = SendOptions::default().with_message_id("3EB0ABC123");
 
 let result = client.send_message_with_options(
     to,
@@ -820,10 +812,7 @@ The library infers the `<message type="...">` attribute from the protobuf conten
 ```rust
 use whatsapp_rust::{StanzaType, send::SendOptions};
 
-let options = SendOptions {
-    stanza_type_override: Some(StanzaType::Text),
-    ..Default::default()
-};
+let options = SendOptions::default().with_stanza_type_override(StanzaType::Text);
 
 let result = client.send_message_with_options(
     to,
@@ -842,14 +831,11 @@ For advanced use cases, you can include custom XML nodes:
 use whatsapp_rust::send::SendOptions;
 use wacore_binary::builder::NodeBuilder;
 
-let options = SendOptions {
-    extra_stanza_nodes: vec![
-        NodeBuilder::new("custom")
-            .attr("key", "value")
-            .build(),
-    ],
-    ..Default::default()
-};
+let options = SendOptions::default().with_extra_stanza_nodes(vec![
+    NodeBuilder::new("custom")
+        .attr("key", "value")
+        .build(),
+]);
 
 let result = client.send_message_with_options(
     to,
@@ -859,6 +845,10 @@ let result = client.send_message_with_options(
 ```
 
 See [Send API reference](/api/send#sendoptions) for full details.
+
+<Note>
+`SendOptions` and `EditOptions` are `#[non_exhaustive]` — build them by chaining the `with_*` setters off `::default()` rather than a struct literal (even with `..Default::default()`), since new fields can be added in future releases without breaking existing call sites.
+</Note>
 
 ## Message preparation helpers
 

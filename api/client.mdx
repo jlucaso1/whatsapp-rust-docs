@@ -506,7 +506,7 @@ pub async fn edit_message_with_options(
 ) -> Result<String, SendError>
 ```
 
-Edit-path counterpart of `send_message_with_options`. Accepts an `EditOptions { stanza_id: Option<String> }` to pin the outer stanza id to an existing message's id (best-effort — server/client dependent) instead of the fresh id `edit_message` generates.
+Edit-path counterpart of `send_message_with_options`. Accepts an [`EditOptions`](/api/send#editoptions) (built via `EditOptions::default().with_stanza_id(id)`) to pin the outer stanza id to an existing message's id (best-effort — server/client dependent) instead of the fresh id `edit_message` generates.
 
 See [Send API reference](/api/send#edit_message_with_options) for the full `EditOptions` type and its side-effect notes.
 
@@ -977,29 +977,41 @@ Native profiles (`android`, `smb_android`, `ios`, `macos`, `windows`) automatica
 
 ## Device State
 
-### get_push_name
+### push_name
 
 ```rust
-pub fn get_push_name(&self) -> String
+pub fn push_name(&self) -> String
 ```
 
 Returns the current push name (display name).
 
-### get_pn
+<Note>
+Renamed from `get_push_name` — the `get_` prefix was dropped to match the neighboring accessors.
+</Note>
+
+### pn
 
 ```rust
-pub fn get_pn(&self) -> Option<Jid>
+pub fn pn(&self) -> Option<Jid>
 ```
 
-Returns the phone number JID.
+Returns the phone number JID, or `None` before pairing completes.
 
-### get_lid
+<Note>
+Renamed from `get_pn`.
+</Note>
+
+### lid
 
 ```rust
-pub fn get_lid(&self) -> Option<Jid>
+pub fn lid(&self) -> Option<Jid>
 ```
 
-Returns the LID (Linked Identity).
+Returns the LID (Linked Identity), or `None` before pairing completes.
+
+<Note>
+Renamed from `get_lid`.
+</Note>
 
 ### is_lid_migrated
 

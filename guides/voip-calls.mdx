@@ -19,6 +19,10 @@ Video is **codec-neutral**: you hand the library complete H.264 Annex-B access u
   The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) (audio), [PR #1024](https://github.com/oxidezap/whatsapp-rust/pull/1024) (video), and [PR #1050](https://github.com/oxidezap/whatsapp-rust/pull/1050) (encoded audio + native Opus, and the feature split below) and will be included in the next published release. Until then, depend on the git source:
 </Warning>
 
+<Warning>
+  [PR #1051](https://github.com/oxidezap/whatsapp-rust/pull/1051) changed `CallHandle::accept_video`'s signature and the shape of `CallEvent::VideoStateChanged` to close a race where a cancelled or superseded video-upgrade request could still attach a camera. If you're upgrading from before this PR, see [Peer initiates](#video-io) below and the `VideoUpgradeToken` field on the event.
+</Warning>
+
 ```toml
 [dependencies]
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", features = ["voip"] }
@@ -131,6 +135,10 @@ The CLI exposes three subcommands, each accepting a trailing `--video`:
 | `call <jid> [--video]` | Connect to WhatsApp and place an outgoing call to the given JID. With `--video` it's a video call from the start. |
 
 During a live call, single-key stdin commands (terminal only) work regardless of how the call started: `v` toggles video — upgrades to video, accepts a pending peer upgrade request, or downgrades back to audio — and `q` performs a signaled hangup.
+
+<Note>
+  `listen accept --video` auto-accepts a peer's mid-call video-upgrade request even when the call itself started as audio-only — not just on calls that were video from the start.
+</Note>
 
 To test the audio stack locally without a WhatsApp session:
 
@@ -303,18 +311,32 @@ handle.start_video(camera_source, video_sink).await?;
   Don't call `handle.announce_video_enabled()` in response because that sends a redundant second `Enabled`. Only use that method when you drive call signaling outside the standard handler.
 </Note>
 
-**Peer initiates** — respond to a `CallEvent::VideoStateChanged { state, .. }` event where `state` is `VideoState::UpgradeRequest` (legacy) or `VideoState::UpgradeRequestV2`:
+**Peer initiates** — respond to a `CallEvent::VideoStateChanged { state, upgrade_token, .. }` event where `state` is `VideoState::UpgradeRequest` (legacy) or `VideoState::UpgradeRequestV2`. Pass the event's `upgrade_token` straight to `accept_video` — it binds the accept to that exact peer request so a cancelled or superseded upgrade can't attach your camera:
 
 ```rust
-// Sends both the accept and the Enabled stanza in one call — no extra step needed on this side.
-handle.accept_video(camera_source, video_sink).await?;
+CallEvent::VideoStateChanged { state, upgrade_token: Some(token), .. } if state.is_upgrade_request() => {
+    // Sends both the accept and the Enabled stanza in one call — no extra step needed on this side.
+    handle.accept_video(token, camera_source, video_sink).await?;
+}
 ```
 
-**Either side** — downgrade back to audio-only:
+<Note>
+  `upgrade_token` is `None` when the transition was already auto-resolved by the signaling state machine (e.g. simultaneous local and peer upgrade requests) — there's nothing to accept in that case. If you call `accept_video` with a token from an upgrade that has since been cancelled, superseded, or expired (see the 5-second timeout below), it returns `CallError::VideoUpgradeExpired` instead of attaching the camera.
+</Note>
+
+**Either side** — stop sending our own video:
 
 ```rust
 handle.stop_video().await?; // Idempotent.
 ```
+
+<Note>
+  `stop_video` only stops the video **we** send. If the peer keeps sending, their plane and `is_video` stay up — it's no longer a full downgrade to audio-only for the call. To end video in both directions, each side calls `stop_video()` independently, or one side hangs up.
+</Note>
+
+<Note>
+  An upgrade request you send with `start_video` auto-cancels after 5 seconds if the peer hasn't answered: the library sends `<video state=9>` (`VideoState::UpgradeCancelByTimeout`) and releases the local camera source/sink it had prepared. This mirrors the native app's upgrade timeout and means `start_video` isn't guaranteed to stay pending indefinitely — watch `CallEvent::VideoStateChanged` if you need to know when a request you initiated expires unanswered.
+</Note>
 
 <Tip>
   `handle.events()` clones share one underlying queue — they're competing consumers, not a broadcast. If your app already drains events on one loop (for relay/RTCP/audio events, say), react to `VideoStateChanged` there rather than spawning a second `handle.events()` consumer, or the two loops will race for the same messages.
@@ -337,10 +359,10 @@ handle.stop_video().await?; // Idempotent.
 | `handle.peer_jid()` | The peer's JID (needed for `terminate`) |
 | `handle.call_creator()` | The call creator's JID (needed for `terminate`) |
 | `handle.set_muted(true)` | Mute or unmute the local microphone |
-| `handle.start_video(source, sink).await` | Upgrade to video (we initiate); sends the video-upgrade offer and returns immediately. The media plane enables once the peer accepts — see Video I/O above |
-| `handle.accept_video(source, sink).await` | Accept the peer's pending video-upgrade request |
+| `handle.start_video(source, sink).await` | Upgrade to video (we initiate); sends the video-upgrade offer and returns immediately. The media plane enables once the peer accepts — see Video I/O above. Auto-cancels after 5s if unanswered |
+| `handle.accept_video(token, source, sink).await` | Accept the peer's pending video-upgrade request. `token` is the `VideoUpgradeToken` from that request's `CallEvent::VideoStateChanged`; a stale token returns `CallError::VideoUpgradeExpired` |
 | `handle.announce_video_enabled().await` | Send the standalone `Enabled` stanza that completes a `start_video` upgrade. `whatsapp-rust`'s standard `<call>` handler already does this automatically on the peer's `UpgradeAccept` — only call it yourself if you're driving call signaling outside that handler |
-| `handle.stop_video().await` | Downgrade to audio-only; idempotent |
+| `handle.stop_video().await` | Stop our own outbound video; idempotent. The peer's video plane is unaffected if they keep sending — see Video I/O above |
 | `handle.events()` | Subscribe to engine events (relay allocate, audio/video state changes, RTCP, failures) |
 
 ## Multi-Device Behavior

@@ -7,6 +7,8 @@ As of PR #893, all feature-domain APIs return a typed, domain-specific error ins
 
 As of PR #1090, the connect/lifecycle surface (`Client::connect`, `wait_for_socket`, `wait_for_connected`), the background Signal maintenance surface (`Client::rotate_signed_pre_key`, `Client::flush_pending_signal_state`), and the message-edit target-key resolvers (`EncryptedEdit::original_sender_jid`, `SecretEncrypted::original_sender_jid`/`original_sender_for_dispatch`) also return typed errors — see [`ConnectError`](#connecterror), [`SignalMaintenanceError`](#signalmaintenanceerror), and [`MessageEditError`](#messageediterror) below. `Client::logout()` is now infallible (`()`, not `Result<(), _>`): the deregistration IQ it sends is best-effort, so there was nothing for a caller to branch on.
 
+As of PR #1100, every wrapping variant that used to be `#[error(transparent)]` is `#[error("{0}")]` instead — same `Display` output, but the wrapped error is now reachable via `std::error::Error::source()` instead of being erased. [`ErrorChainExt`](#error-chain-recovery) is a new extension trait, implemented for every `std::error::Error`, that walks that chain for you: `server_rejection()`, `is_timeout()`, `is_transport_unavailable()`, and `store_failure()` answer type-agnostically across every error on this page, without downcasting or string-matching. See [Error chain recovery](#error-chain-recovery) below.
+
 ## Error hierarchy
 
 ```
@@ -58,6 +60,71 @@ Domain errors that embed `IqError` or `ClientError` via `#[from]` propagate thos
 `ConnectError` and `SignalMaintenanceError` are **not** variants of `ClientError` — they are separate top-level error types returned directly by their respective methods (previously those methods returned bare `anyhow::Error`). `ClientError::AlreadyConnected` was removed in PR #1090; the equivalent case now lives on `ConnectError::AlreadyConnected`.
 </Note>
 
+## Error chain recovery
+
+Added in PR #1100. Before this, `#[error(transparent)]` on a wrapping variant made `Display` forward to the inner error but also made `source()` forward to *that error's own* source — so the wrapped error itself was never reachable, and a consumer walking `source()` to find (say) a `403` from the server lost the typed node and was left parsing `Display` text. Every `transparent` in the crate (46 occurrences) is now `#[error("{0}")]`: byte-identical `Display` output, but `source()` now returns the wrapped error itself, so it can be downcast.
+
+`ErrorChainExt` is a blanket-implemented trait (`impl<E: std::error::Error> ErrorChainExt for E`) that turns that walk into a few type-agnostic questions, so a domain error added later answers them without implementing anything:
+
+```rust
+pub trait ErrorChainExt {
+    fn sources(&self) -> Sources<'_>;
+    fn server_rejection(&self) -> Option<ServerRejection<'_>>;
+    fn is_timeout(&self) -> bool;
+    fn is_transport_unavailable(&self) -> bool;
+    fn store_failure(&self) -> Option<&StoreError>;
+}
+```
+
+- `sources()` — an iterator over the error and everything reachable from it via `source()`, nearest first. Use this to recover a domain type the other methods don't model.
+- `server_rejection()` — the [`ServerRejection`](#serverrejection) behind this error, if any of the three types that can carry one (`wacore::request::IqError`, `crate::request::IqError`, or the crate-boundary `ServerErrorCode`) appear anywhere in the chain. Reports IQ-level rejections only — `MexError::ExtensionError`'s `code` is a GraphQL extension code, a different space from the IQ `code` attribute, so it is deliberately not reported here.
+- `is_timeout()` — whether the operation ran out of time: a request that got no answer, or a connect/handshake step that never completed.
+- `is_transport_unavailable()` — whether the failure was the transport being gone (disconnected, socket/channel closed) rather than the operation being refused. Mirrors the judgement the send and receive paths already make internally when deciding whether a failure is worth retrying.
+- `store_failure()` — the `StoreError` behind this error, if a persistence backend failed anywhere in the chain.
+
+```rust
+use whatsapp_rust::ErrorChainExt;
+
+match client.groups().set_description(&jid, Some(desc), PreviousDescription::Resolve).await {
+    Ok(_) => {}
+    Err(e) if e.is_transport_unavailable() => { /* retry once reconnected */ }
+    Err(e) => {
+        if let Some(rejection) = e.server_rejection() {
+            eprintln!("server said {}: {}", rejection.code, rejection.text);
+        } else {
+            eprintln!("group update failed: {e}");
+        }
+    }
+}
+```
+
+From a caller holding `anyhow::Error` rather than a typed error, annotate the cast — `anyhow::Error` has two `AsRef<dyn Error>` impls, and both are covered:
+
+```rust
+let cause: &(dyn std::error::Error + 'static) = err.as_ref();
+if cause.is_timeout() { /* ... */ }
+```
+
+### ServerRejection
+
+```rust
+#[non_exhaustive]
+pub struct ServerRejection<'a> {
+    pub code: u16,
+    pub text: &'a str,
+    pub error_type: Option<&'a str>,
+    pub backoff: Option<u32>,
+}
+```
+
+Borrowed from whichever error in the chain carried it, so recovering one costs no allocation.
+
+<Note>
+Rendering changed alongside the `source()` fix: a wrapping variant's `Display` still prints exactly what it wraps, so code that concatenates every node in a chain (a logging layer, a `display_chain` helper) now sees the same sentence repeated once per wrapping variant — e.g. `CommunityError::Group(GroupError::Iq(..))` is three nodes rendering one sentence three times. That repetition is the cost of keeping the wrapped error downcastable. Print the innermost cause, or collapse equal neighbours, rather than joining every node in the chain.
+</Note>
+
+`ErrorChainExt`, `ServerRejection`, and `Sources` are re-exported from the crate root (`whatsapp_rust::ErrorChainExt`, `whatsapp_rust::ServerRejection`, `whatsapp_rust::Sources`).
+
 ## Domain error types
 
 | Error type | Returned by | Module |
@@ -87,7 +154,7 @@ Domain errors that embed `IqError` or `ClientError` via `#[from]` propagate thos
 ```rust
 #[non_exhaustive]
 pub enum SendError {
-    #[error(transparent)]
+    #[error("{0}")]
     Client(ClientError),
     #[error("client is not logged in")]
     NotLoggedIn,
@@ -95,7 +162,7 @@ pub enum SendError {
     Iq(#[from] IqError),
     #[error("invalid send request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -105,27 +172,31 @@ pub enum SendError {
 ```rust
 #[non_exhaustive]
 pub enum GroupError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Mex(#[from] MexError),
     #[error("invalid group request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
+    #[error("group description changed on the server since it was last read")]
+    DescriptionConflict,
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
+
+`DescriptionConflict` (added in PR #1097) is returned by [`Groups::set_description`](/api/groups#set_description) when the `prev` token no longer matches the group's current description — see [`GroupError` in the groups reference](/api/groups#grouperror).
 
 ### BlockingError
 
 ```rust
 #[non_exhaustive]
 pub enum BlockingError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
     #[error("invalid blocklist target: {0}")]
     InvalidJid(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -139,7 +210,7 @@ Shared by `ChatActions` and `Labels`.
 pub enum AppStateError {
     #[error("invalid app-state request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -149,7 +220,7 @@ pub enum AppStateError {
 ```rust
 #[non_exhaustive]
 pub enum ChatStateError {
-    #[error(transparent)]
+    #[error("{0}")]
     Client(#[from] ClientError),
 }
 ```
@@ -159,11 +230,11 @@ pub enum ChatStateError {
 ```rust
 #[non_exhaustive]
 pub enum CommunityError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Mex(#[from] MexError),
-    #[error(transparent)]
+    #[error("{0}")]
     Group(#[from] GroupError),
     #[error("invalid community request: {0}")]
     InvalidRequest(String),
@@ -175,7 +246,7 @@ pub enum CommunityError {
 ```rust
 #[non_exhaustive]
 pub enum ContactError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
     #[error("unsupported contact JID: {0}")]
     InvalidJid(String),
@@ -187,15 +258,15 @@ pub enum ContactError {
 ```rust
 #[non_exhaustive]
 pub enum NewsletterError {
-    #[error(transparent)]
+    #[error("{0}")]
     Mex(#[from] MexError),
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Client(#[from] ClientError),
     #[error("invalid newsletter request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -205,7 +276,7 @@ pub enum NewsletterError {
 ```rust
 #[non_exhaustive]
 pub enum PollError {
-    #[error(transparent)]
+    #[error("{0}")]
     Send(#[from] SendError),
     #[error("invalid poll: {0}")]
     InvalidPoll(String),
@@ -221,13 +292,13 @@ pub enum PollError {
 ```rust
 #[non_exhaustive]
 pub enum ProfileError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Client(#[from] ClientError),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -237,11 +308,11 @@ pub enum ProfileError {
 ```rust
 #[non_exhaustive]
 pub enum SignalError {
-    #[error(transparent)]
+    #[error("{0}")]
     Protocol(#[from] SignalProtocolError),
     #[error("unsupported signal operation: {0}")]
     Unsupported(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -251,9 +322,9 @@ pub enum SignalError {
 ```rust
 #[non_exhaustive]
 pub enum TcTokenError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Store(#[from] StoreError),
 }
 ```
@@ -263,7 +334,7 @@ pub enum TcTokenError {
 ```rust
 #[non_exhaustive]
 pub enum MediaReuploadError {
-    #[error(transparent)]
+    #[error("{0}")]
     Client(#[from] ClientError),
     #[error("client is not logged in")]
     NotLoggedIn,
@@ -271,7 +342,7 @@ pub enum MediaReuploadError {
     InvalidRequest(String),
     #[error("media retry notification timed out")]
     Timeout,
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -283,9 +354,9 @@ pub enum MediaReuploadError {
 pub enum PresenceError {
     #[error("cannot send presence without a push name set")]
     PushNameEmpty,
-    #[error(transparent)]
+    #[error("{0}")]
     Client(#[from] ClientError),
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 ```
@@ -310,7 +381,7 @@ pub enum ConnectError {
     Version(#[source] anyhow::Error),
     #[error("failed to open transport")]
     Transport(#[source] anyhow::Error),
-    #[error(transparent)]
+    #[error("{0}")]
     Handshake(#[from] crate::handshake::HandshakeError),
 }
 ```
@@ -321,6 +392,8 @@ pub enum ConnectError {
 - `Timeout` — a step of the connect flow ran out of time. `stage` says which one (see [`ConnectStage`](#connectstage) below); `wait_for_socket`/`wait_for_connected` always report `Socket`/`Ready` respectively.
 - `Version` / `Transport` — the app-version resolution or transport factory failed outright (not a timeout).
 - `Handshake` — the Noise handshake failed after the transport was up. Wraps `HandshakeError` (see [WebSocket & Noise Protocol](/advanced/websocket-handling#handshake-errors)) via `#[from]`, so `?` still works and `matches!(err, ConnectError::Handshake(e) if e.is_transient())` replaces the old `err.downcast_ref::<HandshakeError>()` pattern for deciding whether a failed reconnect attempt is worth retrying.
+
+Added in PR #1100: `ConnectError::is_timeout()` is an exhaustively-matched method that reports `true` for `Timeout` and for a `Handshake(e)` where `e.is_timeout()` (`HandshakeError` gained the same method). Prefer [`ErrorChainExt::is_timeout()`](#error-chain-recovery) unless you specifically hold a `ConnectError` and want to skip the chain walk.
 
 #### ConnectStage
 
@@ -355,7 +428,7 @@ pub enum SignalMaintenanceError {
     Storage(#[source] anyhow::Error),
     #[error("IQ request failed: {0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Signal(#[from] SignalProtocolError),
     #[error(
         "inbound drain batch commit failed; Signal cache left unflushed so the server redelivers"
@@ -415,7 +488,7 @@ pub enum ClientError {
     EncryptSend(EncryptSendError),
     #[error("IQ request failed: {0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -457,6 +530,8 @@ pub enum IqError {
 <Note>
 `IqError::ClientState` holds a `Box<ClientError>` (not `ClientError` directly) to break the mutual-size cycle between `ClientError` and `IqError`. Pattern matching needs dereferencing: `IqError::ClientState(e) => { /* *e is a ClientError */ }`.
 </Note>
+
+Added in PR #1100: `wacore::request::IqError` gained public `is_timeout()` (`true` only for `Timeout`) and `is_transport_unavailable()` (`true` for `NotConnected`, `Disconnected`, and `InternalChannelClosed`) methods, each an exhaustive match so a future variant has to be classified rather than silently defaulting to `false`. `whatsapp_rust::request::IqError` (the crate-level type shown above, with the extra `Socket`/`EncryptSend`/`ClientState`/`EncodeError`/`ParseError` variants) makes the same judgement internally but does not expose it publicly — go through [`ErrorChainExt`](#error-chain-recovery) instead, which handles both types.
 
 ## Migration guide
 
@@ -522,3 +597,32 @@ if let Err(e) = client.connect().await {
 }
 client.logout().await; // infallible — no `?` needed anymore
 ```
+
+### From PR #1100: error chain recovery
+
+If you were walking `source()` by hand to recover a server rejection or classify a failure, switch to [`ErrorChainExt`](#error-chain-recovery):
+
+```rust
+// Before
+fn is_transport_unavailable(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<ClientError>()
+            .is_some_and(ClientError::is_transport_unavailable)
+            || cause
+                .downcast_ref::<IqError>()
+                .is_some_and(IqError::is_transport_unavailable)
+    })
+}
+
+// After
+use whatsapp_rust::ErrorChainExt;
+fn is_transport_unavailable(err: &anyhow::Error) -> bool {
+    let cause: &(dyn std::error::Error + 'static) = err.as_ref();
+    cause.is_transport_unavailable()
+}
+```
+
+If you concatenated an error's full chain (e.g. a logging layer joining every `source()` node into one string), be aware the text changed: a wrapping variant still renders exactly what it wraps, so `#[error(transparent)]` becoming `#[error("{0}")]` means a chain like `CommunityError::Group(GroupError::Iq(..))` now repeats the same sentence once per wrapping node instead of once. Each error's own `Display` output — what you get from `{e}` on a single error value — is unchanged. Print the innermost cause, or collapse equal neighbours, rather than joining every node.
+
+`#[non_exhaustive]` was added to four error enums that were missing it: `wacore::pair_code::PairCodeError`, `wacore::shortcake::ShortcakeError`, `wacore::iq::chatstate::ChatstateParseError`, and `wacore::iq::dirty::DirtyBitParseError`. An exhaustive `match` on any of these from outside their defining crate now fails with `E0004`; add a `_ => {}` arm.

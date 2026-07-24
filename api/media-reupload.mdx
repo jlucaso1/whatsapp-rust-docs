@@ -174,7 +174,7 @@ The method returns `Result<MediaRetryResult, MediaReuploadError>`. The `MediaRet
 ```rust
 #[non_exhaustive]
 pub enum MediaReuploadError {
-    #[error(transparent)]
+    #[error("{0}")]
     Client(#[from] ClientError),
     #[error("client is not logged in")]
     NotLoggedIn,
@@ -182,7 +182,7 @@ pub enum MediaReuploadError {
     InvalidRequest(String),
     #[error("media retry notification timed out")]
     Timeout,
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```

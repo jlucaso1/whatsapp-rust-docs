@@ -650,13 +650,13 @@ All signal methods return `Result<T, SignalError>`:
 ```rust
 #[non_exhaustive]
 pub enum SignalError {
-    #[error(transparent)]
+    #[error("{0}")]
     Protocol(#[from] SignalProtocolError),
     #[error("unsupported signal operation: {0}")]
     Unsupported(String),
     #[error("invalid signal input: {0}")]
     InvalidInput(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```

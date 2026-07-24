@@ -1001,6 +1001,10 @@ match client.pair_with_code(options).await {
     Err(PairError::RequestFailed(iq)) => {
         eprintln!("Pair-code IQ request failed: {iq}");
     }
+    // Both `PairError` and `PairCodeError` are `#[non_exhaustive]`, so a
+    // wildcard arm is required from outside the crate — `PairCodeError`
+    // joined the other 3 that were missing the attribute in PR #1100.
+    _ => {}
 }
 ```
 

@@ -600,7 +600,7 @@ All methods return `Result<(), AppStateError>`:
 pub enum AppStateError {
     #[error("invalid app-state request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```

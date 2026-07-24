@@ -143,11 +143,11 @@ All methods return `Result<T, BlockingError>`:
 ```rust
 #[non_exhaustive]
 pub enum BlockingError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
     #[error("invalid blocklist target: {0}")]
     InvalidJid(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```

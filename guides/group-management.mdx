@@ -211,28 +211,28 @@ See [Groups API reference](/api/groups#set_subject) for details.
 ### Set or delete group description
 
 ```rust
-use whatsapp_rust::features::groups::GroupDescription;
+use whatsapp_rust::features::groups::{GroupDescription, PreviousDescription};
 
-// Set description
+// Set description — resolves the current description id from the server automatically
 let description = GroupDescription::new("This is the group description")?;
 client.groups().set_description(
     &group_jid,
     Some(description),
-    None,  // prev description ID (optional)
+    PreviousDescription::Resolve,
 ).await?;
 
 // Delete description
 client.groups().set_description(
     &group_jid,
     None,
-    None,
+    PreviousDescription::Resolve,
 ).await?;
 ```
 
 See [Groups API reference](/api/groups#set_description) for details.
 
 <Note>
-The `prev` parameter can be used for conflict detection. If provided and the current description ID doesn't match, the operation may fail. Pass `None` if you don't need this check.
+`prev` is an optimistic-concurrency token, not an optional hint: a group that already has a description can only be updated by naming the id it replaces, or the server answers `409 conflict` (surfaced as [`GroupError::DescriptionConflict`](/api/groups#grouperror)). `PreviousDescription::Resolve` reads that id from the server first — the safe default when you don't already have it. If you just fetched `GroupMetadata`, skip the extra round trip by passing its id directly: `metadata.description_id.as_deref().into()`. Use `PreviousDescription::Absent` for a group you know has no description yet, such as one you just created.
 </Note>
 
 ## Managing participants

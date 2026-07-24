@@ -589,7 +589,7 @@ Access group management operations.
 - `get_participating()` - List all groups you're in
 - `create_group(options: GroupCreateOptions)` - Create a new group
 - `set_subject(jid: &Jid, subject: GroupSubject)` - Change group name
-- `set_description(jid: &Jid, desc: Option<GroupDescription>, prev: Option<String>)` - Change description
+- `set_description(jid: &Jid, desc: Option<GroupDescription>, prev: PreviousDescription<'_>)` - Change description; `prev` is an optimistic-concurrency token ([`PreviousDescription::Resolve`](/api/groups#previousdescription) reads the current one for you)
 - `leave(jid: &Jid)` - Leave a group
 - `add_participants(jid: &Jid, participants: &[Jid])` - Add members
 - `remove_participants(jid: &Jid, participants: &[Jid])` - Remove members

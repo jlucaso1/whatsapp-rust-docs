@@ -66,6 +66,8 @@ fn record_outgoing(
 
 `record_outgoing` is synchronous — it only enqueues onto the writer channel and returns, it does not wait for the write to commit. The row starts at `MessageStatus::Pending` and is lifted by the server ack/receipts that follow. Because the enqueue happens on the same writer queue as inbound events, it cannot race the ack that immediately follows a send. Call [`flush()`](#waiting-for-writes-to-land) if you need to wait for the row to actually land before reading it back.
 
+`chat` may be either of a 1:1 peer's identities (phone number or LID) — see [PN/LID identity aliasing](#pn-lid-identity-aliasing) for how the store routes and reads across the two.
+
 ### Waiting for writes to land
 
 ```rust
@@ -73,6 +75,23 @@ async fn flush(&self) -> Result<()>;
 ```
 
 Awaits until every write enqueued before the call has committed. Returns `ChatStoreError::WriteBatchFailed` if the batch containing one of those writes rolled back. Mainly useful in tests, or right before reading your own just-sent message back out.
+
+### PN/LID identity aliasing
+
+A 1:1 peer has two interchangeable wire identities — phone number (`@s.whatsapp.net`) and LID (`@lid`) — and inbound traffic for the same thread can arrive addressed under either one, regardless of which key the thread's rows already live under.
+
+- **An existing thread keeps its key.** Whichever identity addresses it, live traffic (messages, receipts, reactions, app-state updates) routes to the thread that already exists, matching WA Web's `selectChatForOneOnOneMessage`.
+- **A brand-new chat is keyed by LID** when the peer already has a known PN↔LID mapping; otherwise it's keyed by whichever identity first addressed it.
+- **Every read resolves the alias.** [`messages`](#querying), [`message`](#querying), [`reactions`](#querying) and [`receipts`](#querying) all accept either of the peer's identities as the `chat` argument and match rows stored under either key — so a caller that only ever addresses a peer by phone number keeps working even if some rows ended up under the LID key (or vice versa).
+- **Splits heal automatically.** If a peer's rows are split across both keys (for example, from receipts that arrived under the wrong identity before this resolution existed), the next piece of live traffic for that peer merges the pair into one thread — advance-only status/star/revoke/edit conflict resolution, union of reactions and per-user receipts, sticky metadata (pin/mute/archive/name/ephemeral) kept, badge recounted. Ties go to the LID side.
+
+To force this healing eagerly instead of waiting for live traffic:
+
+```rust
+fn reconcile_chat(&self, chat: &Jid) -> Result<()>;
+```
+
+Reconcile a 1:1 peer's PN- and LID-keyed rows into a single thread on demand. Idempotent — a peer with one thread (or no LID mapping yet) is a no-op. Like `record_outgoing`, this goes through the writer queue and returns immediately; call [`flush()`](#waiting-for-writes-to-land) to await completion.
 
 ## Querying
 
@@ -95,6 +114,8 @@ async fn messages(
 
 Newest-first, **keyset-paginated**: pass the [`MessageCursor`](#messagecursor) of the oldest message you already hold (`MessageCursor::from(&stored_message)`) to fetch the page before it. There is no `OFFSET`-based paging — keyset pagination stays stable under concurrent inserts (e.g. a new message arriving while a chat history is being scrolled).
 
+`chat` accepts either of a 1:1 peer's identities (phone number or LID) — see [PN/LID identity aliasing](#pn-lid-identity-aliasing).
+
 ```rust
 async fn message(&self, chat: &Jid, msg_id: &str) -> Result<Option<StoredMessage>>;
 async fn reactions(&self, chat: &Jid, msg_id: &str) -> Result<Vec<ReactionEntry>>;
@@ -103,7 +124,7 @@ async fn contact(&self, jid: &Jid) -> Result<Option<ContactEntry>>;
 async fn unread_total(&self) -> Result<i64>;
 ```
 
-`receipts` returns per-user delivery/read state — the group "read by" list. `unread_total` sums only positive unread counters, ignoring the `-1` manually-marked-unread sentinel on individual chats.
+`message`, `reactions` and `receipts` accept either of a 1:1 peer's identities the same way `messages` does. `receipts` returns per-user delivery/read state — the group "read by" list. `unread_total` sums only positive unread counters, ignoring the `-1` manually-marked-unread sentinel on individual chats.
 
 ```rust
 async fn put_media_ref(
@@ -316,6 +337,7 @@ pub type Result<T> = std::result::Result<T, ChatStoreError>;
 - **Offline-drain reordering is handled.** If a revoke or edit arrives before the message it targets (common when draining a backlog), the target is materialized as already-revoked/edited up front — the original content's later arrival can't resurrect revoked content or show pre-edit text, and never double-counts unread.
 - **History sync never clobbers live rows** (`ON CONFLICT DO NOTHING`). Live redeliveries and PDO recovery replace content in place instead — an `Undecryptable` placeholder becomes the real message under the same id once it's recovered.
 - **Content refreshes are sender-scoped.** Message ids are sender-chosen, so a different sender reusing an id can't rewrite someone else's message.
+- **PN/LID splits heal, they don't recur.** Once live traffic (or [`reconcile_chat`](#pn-lid-identity-aliasing)) merges a peer's phone-number- and LID-keyed rows into one thread, later traffic under either identity keeps routing to that same thread — it can't re-split.
 
 ## See also
 

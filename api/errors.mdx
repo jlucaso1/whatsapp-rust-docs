@@ -46,10 +46,11 @@ IqError              (IQ request failures — embedded by most domain errors)
   ├── Socket(SocketError)
   ├── EncryptSend(EncryptSendError)
   ├── ClientState(Box<ClientError>)
-  ├── Disconnected
+  ├── Disconnected(Box<Node>)
   ├── ServerError
   ├── UnexpectedResponseType
   ├── InternalChannelClosed
+  ├── DuplicateRequestId(String)
   ├── EncodeError
   └── ParseError
 ```
@@ -507,23 +508,25 @@ pub enum IqError {
     #[error("client is not connected")]
     NotConnected,
     #[error("socket error")]
-    Socket(SocketError),
+    Socket(#[from] SocketError),
     #[error("encrypted send pipeline failed")]
-    EncryptSend(EncryptSendError),
+    EncryptSend(#[from] EncryptSendError),
     #[error("client state prevented send")]
-    ClientState(Box<ClientError>),  // boxed to break the ClientError<->IqError cycle
-    #[error("received disconnect node during IQ wait")]
-    Disconnected,
+    ClientState(#[source] Box<ClientError>),  // boxed to break the ClientError<->IqError cycle
+    #[error("received disconnect node during IQ wait: {0:?}")]
+    Disconnected(Box<Node>),
     #[error("received a server error response: code={code}, text='{text}'")]
     ServerError { code: u16, text: String, error_type: Option<String>, backoff: Option<u32> },
-    #[error("received unexpected IQ response type")]
+    #[error("received unexpected IQ response type: {got:?}")]
     UnexpectedResponseType { got: Option<String> },
     #[error("internal channel closed unexpectedly")]
     InternalChannelClosed,
+    #[error("IQ request ID is already in flight: {0}")]
+    DuplicateRequestId(String),
     #[error("failed to encode IQ request")]
-    EncodeError(anyhow::Error),
+    EncodeError(#[source] anyhow::Error),
     #[error("failed to parse IQ response")]
-    ParseError(anyhow::Error),
+    ParseError(#[from] anyhow::Error),
 }
 ```
 

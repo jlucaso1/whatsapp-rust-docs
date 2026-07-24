@@ -333,7 +333,7 @@ pub struct PollOptionResult {
 | `voters` | `Vec<String>` | JID strings of voters who selected this option |
 
 <Note>
-`Polls`, `PollOptionResult`, and `PollVoteCiphertext` are re-exported from the crate root, so `whatsapp_rust::Polls` and `whatsapp_rust::PollOptionResult` work as well as the `whatsapp_rust::features::` path shown above.
+`Polls`, `PollOptionResult`, and `PollVoteCiphertext` are re-exported from the crate root. `whatsapp_rust::Polls` and `whatsapp_rust::PollOptionResult` (shown in the examples above) are now the preferred paths; the legacy `whatsapp_rust::features::` import path continues to work as well.
 </Note>
 
 ## Low-level utilities

@@ -270,6 +270,7 @@ pub async fn send_message_with_options(
 Options for customizing message sending behavior.
 
 ```rust
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct SendOptions {
     /// Override the auto-generated message ID.

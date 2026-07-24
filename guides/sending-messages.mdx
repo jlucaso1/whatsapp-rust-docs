@@ -352,12 +352,16 @@ Do not hand-roll the edit envelope by wrapping a `ProtocolMessage` inside `Messa
 `client.edit_message` always mints a fresh outer stanza id — that's what stops the server from deduplicating the edit against the original message. If you need to control that id yourself (for example, to collide it with an existing message so clients re-render that slot), use [`client.edit_message_with_options`](/api/send#edit_message_with_options) with [`EditOptions`](/api/send#editoptions):
 
 ```rust
+use waproto::whatsapp as wa;
 use whatsapp_rust::send::EditOptions;
 
 let edit_id = client.edit_message_with_options(
     &chat_jid,
     &original_id,
-    new_content,
+    wa::Message {
+        conversation: Some("This is the edited text".to_string()),
+        ..Default::default()
+    },
     EditOptions {
         stanza_id: Some(existing_message_id.clone()),
     },

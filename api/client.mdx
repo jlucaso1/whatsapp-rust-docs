@@ -494,6 +494,22 @@ Edits a previously sent message.
   New message content
 </ParamField>
 
+### edit_message_with_options
+
+```rust
+pub async fn edit_message_with_options(
+    &self,
+    to: impl Into<Jid>,
+    original_id: impl Into<String>,
+    new_content: wa::Message,
+    options: EditOptions
+) -> Result<String, SendError>
+```
+
+Edit-path counterpart of `send_message_with_options`. Accepts an `EditOptions { stanza_id: Option<String> }` to pin the outer stanza id to an existing message's id (best-effort — server/client dependent) instead of the fresh id `edit_message` generates.
+
+See [Send API reference](/api/send#edit_message_with_options) for the full `EditOptions` type and its side-effect notes.
+
 ### revoke_message
 
 ```rust

@@ -347,6 +347,31 @@ Message editing only works for text messages (`conversation` or `extended_text_m
 Do not hand-roll the edit envelope by wrapping a `ProtocolMessage` inside `Message.edited_message` (a `FutureProofMessage`) and passing it to `send_message`. That shape is the history/storage form; on the wire WhatsApp expects a top-level `protocolMessage` with `type = MESSAGE_EDIT`. `client.edit_message` produces the correct shape — manual envelopes will be silently dropped by the server.
 </Warning>
 
+### Pinning the outer stanza id
+
+`client.edit_message` always mints a fresh outer stanza id — that's what stops the server from deduplicating the edit against the original message. If you need to control that id yourself (for example, to collide it with an existing message so clients re-render that slot), use [`client.edit_message_with_options`](/api/send#edit_message_with_options) with [`EditOptions`](/api/send#editoptions):
+
+```rust
+use waproto::whatsapp as wa;
+use whatsapp_rust::send::EditOptions;
+
+let edit_id = client.edit_message_with_options(
+    &chat_jid,
+    &original_id,
+    wa::Message {
+        conversation: Some("This is the edited text".to_string()),
+        ..Default::default()
+    },
+    EditOptions {
+        stanza_id: Some(existing_message_id.clone()),
+    },
+).await?;
+```
+
+<Note>
+Pinning `stanza_id` to an id borrowed from another message is best-effort: the server and recipient clients decide whether the collision is honored. The library does not persist retry-cache or outbound-secret state under the borrowed id, so the original message's retry content and secret are left intact. Leave `stanza_id` as `None` (or use plain `edit_message`) unless you specifically need this.
+</Note>
+
 ## Deleting messages (revoke)
 
 ### Delete your own message

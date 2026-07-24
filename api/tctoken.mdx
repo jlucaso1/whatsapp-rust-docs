@@ -129,9 +129,9 @@ Each method returns `Result<T, TcTokenError>`:
 ```rust
 #[non_exhaustive]
 pub enum TcTokenError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Store(#[from] StoreError),
 }
 ```

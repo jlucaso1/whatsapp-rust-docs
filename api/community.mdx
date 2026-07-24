@@ -514,11 +514,11 @@ All community methods return `Result<T, CommunityError>`:
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CommunityError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Mex(#[from] MexError),
-    #[error(transparent)]
+    #[error("{0}")]
     Group(#[from] GroupError),
     #[error("invalid community request: {0}")]
     InvalidRequest(String),

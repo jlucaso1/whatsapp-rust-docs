@@ -527,15 +527,15 @@ All newsletter methods return `Result<T, NewsletterError>`:
 ```rust
 #[non_exhaustive]
 pub enum NewsletterError {
-    #[error(transparent)]
+    #[error("{0}")]
     Mex(#[from] MexError),
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Client(#[from] ClientError),
     #[error("invalid newsletter request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```

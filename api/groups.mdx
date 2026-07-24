@@ -1700,15 +1700,15 @@ All group methods return `Result<T, GroupError>`:
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum GroupError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
-    #[error(transparent)]
+    #[error("{0}")]
     Mex(#[from] MexError),
     #[error("invalid group request: {0}")]
     InvalidRequest(String),
     #[error("the group description changed since it was read")]
     DescriptionConflict,
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```

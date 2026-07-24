@@ -1317,7 +1317,7 @@ All send-path methods return `Result<T, SendError>`:
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SendError {
-    #[error(transparent)]
+    #[error("{0}")]
     Client(ClientError),
     #[error("client is not logged in")]
     NotLoggedIn,
@@ -1325,7 +1325,7 @@ pub enum SendError {
     Iq(#[from] IqError),
     #[error("invalid send request: {0}")]
     InvalidRequest(String),
-    #[error(transparent)]
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```

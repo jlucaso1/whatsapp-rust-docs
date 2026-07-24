@@ -413,7 +413,7 @@ All five poll methods (`create`, `create_quiz`, `vote`, `decrypt_vote`, and `agg
 ```rust
 #[non_exhaustive]
 pub enum PollError {
-    #[error(transparent)]
+    #[error("{0}")]
     Send(#[from] SendError),
     #[error("invalid poll: {0}")]
     InvalidPoll(String),

@@ -270,7 +270,7 @@ All methods return `Result<T, ContactError>`:
 ```rust
 #[non_exhaustive]
 pub enum ContactError {
-    #[error(transparent)]
+    #[error("{0}")]
     Iq(#[from] IqError),
     #[error("unsupported contact JID: {0}")]
     InvalidJid(String),

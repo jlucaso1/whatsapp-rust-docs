@@ -344,7 +344,7 @@ Both `ConnectError` and `ConnectStage` are re-exported from the crate root (`wha
 
 ### SignalMaintenanceError
 
-Returned by [`Client::rotate_signed_pre_key`](/api/client#signed-pre-key-rotation) and [`Client::flush_pending_signal_state`](/api/client#flush_pending_signal_state). Added in PR #1090, replacing bare `anyhow::Error` on both methods. The split that matters to a caller is corruption versus everything else: `CorruptKey` will keep failing until the stored material is replaced, while `Storage`, `Iq`, `DrainCommitFailed`, and `DrainShuttingDown` are worth retrying.
+Returned by [`Client::rotate_signed_pre_key`](/api/client#signed-pre-key-rotation) and [`Client::flush_pending_signal_state`](/api/client#flush_pending_signal_state). Added in PR #1090, replacing bare `anyhow::Error` on both methods. The split that matters to a caller is corruption versus everything else: `CorruptKey` will keep failing until the stored material is replaced, while `Storage`, `Iq`, and `DrainCommitFailed` are worth retrying on the same client. `DrainShuttingDown` is different again — it fires because the client itself is being torn down, so retrying the same call on that instance fails the same way; the only recovery is a fresh client.
 
 ```rust
 #[non_exhaustive]
@@ -372,7 +372,7 @@ pub enum SignalMaintenanceError {
 - `Iq` — the rotation IQ was rejected by the server or never reached it (embeds [`IqError`](#iqerror-base-type) via `#[from]`).
 - `Signal` — a Signal primitive failed (e.g. signing the new signed pre-key).
 - `DrainCommitFailed` — the inbound drain batch could not be committed, so the Signal cache was deliberately left unflushed and the server will redeliver.
-- `DrainShuttingDown` — the client is going away while an inbound drain is active; flushing would persist ratchet advances whose messages have no durable row.
+- `DrainShuttingDown` — the client is going away while an inbound drain is active; flushing would persist ratchet advances whose messages have no durable row. Not worth retrying on this client — it will report the same error until the client is dropped and replaced.
 
 `SignalMaintenanceError` is re-exported from the crate root as `whatsapp_rust::SignalMaintenanceError`. `Signal::*` methods on the [`Signal`](/api/signal) struct are unaffected — `SignalError` already had `Internal`/`Protocol` variants and now converts `SignalMaintenanceError` via `From` (mapping `Signal(e)` to `SignalError::Protocol(e)` and everything else to `SignalError::Internal`).
 

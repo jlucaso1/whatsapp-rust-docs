@@ -125,7 +125,7 @@ As of PR #1090, `connect()` returns [`ConnectError`](/api/errors#connecterror) i
 **Errors (`ConnectError`):**
 - `AlreadyConnected` - a connection is already up, or another `connect()` attempt is already in flight
 - `NotActivated` - construction never activated (only reachable with the `client-lifecycle` feature)
-- `Timeout { stage, timeout }` - a step of the connect flow (`ConnectStage::VersionFetch`/`Transport`/`Socket`/`Ready`) ran out of time (20s for version fetch and transport, each independently)
+- `Timeout { stage, timeout }` - the version fetch or the transport open ran out of time, independently, each under the same 20s budget (`ConnectStage::VersionFetch`/`Transport`). `connect()` itself never reports `ConnectStage::Socket` or `Ready` — those are only produced by `wait_for_socket()`/`wait_for_connected()` below.
 - `Version(anyhow::Error)` / `Transport(anyhow::Error)` - app version resolution or transport open failed outright
 - `Handshake(HandshakeError)` - the Noise handshake failed after the transport was up; check `HandshakeError::is_transient()` to decide whether a retry is worthwhile
 
@@ -243,6 +243,10 @@ pub async fn wait_for_connected(
 ```
 
 Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
+
+<ParamField path="timeout" type="Duration" required>
+  Maximum time to wait
+</ParamField>
 
 <ParamField path="Returns" type="Result<(), ConnectError>">
   Ok once fully ready, `ConnectError::Timeout { stage: ConnectStage::Ready, timeout }` on timeout

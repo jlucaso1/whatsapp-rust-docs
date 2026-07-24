@@ -178,7 +178,7 @@ pub enum GroupError {
     Mex(#[from] MexError),
     #[error("invalid group request: {0}")]
     InvalidRequest(String),
-    #[error("group description changed on the server since it was last read")]
+    #[error("the group description changed since it was read")]
     DescriptionConflict,
     #[error("{0}")]
     Internal(#[from] anyhow::Error),
@@ -600,10 +600,10 @@ client.logout().await; // infallible — no `?` needed anymore
 
 ### From PR #1100: error chain recovery
 
-If you were walking `source()` by hand to recover a server rejection or classify a failure, switch to [`ErrorChainExt`](#error-chain-recovery):
+If you were walking `source()` by hand to recover a server rejection or classify a failure, switch to [`ErrorChainExt`](#error-chain-recovery). This is the shape the crate's own internal helper had before PR #1100 (`ClientError::is_transport_unavailable` is public; the `IqError` half required a call this crate could make on its own type but a downstream consumer could not, since it wasn't exposed):
 
 ```rust
-// Before
+// Before (internal to this crate — the IqError check isn't public API)
 fn is_transport_unavailable(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         cause
@@ -611,11 +611,11 @@ fn is_transport_unavailable(err: &anyhow::Error) -> bool {
             .is_some_and(ClientError::is_transport_unavailable)
             || cause
                 .downcast_ref::<IqError>()
-                .is_some_and(IqError::is_transport_unavailable)
+                .is_some_and(|iq| matches!(iq, IqError::NotConnected | IqError::Disconnected(_) | IqError::InternalChannelClosed))
     })
 }
 
-// After
+// After — works the same from inside or outside the crate
 use whatsapp_rust::ErrorChainExt;
 fn is_transport_unavailable(err: &anyhow::Error) -> bool {
     let cause: &(dyn std::error::Error + 'static) = err.as_ref();

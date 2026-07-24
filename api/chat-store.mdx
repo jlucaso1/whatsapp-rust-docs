@@ -99,7 +99,7 @@ A peer's linked device (WhatsApp Web/Desktop) addresses traffic under a device-s
 
 - **Receipts from a companion device count.** Multi-device delivery/read semantics are any-device — WhatsApp emits the receipt once, from whichever of the peer's devices acted first, and never re-sends it from the primary — so `messages.status` advances the same whether the ack came from the peer's phone or their linked device.
 - **One "read by" row per participant, not per device.** A group member reading on their phone and again on Web still produces a single row in [`receipts()`](#querying).
-- **`contact()` resolves either form.** A caller holding a message's `sender` (which keeps its device by design) finds the same [`ContactEntry`](#contactentry) as a caller holding the peer's bare identity — both look up the same row.
+- **[`contact()`](#querying) resolves either form.** A caller holding a message's `sender` (which keeps its device by design) finds the same [`ContactEntry`](#contactentry) as a caller holding the peer's bare identity — both look up the same row.
 
 This is unrelated to [PN/LID identity aliasing](#pnlid-identity-aliasing) above: it normalizes the device suffix on one identity, not which of the two identities a thread is keyed by.
 

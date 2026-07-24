@@ -111,27 +111,37 @@ tokio::spawn(async move {
 ### connect
 
 ```rust
-pub async fn connect(self: &Arc<Self>) -> Result<(), anyhow::Error>
+pub async fn connect(self: &Arc<Self>) -> Result<(), ConnectError>
 ```
 
 Establishes WebSocket connection and performs Noise Protocol handshake. Both the transport connection and the version fetch run in parallel under a **20-second timeout** (`TRANSPORT_CONNECT_TIMEOUT`), matching WhatsApp Web's MQTT and DGW connect timeout defaults. Without this, a dead network would block on the OS TCP SYN timeout (~60-75s).
 
 The Noise handshake response also has a separate **20-second timeout** (`NOISE_HANDSHAKE_RESPONSE_TIMEOUT`).
 
-**Errors:**
-- `ClientError::AlreadyConnected` - Already connected
-- Transport connect timeout (20s exceeded)
-- Version fetch timeout (20s exceeded)
-- Noise handshake timeout or failure
-- Connection/handshake failures
+<Note>
+As of PR #1090, `connect()` returns [`ConnectError`](/api/errors#connecterror) instead of `anyhow::Error`. `ClientError::AlreadyConnected` was removed — that case is now `ConnectError::AlreadyConnected`.
+</Note>
+
+**Errors (`ConnectError`):**
+- `AlreadyConnected` - a connection is already up, or another `connect()` attempt is already in flight
+- `NotActivated` - construction never activated (only reachable with the `client-lifecycle` feature)
+- `Timeout { stage, timeout }` - a step of the connect flow (`ConnectStage::VersionFetch`/`Transport`/`Socket`/`Ready`) ran out of time (20s for version fetch and transport, each independently)
+- `Version(anyhow::Error)` / `Transport(anyhow::Error)` - app version resolution or transport open failed outright
+- `Handshake(HandshakeError)` - the Noise handshake failed after the transport was up; check `HandshakeError::is_transient()` to decide whether a retry is worthwhile
+
+See [`ConnectError`](/api/errors#connecterror) for the full variant reference.
 
 ### logout
 
 ```rust
-pub async fn logout(self: &Arc<Self>) -> Result<()>
+pub async fn logout(self: &Arc<Self>)
 ```
 
 Deregisters this companion device from WhatsApp and disconnects. This sends a device removal IQ to the server, disables auto-reconnect, disconnects the transport, and emits a `LoggedOut` event.
+
+<Note>
+As of PR #1090, `logout()` is infallible (`()`, not `Result<()>`). The deregistration IQ is best-effort — it cannot be sent at all while offline — and the local teardown runs either way, so there was nothing for a caller to branch on. A failed IQ is logged at `warn`.
+</Note>
 
 <Warning>
 This does **not** wipe stored keys or credentials. To fully clear session data, delete the storage backend after calling `logout()`.
@@ -140,7 +150,7 @@ This does **not** wipe stored keys or credentials. To fully clear session data, 
 **Example:**
 ```rust
 // Logout and clean up
-client.logout().await?;
+client.logout().await;
 
 // Optionally delete stored credentials
 // std::fs::remove_dir_all("./whatsapp_data")?;
@@ -148,7 +158,7 @@ client.logout().await?;
 
 **Behavior:**
 1. Disables auto-reconnect
-2. Sends a `RemoveCompanionDeviceSpec` IQ to deregister the companion device (if connected)
+2. Sends a `RemoveCompanionDeviceSpec` IQ to deregister the companion device (if connected); a failure here is logged, not returned
 3. Disconnects the transport
 4. Emits `Event::LoggedOut` with `reason: ConnectFailureReason::LoggedOut`
 
@@ -210,7 +220,7 @@ client.reconnect_immediately().await;
 pub async fn wait_for_socket(
     &self,
     timeout: std::time::Duration
-) -> Result<(), anyhow::Error>
+) -> Result<(), ConnectError>
 ```
 
 Waits for the Noise socket to be ready (before login). Useful for pair code flows.
@@ -219,8 +229,8 @@ Waits for the Noise socket to be ready (before login). Useful for pair code flow
   Maximum time to wait
 </ParamField>
 
-<ParamField path="Returns" type="Result<(), anyhow::Error>">
-  Ok if socket ready, Err on timeout
+<ParamField path="Returns" type="Result<(), ConnectError>">
+  Ok if socket ready, `ConnectError::Timeout { stage: ConnectStage::Socket, timeout }` on timeout
 </ParamField>
 
 ### wait_for_connected
@@ -229,10 +239,18 @@ Waits for the Noise socket to be ready (before login). Useful for pair code flow
 pub async fn wait_for_connected(
     &self,
     timeout: std::time::Duration
-) -> Result<(), anyhow::Error>
+) -> Result<(), ConnectError>
 ```
 
 Waits for full connection and authentication to complete, including offline sync. Post-login tasks (presence, background queries) are gated behind offline sync completion, which resolves either when the server sends the end marker, all expected items arrive, or the 60-second timeout fires.
+
+<ParamField path="Returns" type="Result<(), ConnectError>">
+  Ok once fully ready, `ConnectError::Timeout { stage: ConnectStage::Ready, timeout }` on timeout
+</ParamField>
+
+<Note>
+As of PR #1090, both methods return [`ConnectError`](/api/errors#connecterror) instead of `anyhow::Error`.
+</Note>
 
 ### pair_with_code
 
@@ -1496,8 +1514,12 @@ This bypasses node logging and `wait_for_sent_node` waiter resolution. Use [`sen
 ### flush_pending_signal_state
 
 ```rust
-pub async fn flush_pending_signal_state(&self) -> Result<(), anyhow::Error>
+pub async fn flush_pending_signal_state(&self) -> Result<(), SignalMaintenanceError>
 ```
+
+<Note>
+As of PR #1090, this returns [`SignalMaintenanceError`](/api/errors#signalmaintenanceerror) instead of `anyhow::Error` (a `Storage` failure keeps the typed backend cause reachable via `source()`).
+</Note>
 
 Forces any pending write-behind Signal cache state to the backend, returning once the flush completes (or fails).
 
@@ -1917,7 +1939,13 @@ See [Signal Protocol - Digest key validation](/advanced/signal-protocol#digest-k
 
 ### Signed pre-key rotation
 
-There is no public method for this — it runs automatically. Once per connection, after the post-login pre-key upload, the client checks whether the signed pre-key is due for rotation (weekly by default) and, if so, generates a fresh one, uploads it via an `encrypt`/`<rotate>` IQ, and retains the previous key so in-flight prekey messages still decrypt. Rotation failures are logged and retried on a later connect — they never fail login.
+Rotation itself runs automatically: once per connection, after the post-login pre-key upload, the client checks whether the signed pre-key is due for rotation (weekly by default) and, if so, generates a fresh one, uploads it via an `encrypt`/`<rotate>` IQ, and retains the previous key so in-flight prekey messages still decrypt. Automatic rotation failures are logged and retried on a later connect — they never fail login.
+
+```rust
+pub async fn rotate_signed_pre_key(&self) -> Result<(), SignalMaintenanceError>
+```
+
+`rotate_signed_pre_key()` is a public method — callers can force an out-of-cadence rotation directly instead of waiting for the weekly check. It shares a lock with the automatic path (so a manual call can't race a background rotation) and, unlike the automatic path, propagates failures to the caller as [`SignalMaintenanceError`](/api/errors#signalmaintenanceerror) instead of only logging them. As of PR #1090 this replaces bare `anyhow::Error`.
 
 See [Signal Protocol - Signed pre-key rotation (RotateKeyJob)](/advanced/signal-protocol#signed-pre-key-rotation-rotatekeyjob) for the full sequence, wire format, and error handling.
 
@@ -2077,10 +2105,13 @@ pub enum ClientError {
     NotConnected,
     Socket(SocketError),
     EncryptSend(EncryptSendError),
-    AlreadyConnected,
     NotLoggedIn,
 }
 ```
+
+<Note>
+As of PR #1090, `connect()`/`wait_for_socket()`/`wait_for_connected()` return [`ConnectError`](/api/errors#connecterror) (`ClientError::AlreadyConnected` was removed in favor of `ConnectError::AlreadyConnected`), and `rotate_signed_pre_key()`/`flush_pending_signal_state()` return [`SignalMaintenanceError`](/api/errors#signalmaintenanceerror). See [Error Types](/api/errors) for the full reference across the crate.
+</Note>
 
 ---
 

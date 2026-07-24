@@ -1039,8 +1039,9 @@ bot.run().await?; // Uses saved session
 ### Logout
 
 ```rust
-// Clear session data
-client.logout().await?;
+// Clear session data. Infallible as of PR #1090 — the deregistration IQ is
+// best-effort and the local teardown runs either way.
+client.logout().await;
 
 // Event emitted:
 Event::LoggedOut(

@@ -1072,7 +1072,7 @@ The watchdog is anchored to `SessionStats::first_send_since_recv_ms` — the **f
 
 The dead-socket check runs on **every** keepalive tick — not just after a failed ping. This catches scenarios where pending IQs caused the ping to be skipped, or where the ping "succeeded" but the connection died immediately after. When a dead socket is detected, the client calls `reconnect_immediately()` and exits the keepalive loop.
 
-WA Web's `deadSocketTimer.onOrBefore` (`WA/Shift/Timer.js`) arms on the first `callStanza` after a receive and is cancelled by `parseAndHandleStanza`; subsequent sends never push the deadline back out. The keepalive loop approximates this by checking `is_dead_socket(first_send_since_recv, last_recv)` unconditionally each iteration, where `first_send_since_recv` is the armed-anchor value described above (not `last_data_sent_ms`, which still tracks the most recent send for telemetry).
+WA Web's `deadSocketTimer.onOrBefore` (`WA/Shift/Timer.js`) arms on the first `callStanza` after a receive and is cancelled by `parseAndHandleStanza`; subsequent sends never push the deadline back out. The keepalive loop approximates this by checking `is_dead_socket_at(first_send_since_recv, last_recv, now)` unconditionally each iteration, where `first_send_since_recv` is the armed-anchor value described above. The tick reads the clock once into `now` and evaluates both the dead-socket check and the elapsed-time log message against that single instant, rather than re-reading the clock for each. There is no `last_data_sent_ms` field — nothing reads a "most recent send" timestamp, only the armed anchor.
 
 ### Error classification
 

@@ -375,8 +375,12 @@ Chat lane invalidation is critical for correctness. Without it, stale message pr
 
 The `read_messages_loop` runs on the `run()` caller's task and uses `select_biased!` to multiplex shutdown signals with transport events. Frame decryption is sequential (noise counter ordering), but node processing uses a hybrid inline/concurrent strategy:
 
-- **Inline**: `success`, `failure`, `stream:error` (connection state), `message` (arrival order for per-chat queues), `ib` (offline sync tracking)
+- **Inline**: `success`, `failure`, `stream:error` (connection state), `message` and status-broadcast `status` (arrival order for per-chat queues), `ib` (offline sync tracking)
 - **Spawned concurrently**: all other stanzas (receipts, notifications, presence, etc.)
+
+A top-level `<status from="status@broadcast">` stanza carries the same E2EE payload as `<message from="status@broadcast">` — the server can deliver either shape — so it's retagged and routed through the identical inline enqueue path, and acked with `class="status"` plus the local device's own JID. A `<status>` from a `@newsletter` sender is a different shape and keeps the router path instead.
+
+Any top-level stanza the router doesn't recognize is nacked (`NackReason::UnrecognizedStanza`) when it carries both `id` and `from`, rather than left unanswered — see the **Nack on unrecognized stanzas** note in [Offline sync](#offline-sync) below.
 
 After processing a batch of multiple frames, the loop refreshes `last_data_received_ms` so the keepalive loop sees the batch completion time rather than the arrival time — preventing false-positive dead-socket triggers during large offline sync batches. The loop also cooperatively yields every `yield_frequency()` frames to avoid starving other tasks.
 
@@ -455,6 +459,10 @@ The Meta AI bot's `msmsg` (`<enc type="msmsg">`) encryption type was the origina
 
 **Nack unparseable message stanzas:** A `<message>` stanza whose required `id`/`from` attrs (and `participant`, for group/status messages) are missing or carry an invalid JID now gets an immediate `<ack error="487">` (`NackReason::ParsingError`) instead of a bare warning log and silent drop. `parse_message_info` itself became fail-fast for the same fields — it no longer falls back to a lenient default JID. Consumers driving their own ack/nack flow for intercepted stanzas can reach the same typed responses via `Client::acknowledge_stanza`/`reject_stanza` — see [Manual stanza acknowledgement](/advanced/binary-protocol#manual-stanza-acknowledgement).
 
+**Top-level `<status>` stanzas are handled and acked.** The server can deliver E2EE status updates as a top-level `<status from="status@broadcast">` stanza instead of wrapping them in `<message from="status@broadcast">`. This shape differs from `<message>` only in its tag, so the client retags it and runs it through the same pipeline, and acks it with `class="status"` (the class the server names in the corresponding `<stream:error><ack class="status"/></stream:error>`) plus the local device's own JID, matching WA Web's `sendAck`. Before this, the tag went unhandled — the stanza was neither processed nor acked, so the server kept redelivering it and periodically recycled the stream to demand the ack it was owed.
+
+**Nack on unrecognized stanzas:** Answering nothing at all when the stanza router doesn't recognize a top-level tag is what let one unhandled `<status>` stanza (above) stall a stream for days — the server queued it forever and cycled the connection roughly every 50 minutes asking for its ack. Any stanza the router declines now gets `<nack reason="…">` with `NackReason::UnrecognizedStanza` when it's addressable (`id` and `from` present, the same guard WA Web's `createNackFromStanza` uses); the nack replaces the deferred ack, so the server never gets both for one stanza. This only fires for a tag with no handler at all — see [Protocol → Nack reasons](/advanced/binary-protocol#nack-reasons).
+
 ### Critical app-state sync (pairing bootstrap)
 
 Right after a fresh pairing (and on any reconnect before the account's critical app-state collections have synced), the client fetches the `CriticalBlock` and `CriticalUnblockLow` collections — blocked contacts and push name — via a batched IQ, before dispatching `Connected`. Decoding those snapshots requires the app-state **sync-key-share**, an E2E message the primary phone sends automatically, which can arrive late if a heavy history sync is saturating the stream at the same time.
@@ -494,6 +502,8 @@ pub(crate) struct PendingDeviceSync {
 ```
 
 The `PendingDeviceSync` state is cleared on reconnect to prevent stale entries from leaking across connections.
+
+The `<devices><update hash="…"/></notification>` hash-only path described in [Storage → Granular cache patching](/concepts/storage#granular-cache-patching) resolves its target contact and joins this same `schedule_unknown_device_sync()` batching — offline resumes queue it here instead of firing an immediate usync mid-drain.
 
 Location: `src/pending_device_sync.rs`, `src/handlers/ib.rs`, `src/usync.rs`
 

@@ -1965,14 +1965,18 @@ pub struct OfflineSyncPreview {
     pub messages: i32,
     pub notifications: i32,
     pub receipts: i32,
+    pub calls: i32,
+    pub statuses: i32,
 }
 ```
+
+`total` is authoritative — the `<ib><offline_preview>` stanza's own `count` attribute — and the per-kind counts are not guaranteed to sum to it. `calls` and `statuses` count the server's `call` and `status` backlog attributes; a server that predates these fields leaves both at `0`.
 
 **Example:**
 ```rust
 Event::OfflineSyncPreview(preview) => {
-    println!("Syncing {} items ({} messages, {} notifications)", 
-        preview.total, preview.messages, preview.notifications);
+    println!("Syncing {} items ({} messages, {} statuses, {} notifications)", 
+        preview.total, preview.messages, preview.statuses, preview.notifications);
 }
 ```
 

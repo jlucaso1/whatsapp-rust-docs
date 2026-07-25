@@ -380,7 +380,7 @@ The `read_messages_loop` runs on the `run()` caller's task and uses `select_bias
 
 A top-level `<status from="status@broadcast">` stanza carries the same E2EE payload as `<message from="status@broadcast">` — the server can deliver either shape — so it's retagged and routed through the identical inline enqueue path, and acked with `class="status"` plus the sending device's own JID. A `<status>` from a `@newsletter` sender is a different shape and keeps the router path instead.
 
-Any top-level stanza the router doesn't recognize is nacked (`NackReason::UnrecognizedStanza`) when it carries both `id` and `from`, rather than left unanswered — see [Nack on unrecognized stanzas](#offline-sync) below.
+Any top-level stanza the router doesn't recognize is nacked (`NackReason::UnrecognizedStanza`) when it carries both `id` and `from`, rather than left unanswered — see the **Nack on unrecognized stanzas** note in [Offline sync](#offline-sync) below.
 
 After processing a batch of multiple frames, the loop refreshes `last_data_received_ms` so the keepalive loop sees the batch completion time rather than the arrival time — preventing false-positive dead-socket triggers during large offline sync batches. The loop also cooperatively yields every `yield_frequency()` frames to avoid starving other tasks.
 

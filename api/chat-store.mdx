@@ -7,7 +7,7 @@ description: Optional SQLite-backed chat and message history store
 
 `whatsapp-rust-chat-store` is an opt-in crate that materializes the client's event stream into queryable chat/message history tables, so a UI or stateful bot survives a restart without re-syncing from WhatsApp. It has no UI dependencies of its own.
 
-- **Event-sourced.** Register `chat_store.handler()` on the client; a single write-behind writer task applies batched events in one transaction per drained batch, preserving event order. Covers messages, receipts, server acks/nacks, edits, revokes, reactions, history sync, app-state chat updates (pin/mute/archive/read/star/delete/clear), push names, and contact actions.
+- **Event-sourced.** Register `chat_store.handler()` on the client; a single write-behind writer task applies batched events in one transaction per drained batch, preserving event order. Covers messages, receipts, server acks/nacks, edits, revokes, reactions, history sync, app-state chat updates (pin/mute/archive/read/star/delete/clear), push names, and contact actions. Sends and locally-originated edits/revokes/reactions — WhatsApp doesn't fan these back to the sending device — are recorded explicitly; see [Recording outgoing messages](#recording-outgoing-messages) and [Recording local amendments](#recording-local-amendments).
 - **Proto as source of truth.** Each message row stores the encoded `wa::Message` plus denormalized columns (`kind`, `text`, `status`). New proto fields never require a schema migration.
 - **Query + invalidation, not a second cache.** Reads are async queries (keyset pagination for message pages — stable under concurrent inserts, never `OFFSET`); consumers subscribe to a [`StoreChange`](#storechange) broadcast and re-query what they display.
 - **Shares the device store's database file.** Writes go through [`SqliteStore::shared()`](/api/store#sharing-the-pool-with-sibling-crates), so the chat tables live in the same file as device/session state without a second connection pool contending for the WAL lock. Backing up the full session stays "copy one file". Multi-account ready (`device_id` on every row).
@@ -67,6 +67,42 @@ fn record_outgoing(
 `record_outgoing` is synchronous — it only enqueues onto the writer channel and returns, it does not wait for the write to commit. The row starts at `MessageStatus::Pending` and is lifted by the server ack/receipts that follow. Because the enqueue happens on the same writer queue as inbound events, it cannot race the ack that immediately follows a send. Call [`flush()`](#waiting-for-writes-to-land) if you need to wait for the row to actually land before reading it back.
 
 `chat` may be either of a 1:1 peer's identities (phone number or LID) — see [PN/LID identity aliasing](#pnlid-identity-aliasing) for how the store routes and reads across the two.
+
+### Recording local amendments
+
+WhatsApp fans an edit, sender revoke, or reaction out to the account's *other* linked devices, but not back to the device that sent it — so, like sends, these need to be recorded explicitly for the local thread to reflect them immediately instead of waiting for a history sync:
+
+```rust
+fn record_edit(
+    &self,
+    chat: &Jid,
+    target_id: &str,
+    new_content: &wa::Message,
+    timestamp: DateTime<Utc>,
+) -> Result<()>;
+
+fn record_revoke(
+    &self,
+    chat: &Jid,
+    target_id: &str,
+    timestamp: DateTime<Utc>,
+) -> Result<()>;
+
+fn record_reaction(
+    &self,
+    chat: &Jid,
+    target: &wa::MessageKey,
+    emoji: &str,
+    timestamp: DateTime<Utc>,
+) -> Result<()>;
+```
+
+Each is the local counterpart of the matching inbound event (`MESSAGE_EDIT`, a sender revoke, a reaction) and reuses the same apply logic, so a local write keeps the same ordering, tombstone, and PN/LID routing semantics described in [Semantics worth knowing](#semantics-worth-knowing) — including offline-drain reordering (an edit or revoke recorded before its target has landed still applies once the target arrives) and the monotonic rule that a stale local write can't undo a newer one.
+
+- `record_edit` and `record_revoke` target the message by `target_id`, the same id passed to `record_outgoing`. A `target_id` that collides with a differently-authored message (a peer happened to reuse the id) is left untouched — only this client's own message is amended.
+- `record_reaction` takes the same `wa::MessageKey` shape passed to `Client::send_reaction` and requires `target.id` to be set. An empty `emoji` removes this client's own reaction, matching the inbound removal event. The target's full identity (`from_me`, `participant`) is matched, not just its id, with the same PN/LID alias resolution as [companion-device identities](#companion-device-identities) — a reaction recorded for a message stored under the peer's other identity, or with a device-suffixed `participant`, still finds it.
+
+All three are synchronous enqueue-only calls on the same writer queue as `record_outgoing` — call [`flush()`](#waiting-for-writes-to-land) to await completion.
 
 ### Waiting for writes to land
 
@@ -347,6 +383,7 @@ pub type Result<T> = std::result::Result<T, ChatStoreError>;
 - **Offline-drain reordering is handled.** If a revoke or edit arrives before the message it targets (common when draining a backlog), the target is materialized as already-revoked/edited up front — the original content's later arrival can't resurrect revoked content or show pre-edit text, and never double-counts unread.
 - **History sync never clobbers live rows** (`ON CONFLICT DO NOTHING`). Live redeliveries and PDO recovery replace content in place instead — an `Undecryptable` placeholder becomes the real message under the same id once it's recovered.
 - **Content refreshes are sender-scoped.** Message ids are sender-chosen, so a different sender reusing an id can't rewrite someone else's message.
+- **Reaction removal is a tombstone, not a delete.** Removing a reaction (an empty-emoji event, or [`record_reaction`](#recording-local-amendments) with `emoji: ""`) keeps the row so a stale, older reaction arriving later — e.g. from a history chunk — can't resurrect it. [`reactions()`](#querying) hides tombstoned rows.
 - **PN/LID splits heal, they don't recur.** Once live traffic (or [`reconcile_chat`](#pnlid-identity-aliasing)) merges a peer's phone-number- and LID-keyed rows into one thread, later traffic under either identity keeps routing to that same thread — it can't re-split.
 - **Companion-device traffic never forks a thread.** A device-suffixed identity is normalized to the bare peer before it reaches routing, so a linked device can't materialize a chat, contact, or receipt row of its own — see [Companion-device identities](#companion-device-identities).
 

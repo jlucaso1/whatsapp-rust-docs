@@ -900,11 +900,11 @@ pub enum EncryptSendError {
     /// A previous frame failed at the transport; this connection's write
     /// keystream can no longer be extended safely. See "Send poisoning"
     /// below.
-    Poisoned,
+    Poisoned { error: anyhow::Error },
 }
 ```
 
-Each variant preserves the underlying typed error as a `source()`. `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source. Walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings.
+Every variant carries a `source()` — internally `EncryptSendError` is one struct with a `kind` and a single `source: anyhow::Error` field, not a distinct payload per variant. For `Crypto`/`Transport`/`Framing`/`Join`, that source is the real downstream error: `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source, and walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings. `Poisoned`'s source is different in kind: there is no downstream failure to wrap, since the poisoning is detected in-process rather than reported by a lower layer, so its source is a fixed explanatory message (`"noise sender disabled after a transport failure; reconnect to rekey"`) rather than something to downcast.
 
 `is_transport_unavailable()` returns `true` for `Transport`, `ChannelClosed`, **and** `Poisoned` — all three mean the same thing to a caller: stop retrying on this connection and reconnect.
 

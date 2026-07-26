@@ -1477,10 +1477,13 @@ Location: `wacore/libsignal/src/protocol/legacy_session.rs`
 The implementation verifies identity keys before encryption/decryption:
 
 ```rust
-if !identity_store
-    .is_trusted_identity(remote_address, &their_identity_key, 
-                         Direction::Sending)
-    .await?
+if !crate::protocol::storage::is_trusted_identity(
+    identity_store,
+    remote_address,
+    &their_identity_key,
+    Direction::Sending,
+)
+.await?
 {
     return Err(SignalProtocolError::UntrustedIdentity(
         remote_address.clone(),
@@ -1488,7 +1491,9 @@ if !identity_store
 }
 ```
 
-Location: `wacore/libsignal/src/protocol/session_cipher.rs:160-172`
+As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), this calls the free `is_trusted_identity` resolver (see [Unboxed identity and session hooks](#unboxed-identity-and-session-hooks)) rather than the trait method directly, so a store's `try_is_trusted_identity` hook gets a chance to answer first.
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:309-325`
 
 ### Self-only protocol message gating
 
@@ -1677,12 +1682,12 @@ Every checkout carries a `SessionCheckoutKey { generation, token }`: `checkout_g
 
 ### Unboxed identity and session hooks
 
-As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), the same "sync hook first, boxed async fallback second" pattern above extends to three more per-message checks: `IdentityKeyStore::try_is_trusted_identity`, `IdentityKeyStore::try_save_identity`, and `SessionStore::try_has_session`. `#[async_trait]` boxes every store method into a `Pin<Box<dyn Future>>` regardless of whether the answer is already known; `is_trusted_identity`'s async body is an unconditional `Ok(true)` (WA Web `isTrustedIdentity` parity — identity *changes* surface through `save_identity`, not through trust checks), so that box was pure overhead paid once per encrypt and once per decrypt.
+As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), the same "sync hook first, boxed async fallback second" pattern above extends to three more per-message checks: `IdentityKeyStore::try_is_trusted_identity`, `IdentityKeyStore::try_save_identity`, and `SessionStore::try_has_session`. `#[async_trait]` boxes every store method into a `Pin<Box<dyn Future>>`, regardless of whether the answer is already known. The bundled `IdentityAdapter`'s async `is_trusted_identity` body is an unconditional `Ok(true)` — WA Web `isTrustedIdentity` parity, since identity *changes* surface through `save_identity` rather than through trust checks. That box was therefore pure overhead, paid once per encrypt and once per decrypt.
 
 Each hook defaults to `None`, and `None` means "I cannot answer synchronously" — never "the answer is the default":
 - `try_save_identity` declines when nothing is cached for the address, so the caller reads the backend. Answering from an empty cache would report every identity as new.
 - `try_has_session` declines when the cache cannot answer, rather than reporting "no session" and forcing a needless session rebuild.
-- `try_is_trusted_identity` is the one hook that can always answer, because the trust decision it shortcuts is already unconditional.
+- `try_is_trusted_identity` can always answer **for the bundled adapter specifically**, because its async `is_trusted_identity` is already the unconditional `Ok(true)` above. This is not a general license to short-circuit trust checks: a custom `IdentityKeyStore` whose async `is_trusted_identity` enforces a real policy must not copy this hook verbatim — returning `Some(Ok(true))` unconditionally would let it bypass that policy. Such a store should return `None` unless it can decide synchronously without skipping any of its own trust logic.
 
 Three free functions in `wacore::libsignal::protocol` — `is_trusted_identity`, `save_identity`, `has_session` — express "ask the hook, then await the fallback" once instead of at each of the eight call sites that previously called the trait methods directly:
 

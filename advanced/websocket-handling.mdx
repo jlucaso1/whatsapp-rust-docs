@@ -304,18 +304,23 @@ The `NoiseSocket` provides encrypted send/receive operations after handshake.
 pub struct NoiseSocket {
     read_key: Arc<NoiseCipher>,
     read_counter: Arc<AtomicU32>,
-    send_job_tx: mpsc::Sender<SendJob>,
-    sender_task_handle: JoinHandle<()>,
+    /// Channel to send jobs to the dedicated sender task. A channel instead of
+    /// a mutex lets callers enqueue their work and await the result without
+    /// blocking on the send in progress.
+    send_job_tx: async_channel::Sender<SendJob>,
+    /// Aborts the sender task on drop (prevents resource leaks if the task is
+    /// stuck on a slow/hanging network operation).
+    _sender_task_handle: AbortHandle,
 }
 
+/// A job sent to the dedicated sender task.
 struct SendJob {
-    plaintext_buf: Vec<u8>,
-    out_buf: Vec<u8>,
+    plaintext: bytes::Bytes,
     response_tx: oneshot::Sender<SendResult>,
 }
 ```
 
-Location: `src/socket/noise_socket.rs:21-32`
+Location: `src/socket/noise_socket.rs:50-66`
 
 ### Design Patterns
 
@@ -325,23 +330,34 @@ The socket uses a dedicated task for sending to ensure frame ordering:
 
 ```rust
 impl NoiseSocket {
-    pub fn new(
+    pub fn with_stats(
+        runtime: Arc<dyn Runtime>,
         transport: Arc<dyn Transport>,
         write_key: NoiseCipher,
         read_key: NoiseCipher,
+        stats: Option<Arc<wacore::stats::SessionStats>>,
     ) -> Self {
-        let (send_job_tx, send_job_rx) = mpsc::channel::<SendJob>(32);
-        
-        // Spawn dedicated sender task
-        let sender_task_handle = tokio::spawn(
-            Self::sender_task(transport, write_key, send_job_rx)
-        );
-        
+        let write_key = Arc::new(write_key);
+        let read_key = Arc::new(read_key);
+
+        // Small buffer matched to typical steady-state throughput; the sender
+        // task is network-bound (awaits transport.send), so a transient
+        // WebSocket stall backpressures producers here rather than queuing.
+        let (send_job_tx, send_job_rx) = async_channel::bounded::<SendJob>(8);
+
+        let sender_task_handle = runtime.spawn(Box::pin(Self::sender_task(
+            runtime.clone(),
+            transport.clone(),
+            write_key.clone(),
+            send_job_rx,
+            stats,
+        )));
+
         Self {
-            read_key: Arc::new(read_key),
+            read_key,
             read_counter: Arc::new(AtomicU32::new(0)),
             send_job_tx,
-            sender_task_handle,
+            _sender_task_handle: sender_task_handle,
         }
     }
 }
@@ -351,164 +367,154 @@ impl NoiseSocket {
 
 1. **Ordering guarantee**: Frames must be sent with sequential counters
 2. **Non-blocking**: Callers don't block on encryption or network I/O
-3. **Backpressure**: Channel capacity (32) prevents unbounded queuing
+3. **Backpressure**: A bounded channel (8 jobs) backpressures producers instead of queuing unboundedly
+4. **Frame coalescing**: whatever is already queued when the task wakes gets encrypted into one buffer and written in a single `transport.send()` — see [Write batching](#write-batching-frame-coalescing) below
 
-Location: `src/socket/noise_socket.rs:34-62`
+Location: `src/socket/noise_socket.rs:81-117`
 
 #### Sender task implementation
 
+A DM round trip can answer one inbound message with several independent producers (reply, delivery receipt, stanza ack) queuing at nearly the same instant. Rather than writing each as its own syscall/TLS record/WebSocket message, the sender drains whatever is **already** queued (`try_recv`, never a blocking wait) into one buffer and hands the transport a single write:
+
 ```rust
 async fn sender_task(
+    runtime: Arc<dyn Runtime>,
     transport: Arc<dyn Transport>,
     write_key: Arc<NoiseCipher>,
-    mut send_job_rx: mpsc::Receiver<SendJob>,
+    send_job_rx: async_channel::Receiver<SendJob>,
+    stats: Option<Arc<wacore::stats::SessionStats>>,
 ) {
     let mut write_counter: u32 = 0;
-    
-    while let Some(job) = send_job_rx.recv().await {
-        let result = Self::process_send_job(
-            &transport,
-            &write_key,
-            &mut write_counter,
-            job.plaintext_buf,
-            job.out_buf,
-        ).await;
-        
-        // Return buffers to caller for reuse
-        let _ = job.response_tx.send(result);
+    let mut enc_buf = Vec::with_capacity(4096);
+    let mut out_buf = BytesMut::with_capacity(4096);
+    let mut poisoned = false;
+    let mut waiters: Vec<(oneshot::Sender<SendResult>, usize)> = Vec::new();
+    let mut carry_over: Option<SendJob> = None;
+
+    loop {
+        let job = match carry_over.take() {
+            Some(job) => job,
+            None => match send_job_rx.recv().await {
+                Ok(job) => job,
+                Err(_) => break,
+            },
+        };
+        if poisoned {
+            let _ = job.response_tx.send(Err(EncryptSendError::poisoned()));
+            continue;
+        }
+
+        // Encrypt everything already queued into out_buf. Stop at the
+        // MAX_BATCH_FRAMES / MAX_BATCH_WIRE_BYTES ceiling, or when try_recv
+        // finds nothing more waiting.
+        // ... encrypt_frame_into loop, then a single transport.send(out_buf) ...
     }
 }
 ```
 
-Location: `src/socket/noise_socket.rs:64-89`
+Two ceilings bound a batch: `MAX_BATCH_FRAMES` (16) and `MAX_BATCH_WIRE_BYTES` (64 KiB). The byte ceiling only stops a batch from *growing*: you check it against the *next* frame's projected wire size **before** appending, and hold a frame that would overflow over (`carry_over`) to open the next batch instead. A dropped held-over job (e.g. on shutdown) drops its response channel, which its caller observes as a closed sender — a held-over job can be lost, but it can never hang its caller.
+
+The ceiling does not shrink a single frame that is already too big. The first job of a batch is always encrypted and appended before either ceiling is checked, so a plaintext whose framed ciphertext alone exceeds 64 KiB (frames up to the 16 MB protocol limit are valid — see [Frame Format](#frame-format)) still goes out, alone, in a write larger than the ceiling. The ceiling governs *coalescing*, not the size of any one frame.
+
+The whole batch shares the fate of its one `transport.send()` call. A crypto or framing error is detected before any byte reaches the wire. It leaves the write counter untouched. Only the offending job's caller sees the error — every frame already encrypted into the buffer still goes out, because the peer's counters must stay contiguous.
+
+A transport error is different: the peer may have partially or fully received the write, so you can't tell which frames landed. The sender poisons itself, and every waiter in the batch is told the send was lost. `EncryptSendError` wraps an `anyhow::Error`, which isn't `Clone`, so you can't hand each waiter its own copy of the real cause. Instead every waiter gets its own `EncryptSendError` (kind `Transport`) so `SendResult` stays `Result<(), EncryptSendError>` for every caller, and each one's `source` wraps the same shared `Arc<EncryptSendError>` via a small `SharedSendFailure` type — so all of them can still downcast to the one real cause instead of a re-worded copy.
+
+A batch that coalesces more than one frame logs at debug level (`noise: coalesced {n} frames into one {bytes}-byte write`) — the only externally visible sign that batching happened.
+
+Location: `src/socket/noise_socket.rs:119-289`
 
 ### Encryption
+
+`encrypt_frame_into` (renamed from the pre-batching `process_send_job`) only encrypts and frames a single plaintext into the shared `out_buf` — it no longer performs the transport write itself, since a batch's write happens once, after every already-queued frame has been folded in.
 
 #### Small Messages (≤16KB)
 
 Encrypted inline to avoid thread pool overhead:
 
 ```rust
-if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
-    // Copy to output buffer and encrypt in-place
-    out_buf.clear();
-    out_buf.extend_from_slice(&plaintext_buf);
-    plaintext_buf.clear();
-    
-    write_key.encrypt_in_place_with_counter(counter, &mut out_buf)?;
-    
-    // Frame the ciphertext
-    wacore::framing::encode_frame_into(&ciphertext, None, &mut out_buf)?;
+if plaintext.len() <= INLINE_ENCRYPT_THRESHOLD {
+    enc_buf.clear();
+    enc_buf.extend_from_slice(&plaintext);
+    write_key.encrypt_in_place_with_counter(counter, enc_buf)?;
+
+    // append_frame_into, not encode_frame_into: it appends to out_buf
+    // instead of clearing it, so several frames can be laid out back to
+    // back in one buffer for a single write.
+    wacore::framing::append_frame_into(enc_buf, None, out_buf)?;
 }
 ```
 
-Location: `src/socket/noise_socket.rs:103-130`
+Location: `src/socket/noise_socket.rs:309-317`
 
 #### Large Messages (>16KB)
 
-Offloaded to blocking thread pool:
+Offloaded to the runtime's blocking pool. The `Bytes` plaintext is moved into the blocking closure (a refcount bump) rather than copied:
 
 ```rust
 else {
-    let plaintext_arc = Arc::new(plaintext_buf);
-    let plaintext_arc_for_task = plaintext_arc.clone();
-    
-    // Offload to blocking thread
-    let spawn_result = tokio::task::spawn_blocking(move || {
-        write_key.encrypt_with_counter(
-            counter, 
-            &plaintext_arc_for_task[..]
-        )
-    }).await;
-    
-    // Recover original buffer
-    plaintext_buf = Arc::try_unwrap(plaintext_arc)
-        .unwrap_or_else(|arc| (*arc).clone());
-    
-    let ciphertext = spawn_result??;
-    
-    // Frame and send
-    wacore::framing::encode_frame_into(&ciphertext, None, &mut out_buf)?;
-    transport.send(out_buf).await?;
+    let write_key = write_key.clone();
+    let ciphertext = wacore::runtime::blocking(&**runtime, move || {
+        write_key.encrypt_with_counter(counter, &plaintext)
+    })
+    .await??;
+
+    wacore::framing::append_frame_into(&ciphertext, None, out_buf)?;
 }
+
+*write_counter = counter + 1;
+Ok(out_buf.len() - before)
 ```
 
-Location: `src/socket/noise_socket.rs:131-164`
+Location: `src/socket/noise_socket.rs:291-337`
 
 <Note>
-  The 16KB threshold is chosen based on benchmarking. Smaller messages benefit from inline encryption (no thread spawning overhead), while larger messages benefit from parallel execution.
+  The 16KB threshold is chosen based on benchmarking. Smaller messages benefit from inline encryption (no thread spawning overhead), while larger messages benefit from parallel execution. The write counter is burned as soon as the framed ciphertext is committed to `out_buf` — at encrypt time, before the batch's single `transport.send()` — not when the write is confirmed, since a failed send says nothing about how many bytes the peer actually received.
 </Note>
+
+### Write batching (frame coalescing)
+
+`wacore/noise/src/framing.rs` splits the old `encode_frame_into` into two functions:
+
+- **`encode_frame_into`** — clears `out` first, then appends. Unchanged behavior for existing one-frame-per-buffer callers.
+- **`append_frame_into`** — the same encoder without the clear, so several frames can be laid out back to back. `encode_frame_into` is now implemented as `clear` + `append_frame_into`.
+
+This is what makes coalescing possible: `out_buf` accumulates every already-queued frame across successive `encrypt_frame_into` calls before the sender task hands it to `transport.send()` once. On the wire, this is functionally the same thing the official WhatsApp Web client already does — `WAFrameSocket.sendFrame` (`WAWeb/Open/ChatSocket.js`) concatenates its handshake prefix and payload into one buffer before a single `requestSend()`, and its receive side already loops multiple frames out of one buffered chunk.
 
 ### Send API
 
 ```rust
-pub async fn encrypt_and_send(
-    &self, 
-    plaintext_buf: Vec<u8>, 
-    out_buf: Vec<u8>
-) -> SendResult {
+pub async fn encrypt_and_send(&self, plaintext: bytes::Bytes) -> SendResult {
     let (response_tx, response_rx) = oneshot::channel();
-    
-    let job = SendJob {
-        plaintext_buf,
-        out_buf,
-        response_tx,
-    };
-    
-    // Send to dedicated task
-    if let Err(send_err) = self.send_job_tx.send(job).await {
-        let job = send_err.0;
-        return Err(EncryptSendError::channel_closed(
-            job.plaintext_buf,
-            job.out_buf,
-        ));
+    let job = SendJob { plaintext, response_tx };
+
+    if let Err(_send_err) = self.send_job_tx.send(job).await {
+        return Err(EncryptSendError::channel_closed());
     }
-    
-    // Wait for result
+
     match response_rx.await {
         Ok(result) => result,
-        Err(_) => Err(EncryptSendError::channel_closed(
-            Vec::new(), Vec::new()
-        )),
+        Err(_) => Err(EncryptSendError::channel_closed()),
     }
 }
 ```
 
-**Buffer Management:**
+`plaintext` is a `bytes::Bytes`, and `SendResult = Result<(), EncryptSendError>` — there is no buffer round-trip; the caller doesn't get anything back to reuse. A caller has no way to tell from this API alone whether its frame was written alone or coalesced into a batch with others queued at the same time.
 
-The API returns both buffers for reuse:
-
-```rust
-type SendResult = Result<(Vec<u8>, Vec<u8>), EncryptSendError>;
-//                        ^^^^^^^^^^^^^^^^^^^^^                  
-//                        (plaintext_buf, out_buf) for reuse
-```
-
-This enables the client to reuse buffers across multiple sends:
-
-```rust
-let mut plaintext_buf = Vec::with_capacity(1024);
-let mut out_buf = Vec::with_capacity(1056);  // plaintext + 32 overhead
-
-loop {
-    plaintext_buf.clear();
-    marshal_to_vec(&message, &mut plaintext_buf)?;
-    
-    (plaintext_buf, out_buf) = 
-        noise_socket.encrypt_and_send(plaintext_buf, out_buf).await?;
-}
-```
-
-Location: `src/socket/noise_socket.rs:173-200`
+Location: `src/socket/noise_socket.rs:339-360`
 
 ### Decryption
 
 ```rust
-pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-    let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
+pub fn decrypt_frame(&self, mut ciphertext: BytesMut) -> Result<BytesMut> {
+    let counter = self
+        .read_counter
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| c.checked_add(1))
+        .map_err(|_| SocketError::Cipher(NoiseError::CounterExhausted))?;
     self.read_key
-        .decrypt_with_counter(counter, ciphertext)
-        .map_err(SocketError::Cipher)
+        .decrypt_in_place_with_counter(counter, &mut ciphertext)
+        .map_err(SocketError::Cipher)?;
+    Ok(ciphertext)
 }
 ```
 
@@ -518,20 +524,15 @@ pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
 2. Decryption is fast (AES-GCM hardware acceleration)
 3. No ordering concerns (unlike send)
 
-Location: `src/socket/noise_socket.rs:202-207`
+Unaffected by write batching: coalescing only changes how outbound frames are packed into a write, not how inbound frames are decoded off the wire (`FrameDecoder`, covered below, already loops multiple frames out of one buffered chunk).
+
+Location: `src/socket/noise_socket.rs:362-379`
 
 ### Cleanup
 
-```rust
-impl Drop for NoiseSocket {
-    fn drop(&mut self) {
-        // Abort sender task to prevent resource leaks
-        self.sender_task_handle.abort();
-    }
-}
-```
+The sender task is aborted on drop automatically: `_sender_task_handle` is an `AbortHandle` whose own `Drop` impl does the work, so `NoiseSocket` no longer needs a manual `Drop` implementation.
 
-Location: `src/socket/noise_socket.rs:210-217`
+Location: `src/socket/noise_socket.rs:65,113-116`
 
 ## Frame Protocol
 
@@ -891,38 +892,29 @@ pub enum SocketError {
     Marshal(#[source] BinaryError),
 }
 
-pub enum EncryptSendError {
-    Crypto { error: anyhow::Error, ... },
-    Transport { error: anyhow::Error, ... },
-    Framing { error: FramingError, ... },
-    Join { error: JoinError, ... },
-    ChannelClosed { ... },
+pub enum EncryptSendErrorKind {
+    Crypto,
+    Framing,
+    Transport,
+    Join,
+    ChannelClosed,
     /// A previous frame failed at the transport; this connection's write
     /// keystream can no longer be extended safely. See "Send poisoning"
     /// below.
-    Poisoned { error: anyhow::Error },
+    Poisoned,
+}
+
+pub struct EncryptSendError {
+    pub kind: EncryptSendErrorKind,
+    pub source: anyhow::Error,
 }
 ```
 
-Every variant carries a `source()` — internally `EncryptSendError` is one struct with a `kind` and a single `source: anyhow::Error` field, not a distinct payload per variant. For `Crypto`/`Transport`/`Framing`/`Join`, that source is the real downstream error: `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source, and walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings. `Poisoned`'s source is different in kind: there is no downstream failure to wrap, since the poisoning is detected in-process rather than reported by a lower layer, so its source is a fixed explanatory message (`"noise sender disabled after a transport failure; reconnect to rekey"`) rather than something to downcast.
+`EncryptSendError` is one struct with a `kind` and a single `source: anyhow::Error` field, not a distinct payload per kind — there are no `plaintext_buf`/`out_buf` fields to recover. For `Crypto`/`Transport`/`Framing`/`Join`, `source` is the real downstream error: `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source, and walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings. `Poisoned`'s source is different in kind: there is no downstream failure to wrap, since the poisoning is detected in-process rather than reported by a lower layer, so its source is a fixed explanatory message (`"noise sender disabled after a transport failure; reconnect to rekey"`) rather than something to downcast.
 
 `is_transport_unavailable()` returns `true` for `Transport`, `ChannelClosed`, **and** `Poisoned` — all three mean the same thing to a caller: stop retrying on this connection and reconnect.
 
-All variants return buffers for reuse:
-
-```rust
-impl EncryptSendError {
-    pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
-        match self {
-            Self::Crypto { plaintext_buf, out_buf, .. } => 
-                (plaintext_buf, out_buf),
-            Self::Transport { plaintext_buf, out_buf, .. } => 
-                (plaintext_buf, out_buf),
-            // ...
-        }
-    }
-}
-```
+Unlike an older version of this API, no variant returns buffers for reuse — there is no `into_buffers()` method. This matches the [Send API](#send-api) above: `encrypt_and_send` takes an owned `bytes::Bytes` and gives nothing back on either the success or the error path, so there is nothing for a caller to recover from a failed send.
 
 Location: `src/socket/error.rs`
 
@@ -935,11 +927,13 @@ A `transport.send()` call that returns `Err` says nothing about how much of the 
 
 Both recovery paths are unrecoverable in-band, so the sender task instead poisons itself on the first transport error:
 
-1. The write counter is now incremented **immediately before** `transport.send()` is awaited, not after it returns — so "a counter value is never used twice" holds regardless of whether the send later fails.
+1. The write counter is incremented at **encrypt time**, inside `encrypt_frame_into`, before the frame joins the batch's shared buffer — not when the batch's single `transport.send()` returns — so "a counter value is never used twice" holds regardless of whether the send later fails.
 2. The first `Transport`-kind error flips an in-memory `poisoned` flag on the sender task and calls `transport.disconnect()`. Closing the transport drives the existing disconnect/reconnect path, since nothing else would otherwise notice a write-only failure on an otherwise-open socket.
 3. Every send after that point is rejected immediately with `EncryptSendError::poisoned()` — it is never encrypted or written to the wire. The connection can only become usable again by reconnecting, which performs a fresh Noise handshake and installs new keys and counters.
 
 `Crypto` and `Framing` errors do **not** poison the sender: both are detected before any byte reaches the wire, so the counter and keystream are untouched and the connection stays usable for the next send.
+
+**Interaction with write batching:** since the sender coalesces several queued frames into one write (see [Write batching](#write-batching-frame-coalescing)), a poisoning transport error fails every frame in that batch, not just one — each waiter gets its own `EncryptSendError` whose `source` downcasts to the same shared cause (see above), rather than a separately-worded copy. A crypto/framing error, by contrast, only fails the one job that produced it; every frame already folded into the buffer ahead of it still goes out.
 
 ### Stream error handling
 
@@ -1122,6 +1116,10 @@ let out_buf = Vec::with_capacity(buffer_capacity);
 
 Location: `src/socket/noise_socket.rs:373-407` (tests verify this formula)
 
+### Write batching
+
+The sender task coalesces whatever send jobs are already queued (never blocking to wait for more) into one encrypted buffer and issues a single `transport.send()` for the batch. Coalescing stops at 16 frames or 64 KiB, whichever comes first — except a single frame already larger than 64 KiB, which still goes out alone rather than being truncated. See [Write batching (frame coalescing)](#write-batching-frame-coalescing) under NoiseSocket for the mechanics. Measured against a 120k-message/12k-per-second pingpong harness, this cut write syscalls per message by ~8.7% and allocator calls by ~0.76%; CPU impact was not statistically significant in that workload. The gain scales with how many independent producers (replies, delivery receipts, stanza acks) happen to queue within the same scheduler tick — a lone frame is written exactly as before.
+
 ### SIMD Encryption
 
 The Noise cipher uses hardware AES acceleration when available:
@@ -1186,9 +1184,6 @@ Key test scenarios:
 
 ```rust
 #[tokio::test]
-async fn test_encrypt_and_send_returns_both_buffers()
-
-#[tokio::test]
 async fn test_concurrent_sends_maintain_order()
 
 #[tokio::test]
@@ -1196,9 +1191,24 @@ async fn test_encrypted_buffer_sizing_is_sufficient()
 
 #[tokio::test]
 async fn test_handshake_with_edge_routing()
+
+// Write batching (frame coalescing)
+#[tokio::test]
+async fn queued_frames_leave_in_one_write_in_counter_order()
+
+#[tokio::test]
+async fn a_batch_never_overshoots_the_byte_ceiling()
+
+#[tokio::test]
+async fn every_encrypted_frame_burns_its_own_counter()
+
+#[tokio::test]
+async fn the_transport_cause_reaches_the_caller()
 ```
 
-Location: `src/socket/noise_socket.rs:219-459`
+`queued_frames_leave_in_one_write_in_counter_order` and `a_batch_never_overshoots_the_byte_ceiling` use a `GatedTransport` whose `send()` blocks on a semaphore, so a test can queue every job into the sender's channel before releasing any of them — the precondition for exercising coalescing at all.
+
+Location: `src/socket/noise_socket.rs:381-1082`
 
 ## Related Components
 

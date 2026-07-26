@@ -111,11 +111,16 @@ The library is fully runtime-agnostic. All async operations go through four plug
 | HTTP client | `HttpClient` | `UreqHttpClient` | `whatsapp-rust-ureq-http-client` |
 | Storage | `Backend` | `SqliteStore` | `whatsapp-rust-sqlite-storage` |
 
-The `Runtime` trait requires four methods plus one optional method with a default:
+The `Runtime` trait requires four methods plus two optional methods with defaults:
 
 ```rust
 pub trait Runtime: Send + Sync + 'static {
     fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> AbortHandle;
+
+    /// Fire-and-forget spawn. Defaults to `self.spawn(future).detach()`.
+    fn spawn_detached(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+        self.spawn(future).detach();
+    }
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
     fn spawn_blocking(&self, f: Box<dyn FnOnce() + Send + 'static>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
     fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
@@ -126,6 +131,8 @@ pub trait Runtime: Send + Sync + 'static {
 ```
 
 `AbortHandle` is `#[must_use]` — dropping the handle aborts the spawned task. Call `.detach()` on the handle for fire-and-forget tasks that should run to completion independently. See [custom backends — AbortHandle](/guides/custom-backends#aborthandle) for implementation details.
+
+As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), `spawn_detached` gives fire-and-forget callers a way to skip building that `AbortHandle` in the first place: `spawn` has to box a `dyn FnOnce` capturing the executor's own handle to construct it, and a caller that detaches on the very next line pays for a box it immediately discards. The library's own detached spawns (background init queries, the ack/receipt workers, phash-mismatch handling) all go through `spawn_detached` now. The default keeps existing `Runtime` implementations correct; override it only if your executor can spawn without any cancellation bookkeeping at all.
 
 The `yield_frequency()` method controls how often the client cooperatively yields during tight async loops (such as processing incoming frames). It returns the number of items to process before yielding. The default value is `10`. Single-threaded runtimes should return `1` to avoid starving the event loop, while multi-threaded runtimes can use higher values or rely on `yield_now()` returning `None`.
 

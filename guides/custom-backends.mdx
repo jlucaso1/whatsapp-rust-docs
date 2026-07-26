@@ -768,6 +768,16 @@ handle.abort(); // Cancel the task
 runtime.spawn(Box::pin(background_work())).detach();
 ```
 
+As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), `Runtime` also has `spawn_detached`, a default method equivalent to `spawn(future).detach()` but without ever constructing the `AbortHandle`:
+
+```rust
+// Equivalent to runtime.spawn(Box::pin(background_work())).detach(),
+// but never builds the AbortHandle in the first place.
+runtime.spawn_detached(Box::pin(background_work()));
+```
+
+`spawn` has to box a `dyn FnOnce` capturing the executor's own handle to build the `AbortHandle`, so a caller that detaches on the very next line pays for a box it immediately throws away. Implementing `spawn_detached` is optional — the default (`self.spawn(future).detach()`) keeps existing `Runtime` implementations correct and behaviorally unchanged. Override it only if your executor can spawn a task without any cancellation bookkeeping at all.
+
 ### Using your runtime
 
 ```rust

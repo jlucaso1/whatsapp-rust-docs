@@ -166,6 +166,11 @@ The `runtime` module defines the `Runtime` trait that all async operations go th
 ```rust
 pub trait Runtime: Send + Sync + 'static {
     fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> AbortHandle;
+
+    /// Spawn a task nobody will cancel. Defaults to `self.spawn(future).detach()`.
+    fn spawn_detached(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+        self.spawn(future).detach();
+    }
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
     fn spawn_blocking(&self, f: Box<dyn FnOnce() + Send + 'static>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
     fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
@@ -178,6 +183,7 @@ pub trait Runtime: Send + Sync + 'static {
 | Method | Purpose |
 |--------|--------|
 | `spawn` | Spawn a background task, returning an `AbortHandle` for cancellation. The handle is `#[must_use]` — dropping it aborts the task. Call `.detach()` for fire-and-forget tasks |
+| `spawn_detached` | Spawn a fire-and-forget task without ever building an `AbortHandle`. Defaults to `spawn(future).detach()`; override only if your runtime can skip that allocation entirely (see [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124)) |
 | `sleep` | Return a future that completes after a duration |
 | `spawn_blocking` | Offload a blocking closure to a thread pool |
 | `yield_now` | Cooperatively yield; return `None` if unnecessary (e.g., multi-threaded runtimes) |

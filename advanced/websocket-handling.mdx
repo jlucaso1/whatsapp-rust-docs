@@ -897,10 +897,16 @@ pub enum EncryptSendError {
     Framing { error: FramingError, ... },
     Join { error: JoinError, ... },
     ChannelClosed { ... },
+    /// A previous frame failed at the transport; this connection's write
+    /// keystream can no longer be extended safely. See "Send poisoning"
+    /// below.
+    Poisoned { error: anyhow::Error },
 }
 ```
 
-Each variant preserves the underlying typed error as a `source()`. `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source. Walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings.
+Every variant carries a `source()` — internally `EncryptSendError` is one struct with a `kind` and a single `source: anyhow::Error` field, not a distinct payload per variant. For `Crypto`/`Transport`/`Framing`/`Join`, that source is the real downstream error: `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source, and walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings. `Poisoned`'s source is different in kind: there is no downstream failure to wrap, since the poisoning is detected in-process rather than reported by a lower layer, so its source is a fixed explanatory message (`"noise sender disabled after a transport failure; reconnect to rekey"`) rather than something to downcast.
+
+`is_transport_unavailable()` returns `true` for `Transport`, `ChannelClosed`, **and** `Poisoned` — all three mean the same thing to a caller: stop retrying on this connection and reconnect.
 
 All variants return buffers for reuse:
 
@@ -919,6 +925,21 @@ impl EncryptSendError {
 ```
 
 Location: `src/socket/error.rs`
+
+### Send poisoning after a transport failure
+
+A `transport.send()` call that returns `Err` says nothing about how much of the frame reached the peer — it may have been fully consumed, partially written, or not sent at all. Because the write counter feeds directly into the AES-GCM nonce, that ambiguity can't be resolved safely:
+
+- **Reusing the counter** on the next frame reuses the nonce under the same write key. Two ciphertexts under one key/nonce pair leak both plaintexts.
+- **Skipping the counter instead** desyncs the peer's read counter, since the peer's actual state depends on whether it saw the failed frame.
+
+Both recovery paths are unrecoverable in-band, so the sender task instead poisons itself on the first transport error:
+
+1. The write counter is now incremented **immediately before** `transport.send()` is awaited, not after it returns — so "a counter value is never used twice" holds regardless of whether the send later fails.
+2. The first `Transport`-kind error flips an in-memory `poisoned` flag on the sender task and calls `transport.disconnect()`. Closing the transport drives the existing disconnect/reconnect path, since nothing else would otherwise notice a write-only failure on an otherwise-open socket.
+3. Every send after that point is rejected immediately with `EncryptSendError::poisoned()` — it is never encrypted or written to the wire. The connection can only become usable again by reconnecting, which performs a fresh Noise handshake and installs new keys and counters.
+
+`Crypto` and `Framing` errors do **not** poison the sender: both are detected before any byte reaches the wire, so the counter and keystream are untouched and the connection stays usable for the next send.
 
 ### Stream error handling
 

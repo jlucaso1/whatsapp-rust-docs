@@ -253,6 +253,10 @@ all_dm_jids.retain(|j| !is_sender);
 // HashSet dedup for self-DM overlap
 ```
 
+<Note>
+**Per-recipient memoization ([#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118)).** The steps above — the registry lookups, the list rebuild, the partition, and the phash — are memoized per recipient in `dm_devices_memo`, keyed by the resolved wire JID and validated against the device-topology generation and the sending identity (own PN/LID). A warm repeat send to the same chat reuses the stored `ResolvedDmDevices` (an `Arc`, so a hit is a refcount bump — nothing is cloned) instead of redoing this resolution. Any device add/remove/replace, registry invalidation, PN↔LID mapping change, or re-pair invalidates the entry through the same topology tracker the group-devices memo (below) already uses; a resolution that had to fall back (e.g. a registry lookup miss) is never memoized. Explicitly requesting network-fresh data bypasses the memo entirely. See `dm_devices_memo` in [`memory_report()`](/api/client#memory_report).
+</Note>
+
 ### Device partitioning
 
 The `partition_dm_devices` function classifies all resolved devices into recipient and own groups, and excludes the exact sender device (the current device) entirely. It partitions `all_devices` in place — swapping recipient devices to the front of the passed-in `Vec` — instead of allocating two new device vectors per send:
@@ -287,6 +291,8 @@ impl PartitionedDmDevices {
 }
 ```
 
+Since [#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118), `partition_dm_devices` runs once per `dm_devices_memo` entry — wrapped by `ResolvedDmDevices::new(all_devices, own_jid, own_lid)` — rather than on every send; see [`DmStanzaRequest` and `ResolvedDmDevices`](#dmstanzarequest-and-resolveddmdevices) below.
+
 ### Sender device exclusion
 
 The exact sender device is identified by matching both the user **and** device ID against your phone number JID (PN) or your Linked Identity JID (LID):
@@ -316,6 +322,49 @@ This ensures that your own devices registered under your LID (common in multi-de
   Both PN-based and LID-based devices must be checked because WhatsApp's multi-device architecture uses both addressing schemes. A user's devices may appear under either their phone number JID (`@s.whatsapp.net`) or their Linked Identity JID (`@lid`), depending on the device type and registration path.
 </Note>
 
+### DmStanzaRequest and ResolvedDmDevices
+
+`prepare_dm_stanza` takes a `DmStanzaRequest` whose `devices` field is the already-resolved, already-partitioned fan-out for the recipient — a borrowed `&ResolvedDmDevices` — rather than a raw device list:
+
+```rust
+pub struct DmStanzaRequest<'a> {
+    pub own_jid: &'a Jid,
+    pub account: Option<&'a wa::ADVSignedDeviceIdentity>,
+    pub to: &'a Jid,
+    pub message: &'a wa::Message,
+    pub message_id: &'a str,
+    pub edit: Option<&'a crate::types::message::EditAttribute>,
+    pub extra_nodes: &'a [Node],
+    /// The already-partitioned fan-out. Borrowed, not owned: the caller's
+    /// per-recipient memo hands out the same `Arc` on every repeat send, so
+    /// neither the device list nor its phash is rebuilt here.
+    pub devices: &'a ResolvedDmDevices,
+    pub pre_encoded: Option<&'a [u8]>,
+}
+```
+
+`ResolvedDmDevices` (`wacore::send::ResolvedDmDevices`) wraps the partitioned device set from `partition_dm_devices` together with a lazily memoized phash — the type that `dm_devices_memo` caches per recipient:
+
+```rust
+pub struct ResolvedDmDevices { /* partitioned devices + OnceLock<CompactString> phash */ }
+
+impl ResolvedDmDevices {
+    /// Partitions `all_devices` into recipient devices and own companions,
+    /// dropping the sending device itself.
+    pub fn new(all_devices: Vec<Jid>, own_jid: &Jid, own_lid: Option<&Jid>) -> Self;
+
+    /// Every device the stanza encrypts for, in partition order.
+    pub fn devices(&self) -> &[Jid];
+
+    /// The DM phash over the sent device set: a memo hit is an inline copy.
+    pub fn phash(&self) -> Option<CompactString>;
+}
+```
+
+<Warning>
+  **Breaking change ([#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118)):** `DmStanzaRequest::own_lid` was removed — the sending identity's LID is now baked into the `ResolvedDmDevices` passed via `devices` at construction time (`ResolvedDmDevices::new`) — and `DmStanzaRequest::devices` changed from `Vec<Jid>` to `&ResolvedDmDevices`. An out-of-tree caller constructing `DmStanzaRequest` directly needs to build a `ResolvedDmDevices` first (via `ResolvedDmDevices::new(all_devices, own_jid, own_lid)`) and pass it by reference.
+</Warning>
+
 ### PreparedDmStanza
 
 `prepare_dm_stanza` returns a `PreparedDmStanza` struct containing the stanza node and the locally computed phash for server ACK validation:
@@ -326,9 +375,13 @@ pub struct PreparedDmStanza {
     /// Locally computed phash from the sent device set. Not sent on the
     /// wire (WA Web only sends phash for groups). Used by the caller to
     /// compare against the server's ACK phash for device-list drift detection.
-    pub phash: Option<String>,
+    pub phash: Option<CompactString>,
 }
 ```
+
+<Note>
+  `phash` changed from `Option<String>` to `Option<CompactString>` (`wacore_binary::CompactString`) in [#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118), matching the type `ResolvedDmDevices::phash()` returns: a warm memo hit clones the cached `CompactString` inline instead of allocating a new `String`.
+</Note>
 
 The phash is computed from the actual sent device set (after partitioning, with the sender excluded) using `MessageUtils::participant_list_hash()`. Unlike group messages, the DM phash is **not** sent on the wire — WA Web only includes `phash` in the `DeviceSentMessage` for groups. The DM phash is used purely for local validation against the server's ACK to detect device-list drift.
 

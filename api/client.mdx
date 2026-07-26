@@ -2029,6 +2029,8 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `group_distribution_lock_evictions` | `u64` | Cumulative capacity evictions of cold (non-live) distribution lanes; poll successive reports to derive a rate |
 | `group_distribution_lock_eviction_blocks` | `u64` | Cumulative attempts that kept a live lane and temporarily exceeded `group_distribution_locks_capacity` instead of evicting it |
 | `resend_rate_limiter_chats` | `u64` | Chats tracked by the per-chat resend rate limiter (count only) |
+| `transport_ack_queue` | `usize` | Deferred transport acks queued for the ack worker. Each entry retains the full inbound node plus a flush guard, so a stalled transport shows up here as a growing backlog ([#1116](https://github.com/oxidezap/whatsapp-rust/pull/1116)) |
+| `delivery_receipt_queue` | `usize` | Delivery receipts queued for their worker, same shape as `transport_ack_queue` ([#1116](https://github.com/oxidezap/whatsapp-rust/pull/1116)) |
 | `response_waiters` | `usize` | Active IQ response waiters |
 | `node_waiters` | `usize` | Active node waiters |
 | `pending_retries` | `usize` | Pending message retries |

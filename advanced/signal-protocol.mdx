@@ -861,10 +861,10 @@ When sending group, status, or DM messages, the library validates the participan
 **How it works:**
 
 1. Before sending, the client obtains the locally computed `phash` — from the stanza `phash` attribute for group/status messages, or from `PreparedDmStanza.phash` for DMs
-2. A oneshot ack waiter is registered for the message ID via `register_ack_waiter`
+2. A `PhashWaiter` (expected hash, target JID, whether to also invalidate the group cache) is registered for the message ID via `register_phash_waiter` — a map entry, not a channel or a task
 3. The message stanza is sent to the server
-4. A background task (`spawn_phash_validation`) awaits the server's ack (with a 10-second timeout)
-5. The server's ack includes its own `phash` — if it differs from the local value, the client invalidates caches
+4. When the server's ack for that message ID arrives, the read loop compares its `phash` attribute against the expected value inline, with no task involved
+5. On a match the entry is just dropped; on a mismatch the client spawns a task to invalidate caches — so a send only pays for a task in the uncommon case, not on every send ([#1116](https://github.com/oxidezap/whatsapp-rust/pull/1116))
 
 **On mismatch, the following caches are invalidated:**
 
@@ -895,7 +895,7 @@ if !jid.is_group() && !jid.is_status_broadcast() {
 ```
 
 <Note>
-The phash validation runs asynchronously in the background and does not block the send path. If the server ack times out (after 10 seconds) or the oneshot channel is dropped, the validation is silently skipped. This matches WhatsApp Web's approach of using phash as a best-effort staleness detector rather than a hard requirement.
+The phash check never blocks the send path. If the server's ack never arrives, nothing polls the waiter directly — it is swept out on the keepalive tick, which drops any phash waiter that has lived through a full sweep since it registered (a window of one keepalive tick, 15–30 seconds, rather than the old fixed 10-second timeout). The sweep runs before keepalive's own idle early-return, so a connection with steady inbound traffic — which skips sending pings — still gets its stale waiters cleared; a stranded waiter would otherwise read as an outstanding IQ and suppress pings for the life of the connection. This matches WhatsApp Web's approach of using phash as a best-effort staleness detector rather than a hard requirement.
 </Note>
 
 #### WA Web phash parity (v0.6)

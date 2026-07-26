@@ -768,6 +768,24 @@ handle.abort(); // Cancel the task
 runtime.spawn(Box::pin(background_work())).detach();
 ```
 
+As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), `Runtime` also has `spawn_detached` for fire-and-forget spawns:
+
+```rust
+runtime.spawn_detached(Box::pin(background_work()));
+```
+
+The trait-level default is exactly `self.spawn(future).detach()` — the same cost as writing both calls out by hand, kept only so existing `Runtime` implementations keep compiling and behaving unchanged. It is **not** itself the optimization: `spawn` still boxes a `dyn FnOnce` capturing the executor's own handle to build the `AbortHandle`, and the default still builds and immediately drops it.
+
+The saving requires overriding `spawn_detached` to bypass `spawn` entirely. The bundled `TokioRuntime` does exactly that in `src/runtime_impl.rs`:
+
+```rust
+fn spawn_detached(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+    tokio::spawn(future);
+}
+```
+
+This never constructs an `AbortHandle` at all. Implement `spawn_detached` this way for your own runtime if it can spawn a task with no cancellation bookkeeping; otherwise the inherited default is a correct (if not faster) fallback.
+
 ### Using your runtime
 
 ```rust

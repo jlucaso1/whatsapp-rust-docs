@@ -55,6 +55,10 @@ See the full table, including default/publish status, in [Installation](/install
 
 `Event::IncomingCall` fires for all call-control stanzas (offer, preaccept, accept, reject, terminate, transport, relaylatency). Guard on `CallAction::Offer` before calling `accept()` — otherwise non-offer events return `CallError::NotAnOffer`:
 
+<Warning>
+  [PR #1128](https://github.com/oxidezap/whatsapp-rust/pull/1128) moved callee signaling into `accept(...).start()` itself. Before this PR, `start()` drove only the media plane and the application had to send `<preaccept>`/`<accept>` itself; see the note below for current behavior.
+</Warning>
+
 ```rust
 use whatsapp_rust::client::Client;
 use whatsapp_rust::types::events::Event;
@@ -87,7 +91,11 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
 ```
 
 <Note>
-  `accept(...).start()` drives the **media plane only** (callKey decrypt → relay connect → engine). Sending `<preaccept>` and `<accept>` signaling stanzas to the peer is the caller's responsibility and must happen before or alongside `start()`. See `examples/voip-cli/src/main.rs` in the repository for a complete incoming-call handler that includes signaling.
+  `accept(...).start()` drives the **full callee flow**: it sends `<preaccept>`, decrypts the offer's callKey, sends `<accept>`, then connects the relay and spawns the engine — in that order. You don't build or send either signaling stanza yourself anymore. This is deliberately not automatic preaccept-on-offer: no `<preaccept>` or `<accept>` call-signaling stanza is sent until your application calls `accept(...).start()`, so ringing UI, do-not-disturb, and other answer policy stay entirely under your control. (The router still auto-acks the incoming offer stanza itself — see [Events](/concepts/events) — that's transport-level acknowledgment, not call-signaling.)
+</Note>
+
+<Note>
+  `start()` can fail with two errors specific to this flow. `CallError::VideoNotOffered` is returned if you call `.video(...)` but the incoming offer's `is_video` was `false` — add video later with `CallHandle::start_video` instead (see [Video I/O](#video-io)). `CallError::CallEndedDuringSetup` is returned if the peer terminates or supersedes the call while `start()` is still decrypting the callKey or connecting the relay.
 </Note>
 
 ## Placing an Outgoing Call

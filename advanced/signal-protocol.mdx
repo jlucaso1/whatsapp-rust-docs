@@ -765,9 +765,9 @@ Prior to [#807](https://github.com/oxidezap/whatsapp-rust/pull/807), a single ch
 </Note>
 
 <Note>
-**Per-device session lock around the SKDM fan-out (v0.6).** The chain lock above only serializes the sender-key chain — it does not cover the *pairwise* Signal sessions that `encrypt_for_devices_with_sessions` mutates for each SKDM target device. Those are the same pairwise sessions the DM path locks (see "DM per-device locking" under [Single-allocation session lock keys](#single-allocation-session-lock-keys) below) via `session_lock_for()` / `session_mutexes_for()`. Before [#990](https://github.com/oxidezap/whatsapp-rust/pull/990), the group fan-out held only the chain lock, a disjoint key, so a concurrent DM (or another group send) sharing a device could race that device's pairwise ratchet — both sides load chain index *N* and both store *N+1*, silently dropping one advance. When the lost advance carried the SKDM, that member never received the sender key and every subsequent `skmsg` stayed undecryptable for it until a retry re-distributed.
+**Per-device session lock around the SKDM fan-out (v0.6).** The chain lock above only serializes the sender-key chain — it does not cover the *pairwise* Signal sessions that `encrypt_for_devices_with_sessions` mutates for each SKDM target device. Those are the same pairwise sessions the DM path locks (see "DM per-device locking" under [Single-allocation session lock keys](#single-allocation-session-lock-keys) below) via `session_lock_for()` / `session_guards_for()`. Before [#990](https://github.com/oxidezap/whatsapp-rust/pull/990), the group fan-out held only the chain lock, a disjoint key, so a concurrent DM (or another group send) sharing a device could race that device's pairwise ratchet — both sides load chain index *N* and both store *N+1*, silently dropping one advance. When the lost advance carried the SKDM, that member never received the sender key and every subsequent `skmsg` stayed undecryptable for it until a retry re-distributed.
 
-`prepare_group_stanza` now acquires the SKDM targets' per-device session locks through `SendContextResolver::lock_device_sessions()` before taking the chain lock, and releases them right after the fan-out — the `skmsg` chain encrypt that follows only touches the sender-key chain, never a pairwise session. The `Client` implementation of this hook reuses `build_session_lock_keys()` + `session_mutexes_for()`, so the group and DM paths serialize on the exact same mutexes, in the same sorted order, and always acquire session locks before the chain lock — no path takes the reverse order, so this cannot deadlock. The hook defaults to a no-op, so a custom `SendContextResolver` (as used in tests and benches) is unaffected unless it opts in.
+`prepare_group_stanza` now acquires the SKDM targets' per-device session locks through `SendContextResolver::lock_device_sessions()` before taking the chain lock, and releases them right after the fan-out — the `skmsg` chain encrypt that follows only touches the sender-key chain, never a pairwise session. The `Client` implementation of this hook reuses `build_session_lock_keys()` + `session_guards_for()`, so the group and DM paths serialize on the exact same mutexes, in the same sorted order, and always acquire session locks before the chain lock — no path takes the reverse order, so this cannot deadlock. The hook defaults to a no-op, so a custom `SendContextResolver` (as used in tests and benches) is unaffected unless it opts in.
 </Note>
 
 <Note>
@@ -1780,9 +1780,9 @@ pub trait JidExt {
 }
 ```
 
-`to_protocol_address_string()` is used on hot paths (message encryption and decryption) as the key for `session_locks`. It pre-sizes the output buffer and builds the string in a single allocation, avoiding the two-allocation overhead of constructing a `ProtocolAddress` and then calling `.to_string()`.
+`to_protocol_address_string()` is used on hot paths (message encryption and decryption) as the key for `session_locks`. It pre-sizes the output buffer and builds the `String` in a single allocation. Constructing a `ProtocolAddress` itself no longer allocates for addresses that fit inline (see [Single-buffer ProtocolAddress](#single-buffer-protocoladdress) below), but `.to_string()` on top of it still does, so `to_protocol_address_string()` remains the cheaper path when only the string is needed.
 
-The `write_protocol_address_to()` free function provides the same formatting but writes into a caller-supplied `&mut String` buffer, enabling buffer reuse across multiple JIDs (used by `session_mutexes_for()`).
+The `write_protocol_address_to()` free function provides the same formatting but writes into a caller-supplied `&mut String` buffer, enabling buffer reuse across multiple JIDs.
 
 **Format examples:**
 
@@ -1813,8 +1813,8 @@ let signal_addr_str = encryption_jid.to_protocol_address_string();
 
 // In DM message encryption (src/send.rs) — per-device locks for all devices
 let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
-let session_mutexes = self.session_mutexes_for(&lock_jids).await;
-// Guards acquired in sorted order to prevent deadlocks
+let session_guards = self.session_guards_for(&lock_jids).await;
+// Each lock taken as its mutex is resolved, in sorted order, to prevent deadlocks
 ```
 
 **DM multi-device fanout:**
@@ -1846,14 +1846,18 @@ To prevent ratchet desync when concurrent sends and receives operate on the same
 3. Sorts by `(server, user, device)` using `cmp_for_lock_order()` and deduplicates
 4. Returns sorted `Vec<Jid>` — no intermediate `String` allocations needed for sorting
 
-The `session_mutexes_for()` helper then converts sorted JIDs to session mutexes, reusing a single `String` buffer via `write_protocol_address_to()` to avoid per-JID heap allocations:
+The `session_guards_for()` helper (PR [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131)) then takes each device's lock as its mutex is resolved from the sorted JIDs, reusing a single `ProtocolAddress` via `reset_protocol_address()` to name each lock key without a formatting buffer:
 
 ```rust
 // In DM message encryption (src/send.rs)
 let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
-let session_mutexes = self.session_mutexes_for(&lock_jids).await;
-// Guards acquired in sorted order to prevent deadlocks
+let session_guards = self.session_guards_for(&lock_jids).await;
+// Each lock taken as its mutex is resolved, in sorted order, to prevent deadlocks
 ```
+
+<Note>
+  Resolving every mutex first and then locking each in a second pass (the previous implementation) is still available as `session_mutexes_for()`, but only under `#[cfg(test)]` — production code no longer builds the intermediate `Vec` of mutex handles.
+</Note>
 
 The recipient lock key is always the bare form (e.g., `100000012345678@lid.0`), matching the decrypt path's lock format. This ensures send and receive paths serialize on the exact same lock key.
 
@@ -1861,25 +1865,30 @@ Location: `wacore/src/types/jid.rs:4-51`, `src/send.rs:1481-1507`
 
 ### Single-buffer ProtocolAddress
 
-The `ProtocolAddress` struct stores the full address string `"{name}.{device_id}"` in a single `String` buffer, with a `name_len` marker to split name from suffix. This halves the allocation count compared to storing name and device ID separately, and eliminates the copy when rewriting the address via `reset_with()`.
+The `ProtocolAddress` struct stores the full address string `"{name}.{device_id}"` in a single `AddressBuf` buffer, with a `name_len` marker to split name from suffix. Since [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131), `AddressBuf` is inline-first: addresses up to 47 bytes (`INLINE_CAPACITY`) live inside the value itself with no heap allocation at all — every real WhatsApp address fits, e.g. `"5511987650001:5@c.us.0"` is 22 bytes. A longer address spills to a `String`.
+
+Which arm holds the bytes is not part of the value: `Eq`, `Ord`, and `Hash` all read the rendered string via `as_str()`, so an inline-built key finds a heap-spilled entry (and vice versa) in the session cache. That equivalence is what makes the optimization safe rather than a silent cache-miss generator.
 
 ```rust
 // wacore/libsignal/src/core/address.rs
+const INLINE_CAPACITY: usize = 47;
+
 pub struct ProtocolAddress {
-    buf: String,       // "{name}.{device_id}" in one buffer
+    buf: AddressBuf,   // inline up to 47 bytes, spills to a `String` beyond that
     name_len: usize,   // marks where the name ends
     device_id: DeviceId,
 }
 
 impl ProtocolAddress {
-    /// One-shot construction: takes ownership of `name` and appends the suffix.
-    pub fn new(name: String, device_id: DeviceId) -> Self;
+    /// One-shot construction: writes `name` into the buffer and appends the suffix.
+    pub fn new(name: &str, device_id: DeviceId) -> Self;
 
-    /// Pre-allocated empty address for hot-loop reuse. Call `reset_with()` to fill.
-    pub fn with_capacity(capacity: usize, device_id: DeviceId) -> Self;
+    /// An address with no name yet, ready for `reset_with()`. No capacity argument —
+    /// the buffer starts inline and only allocates if an address ever exceeds it.
+    pub fn empty(device_id: DeviceId) -> Self;
 
     /// Rewrite the address in place via closure. Single write pass — no intermediate copy.
-    pub fn reset_with(&mut self, write_name: impl FnOnce(&mut String));
+    pub fn reset_with(&mut self, write_name: impl FnOnce(&mut AddressBuf));
 
     /// Zero-cost slice of the name portion.
     pub fn name(&self) -> &str;
@@ -1889,7 +1898,15 @@ impl ProtocolAddress {
 }
 ```
 
-Both `name()` and `as_str()` are zero-cost slices into the same buffer — no allocations on access.
+Both `name()` and `as_str()` are zero-cost slices into the same buffer — no allocations on access, whether inline or spilled.
+
+<Note>
+**API change (PR [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131)):** `ProtocolAddress::new` now takes `name: &str` instead of an owned `String`. `with_capacity(capacity, device_id)` was removed in favor of `empty(device_id)` — the buffer no longer needs a capacity hint, since it starts inline and only allocates on overflow. `reset_with()`'s closure now receives `&mut AddressBuf` instead of `&mut String`; `AddressBuf` implements `push_str`, `push`, and `std::fmt::Write`, which covers existing call sites.
+</Note>
+
+<Warning>
+`Debug` on `AddressBuf` (and `ProtocolAddress`) must format `as_str()`, never the backing byte array: clearing an inline buffer only rewinds its length, so the unused tail still holds whichever address occupied it before. A derived `Debug` would print the whole array and could leak an unrelated peer's JID into a log line or error that formats a reused address.
+</Warning>
 
 ### Reusable hot-loop address construction
 
@@ -1898,7 +1915,7 @@ When iterating over many devices (e.g., during group stanza preparation or sessi
 ```rust
 // wacore/src/types/jid.rs
 pub fn make_reusable_protocol_address() -> ProtocolAddress {
-    ProtocolAddress::with_capacity(64, SIGNAL_DEVICE_ID)
+    ProtocolAddress::empty(SIGNAL_DEVICE_ID)
 }
 
 pub trait JidExt {
@@ -1923,7 +1940,7 @@ for device_jid in devices {
 }
 ```
 
-This pattern eliminates one `String` allocation per device in the loop. For a group with 100 participant devices, that saves 100 heap allocations on the send path. The pre-allocated capacity of 64 bytes covers all known WhatsApp address formats without reallocation.
+Since [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131), a fresh `ProtocolAddress` for a typical WhatsApp address (up to 47 bytes) is already allocation-free — inline storage covers it. Reuse still matters for addresses that spill to the heap: rewriting a spilled `ProtocolAddress` keeps its existing `String` allocation instead of dropping and reallocating one per device, and for a group with 100 participant devices sharing a reused buffer, that saves up to 100 heap allocations on the send path.
 
 <Note>
   Use `to_protocol_address()` for one-shot address construction (e.g., cache keys, single lookups). Use `make_reusable_protocol_address()` + `reset_protocol_address()` when iterating over multiple JIDs in a tight loop.

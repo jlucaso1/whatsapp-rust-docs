@@ -891,38 +891,29 @@ pub enum SocketError {
     Marshal(#[source] BinaryError),
 }
 
-pub enum EncryptSendError {
-    Crypto { error: anyhow::Error, ... },
-    Transport { error: anyhow::Error, ... },
-    Framing { error: FramingError, ... },
-    Join { error: JoinError, ... },
-    ChannelClosed { ... },
+pub enum EncryptSendErrorKind {
+    Crypto,
+    Framing,
+    Transport,
+    Join,
+    ChannelClosed,
     /// A previous frame failed at the transport; this connection's write
     /// keystream can no longer be extended safely. See "Send poisoning"
     /// below.
-    Poisoned { error: anyhow::Error },
+    Poisoned,
+}
+
+pub struct EncryptSendError {
+    pub kind: EncryptSendErrorKind,
+    pub source: anyhow::Error,
 }
 ```
 
-Every variant carries a `source()` — internally `EncryptSendError` is one struct with a `kind` and a single `source: anyhow::Error` field, not a distinct payload per variant. For `Crypto`/`Transport`/`Framing`/`Join`, that source is the real downstream error: `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source, and walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings. `Poisoned`'s source is different in kind: there is no downstream failure to wrap, since the poisoning is detected in-process rather than reported by a lower layer, so its source is a fixed explanatory message (`"noise sender disabled after a transport failure; reconnect to rekey"`) rather than something to downcast.
+`EncryptSendError` is one struct with a `kind` and a single `source: anyhow::Error` field, not a distinct payload per kind — there are no `plaintext_buf`/`out_buf` fields to recover. For `Crypto`/`Transport`/`Framing`/`Join`, `source` is the real downstream error: `Cipher` wraps a `NoiseError` (from `wacore::handshake`), which itself carries a typed `CryptoProviderError` source, and walking the chain with `std::error::Error::source()` lets callers downcast to the original AES-GCM, libsignal, or binary-protocol error without parsing strings. `Poisoned`'s source is different in kind: there is no downstream failure to wrap, since the poisoning is detected in-process rather than reported by a lower layer, so its source is a fixed explanatory message (`"noise sender disabled after a transport failure; reconnect to rekey"`) rather than something to downcast.
 
 `is_transport_unavailable()` returns `true` for `Transport`, `ChannelClosed`, **and** `Poisoned` — all three mean the same thing to a caller: stop retrying on this connection and reconnect.
 
-All variants return buffers for reuse:
-
-```rust
-impl EncryptSendError {
-    pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
-        match self {
-            Self::Crypto { plaintext_buf, out_buf, .. } => 
-                (plaintext_buf, out_buf),
-            Self::Transport { plaintext_buf, out_buf, .. } => 
-                (plaintext_buf, out_buf),
-            // ...
-        }
-    }
-}
-```
+Unlike an older version of this API, no variant returns buffers for reuse — there is no `into_buffers()` method. This matches the [Send API](#send-api) above: `encrypt_and_send` takes an owned `bytes::Bytes` and gives nothing back on either the success or the error path, so there is nothing for a caller to recover from a failed send.
 
 Location: `src/socket/error.rs`
 

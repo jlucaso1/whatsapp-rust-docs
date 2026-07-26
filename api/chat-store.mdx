@@ -72,11 +72,11 @@ fn record_outgoing(
 
 ### Outgoing timestamp reconciliation
 
-An outgoing row's timestamp starts as the local clock value passed to `record_outgoing`. When the server's positive message ack for that id arrives, the store replaces it with the ack's own `t` — the same clock inbound messages already use — so a reply that lands quickly no longer sorts above the message it's answering:
+An outgoing row's timestamp starts as the local clock value passed to `record_outgoing`. When the server's positive message ack for that id arrives with a timestamp, the store replaces it with the ack's own `t` — the same clock inbound messages already use — so a reply that lands quickly no longer sorts above the message it's answering. An ack that omits `t` leaves the row's timestamp untouched.
 
 - **Independent of status.** The timestamp fix applies whether or not a delivery/read receipt reached the writer first; an earlier receipt advancing the row's status doesn't suppress the correction.
-- **Reorders the thread and the chat list.** Because the row's timestamp changes, its position in [`messages()`](#querying) can move, and the chat list's `last_message_at` moves with it — unless a deleted message currently holds a newer activity time, in which case that time is kept and only `last_message_preview`/`last_message_kind` are refreshed to the newest surviving row.
-- **A nack never reconciles the timestamp.** `ack.error` being set means the send failed; the row keeps its optimistic local timestamp (status becomes `Error` instead).
+- **Reorders the thread and the chat list.** The row's new timestamp can change its position in [`messages()`](#querying). The chat list's `last_message_at` follows it too, but only when the reconciled row was already the chat's most recent activity. If some other message — deleted or not — is already newer than the corrected timestamp, `last_message_at` stays put and only `last_message_preview`/`last_message_kind` are recomputed from the newest surviving row.
+- **A nack never reconciles the timestamp.** `ack.error` being set means the send failed; the row keeps its optimistic local timestamp. As with [status transitions generally](#messagestatus), a nack only moves status to `Error` when the row is still `Pending` — a nack arriving after a delivery/read receipt changes neither the status nor the timestamp.
 - **A reused message id across chats is left alone.** If the ack can't be resolved to one chat (no usable `from`, and the id matches an outgoing row in more than one chat for this device) neither row's timestamp is touched, and the store logs a warning under the `ChatStore/Ack` target instead of guessing.
 
 ### Waiting for writes to land

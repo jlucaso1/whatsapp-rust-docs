@@ -66,7 +66,18 @@ fn record_outgoing(
 
 `record_outgoing` is synchronous — it only enqueues onto the writer channel and returns, it does not wait for the write to commit. The row starts at `MessageStatus::Pending` and is lifted by the server ack/receipts that follow. Because the enqueue happens on the same writer queue as inbound events, it cannot race the ack that immediately follows a send. Call [`flush()`](#waiting-for-writes-to-land) if you need to wait for the row to actually land before reading it back.
 
+`timestamp` is only the optimistic display time shown before the server responds. Once a positive message ack arrives with a server timestamp, the store overwrites the row's timestamp with that authoritative value and re-sorts the thread and the chat list accordingly — see [Outgoing timestamp reconciliation](#outgoing-timestamp-reconciliation).
+
 `chat` may be either of a 1:1 peer's identities (phone number or LID) — see [PN/LID identity aliasing](#pnlid-identity-aliasing) for how the store routes and reads across the two.
+
+### Outgoing timestamp reconciliation
+
+An outgoing row's timestamp starts as the local clock value passed to `record_outgoing`. When the server's positive message ack for that id arrives, the store replaces it with the ack's own `t` — the same clock inbound messages already use — so a reply that lands quickly no longer sorts above the message it's answering:
+
+- **Independent of status.** The timestamp fix applies whether or not a delivery/read receipt reached the writer first; an earlier receipt advancing the row's status doesn't suppress the correction.
+- **Reorders the thread and the chat list.** Because the row's timestamp changes, its position in [`messages()`](#querying) can move, and the chat list's `last_message_at` moves with it — unless a deleted message currently holds a newer activity time, in which case that time is kept and only `last_message_preview`/`last_message_kind` are refreshed to the newest surviving row.
+- **A nack never reconciles the timestamp.** `ack.error` being set means the send failed; the row keeps its optimistic local timestamp (status becomes `Error` instead).
+- **A reused message id across chats is left alone.** If the ack can't be resolved to one chat (no usable `from`, and the id matches an outgoing row in more than one chat for this device) neither row's timestamp is touched, and the store logs a warning under the `ChatStore/Ack` target instead of guessing.
 
 ### Waiting for writes to land
 
@@ -343,6 +354,7 @@ pub type Result<T> = std::result::Result<T, ChatStoreError>;
 ## Semantics worth knowing
 
 - **Monotonic status.** Per-message status and per-user group receipts only ever move forward; a late-arriving `delivered` can't downgrade a `read`.
+- **Outgoing timestamps converge on the server clock.** A positive message ack replaces the optimistic local timestamp set by [`record_outgoing`](#recording-outgoing-messages) with the server's, reordering the thread and chat list as needed — see [Outgoing timestamp reconciliation](#outgoing-timestamp-reconciliation).
 - **Monotonic read state.** Self-read state is tracked as a keyed cursor (watermark + boundary message id), so same-second siblings resolve deterministically and a stale replayed read/receipt can't resurrect an unread badge. A no-op read still clears a manual-unread marker.
 - **Offline-drain reordering is handled.** If a revoke or edit arrives before the message it targets (common when draining a backlog), the target is materialized as already-revoked/edited up front — the original content's later arrival can't resurrect revoked content or show pre-edit text, and never double-counts unread.
 - **History sync never clobbers live rows** (`ON CONFLICT DO NOTHING`). Live redeliveries and PDO recovery replace content in place instead — an `Undecryptable` placeholder becomes the real message under the same id once it's recovered.

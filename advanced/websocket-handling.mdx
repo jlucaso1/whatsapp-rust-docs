@@ -767,7 +767,7 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
                                 if is_critical(&node) {
                                     self.process_decrypted_node(node).await;
                                 } else {
-                                    self.runtime.spawn(/* ... */).detach();
+                                    self.runtime.spawn_detached(/* ... */);
                                 }
                             }
 

@@ -368,7 +368,7 @@ impl NoiseSocket {
 1. **Ordering guarantee**: Frames must be sent with sequential counters
 2. **Non-blocking**: Callers don't block on encryption or network I/O
 3. **Backpressure**: A bounded channel (8 jobs) backpressures producers instead of queuing unboundedly
-4. **Frame coalescing**: whatever is already queued when the task wakes gets encrypted into one buffer and written in a single `transport.send()` — see [Write Batching](#write-batching-frame-coalescing) below
+4. **Frame coalescing**: whatever is already queued when the task wakes gets encrypted into one buffer and written in a single `transport.send()` — see [Write batching](#write-batching-frame-coalescing) below
 
 Location: `src/socket/noise_socket.rs:81-117`
 
@@ -412,12 +412,13 @@ async fn sender_task(
 }
 ```
 
-Two ceilings bound a batch: `MAX_BATCH_FRAMES` (16) and `MAX_BATCH_WIRE_BYTES` (64 KiB). The byte ceiling is checked against the *next* frame's projected wire size **before** it is appended — a frame that would overflow is held over (`carry_over`) to open the next batch rather than pushing the current one past its bound. Dropping a held-over job (e.g. on shutdown) drops its response channel, which its caller observes as a closed sender: a held-over job can be lost, but it can never hang its caller.
+Two ceilings bound a batch: `MAX_BATCH_FRAMES` (16) and `MAX_BATCH_WIRE_BYTES` (64 KiB). The byte ceiling only stops a batch from *growing*: you check it against the *next* frame's projected wire size **before** appending, and hold a frame that would overflow over (`carry_over`) to open the next batch instead. A dropped held-over job (e.g. on shutdown) drops its response channel, which its caller observes as a closed sender — a held-over job can be lost, but it can never hang its caller.
 
-The whole batch shares the fate of its one `transport.send()` call:
+The ceiling does not shrink a single frame that is already too big. The first job of a batch is always encrypted and appended before either ceiling is checked, so a plaintext whose framed ciphertext alone exceeds 64 KiB (frames up to the 16 MB protocol limit are valid — see [Frame Format](#frame-format)) still goes out, alone, in a write larger than the ceiling. The ceiling governs *coalescing*, not the size of any one frame.
 
-- **A crypto or framing error** is detected before any byte reaches the wire and leaves the write counter untouched. Only the offending job's caller sees the error; every frame already encrypted into the buffer still goes out (the peer's counters must stay contiguous).
-- **A transport error** is ambiguous (the peer may have partially or fully received the write), so it poisons the sender and every waiter in the batch is told the send was lost. Since `EncryptSendError` wraps an `anyhow::Error` and isn't `Clone`, every waiter shares one `Arc<EncryptSendError>` (`SharedSendFailure`) rather than a re-worded copy, so the real cause reaches every caller.
+The whole batch shares the fate of its one `transport.send()` call. A crypto or framing error is detected before any byte reaches the wire. It leaves the write counter untouched. Only the offending job's caller sees the error — every frame already encrypted into the buffer still goes out, because the peer's counters must stay contiguous.
+
+A transport error is different: the peer may have partially or fully received the write, so you can't tell which frames landed. The sender poisons itself, and every waiter in the batch is told the send was lost. `EncryptSendError` wraps an `anyhow::Error`, which isn't `Clone`, so you can't hand each waiter its own copy of the real cause. Instead every waiter gets its own `EncryptSendError` (kind `Transport`) so `SendResult` stays `Result<(), EncryptSendError>` for every caller, and each one's `source` wraps the same shared `Arc<EncryptSendError>` via a small `SharedSendFailure` type — so all of them can still downcast to the one real cause instead of a re-worded copy.
 
 A batch that coalesces more than one frame logs at debug level (`noise: coalesced {n} frames into one {bytes}-byte write`) — the only externally visible sign that batching happened.
 
@@ -471,7 +472,7 @@ Location: `src/socket/noise_socket.rs:291-337`
   The 16KB threshold is chosen based on benchmarking. Smaller messages benefit from inline encryption (no thread spawning overhead), while larger messages benefit from parallel execution. The write counter is burned as soon as the framed ciphertext is committed to `out_buf` — at encrypt time, before the batch's single `transport.send()` — not when the write is confirmed, since a failed send says nothing about how many bytes the peer actually received.
 </Note>
 
-### Write Batching (Frame Coalescing)
+### Write batching (frame coalescing)
 
 `wacore/noise/src/framing.rs` splits the old `encode_frame_into` into two functions:
 
@@ -932,7 +933,7 @@ Both recovery paths are unrecoverable in-band, so the sender task instead poison
 
 `Crypto` and `Framing` errors do **not** poison the sender: both are detected before any byte reaches the wire, so the counter and keystream are untouched and the connection stays usable for the next send.
 
-**Interaction with write batching:** since the sender coalesces several queued frames into one write (see [Write Batching](#write-batching-frame-coalescing)), a poisoning transport error fails every frame in that batch, not just one — they share a single `Arc<EncryptSendError>` rather than each getting a separately-worded copy, since the underlying `anyhow::Error` isn't `Clone`. A crypto/framing error, by contrast, only fails the one job that produced it; every frame already folded into the buffer ahead of it still goes out.
+**Interaction with write batching:** since the sender coalesces several queued frames into one write (see [Write batching](#write-batching-frame-coalescing)), a poisoning transport error fails every frame in that batch, not just one — each waiter gets its own `EncryptSendError` whose `source` downcasts to the same shared cause (see above), rather than a separately-worded copy. A crypto/framing error, by contrast, only fails the one job that produced it; every frame already folded into the buffer ahead of it still goes out.
 
 ### Stream error handling
 
@@ -1115,9 +1116,9 @@ let out_buf = Vec::with_capacity(buffer_capacity);
 
 Location: `src/socket/noise_socket.rs:373-407` (tests verify this formula)
 
-### Write Batching
+### Write batching
 
-The sender task coalesces whatever send jobs are already queued (never blocking to wait for more) into one encrypted buffer and issues a single `transport.send()` for the batch, capped at 16 frames or 64 KiB. See [Write Batching (Frame Coalescing)](#write-batching-frame-coalescing) under NoiseSocket for the mechanics. Measured against a 120k-message/12k-per-second pingpong harness, this cut write syscalls per message by ~8.7% and allocator calls by ~0.76%; CPU impact was not statistically significant in that workload. The gain scales with how many independent producers (replies, delivery receipts, stanza acks) happen to queue within the same scheduler tick — a lone frame is written exactly as before.
+The sender task coalesces whatever send jobs are already queued (never blocking to wait for more) into one encrypted buffer and issues a single `transport.send()` for the batch. Coalescing stops at 16 frames or 64 KiB, whichever comes first — except a single frame already larger than 64 KiB, which still goes out alone rather than being truncated. See [Write batching (frame coalescing)](#write-batching-frame-coalescing) under NoiseSocket for the mechanics. Measured against a 120k-message/12k-per-second pingpong harness, this cut write syscalls per message by ~8.7% and allocator calls by ~0.76%; CPU impact was not statistically significant in that workload. The gain scales with how many independent producers (replies, delivery receipts, stanza acks) happen to queue within the same scheduler tick — a lone frame is written exactly as before.
 
 ### SIMD Encryption
 

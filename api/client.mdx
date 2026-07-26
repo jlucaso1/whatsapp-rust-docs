@@ -2018,6 +2018,7 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `recent_messages` | `CollectionStats` | Recent message dedup cache |
 | `sender_key_device_cache` | `CollectionStats` | Per-group sender key device tracking cache |
 | `group_devices_memo` | `CollectionStats` | Resolved group-devices memoization cache |
+| `dm_devices_memo` | `CollectionStats` | Resolved per-recipient DM-devices memoization cache (recipient + own-companion devices, partitioned, with their phash) |
 | `message_retry_counts` | `u64` | Message retry counter cache (count only) |
 | `undecryptable_dispatched` | `u64` | Undecryptable-message dedup cache (count only) |
 | `pdo_pending_requests` | `u64` | PDO pending request cache (count only) |

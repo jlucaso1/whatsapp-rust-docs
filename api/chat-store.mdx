@@ -261,7 +261,7 @@ async fn search_messages_in_chat(
 ) -> Result<Vec<StoredMessage>>;
 ```
 
-Best match first. The query is treated as plain whitespace-separated words — each is turned into a quoted prefix term, so FTS5 operator syntax in user input can't reach the query parser. An empty or whitespace-only query returns `ChatStoreError::InvalidSearchQuery`.
+Best match first, when every token in the query is at least three characters — see below. The query is treated as plain whitespace-separated words — each is turned into a quoted prefix term, so FTS5 operator syntax in user input can't reach the query parser. An empty or whitespace-only query returns `ChatStoreError::InvalidSearchQuery`.
 
 `search_messages_in_chat` is the same search restricted to one chat. Scoping happens inside the FTS join rather than filtering a global result afterwards, so a chat that ranks sparsely in the whole store still returns its hits. `chat` accepts either of a 1:1 peer's identities (phone number or LID) — see [PN/LID identity aliasing](#pnlid-identity-aliasing).
 

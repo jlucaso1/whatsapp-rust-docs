@@ -517,7 +517,7 @@ pub async fn encrypt_and_send(&self, plaintext: bytes::Bytes) -> SendResult {
 **`encrypt_and_send` split into enqueue and await halves ([#1139](https://github.com/oxidezap/whatsapp-rust/pull/1139)).** `encrypt_and_send` is unchanged from a caller's perspective — it's now just `enqueue_send` immediately followed by `await_send` — but the split lets a multi-frame caller enqueue every frame before awaiting any of them, which is what [burst sends](#burst-sends) below need to reach the sender task queued together instead of one completion apart.
 </Note>
 
-Location: `src/socket/noise_socket.rs:339-380`
+Location: `src/socket/noise_socket.rs:416-460`
 
 ### Burst sends
 
@@ -556,7 +556,7 @@ pub fn decrypt_frame(&self, mut ciphertext: BytesMut) -> Result<BytesMut> {
 
 Unaffected by write batching: coalescing only changes how outbound frames are packed into a write, not how inbound frames are decoded off the wire (`FrameDecoder`, covered below, already loops multiple frames out of one buffered chunk).
 
-Location: `src/socket/noise_socket.rs:362-379`
+Location: `src/socket/noise_socket.rs:462-474`
 
 ### Cleanup
 

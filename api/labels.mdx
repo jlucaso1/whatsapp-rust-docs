@@ -158,7 +158,7 @@ App state sync requires the relevant encryption keys, which arrive during initia
 </Note>
 
 <Note>
-`create_label`, `delete_label`, `add_chat_label`, and `remove_chat_label` are thin wrappers over the same app-state send path as [chat actions](/api/chat-actions#app-state-sync), so they share its conflict-retry behavior (as of PR [#1158](https://github.com/oxidezap/whatsapp-rust/pull/1158)): a call that loses a version race with another linked device is no longer silently dropped. The client applies the winning patches, rebuilds the mutation, and resends — up to 5 attempts — before returning `Err`. See [Chat actions — App state sync](/api/chat-actions#app-state-sync) for the full explanation.
+`create_label`, `delete_label`, `add_chat_label`, and `remove_chat_label` are thin wrappers over the same app-state send path as [chat actions](/api/chat-actions#app-state-sync). They share its conflict-retry behavior, added in PR [#1158](https://github.com/oxidezap/whatsapp-rust/pull/1158). A call that loses a version race with another linked device is no longer silently dropped. The client applies the winning patches, rebuilds the mutation, and resends. It retries up to 5 times before returning `Err`. See [Chat actions — App state sync](/api/chat-actions#app-state-sync) for the full explanation.
 </Note>
 
 ## Error handling

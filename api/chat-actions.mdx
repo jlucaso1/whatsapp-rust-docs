@@ -549,6 +549,10 @@ All chat actions are synced across devices using WhatsApp's app state synchroniz
 App state sync requires encryption keys to be available. These are typically obtained during initial sync after authentication. Actions may fail if called immediately after pairing before sync completes.
 </Note>
 
+<Note>
+As of PR [#1158](https://github.com/oxidezap/whatsapp-rust/pull/1158), losing an app-state version race no longer silently drops your mutation. A version race happens when another linked device already advanced the same collection. The server now answers with the winning patches instead of an error. The client applies them, rebuilds your mutation on the new base, and resends. It retries up to 5 times, matching WhatsApp Web's own cap. Previously, the call returned `Ok(())` even though the conflict response was ignored and the mutation never took effect. This conflict-resolution path only returns `Err` after those 5 attempts are exhausted, or if the server rejects the patch outright (not a version conflict). The other failure causes in [Error handling](#error-handling) below — invalid input, missing sync keys, network errors — are unrelated to this change and still apply as before.
+</Note>
+
 ## Events
 
 Chat action changes are emitted as events that you can handle:
@@ -607,7 +611,7 @@ pub enum AppStateError {
 
 You'll encounter these most often:
 - `InvalidRequest` — you passed an invalid timestamp to `mute_chat_until` or omitted `participant_jid` for a group operation
-- `Internal` — no app state sync key is available yet (sync not complete), or a network error occurred
+- `Internal` — no app state sync key is available yet (sync not complete), a network error occurred, or (as of PR #1158) an app-state version conflict with another device could not be resolved after 5 rebuild-and-resend attempts
 
 ```rust
 use whatsapp_rust::AppStateError;

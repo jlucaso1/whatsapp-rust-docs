@@ -157,9 +157,15 @@ use wacore::types::events::Event;
 App state sync requires the relevant encryption keys, which arrive during initial sync after pairing. Outbound label calls may fail if invoked immediately after pairing before sync completes.
 </Note>
 
+<Note>
+`create_label`, `delete_label`, `add_chat_label`, and `remove_chat_label` are thin wrappers over the same app-state send path as [chat actions](/api/chat-actions#app-state-sync). They share its conflict-retry behavior, added in PR [#1158](https://github.com/oxidezap/whatsapp-rust/pull/1158). A call that loses a version race with another linked device is no longer silently dropped. The client applies the winning patches, rebuilds the mutation, and resends. It retries up to 5 times before returning `Err`. See [Chat actions — App state sync](/api/chat-actions#app-state-sync) for the full explanation.
+</Note>
+
 ## Error handling
 
 All methods return `Result<(), AppStateError>`. If you pass an empty `label_id` (or an empty `name` to `create_label`), the call fails immediately with `AppStateError::InvalidRequest` before any network work is done.
+
+A call can also return `AppStateError::Internal` if no app state sync key is available yet, a network error occurred, or an app-state version conflict with another device could not be resolved after 5 rebuild-and-resend attempts (see [App state sync](#app-state-sync) above).
 
 ```rust
 use whatsapp_rust::AppStateError;

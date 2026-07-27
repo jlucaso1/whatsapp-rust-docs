@@ -579,34 +579,38 @@ Location: `wacore/src/framing/mod.rs:10-30`
 
 ### Frame Decoder
 
-`FrameDecoder` (in `wacore/noise/src/framing.rs`) accumulates inbound bytes and splits out complete frames. It has two feed methods:
-
-- **`feed(&[u8])`** — borrow path; always copies into the internal `BytesMut` staging buffer. Used during the handshake and in tests.
-- **`feed_bytes(Bytes)`** — owned path; adopts the payload's allocation without copying in steady state (buffer empty + sole reference). Falls back to copying when the buffer has a partial frame or the payload is shared (refcount > 1).
+`FrameDecoder` (in `wacore/noise/src/framing.rs`) keeps one long-lived accumulation `BytesMut` and splits complete frames out of it — the shape `tokio_util::codec::Decoder` uses. Every inbound read goes through a single `feed(&[u8])`; there is no owned/borrowed split.
 
 ```rust
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
+
+const CHUNK_SIZE: usize = 1024;
+const MAX_IDLE_CAPACITY: usize = 64 * 1024;
+const MAX_EAGER_RESERVE: usize = 64 * 1024;
 
 pub struct FrameDecoder {
     buffer: BytesMut,
+    /// Whether the buffer has ever grown past `MAX_IDLE_CAPACITY`.
+    grew_oversized: bool,
 }
 
 impl FrameDecoder {
-    /// Borrow path — used during the handshake and by existing tests.
+    pub fn new() -> Self {
+        Self {
+            buffer: BytesMut::with_capacity(CHUNK_SIZE),
+            grew_oversized: false,
+        }
+    }
+
     pub fn feed(&mut self, data: &[u8]) {
+        self.reserve_for(data.len());
         self.buffer.extend_from_slice(data);
     }
 
-    /// Owned path — adopts the payload's allocation zero-copy in steady state
-    /// (buffer empty + sole reference). Falls back to `feed` otherwise.
-    pub fn feed_bytes(&mut self, data: Bytes) {
-        if self.buffer.is_empty() {
-            match data.try_into_mut() {
-                Ok(owned) => self.buffer = owned,
-                Err(shared) => self.buffer.extend_from_slice(&shared),
-            }
-        } else {
-            self.buffer.extend_from_slice(&data);
+    fn reserve_for(&mut self, incoming: usize) {
+        if self.buffer.capacity() - self.buffer.len() < incoming {
+            self.buffer.reserve(incoming.max(CHUNK_SIZE));
+            self.grew_oversized |= self.buffer.capacity() > MAX_IDLE_CAPACITY;
         }
     }
 
@@ -615,23 +619,42 @@ impl FrameDecoder {
             return None;
         }
 
-        let len = (u32::from(self.buffer[0]) << 16
-            | u32::from(self.buffer[1]) << 8
-            | u32::from(self.buffer[2])) as usize;
+        let frame_len = ((self.buffer[0] as usize) << 16)
+            | ((self.buffer[1] as usize) << 8)
+            | (self.buffer[2] as usize);
 
-        if self.buffer.len() < FRAME_LENGTH_SIZE + len {
+        if self.buffer.len() < FRAME_LENGTH_SIZE + frame_len {
+            // Size the buffer ahead for the rest of a large frame instead of
+            // growing geometrically across the reads that carry it.
+            let missing = FRAME_LENGTH_SIZE + frame_len - self.buffer.len();
+            self.reserve_for(missing.min(MAX_EAGER_RESERVE));
             return None;
         }
 
-        let _ = self.buffer.split_to(FRAME_LENGTH_SIZE);
-        Some(self.buffer.split_to(len))
+        self.buffer.advance(FRAME_LENGTH_SIZE);
+        let frame_data = self.buffer.split_to(frame_len);
+
+        // Copy a short residue into a fresh chunk so an oversized allocation
+        // doesn't get pinned by a few leftover bytes of the next frame.
+        if (self.grew_oversized || self.buffer.capacity() > MAX_IDLE_CAPACITY)
+            && self.buffer.len() <= CHUNK_SIZE
+        {
+            let mut fresh = BytesMut::with_capacity(CHUNK_SIZE);
+            fresh.extend_from_slice(&self.buffer);
+            self.buffer = fresh;
+            self.grew_oversized = false;
+        }
+
+        Some(frame_data)
     }
 }
 ```
 
 Location: `wacore/noise/src/framing.rs`
 
-**Steady-state zero-copy guarantee:** because the WebSocket transport delivers each message as its own `Bytes`, in steady state the staging buffer is empty when `feed_bytes` is called and the payload is the sole reference. `try_into_mut` succeeds, the bytes are adopted wholesale, and the decoded frame's slice points directly into the original WebSocket allocation at offset `FRAME_LENGTH_SIZE` — verified by pointer identity in `test_feed_bytes_adopts_unique_payload_without_copy`.
+**Why an accumulation buffer instead of adopting each payload.** An earlier version had `feed_bytes(Bytes)`, an owned path meant to adopt the transport's payload allocation zero-copy. It used `Bytes::try_into_mut` to check whether the decoder's buffer was empty and the payload had no other references. In practice that fast path never fired. `tokio-websockets` builds every payload via `BytesMut::split_to` on its own read buffer, which leaves the payload sharing storage with that read buffer. A shared payload always fails the `try_into_mut` uniqueness check, so it fell back to copying anyway. The steady-state branch made this worse: it also donated the decoder's whole buffer downstream via `mem::take`, forcing a fresh allocation on the very next read.
+
+`feed_bytes` was removed rather than fixed. The accumulation-buffer design amortizes the buffer's allocation over every frame that fits in a `CHUNK_SIZE` (1 KiB) chunk, instead of allocating per read. A buffer produced by `split_to` already uses shared, reference-counted storage, so `BytesMut::freeze()` further down the receive path (in-place AEAD decryption) becomes a pointer move rather than a fresh allocation. `MAX_IDLE_CAPACITY` (64 KiB) bounds how much capacity a drained buffer is allowed to keep. `MAX_EAGER_RESERVE` (64 KiB) caps how far the decoder will grow ahead of an announced-but-not-yet-received frame. This cap matters because the 3-byte length prefix is only the peer's claim, not evidence of data actually sent — without it, a hostile peer could pin an arbitrary allocation by announcing a large frame and sending almost none of it.
 
 ## Transport Abstraction
 
@@ -649,8 +672,8 @@ pub trait Transport: Send + Sync {
 pub enum TransportEvent {
     Connected,
     Disconnected,
-    /// Inbound payload. Carrying `Bytes` (rather than `Vec<u8>`) lets the
-    /// receive path adopt the allocation zero-copy via `feed_bytes`.
+    /// Inbound payload, fed into the frame decoder's accumulation buffer
+    /// and dropped immediately after — see [Frame Decoder](#frame-decoder).
     DataReceived(Bytes),
 }
 ```
@@ -756,9 +779,12 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
                     Ok(TransportEvent::DataReceived(data)) => {
                         // Update dead-socket timer on arrival
                         self.last_data_received_ms.store(now_millis(), Ordering::Relaxed);
-                        // Adopt the payload zero-copy when it is the sole reference
-                        // and no partial frame is pending (steady state).
-                        frame_decoder.feed_bytes(data);
+                        // Dropped before any await below: `data` is a view into the
+                        // websocket's shared read buffer, so holding it while a node
+                        // is processed would keep that allocation alive alongside
+                        // the decoder's own copy of the same bytes.
+                        frame_decoder.feed(&data);
+                        drop(data);
 
                         let mut frames_in_batch: u32 = 0;
                         while let Some(encrypted_frame) = frame_decoder.decode_frame() {
@@ -1145,19 +1171,18 @@ marshal_to_vec(&node, &mut buf)?;
 socket.send(buf).await?;
 ```
 
-**Receive path** — `feed_bytes` adopts the WebSocket payload's allocation in steady state so inbound bytes cross the framing layer without a copy:
+**Receive path** — every inbound payload is copied once into `FrameDecoder`'s accumulation buffer, but that buffer's allocation is amortized over every frame that fits in a chunk rather than paid per read:
 
 ```rust
-// The transport delivers an owned Bytes; feed_bytes adopts it when
-// the staging buffer is empty and the payload has no other references.
-frame_decoder.feed_bytes(data);
+frame_decoder.feed(&data);
+drop(data); // release the transport's view before any await below
 
-// Each decoded frame then slices directly into the original
-// WebSocket allocation — no intermediate staging copy.
+// Each frame is split out of the shared accumulation buffer, so the
+// downstream freeze() is a pointer move rather than a fresh allocation.
 while let Some(frame) = frame_decoder.decode_frame() { /* ... */ }
 ```
 
-This eliminates one full `memcpy` of every inbound byte in the common case. Shared payloads and partial-frame continuations fall back to copying automatically.
+See [Frame Decoder](#frame-decoder) for why this amortized-allocation design replaced an earlier per-payload zero-copy adoption path (`feed_bytes`) that never actually avoided a copy in practice.
 
 ## Testing
 

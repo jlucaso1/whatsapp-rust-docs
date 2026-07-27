@@ -1940,7 +1940,7 @@ for device_jid in devices {
 }
 ```
 
-Since [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131), a fresh `ProtocolAddress` for a typical WhatsApp address (up to 47 bytes) is already allocation-free — inline storage covers it. Reuse still matters for addresses that spill to the heap: rewriting a spilled `ProtocolAddress` keeps its existing `String` allocation instead of dropping and reallocating one per device, and for a group with 100 participant devices sharing a reused buffer, that saves up to 100 heap allocations on the send path.
+Since [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131), a fresh `ProtocolAddress` for a typical WhatsApp address (up to 47 bytes) is already allocation-free — inline storage covers it. Reuse still matters for addresses that spill to the heap: the first spill on a reused buffer still allocates its backing `String`, but every reset after that keeps the existing allocation instead of dropping and reallocating one per device — for a group with 100 participant devices past the inline limit sharing a reused buffer, that saves up to 99 heap allocations on the send path.
 
 <Note>
   Use `to_protocol_address()` for one-shot address construction (e.g., cache keys, single lookups). Use `make_reusable_protocol_address()` + `reset_protocol_address()` when iterating over multiple JIDs in a tight loop.

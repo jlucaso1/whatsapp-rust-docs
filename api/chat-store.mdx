@@ -9,7 +9,7 @@ description: Optional SQLite-backed chat and message history store
 
 - **Event-sourced.** Register `chat_store.handler()` on the client; a single write-behind writer task applies batched events in one transaction per drained batch, preserving event order. Covers messages, receipts, server acks/nacks, edits, revokes, reactions, history sync, app-state chat updates (pin/mute/archive/read/star/delete/clear), push names, and contact actions. Sends and locally-originated edits/revokes/reactions — WhatsApp doesn't fan these back to the sending device — are recorded explicitly; see [Recording outgoing messages](#recording-outgoing-messages) and [Recording local amendments](#recording-local-amendments).
 - **Proto as source of truth.** Each message row stores the encoded `wa::Message` plus denormalized columns (`kind`, `text`, `status`). New proto fields never require a schema migration.
-- **Query + invalidation, not a second cache.** Reads are async queries (keyset pagination for message pages — stable under concurrent inserts, never `OFFSET`); consumers subscribe to a [`StoreChange`](#storechange) broadcast and re-query what they display.
+- **Query + invalidation, not a second cache.** Reads are async queries (keyset pagination for message and chat-list pages — stable under concurrent inserts, never `OFFSET`); consumers subscribe to a [`StoreChange`](#storechange) broadcast and re-query what they display.
 - **Shares the device store's database file.** Writes go through [`SqliteStore::shared()`](/api/store#sharing-the-pool-with-sibling-crates), so the chat tables live in the same file as device/session state without a second connection pool contending for the WAL lock. Backing up the full session stays "copy one file". Multi-account ready (`device_id` on every row).
 
 <Note>
@@ -50,6 +50,16 @@ client.register_handler(chat_store.handler());
 async fn new(store: &SqliteStore) -> Result<Arc<Self>>;
 ```
 
+### Skipping batches your durability hook already committed
+
+If the client also has an [inbound durability hook](/advanced/inbound-durability) registered, and that hook persists into this same `ChatStore`, the store materializes each batch twice by default — once from the hook's write, once from its own `handler()`. A batch's `hook_committed` flag only says *a* hook committed it, not that it committed it *here*, so the store never infers this on its own — opt in explicitly:
+
+```rust
+chat_store.skip_hook_committed_batches(true);
+```
+
+Off by default. Turn it on only when your hook feeds this exact store — a hook that persists elsewhere (its own database, a queue, an audit log) still needs this store to materialize every batch, and skipping on the marker alone would silently drop acknowledged messages from history, previews, and subscriptions. Takes effect on the next event; handlers already handed out observe it.
+
 ### Recording outgoing messages
 
 Incoming events (messages, receipts, acks) are captured automatically once the handler is registered. Messages the client itself sends need to be recorded explicitly, since sends don't go through the inbound event pipeline:
@@ -78,6 +88,10 @@ An outgoing row's timestamp starts as the local clock value passed to `record_ou
 - **Reorders the thread and the chat list.** The row's new timestamp can change its position in [`messages()`](#querying). The chat list's `last_message_at` follows it too, but only when the reconciled row was already the chat's most recent activity. If some other message — deleted or not — is already newer than the corrected timestamp, `last_message_at` stays put and only `last_message_preview`/`last_message_kind` are recomputed from the newest surviving row.
 - **A nack never reconciles the timestamp.** `ack.error` being set means the send failed; the row keeps its optimistic local timestamp. As with [status transitions generally](#messagestatus), a nack only moves status to `Error` when the row is still `Pending` — a nack arriving after a delivery/read receipt changes neither the status nor the timestamp.
 - **A reused message id across chats is left alone.** If the ack can't be resolved to one chat (no usable `from`, and the id matches an outgoing row in more than one chat for this device) neither row's timestamp is touched, and the store logs a warning under the `ChatStore/Ack` target instead of guessing.
+
+<Note>
+An ack for a message row that hasn't landed yet is no longer silently dropped: it waits in a bounded, TTL'd queue and re-applies as soon as the matching `record_outgoing`/inbound insert commits, correcting the row's status and timestamp retroactively. Every discarded (expired or overflowed) ack still logs a warning under the `ChatStore/Ack` target, so a loss is never silent.
+</Note>
 
 ### Recording local amendments
 
@@ -158,7 +172,22 @@ All query methods are `async` and run on the shared pool's blocking thread pool.
 async fn chats(&self, include_archived: bool, limit: i64) -> Result<Vec<ChatEntry>>;
 ```
 
-Chat list ordered pinned-first, then by most recent activity. Not cursor-paginated — pass the page size you need.
+Chat list ordered pinned-first, then by most recent activity. Equivalent to [`chats_page`](#querying) with no cursor — a convenience for a caller that only ever wants the first page.
+
+```rust
+async fn chats_page(
+    &self,
+    include_archived: bool,
+    after: Option<ChatCursor>,
+    limit: i64,
+) -> Result<Vec<ChatEntry>>;
+
+async fn chat(&self, jid: &Jid) -> Result<Option<ChatEntry>>;
+```
+
+`chats_page` is **keyset-paginated**: pass the [`ChatCursor`](#chatcursor) of the last chat you already hold (`ChatCursor::from(&chat_entry)`) to fetch the page after it. The list is two ordered runs concatenated — pinned chats by pin time, then everything else by activity — so both runs stay a plain indexed range scan even across a page boundary, rather than the full scan plus temp B-tree a single combined sort would need.
+
+`chat` is the point lookup the primary key always supported — resolving an addressed JID back to its store key, or folding one chat's unread count, without paging through the whole list. It accepts either of a 1:1 peer's identities the same way [`messages`](#querying) does, and never synthesizes a merged row across a still-unreconciled PN/LID pair: while a pair is split, sticky metadata can sit on the side this doesn't return, exactly as `chats`/`chats_page` list such a pair as two entries. [`reconcile_chat`](#pnlid-identity-aliasing) is what unions them.
 
 ```rust
 async fn messages(
@@ -252,6 +281,20 @@ pub struct ChatEntry {
 }
 ```
 
+### ChatCursor
+
+```rust
+pub struct ChatCursor {
+    pub pinned_at_ms: Option<i64>,
+    pub last_message_ts: i64,
+    pub jid: String,
+}
+
+impl From<&ChatEntry> for ChatCursor { /* ... */ }
+```
+
+The keyset-pagination cursor used by [`chats_page()`](#querying). `pinned_at_ms` is `Some` when the cursor sits in the pinned run and `None` for the activity run — the chat list is two ordered runs concatenated rather than one column SQLite can sort on directly, so the cursor records which run it's in as well as where in that run. Build one with `ChatCursor::from(&chat_entry)`.
+
 ### StoredMessage
 
 ```rust
@@ -268,6 +311,7 @@ pub struct StoredMessage {
     pub starred: bool,
     pub edited_at: Option<DateTime<Utc>>,
     pub revoked: bool,
+    pub seq: i64, // arrival order (SQLite rowid) — see MessageCursor
 }
 ```
 
@@ -276,13 +320,17 @@ pub struct StoredMessage {
 ```rust
 pub struct MessageCursor {
     pub timestamp_ms: i64,
-    pub msg_id: String,
+    pub seq: i64,
 }
 
 impl From<&StoredMessage> for MessageCursor { /* ... */ }
 ```
 
-The keyset-pagination cursor used by [`messages()`](#querying).
+The keyset-pagination cursor used by [`messages()`](#querying). `seq` is the row's SQLite `rowid` — the order the socket delivered it — not a value you construct by hand.
+
+<Note>
+**Breaking change:** `MessageCursor.msg_id: String` is now `seq: i64`. The previous tiebreak sorted same-second messages (the server's timestamp is whole seconds, so a live back-and-forth often lands several on one value) by comparing message ids, which put a peer's message above a same-second reply most of the time — outgoing ids carry a fixed generated prefix that isn't comparable to a peer's. Same-second messages now resolve in arrival order instead. Always build a cursor with `MessageCursor::from(&stored_message)` rather than constructing the fields directly, and this change needs no code update on your side.
+</Note>
 
 ### MessageKind
 
@@ -404,3 +452,4 @@ pub type Result<T> = std::result::Result<T, ChatStoreError>;
 - [Storage Traits](/api/store) - `SqliteStore` and the underlying backend traits
 - [Custom Backends](/guides/custom-backends) - Implementing your own storage backend
 - [Events](/concepts/events) - The event system `ChatStore`'s handler listens to
+- [Inbound Durability Hook](/advanced/inbound-durability) - Combine with `skip_hook_committed_batches` to avoid double-materializing a hook-fed batch

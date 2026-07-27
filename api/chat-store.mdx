@@ -159,7 +159,7 @@ Reconcile a 1:1 peer's PN- and LID-keyed rows into a single thread on demand. Id
 A peer's linked device (WhatsApp Web/Desktop) addresses traffic under a device-suffixed JID — `10203040506070:48@lid` rather than the peer's bare `10203040506070@lid`. Every row the store keys on identity (chats, contacts, message receipts) uses the bare form, so a companion device's traffic is normalized rather than filed under a key nothing else reads:
 
 - **Receipts from a companion device count.** Multi-device delivery/read semantics are any-device — WhatsApp emits the receipt once, from whichever of the peer's devices acted first, and never re-sends it from the primary — so `messages.status` advances the same whether the ack came from the peer's phone or their linked device.
-- **One row per participant per state, not per device.** A group member reading on their phone and again on Web still produces a single `Read` row in [`receipts()`](#querying), not two. Each state the participant reaches gets its own row instead of overwriting the previous one.
+- **One row per participant per state, not per device.** A group member reading on their phone and again on Web still produces a single `Read` row in [`receipts()`](#querying), not two. Each reported state gets its own row instead of overwriting the previous one.
 - **[`contact()`](#querying) resolves either form.** A caller holding a message's `sender` (which keeps its device by design) finds the same [`ContactEntry`](#contactentry) as a caller holding the peer's bare identity — both look up the same row.
 
 This is unrelated to [PN/LID identity aliasing](#pnlid-identity-aliasing) above: it normalizes the device suffix on one identity, not which of the two identities a thread is keyed by.
@@ -210,10 +210,10 @@ async fn contact(&self, jid: &Jid) -> Result<Option<ContactEntry>>;
 async fn unread_total(&self) -> Result<i64>;
 ```
 
-`message`, `reactions` and `receipts` accept either of a 1:1 peer's identities the same way `messages` does. `receipts` returns one row per participant per state they've reached, not one row per participant. `Delivered`, `Read`, and `Played` are each recorded as a separate row. Each row's `timestamp` is the instant that state was first reported. `unread_total` sums only positive unread counters, ignoring the `-1` manually-marked-unread sentinel on individual chats.
+`message`, `reactions` and `receipts` accept either of a 1:1 peer's identities the same way `messages` does. `receipts` returns one row per participant per state their receipts have reported, not one row per participant. `Delivered`, `Read`, and `Played` are each recorded as a separate row when reported — a `Read` receipt with no prior `Delivered` receipt produces only a `Read` row, not both. Each row's `timestamp` is the instant that state was first reported. `unread_total` sums only positive unread counters, ignoring the `-1` manually-marked-unread sentinel on individual chats.
 
 <Note>
-**Breaking change:** `receipts` used to return rows only for group chats. A 1:1's delivery/read state lived solely in `StoredMessage.status`, with no per-state timestamp available. It now records the same per-state rows for 1:1 chats too, so a caller can render "Delivered hh:mm" above "Read hh:mm" the way WA Web's contact message-info drawer does. A caller that assumed at most one row per participant should now expect up to three (`Delivered`, `Read`, `Played`), oldest state first.
+**Breaking change:** `receipts` used to return rows only for group chats. A 1:1's delivery/read state lived solely in `StoredMessage.status`, with no per-state timestamp available. It now records the same per-state rows for 1:1 chats too, so a caller can render "Delivered hh:mm" above "Read hh:mm" the way WA Web's contact message-info drawer does. A caller that assumed at most one row per participant should now expect up to three: `Delivered`, `Read`, and `Played`. They come back oldest state first.
 </Note>
 
 ```rust
@@ -397,7 +397,7 @@ pub struct ReceiptEntry {
 }
 ```
 
-A message can carry several `ReceiptEntry` rows for the same `user_jid` — one per state (`Delivered`, `Read`, `Played`) that peer's receipts have reached. Each row's `timestamp` is the earliest instant that state was reported. This applies to both 1:1 and group chats; see [Querying](#querying) and [Companion-device identities](#companion-device-identities).
+A message can carry several `ReceiptEntry` rows for the same `user_jid` — one per state (`Delivered`, `Read`, `Played`) that peer's receipts have reported. A state with no matching receipt has no row; states aren't backfilled just because a later one arrived. Each row's `timestamp` is the earliest instant that state was reported. This applies to both 1:1 and group chats; see [Querying](#querying) and [Companion-device identities](#companion-device-identities).
 
 ### ContactEntry
 

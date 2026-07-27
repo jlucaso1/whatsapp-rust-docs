@@ -484,7 +484,10 @@ This is what makes coalescing possible: `out_buf` accumulates every already-queu
 ### Send API
 
 ```rust
-pub async fn encrypt_and_send(&self, plaintext: bytes::Bytes) -> SendResult {
+pub(crate) async fn enqueue_send(
+    &self,
+    plaintext: bytes::Bytes,
+) -> std::result::Result<oneshot::Receiver<SendResult>, EncryptSendError> {
     let (response_tx, response_rx) = oneshot::channel();
     let job = SendJob { plaintext, response_tx };
 
@@ -492,16 +495,43 @@ pub async fn encrypt_and_send(&self, plaintext: bytes::Bytes) -> SendResult {
         return Err(EncryptSendError::channel_closed());
     }
 
-    match response_rx.await {
+    Ok(response_rx)
+}
+
+pub(crate) async fn await_send(receiver: oneshot::Receiver<SendResult>) -> SendResult {
+    match receiver.await {
         Ok(result) => result,
         Err(_) => Err(EncryptSendError::channel_closed()),
     }
+}
+
+pub async fn encrypt_and_send(&self, plaintext: bytes::Bytes) -> SendResult {
+    let receiver = self.enqueue_send(plaintext).await?;
+    Self::await_send(receiver).await
 }
 ```
 
 `plaintext` is a `bytes::Bytes`, and `SendResult = Result<(), EncryptSendError>` — there is no buffer round-trip; the caller doesn't get anything back to reuse. A caller has no way to tell from this API alone whether its frame was written alone or coalesced into a batch with others queued at the same time.
 
-Location: `src/socket/noise_socket.rs:339-360`
+<Note>
+**`encrypt_and_send` split into enqueue and await halves ([#1139](https://github.com/oxidezap/whatsapp-rust/pull/1139)).** `encrypt_and_send` is unchanged from a caller's perspective — it's now just `enqueue_send` immediately followed by `await_send` — but the split lets a multi-frame caller enqueue every frame before awaiting any of them, which is what [burst sends](#burst-sends) below need to reach the sender task queued together instead of one completion apart.
+</Note>
+
+Location: `src/socket/noise_socket.rs:339-380`
+
+### Burst sends
+
+`Client::send_raw_bytes_burst` (`src/client/messaging.rs`) sends several pre-marshaled stanzas as one burst and returns a result per stanza in the same order, for the two callers — the ack worker and the receipt worker — that already have more than one stanza ready at once. It exists because a worker that awaits each `encrypt_and_send` before starting the next never has two frames queued at the same time, so the coalescing described above never fires for it: batching only helps a caller that hands over the whole burst up front.
+
+A single-frame burst — the common case — is just `encrypt_and_send`. A multi-frame burst enqueues every frame via `enqueue_send` before awaiting any of them, holding the returned receivers in a `SmallVec<[_; MAX_INLINE_BURST]>` (`MAX_INLINE_BURST` is 4, matching the ack and receipt workers' own burst caps, `MAX_ACK_BURST` and `MAX_RECEIPT_BURST`) so a real burst never spills to the heap. `results` is a caller-owned, reused `Vec` rather than a return value, and `frames` is always fully drained — both retain their allocation across calls instead of being rebuilt per send.
+
+<Note>
+**Before [#1139](https://github.com/oxidezap/whatsapp-rust/pull/1139), a multi-frame burst allocated its result storage anyway ([#1138](https://github.com/oxidezap/whatsapp-rust/issues/1138)).** The out-parameter `results` above was added by [#1137](https://github.com/oxidezap/whatsapp-rust/pull/1137) to remove the single-frame burst's per-send allocation, but the multi-frame path still called `futures::future::join_all` over the sends and copied its returned `Vec` into `results` — `join_all` allocates storage for the futures it joins and a fresh `Vec` for their outputs, so that path kept paying what it paid before the out-parameter existed. Splitting `encrypt_and_send` into enqueue and await halves removed both allocations for a burst up to `MAX_INLINE_BURST` frames.
+</Note>
+
+If an enqueue fails partway through — the sender task is gone, which no later frame recovers from either — the remaining frames are still drained from `frames` and reported failed in their own positions, so `results` stays aligned with the frames the caller handed in rather than shifting out of step.
+
+Location: `src/client/messaging.rs`
 
 ### Decryption
 

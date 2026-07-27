@@ -230,6 +230,10 @@ When sending a direct message, the library resolves all known devices for both t
 - **Recipient devices** receive the actual message content
 - **Own other devices** (your other linked devices) receive a `DeviceSentMessage` wrapper containing the message plus the destination JID, so your other devices can display the sent message in the correct chat
 
+<Note>
+**Destination JID encoding via `DsmDestination` ([#1137](https://github.com/oxidezap/whatsapp-rust/pull/1137)).** The `DeviceSentMessage` wrapper writes its destination JID as a length-prefixed protobuf field, which needs the encoded length before the bytes. `wacore::messages::MessageUtils::encode_dm_plaintexts` and `dm_plaintexts_from_encoded` used to take `destination_jid: &str`, so the caller rendered the `Jid` into a `String` purely to measure and copy it. Both now take `impl DsmDestination` — a trait implemented directly on `Jid` (so it can measure and write its own wire form without an intermediate `String`) and on `str` plus the standard string wrappers (`String`, `Box<str>`, `Rc<str>`, `Arc<str>`, `Cow<str>`), carried through references of any depth via two blanket impls. The DM send path now passes `to_jid: &Jid` directly instead of `&to_jid.to_string()`.
+</Note>
+
 ### Device resolution
 
 The DM send path builds the full device list in a WA Web-compliant manner (matching `WAWebSendUserMsgJob` and `WAWebDBDeviceListFanout`):
@@ -1722,6 +1726,28 @@ pub struct SessionRecord {
 ```
 
 Only rare operations (archive current session, promote previous session, take/restore during session setup) trigger `Arc::make_mut` and a deep copy.
+
+### Chain key buffer reuse
+
+As of [#1137](https://github.com/oxidezap/whatsapp-rust/pull/1137), advancing a chain key no longer allocates a fresh buffer for its persisted 32-byte key material on every step. `SessionState` stores each chain key's bytes as `Option<bytes::Bytes>` on the underlying protobuf `ChainKey` field; since `Bytes` is immutable, writing the ratcheted key used to be an unconditional `Bytes::copy_from_slice(..)`, and the ratchet advances three times per message round trip (twice sending, once receiving).
+
+`write_chain_key` (`wacore/libsignal/src/protocol/state/session.rs`) instead reuses the existing buffer in place when it safely can:
+
+```rust
+fn write_chain_key(field: &mut Option<bytes::Bytes>, key: &[u8]) {
+    if let Some(existing) = field.take()
+        && existing.len() == key.len()
+        && let Ok(mut owned) = existing.try_into_mut()
+    {
+        owned.copy_from_slice(key);
+        *field = Some(owned.freeze());
+        return;
+    }
+    *field = Some(bytes::Bytes::copy_from_slice(key));
+}
+```
+
+Reuse only happens when both guards pass: `try_into_mut()` succeeds solely when the `Bytes` is uniquely owned (no other clone observing the old key), and the length check keeps a differently-sized buffer (e.g. from a legacy record) from being partially overwritten. Either guard failing falls back to the original allocating behavior. In steady state a checked-out session record is uniquely owned — the cache takes it out of its `Arc` via `try_unwrap` (see [Session object cache](#session-object-cache) above) — so the fallback is rare.
 
 ### Redundant signal store write elimination
 

@@ -887,8 +887,8 @@ Each session owns its own `SqliteStore`, so the store's fixed costs (thread-pool
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| `pool_size` | `1` | Single connection; store serializes via its internal semaphore |
-| `read_pool_size` | `0` | Extra connections reserved for reads only; `0` queues reads on the same permit as writes, unchanged from before this knob existed |
+| `pool_size` | `1` | Connections available to the write path (`run`); the store serializes them via its internal semaphore. Not the store's total concurrency once `read_pool_size` is nonzero — see below |
+| `read_pool_size` | `0` | Extra connections reserved for reads only, on top of `pool_size`; `0` queues reads on the write path's permit too, unchanged from before this knob existed |
 | `cache_size_kib` | `512` | Per-connection page cache (~512 KiB) |
 | `busy_timeout` | `30 s` | SQLite busy-timeout |
 | `synchronous` | `NORMAL` | WAL-safe durability |
@@ -898,8 +898,10 @@ Each session owns its own `SqliteStore`, so the store's fixed costs (thread-pool
 
 ```rust
 pub struct SqliteStoreConfig {
-    /// Max concurrent operations: r2d2 `max_size` AND the internal semaphore
-    /// permits, kept in lockstep. Clamped to at least 1.
+    /// Max concurrent operations on the write path (`run`): r2d2 `max_size`
+    /// AND the internal semaphore permits, kept in lockstep. Clamped to at
+    /// least 1. This bounds `run`, not the store as a whole — connections
+    /// from `read_pool_size` sit on top of it and aren't counted here.
     ///
     /// Raising this makes *writes* concurrent, which SQLite does not want: two
     /// deferred transactions that both read and then write deadlock on the
@@ -942,26 +944,18 @@ let backend = Arc::new(
     SqliteStore::with_config_for_device("whatsapp.db", 1, SqliteStoreConfig::default()).await?,
 );
 
-// High-throughput profile for a single busy session
+// High-throughput profile for a single busy session: a bigger page cache,
+// and read concurrency via read_pool_size rather than raising pool_size
+// (which would risk the write-upgrade deadlock described below).
 let backend = Arc::new(
     SqliteStore::with_config_for_device(
         "whatsapp.db",
         1,
         SqliteStoreConfig {
-            pool_size: 4,
             cache_size_kib: 4096,
+            read_pool_size: 4,
             ..SqliteStoreConfig::default()
         },
-    )
-    .await?,
-);
-
-// Let reads run alongside a pending write, without raising pool_size
-let backend = Arc::new(
-    SqliteStore::with_config_for_device(
-        "whatsapp.db",
-        1,
-        SqliteStoreConfig::default().with_read_pool_size(4),
     )
     .await?,
 );

@@ -369,6 +369,16 @@ impl ResolvedDmDevices {
   **Breaking change ([#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118)):** `DmStanzaRequest::own_lid` was removed — the sending identity's LID is now baked into the `ResolvedDmDevices` passed via `devices` at construction time (`ResolvedDmDevices::new`) — and `DmStanzaRequest::devices` changed from `Vec<Jid>` to `&ResolvedDmDevices`. An out-of-tree caller constructing `DmStanzaRequest` directly needs to build a `ResolvedDmDevices` first (via `ResolvedDmDevices::new(all_devices, own_jid, own_lid)`) and pass it by reference.
 </Warning>
 
+### Session preflight and the 406 case
+
+Before `prepare_dm_stanza` builds the stanza, `ensure_e2e_sessions` runs as a preflight that fetches prekeys for any resolved device without an established Signal session. A `406` response to that fetch means the server no longer knows one or more of the devices the local registry named — the batch is one IQ over up to `SESSION_CHECK_BATCH_SIZE` (50) devices, and the response doesn't say which one.
+
+<Note>
+**A DM `406` now refreshes the stale device list instead of leaving it in place ([#1139](https://github.com/oxidezap/whatsapp-rust/pull/1139), closes [#1135](https://github.com/oxidezap/whatsapp-rust/issues/1135)).** The preflight still propagates the fetch error with `?` — the send still fails, deliberately: because the batch response doesn't name the offending device, treating a `406` as "no prekeys" for the whole batch would silently drop every device in it from the fan-out, including any that were merely missing a local session rather than actually unregistered. What changes is that `ensure_sessions_inner` now recognizes the `406` — by server code, via `crate::request::IqError::ServerError` from this direct call, or `wacore::request::ServerErrorCode` from the type the group fan-out's own prekey fetch re-wraps to — and calls `invalidate_device_cache` once per distinct user named in the failed batch before returning the error. A retry after that resolves a fresh device list instead of re-hitting the same absent device forever.
+
+Two earlier commits on this PR tried carrying an "unregistered" flag out of `prepare_dm_stanza` itself for the caller to act on, but the preflight already aborts the send with `?` before the stanza is ever built, so the flag was only reachable in a race. They were reverted in favor of handling it at the source. This is also why the asymmetry with the group path exists: group sends have no such preflight, so a `406` there is already caught inside the per-device fan-out (`stale_device_users`), which knows exactly which device it's about.
+</Note>
+
 ### PreparedDmStanza
 
 `prepare_dm_stanza` returns a `PreparedDmStanza` struct containing the stanza node and the locally computed phash for server ACK validation:

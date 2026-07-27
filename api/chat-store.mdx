@@ -252,9 +252,20 @@ With the `search` feature enabled, `ChatStore` maintains a SQLite FTS5 index ove
 
 ```rust
 async fn search_messages(&self, query: &str, limit: i64) -> Result<Vec<StoredMessage>>;
+
+async fn search_messages_in_chat(
+    &self,
+    chat: &Jid,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<StoredMessage>>;
 ```
 
-Best match first. The query is treated as plain whitespace-separated words — each is turned into a quoted prefix term, so FTS5 operator syntax in user input can't reach the query parser. An empty or whitespace-only query returns `ChatStoreError::InvalidSearchQuery`.
+Best match first, when every token in the query is at least three characters — see below. The query is treated as plain whitespace-separated words — each is turned into a quoted prefix term, so FTS5 operator syntax in user input can't reach the query parser. An empty or whitespace-only query returns `ChatStoreError::InvalidSearchQuery`.
+
+`search_messages_in_chat` is the same search restricted to one chat. Scoping happens inside the FTS join rather than filtering a global result afterwards, so a chat that ranks sparsely in the whole store still returns its hits. `chat` accepts either of a 1:1 peer's identities (phone number or LID) — see [PN/LID identity aliasing](#pnlid-identity-aliasing).
+
+A query with any token shorter than three characters is ordered newest-first instead of by relevance, for the whole query: `ORDER BY rank` has to score every row a short prefix matches before `limit` can discard any, which on a real store means most of it, so ranking on a short prefix would turn one keystroke into a multi-second query. Only a query where every token is three characters or longer ranks by relevance.
 
 The FTS5 virtual table and its sync triggers are created lazily and idempotently in `ChatStore::new()` when the feature is enabled, not via a migration — a build without `search` leaves no FTS objects behind.
 
@@ -340,11 +351,13 @@ pub enum MessageKind {
     Text, Image, Video, VideoNote, Audio, VoiceNote, Sticker, Document,
     Contact, Location, Poll, Event, GroupInvite, Template, TemplateReply,
     Buttons, ButtonsResponse, List, ListResponse, Interactive,
-    InteractiveResponse, Undecryptable, Unknown, Other(String),
+    InteractiveResponse, Undecryptable, ViewOnce, Hosted, Bot, Unknown, Other(String),
 }
 ```
 
 `Template`/`Buttons`/`List`/`Interactive` are WABA business content — a template notification, a message with quick-reply buttons, a list picker, or a flow/native-flow interactive message. Each has a `*Reply`/`*Response` counterpart for what a user's tap materializes as. `text` is extracted per type mirroring WA Web's parsers (e.g. a template's `hydrated_content_text`, a list's `description`, a response's `selected_display_text`); footer text and button labels stay in the stored proto rather than `text`. A non-hydrated template still classifies as `Template` with `text: None`.
+
+`Undecryptable` is a placeholder for a message that could not be decrypted **yet** — a retry or a PDO placeholder-resend may still fill it in, at which point the row is replaced with the recovered content under the same id. `ViewOnce`, `Hosted`, and `Bot` are also fanouts the server reported as unavailable, but permanently: a view-once photo/video/voice note is never shared with a companion device by design, and the same holds for hosted-content and bot-message fanouts. They previously all collapsed into `Undecryptable`, which gave a UI no way to distinguish "may still arrive" from "never will" — surfaced by a chat's [`last_message_kind`](#chatentry) too, so a chat list can render the right chip without opening the thread.
 
 `Other(String)` round-trips a forward-compatible label for message types added after this crate was released.
 

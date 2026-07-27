@@ -505,8 +505,19 @@ impl SharedSqlite {
     where
         F: FnOnce(&mut SqliteConnection) -> Result<T> + Send + 'static,
         T: Send + 'static;
+
+    /// Runs `f` as a read-only, consistent snapshot — a diesel deferred
+    /// transaction that never asks for the write lock.
+    pub async fn read<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut SqliteConnection) -> Result<T> + Send + 'static,
+        T: Send + 'static;
 }
 ```
+
+<Note>
+`read` takes a permit from a separate reader pool, sized by [`SqliteStoreConfig::read_pool_size`](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig) — so a burst of reads can run alongside a pending write instead of queueing behind it on `run`'s single permit. If `read_pool_size` is `0` (the default) or the underlying connection isn't WAL, `read` falls back to queueing on the same permit as `run` — it's always safe to call. Wrapping the closure in a deferred transaction also means a `read` that issues more than one statement (e.g. resolve a chat's identity keys, then query by them) sees one consistent snapshot across all of them, rather than possibly straddling a write that commits in between. Prefer `read` over `run` for anything that only queries — [`whatsapp-rust-chat-store`](/api/chat-store)'s query paths do.
+</Note>
 
 ### Features
 

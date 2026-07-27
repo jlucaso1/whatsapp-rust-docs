@@ -888,6 +888,7 @@ Each session owns its own `SqliteStore`, so the store's fixed costs (thread-pool
 | Setting | Default | Notes |
 |---------|---------|-------|
 | `pool_size` | `1` | Single connection; store serializes via its internal semaphore |
+| `read_pool_size` | `0` | Extra connections reserved for reads only; `0` queues reads on the same permit as writes, unchanged from before this knob existed |
 | `cache_size_kib` | `512` | Per-connection page cache (~512 KiB) |
 | `busy_timeout` | `30 s` | SQLite busy-timeout |
 | `synchronous` | `NORMAL` | WAL-safe durability |
@@ -897,9 +898,22 @@ Each session owns its own `SqliteStore`, so the store's fixed costs (thread-pool
 
 ```rust
 pub struct SqliteStoreConfig {
-    /// Connection pool size. Drives both r2d2 `max_size` and the
-    /// internal semaphore permits, so they always stay in sync.
+    /// Max concurrent operations: r2d2 `max_size` AND the internal semaphore
+    /// permits, kept in lockstep. Clamped to at least 1.
+    ///
+    /// Raising this makes *writes* concurrent, which SQLite does not want: two
+    /// deferred transactions that both read and then write deadlock on the
+    /// upgrade, and `busy_timeout` cannot break it. Leave it at 1 and reach for
+    /// `read_pool_size` instead — that is the knob for concurrency, and it is
+    /// safe because WAL readers never contend for the write lock.
     pub pool_size: u32,
+    /// Extra connections reserved for read-only work, each free to run while a
+    /// write holds the write permit. `0` (default) keeps every operation on the
+    /// single queue, exactly as before this knob existed.
+    ///
+    /// Costs one connection's page cache (`cache_size_kib`) each, which is why
+    /// it is off by default in a process holding many per-session stores.
+    pub read_pool_size: u32,
     /// Per-connection SQLite page cache in KiB.
     pub cache_size_kib: u32,
     /// SQLite busy-timeout.
@@ -941,10 +955,20 @@ let backend = Arc::new(
     )
     .await?,
 );
+
+// Let reads run alongside a pending write, without raising pool_size
+let backend = Arc::new(
+    SqliteStore::with_config_for_device(
+        "whatsapp.db",
+        1,
+        SqliteStoreConfig::default().with_read_pool_size(4),
+    )
+    .await?,
+);
 ```
 
 <Note>
-`SqliteStore::new` and `SqliteStore::new_for_device` are unchanged — they delegate to `SqliteStoreConfig::default()` internally. Raising `pool_size` above `1` also raises the internal semaphore permits in lockstep, so real concurrency is available without the store serializing every operation.
+`SqliteStore::new` and `SqliteStore::new_for_device` are unchanged — they delegate to `SqliteStoreConfig::default()` internally. Raising `pool_size` above `1` makes *writes* concurrent, which SQLite does not want — two deferred transactions that both read and then write deadlock on the upgrade, and `busy_timeout` cannot break it. `read_pool_size` (set via the `with_read_pool_size` builder, or the struct field directly) is the knob for concurrency instead: it reserves connections purely for reads, which WAL lets run alongside a pending write without contending for the write lock. Left at `0`, reads queue on the same permit as writes exactly as before this knob existed.
 </Note>
 
 **Multi-session measurements (from PR #926):**

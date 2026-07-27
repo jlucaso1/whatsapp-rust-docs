@@ -85,6 +85,7 @@ All metrics are prefixed with `wa_` and emitted at the same boundaries as the ma
 | `wa_appstate_mutations_total` | — | App-state mutations applied |
 | `wa_identity_change_total` | — | Peer identity changes that triggered a session reset |
 | `wa_prekey_upload_total` | `outcome` = `ok`, `fail` | Pre-key uploads by outcome |
+| `wa_session_record_quarantined_total` | — | Stored session rows that failed to decode and were treated as absent for recovery. Steady state is zero — see [session row quarantine](/concepts/storage#signalstorecache) |
 
 ### Histograms (seconds)
 

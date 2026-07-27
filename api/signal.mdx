@@ -625,6 +625,10 @@ client.signal().assert_sessions(&[jid.clone()]).await?;
 let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
 ```
 
+<Note>
+A session row that fails to decode from storage no longer needs this manual reset — it self-heals automatically on its next load. See [undecodable session rows](/concepts/storage#signalstorecache). Manual reset is still the right tool for a session that decodes fine but is logically wrong, e.g. after a known identity compromise.
+</Note>
+
 ### Manually migrate a session to LID addressing
 
 ```rust

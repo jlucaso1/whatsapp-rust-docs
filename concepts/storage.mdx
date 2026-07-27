@@ -347,6 +347,14 @@ cache.clear().await;
 - Only clears dirty tracking after ALL writes succeed
 - On failure, dirty state is preserved for retry on next flush
 
+**Undecodable session rows:** Deserialization is a pure function of the stored bytes. A session row that fails to decode once — from genuine corruption, or from a row written in a shape this build can no longer read, including a counter lease stranded by a since-fixed bug (see [DH ratchet resets rebase the lease](/advanced/signal-protocol#dh-ratchet-resets-rebase-the-lease)) — fails identically forever.
+
+- `get_session`, `checkout_session`, and `has_session` all report that row as **absent** instead of propagating a decode error. Loading the row doesn't repair it by itself — it only lets the caller treat the address as session-less.
+- That matters because the paths that would otherwise repair the session — decrypting the peer's next pre-key message, the retry-receipt handler — have to load the record first. If the decode error propagated instead, it would strand the address until you deleted the row by hand.
+- Reporting the row absent lets the ordinary no-session recovery run instead: the next send or decrypt for that address fetches a fresh pre-key bundle and persists a replacement session, overwriting the unreadable row. This build never derives key material from bytes it can't decode, so it loses nothing usable — but the overwrite is destructive to the original bytes. If you're rolling back to a build that could still decode that row, back up the database first; the original bytes don't survive the overwrite.
+- `has_session()` decodes the row instead of only checking for its existence, so it never reports a quarantined row as present to a caller deciding whether to skip recovery.
+- Each quarantine increments the `wa_session_record_quarantined_total` [counter](/advanced/metrics#counters). Watch for a non-zero rate — steady state is zero.
+
 ## AppSyncStore
 
 **Purpose:** WhatsApp app state synchronization

@@ -614,8 +614,10 @@ if !client.signal().has_sender_key(&group_jid, &my_jid).await? {
 
 ### Reset a broken session
 
+Use this for a session that decodes fine but is logically wrong — for example, after a known identity compromise. A session row that fails to decode from storage doesn't need this: the next send or decrypt for that address recovers it automatically, by fetching a fresh pre-key bundle and replacing the row. See [undecodable session rows](/concepts/storage#signalstorecache) for the mechanics.
+
 ```rust
-// Delete the corrupted session
+// Delete a session you know is logically wrong (e.g. after an identity compromise)
 client.signal().delete_sessions(&[jid.clone()]).await?;
 
 // Re-establish
@@ -624,10 +626,6 @@ client.signal().assert_sessions(&[jid.clone()]).await?;
 // Now encryption should work again
 let (enc_type, ciphertext) = client.signal().encrypt_message(&jid, plaintext).await?;
 ```
-
-<Note>
-A session row that fails to decode from storage no longer needs this manual reset — it self-heals automatically on its next load. See [undecodable session rows](/concepts/storage#signalstorecache). Manual reset is still the right tool for a session that decodes fine but is logically wrong, e.g. after a known identity compromise.
-</Note>
 
 ### Manually migrate a session to LID addressing
 

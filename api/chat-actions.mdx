@@ -550,7 +550,7 @@ App state sync requires encryption keys to be available. These are typically obt
 </Note>
 
 <Note>
-As of PR [#1158](https://github.com/oxidezap/whatsapp-rust/pull/1158), a mutation that loses an app-state version race (another device already advanced the same collection) is no longer silently dropped. The server answers the send with the winning patches instead of an error; the client applies them, rebuilds your mutation on top of the new base, and resends — up to 5 attempts, matching WhatsApp Web's own retry cap. Previously the conflict response was ignored and the call returned `Ok(())` even though the mutation never took effect. A call now only returns `Err` if the conflict could not be resolved after exhausting those attempts, or if the server rejected the patch outright (not a version conflict).
+As of PR [#1158](https://github.com/oxidezap/whatsapp-rust/pull/1158), a mutation that loses an app-state version race (another device already advanced the same collection) is no longer silently dropped. The server answers the send with the winning patches instead of an error; the client applies them, rebuilds your mutation on top of the new base, and resends — up to 5 attempts, matching WhatsApp Web's own retry cap. Previously the conflict response was ignored and the call returned `Ok(())` even though the mutation never took effect. This conflict-resolution path itself only surfaces an `Err` once resolution is exhausted after those 5 attempts, or if the server rejects the patch outright (not a version conflict) — the other failure causes described in [Error handling](#error-handling) below (invalid input, missing sync keys, network errors) are unaffected by this change and can still occur as before.
 </Note>
 
 ## Events

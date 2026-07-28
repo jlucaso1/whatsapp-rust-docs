@@ -658,7 +658,7 @@ where
     Fut: Future<Output = ()> + Send + 'static
 ```
 
-Registers a handler for [`Event::PairingCodeRefresh`](/concepts/events#pairingcoderefresh), fired when the server asks the companion to refresh an in-progress pair code. The `bool` argument is `force_manual`.
+Registers a handler for [`Event::PairingCodeRefresh`](/concepts/events#pairingcoderefresh), fired when the in-progress phone-number pairing code should be replaced. The `bool` argument is `force_manual`.
 
 <ParamField path="handler" type="F" required>
   Async function that receives `force_manual: bool` and `Arc<Client>`
@@ -674,9 +674,9 @@ Bot::builder()
         ..Default::default()
     })
     .on_pair_code_refresh(|force_manual, client| async move {
-        println!("Server requested a pair-code refresh (force_manual={force_manual})");
-        // The previous code is no longer guaranteed valid — request a fresh
-        // one with the same phone number.
+        println!("Pair code needs a refresh (force_manual={force_manual})");
+        // The previous code is no longer valid, and the flow is already
+        // clear — request a fresh one with the same phone number.
         let _ = client.pair_with_code(PairCodeOptions {
             phone_number: "15551234567".to_string(),
             ..Default::default()
@@ -686,7 +686,7 @@ Bot::builder()
 ```
 
 <Note>
-Only fires while a pair-code flow is outstanding and the notification's ref matches it — a `refresh_code` notification for a stale or unrelated flow is ignored.
+This callback fires for **two** triggers, not just a server request: the server asking for a refresh (only while a pair-code flow is outstanding and the notification's ref matches it — a `refresh_code` notification for a stale or unrelated flow is ignored), and a `companion_finish` that went unanswered for a minute after the phone entered the code (`force_manual` is always `false` for this second trigger). See [Pair code refresh events](/concepts/authentication#pair-code-refresh-events) for the full breakdown.
 </Note>
 
 ---

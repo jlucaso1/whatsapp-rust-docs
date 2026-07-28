@@ -597,18 +597,23 @@ pub struct PairingQrCodesExhausted {
 ```rust
 Event::PairingQrCodesExhausted(PairingQrCodesExhausted { disconnected, .. }) => {
     if disconnected {
-        // No pair-code flow was outstanding — the client already tore the
-        // socket down. Reconnect to get a fresh batch of refs.
-        println!("QR refs exhausted, disconnected — reconnect to retry");
+        // No pair-code flow was outstanding, so the client is tearing its own
+        // socket down. Wait for the subsequent Event::Disconnected, then
+        // reconnect to get a fresh batch of refs.
+        println!("QR refs exhausted, disconnecting — reconnect once Disconnected fires");
     } else {
-        // A pair-code flow is still outstanding, so the socket was left up
-        // to keep carrying it. There is simply no QR to show right now.
+        // A pair-code flow is still outstanding, so the socket is being left
+        // up to keep carrying it. There is simply no QR to show right now.
         println!("QR refs exhausted, but a pair code is still in progress");
     }
 }
 ```
 
 See [QR ref exhaustion](/concepts/authentication#qr-ref-exhaustion) for why this no longer disconnects unconditionally.
+
+<Note>
+`disconnected: true` reports intent, not a completed action: the client dispatches this event *before* awaiting `disconnect()`, so the socket may still be open at the moment a handler observes it. A synchronous `EventHandler` runs inline ahead of the disconnect; a `Bot`/`on_event` closure runs off a channel on its own task and can race it either way. Treat `true` as "reconnecting shortly" and wait for [`Event::Disconnected`](#disconnected) rather than assuming the socket is already closed.
+</Note>
 
 <Note>
 This is a new event and a new `EventKind` variant, added at the **end** of `EventKind` (after `ServerAck`) rather than next to `Event::PairingQrCodesExhausted` — new kinds always go at the end, since the discriminant is what a consumer persists or transmits and inserting in the middle would renumber every kind after it.

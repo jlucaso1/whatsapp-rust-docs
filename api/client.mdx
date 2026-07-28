@@ -270,7 +270,7 @@ Initiates pair code authentication as an alternative to QR code pairing. The ret
 This can run concurrently with QR code pairing — whichever completes first wins.
 
 <Note>
-**One code at a time.** Fails with `PairCodeError::CodeAlreadyOutstanding` while a previously issued code is still within its validity window, instead of silently replacing it — a second code does not replace the first for the phone, since the server routes `primary_hello` by number without ever seeing the code. Call [`cancel_pair_code`](#cancel_pair_code) first when the replacement is intentional. Do not call this on a schedule driven by QR-code rotation — the two flows have unrelated lifetimes. See [One code at a time](/concepts/authentication#one-code-at-a-time).
+**One code at a time.** Fails with `PairCodeError::CodeAlreadyOutstanding` while a previous code is still outstanding, instead of silently replacing it. "Outstanding" means either the previous code's validity window hasn't elapsed yet, *or* its `primary_hello` was already accepted and a `pair-success` for it is still pending — that second case can outlast the validity window by up to a minute, and `remaining` reads as `0` for it since there's no window left to report. A second code does not replace the first for the phone: the server routes `primary_hello` by number and never sees the code itself, so whoever is still reading the older one reaches stage 2 regardless. Call [`cancel_pair_code`](#cancel_pair_code) first when the replacement is intentional. Do not call this on a schedule driven by QR-code rotation — the two flows have unrelated lifetimes. See [One code at a time](/concepts/authentication#one-code-at-a-time).
 </Note>
 
 <ParamField path="options" type="PairCodeOptions" required>
@@ -295,7 +295,7 @@ This can run concurrently with QR code pairing — whichever completes first win
 | `PairCode(PhoneNumberTooShort)` | Fewer than 7 digits |
 | `PairCode(PhoneNumberNotInternational)` | Starts with `0` (not international format) |
 | `PairCode(InvalidCustomCode)` | Custom code is not 8 valid Crockford Base32 characters |
-| `PairCode(CodeAlreadyOutstanding { remaining })` | A previously issued code is still within its validity window — call `cancel_pair_code` first |
+| `PairCode(CodeAlreadyOutstanding { remaining })` | A previous code is still outstanding (within its validity window, or its `primary_hello` was accepted and `pair-success` is still pending) — call `cancel_pair_code` first |
 | `PairCode(Cancelled)` | `cancel_pair_code` was called while `companion_hello` (stage 1) was still in flight |
 | `PairCode(InvalidPrimaryEphemeralKey)` / `InvalidPrimaryIdentityKey` | Peer key parsing failed (typed `CurveError` source) |
 | `PairCode(EphemeralKeyAgreement)` / `IdentityKeyAgreement` | Diffie–Hellman failed (typed `CurveError` source) |
@@ -327,7 +327,11 @@ println!("Enter this code on your phone: {}", code);
 pub async fn cancel_pair_code(self: &Arc<Self>)
 ```
 
-Abandons the outstanding pair-code flow, if any — the explicit reset [`pair_with_code`](#pair_with_code) requires before it will mint a replacement (WA Web's `initializeAltDeviceLinking()`). After this the previous code can no longer complete: a `primary_hello` for it is dropped rather than answered with a bundle its holder cannot open. A no-op when no flow is outstanding.
+Abandons the outstanding pair-code flow, if any — the explicit reset [`pair_with_code`](#pair_with_code) requires before it will mint a replacement (WA Web's `initializeAltDeviceLinking()`). A no-op when no flow is outstanding.
+
+<Note>
+**Boundary: a `primary_hello` already being processed may still finish.** If no `primary_hello` has been accepted yet, cancellation is immediate and complete — a later `primary_hello` for the cancelled ref is dropped rather than answered. But once the phone's `primary_hello` has been accepted, stage 2 (deriving the key bundle and sending `companion_finish`) runs under the same lock `cancel_pair_code` takes, so the two race: if `cancel_pair_code` wins, stage 2 finds the flow gone and stops before sending anything; if stage 2 already holds the lock, `companion_finish` is sent before `cancel_pair_code` gets a turn. The library never revokes credentials the server has already issued, so an authenticated `pair-success` that follows still completes the link even though `cancel_pair_code` ran. Treat cancellation as reliable only before the phone has entered the code.
+</Note>
 
 **Example:**
 ```rust

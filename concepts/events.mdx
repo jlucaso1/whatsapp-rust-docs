@@ -327,7 +327,15 @@ The 403 variant was renamed `MainDeviceGone` → `AccountLocked` in v0.6 to matc
 #[non_exhaustive]
 pub struct TemporaryBan {
     pub code: TempBanReason,
+    /// How long the ban lasts — the wire's `expire` is a duration in seconds,
+    /// not a deadline.
     pub expire: chrono::Duration,
+    /// The server's `message` attribute, when present.
+    pub message: Option<String>,
+    /// Support/appeal link the official ban screen opens.
+    pub url: Option<String>,
+    /// The whole `<failure>` stanza.
+    pub raw: Option<Node>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -341,10 +349,24 @@ pub enum TempBanReason {
 }
 ```
 
+**Fields:**
+- `code` — the ban sub-reason from the `code` attribute
+- `expire` — how long the ban lasts, as a `chrono::Duration`
+- `message` — the server's free-text detail, when present
+- `url` — the support/appeal link the official ban screen opens, when the server sent one
+- `raw` — the whole `<failure>` stanza
+
+<Note>
+Breaking change: `TemporaryBan` gained `message`, `url` and `raw`. It also gained a stricter emission rule: a `<failure reason="402">` missing `code` or `expire` — or whose `expire` doesn't fit a `chrono::Duration` — no longer dispatches `TemporaryBan` with an invented zero expiry. Such a stanza now surfaces as `ConnectFailure { reason: ConnectFailureReason::TempBanned, raw: Some(node), .. }` instead, carrying the same raw stanza. A consumer that matched on `Event::TemporaryBan` to detect an incomplete ban stanza will now see `Event::ConnectFailure`.
+</Note>
+
 **Usage:**
 ```rust
 Event::TemporaryBan(ban) => {
     eprintln!("Banned: {} (expires in {:?})", ban.code, ban.expire);
+    if let Some(url) = &ban.url {
+        eprintln!("Learn more: {url}");
+    }
 }
 ```
 
@@ -378,17 +400,42 @@ Event::StreamReplaced(_) => {
 pub struct LoggedOut {
     pub on_connect: bool,
     pub reason: ConnectFailureReason,
+    /// Server-supplied logout copy, when it sent any. Present in practice on
+    /// `ConnectFailureReason::AccountLocked`.
+    pub logout_message: Option<LogoutMessage>,
+    /// The stanza that caused the logout, when one was received.
+    pub raw: Option<Node>,
+}
+
+/// Localized text the server wants shown when it forces a logout, from
+/// `logout_message_header` / `logout_message_subtext` on `<failure>`.
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct LogoutMessage {
+    pub header: Option<String>,
+    pub subtext: Option<String>,
+    /// e.g. `"pt_BR"`. Compare against the consumer's locale before rendering.
+    pub locale: Option<String>,
 }
 ```
 
 **Fields:**
 - `on_connect` — `true` if the logout happened during a connection attempt (server-initiated), `false` if triggered by `client.logout()` or a stream error while connected
 - `reason` — The reason for the logout (e.g., `ConnectFailureReason::LoggedOut`)
+- `logout_message` — server-supplied header/subtext/locale, when the server sent any (in practice, only on an account lock). The official client only renders `header`/`subtext` when `locale` matches the consumer's current locale, and the locale travels with the text so a consumer can apply the same rule.
+- `raw` — the stanza that caused the logout, when one was received. Two different shapes reach this field, so dispatch on `raw.tag` rather than assuming one: `"failure"` for a server-side connect refusal (`on_connect` is then `true`), and `"stream:error"` for a `<conflict>`, a 516 device removal, or a 401 stream error while already connected. `None` for a locally initiated `client.logout()` — there's no stanza to report.
+
+<Note>
+Breaking change: `LoggedOut` gained `logout_message` and `raw`. An account lock (`reason: ConnectFailureReason::AccountLocked`) carries a server-issued `appeal_token` plus `violation_reason` and `vt` on the `<failure>` stanza — WA Web itself ignores these (its appeal flow is native-client only) so they aren't parsed into typed fields, but they now survive on `logout.raw` for an embedder that wants to build its own appeal UI. Read them off `raw.attrs.get("appeal_token")`, etc.
+</Note>
 
 **Usage:**
 ```rust
 Event::LoggedOut(logout) => {
     eprintln!("Logged out (reason: {:?})", logout.reason);
+    if let Some(msg) = &logout.logout_message {
+        eprintln!("Server message: {:?} / {:?}", msg.header, msg.subtext);
+    }
     // Session is invalid — you must re-pair the device
     // Auto-reconnect is disabled
 }
@@ -642,8 +689,18 @@ Event::QrScannedWithoutMultidevice(_) => {
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
 #[non_exhaustive]
-pub struct ClientOutdated {}
+pub struct ClientOutdated {
+    /// The whole `<failure>` stanza, so no attribute is lost to a log line.
+    pub raw: Option<Node>,
+}
 ```
+
+**Fields:**
+- `raw` — the `<failure reason="405">` stanza the server sent
+
+<Note>
+Breaking change: `ClientOutdated` gained `raw`, carrying the full `<failure>` stanza instead of discarding it.
+</Note>
 
 **Usage:**
 ```rust

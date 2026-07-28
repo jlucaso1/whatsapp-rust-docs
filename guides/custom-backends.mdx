@@ -848,6 +848,20 @@ let factory = TokioWebSocketTransportFactory::new()
 
 Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point.
 
+### Custom Origin for a relay
+
+`TokioWebSocketTransportFactory` sends `Origin: https://web.whatsapp.com` on every upgrade by default, matching what whatsmeow and Baileys send unconditionally. If `with_url` points at a relay or gateway that enforces its own `Origin` check, override it with `with_origin`:
+
+```rust
+let factory = TokioWebSocketTransportFactory::new()
+    .with_url("wss://my-relay.example/ws/chat")
+    .with_origin("https://my-relay.example");
+```
+
+Keep the default for a relay that simply forwards traffic to WhatsApp — it's still emulating a real WA Web browser, so `Origin` should stay `https://web.whatsapp.com` regardless of which host you dial. Only call `with_origin` when the relay itself checks the header against its own domain. `without_origin()` drops the header entirely, for a peer that rejects the upgrade because of it.
+
+See [Transport API reference](/api/transport#with_origin) for details.
+
 ### Full proxy support for the WebSocket transport
 
 For full proxy support (SOCKS5, HTTP CONNECT, etc.), implement the `TransportFactory` trait directly. Establish the WebSocket connection through your proxy, then wrap it with `from_websocket`:

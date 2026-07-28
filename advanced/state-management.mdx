@@ -248,11 +248,7 @@ pub enum DeviceCommand {
     SetPushName(String),
     SetAccount(Option<wa::ADVSignedDeviceIdentity>),
     SetAppVersion((u32, u32, u32)),
-    SetDeviceProps(
-        Option<String>,
-        Option<wa::device_props::AppVersion>,
-        Option<wa::device_props::PlatformType>,
-    ),
+    SetDeviceProps(DevicePropsOverride),
     SetClientProfile(ClientProfile),
     SetPropsHash(Option<String>),
     SetNextPreKeyId(u32),

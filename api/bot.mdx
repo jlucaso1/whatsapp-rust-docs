@@ -546,7 +546,11 @@ WA Web itself only ever sends one of two coherent `DeviceProps` shapes, chosen b
 | browser (this library's default) | `CHROME`/`FIREFOX`/… | `false` | unset |
 | win_hybrid | `UWP` | `true` | `365` |
 
-The library's sync fields (`require_full_sync`, `history_sync_config`) default to the browser row's *sync behavior* — pairing requests a recent history sync, not a full backfill. The identity fields (`os`, `platform_type`) deliberately don't follow either row: they stay at `"rust"` / `UNKNOWN` so the library doesn't impersonate a specific client unless you configure one. To opt into a full backfill, set `require_full_sync` together with the matching `history_sync_config` fields — setting `require_full_sync` alone produces a combination no real WhatsApp client sends:
+The library's sync fields (`require_full_sync`, `history_sync_config`) default to the browser row's sync behavior. Pairing requests a recent history sync, not a full backfill.
+
+The identity fields (`os`, `platform_type`) deliberately follow neither row. They stay at `"rust"` / `UNKNOWN` by default, so the library doesn't impersonate a specific client unless you configure one.
+
+To opt into a full backfill, set `require_full_sync` together with the matching `history_sync_config` fields. Setting `require_full_sync` alone produces a combination no real WhatsApp client sends:
 
 ```rust
 use waproto::whatsapp::device_props::{HistorySyncConfig, PlatformType};

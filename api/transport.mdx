@@ -256,6 +256,10 @@ let factory = TokioWebSocketTransportFactory::new()
 // Custom TLS connector (e.g. custom CA certificates, client certs)
 let factory = TokioWebSocketTransportFactory::new()
     .with_connector(my_custom_connector);
+
+// Custom Origin header (e.g. connecting through a relay that requires its own)
+let factory = TokioWebSocketTransportFactory::new()
+    .with_origin("https://relay.example");
 ```
 
 #### with_connector
@@ -296,6 +300,25 @@ let factory = TokioWebSocketTransportFactory::new()
 <Note>
 Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point before customizing.
 </Note>
+
+#### with_origin
+
+```rust
+pub fn with_origin(self, origin: impl Into<String>) -> Self
+```
+
+Sends a different `Origin` header on the WebSocket upgrade request. The default is [`WHATSAPP_WEB_ORIGIN`](#connection-settings) (`"https://web.whatsapp.com"`), and it stays correct even when [`with_url`](#tokiowebsockettransportfactory) points at a relay or a mock — the origin names the endpoint the peer is standing in for, not the host being dialled. Reach for this only when something in front of WhatsApp demands its own `Origin`.
+
+**Parameters:**
+- `origin` - The value to send as the `Origin` header
+
+#### without_origin
+
+```rust
+pub fn without_origin(self) -> Self
+```
+
+Opens the socket with no `Origin` header at all — this crate's behavior before the header was added. Use it only for a peer that rejects the upgrade because of the header; no known WhatsApp endpoint does.
 
 ### default_tls_connector
 
@@ -477,6 +500,14 @@ The default WebSocket URL is:
 ```rust
 pub const WHATSAPP_WEB_WS_URL: &str = "wss://web.whatsapp.com/ws/chat";
 ```
+
+Every upgrade also carries an `Origin` header by default:
+
+```rust
+pub const WHATSAPP_WEB_ORIGIN: &str = "https://web.whatsapp.com";
+```
+
+RFC 6455 requires a browser client to send `Origin` on the WebSocket handshake, and both whatsmeow and Baileys send this value unconditionally, regardless of the platform their `ClientPayload` claims — the constant describes the endpoint (the web companion socket), not the connecting client. Override it with [`with_origin`](#with_origin), or drop it entirely with [`without_origin`](#without_origin) for a peer that rejects the header.
 
 <Note>
 The `Client` wraps `create_transport()` in a **20-second timeout** matching WhatsApp Web's connect timeout. The transport itself does not enforce this timeout — it is applied at the client layer. If you use a custom transport, be aware that the client will abort the connection attempt after 20 seconds regardless of the transport's own timeout behavior.

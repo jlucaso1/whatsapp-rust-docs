@@ -858,7 +858,7 @@ let factory = TokioWebSocketTransportFactory::new()
     .with_origin("https://my-relay.example");
 ```
 
-The default stays correct for a relay that simply forwards to WhatsApp — the origin names the endpoint being stood in for, not the host actually dialled. Only override it when the relay itself validates the header. `without_origin()` drops the header entirely, for a peer that rejects the upgrade because of it.
+Keep the default for a relay that simply forwards traffic to WhatsApp — it's still emulating a real WA Web browser, so `Origin` should stay `https://web.whatsapp.com` regardless of which host you dial. Only call `with_origin` when the relay itself checks the header against its own domain. `without_origin()` drops the header entirely, for a peer that rejects the upgrade because of it.
 
 See [Transport API reference](/api/transport#with_origin) for details.
 

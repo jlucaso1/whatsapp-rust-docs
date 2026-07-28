@@ -180,6 +180,40 @@ for code in codes_clone {
   The rotation uses `futures::future::select` with an `async_channel` stop signal rather than Tokio-specific primitives. This keeps the QR rotation compatible with any async runtime, since the `Client` uses the pluggable `Runtime` trait for sleep and spawn operations.
 </Note>
 
+### QR ref exhaustion
+
+The server hands out six `pair-device` refs per connection (60s for the first, 20s for each of the other five — 160s total). When the rotation runs out of refs, it dispatches [`Event::PairingQrCodesExhausted`](/concepts/events#pairingqrcodesexhausted) rather than disconnecting unconditionally:
+
+```rust
+// src/pair.rs
+let pair_code_outstanding = client_clone
+    .pair_code_state
+    .lock()
+    .await
+    .is_outstanding(wacore::time::now_secs());
+
+client_clone.core.event_bus.dispatch(Event::PairingQrCodesExhausted(
+    PairingQrCodesExhausted::builder()
+        .disconnected(!pair_code_outstanding)
+        .build(),
+));
+if !pair_code_outstanding {
+    client_clone.disconnect().await;
+}
+```
+
+A [pair code](#pair-code-phone-number-linking) flow has an unrelated lifetime — a code sits on a phone screen for up to its ~180s validity window (and longer still while a `companion_finish` is pending), which outlasts the 160s the six QR refs buy. Disconnecting unconditionally would revoke a code the client had just told the user was still good, and any `primary_hello` for it would then arrive at a session the server had already dropped. So the client now disconnects **only when no pair-code flow is outstanding** — a QR-only consumer keeps the reconnect-for-fresh-refs behavior it relies on, while a phone-number flow in progress keeps its socket up.
+
+<Note>
+`disconnected: true` means the client is about to tear down its own socket, not that it already has: as the snippet above shows, the event dispatches *before* `disconnect().await` is called. A handler registered as a plain `EventHandler` runs inline during `dispatch`, ahead of the disconnect; a `Bot`/`on_event` closure runs off a channel on its own task and can race it either way.
+
+Note that no [`Event::Disconnected`](/concepts/events#disconnected) follows this particular teardown: `Client::disconnect()` sets the `expected_disconnect` flag, and `Disconnected` is scoped to disconnects the client did *not* intend — so waiting on it here would hang forever. `disconnect()` also disables auto-reconnect. To resume, call [`connect()`](/api/client#connect) yourself once you're ready to retry (it returns `ConnectError::AlreadyConnected` if the previous teardown is still finishing — back off briefly and retry rather than treating that as fatal).
+</Note>
+
+<Note>
+Breaking change: this is a new event. If you match on `Event` exhaustively with a wildcard already in place, no change is needed. Code that used to rely on the client always disconnecting when QR refs ran out — e.g. treating any disconnect during pairing as "start over" — should instead branch on `PairingQrCodesExhausted.disconnected` and reload only when it's `true`.
+</Note>
+
 ### Native-camera deep link (open WhatsApp directly)
 
 By default the `Event::PairingQrCode` `code` is the **raw** comma-separated string above. It is meant to be scanned from *inside* WhatsApp (**Linked Devices → Link a Device**) — it is **not** a URL and tapping it does nothing.
@@ -284,6 +318,46 @@ let options = PairCodeOptions {
 let code = client.pair_with_code(options).await?;
 assert_eq!(code, "MYCODE12");
 ```
+
+### One code at a time
+
+A second code does not replace the first *for the phone*: the server routes `primary_hello` by phone number, never seeing the code itself, so whoever is still reading the older code reaches stage 2 and is handed a key bundle their code cannot open — the phone reports a failed link and the companion sees nothing. WA Web forbids the overlap outright (`invariant(stage === Initialized)` in `Alt/DeviceLinkingApi.js`).
+
+`pair_with_code` now enforces the same rule: it fails with [`PairCodeError::CodeAlreadyOutstanding { remaining }`](#pair-code-errors) while the previous code is still outstanding, instead of silently overwriting it. "Outstanding" is either clock: the code's own validity window, or — once `primary_hello` has been accepted — the pending `pair-success` that follows it, which can run up to a minute past the window (`remaining` reads as `0` in that case, since there's no window left to report). Call `cancel_pair_code` first when the replacement is intentional:
+
+```rust
+use wacore::pair_code::PairCodeError;
+use whatsapp_rust::pair_code::PairError;
+
+match client.pair_with_code(options).await {
+    Ok(code) => println!("Enter this code on your phone: {code}"),
+    Err(PairError::PairCode(PairCodeError::CodeAlreadyOutstanding { remaining })) => {
+        // `remaining` is the code's validity window, not a countdown on the
+        // overall block: it reads `0` while a pair-success is pending on an
+        // already-entered code, not "no time left before you may retry".
+        eprintln!("A code is already outstanding ({remaining:?} left in its validity window) — cancel it first");
+        client.cancel_pair_code().await;
+    }
+    Err(e) => eprintln!("Pair code request failed: {e}"),
+}
+```
+
+<Note>
+**Do not drive `pair_with_code` from QR-code rotation.** The two flows have unrelated lifetimes — a pair code is read off a screen and typed into a phone minutes later, well past the point a QR ref would rotate. Re-requesting a code on every QR rotation trips `CodeAlreadyOutstanding` and does not match WA Web, which only regenerates on the server's `refresh_code`, on `force_manual_refresh`, or on its own expiry timers — never on a QR ref rotating. See [Pair code refresh events](#pair-code-refresh-events) for the cases that *do* warrant a new request.
+</Note>
+
+`Client::cancel_pair_code()` abandons the outstanding flow, if any — WA Web's `initializeAltDeviceLinking()`.
+
+```rust
+// src/pair_code.rs
+pub async fn cancel_pair_code(self: &Arc<Self>);
+```
+
+<Note>
+**Cancellation is reliable only before the phone enters the code.** Before a `primary_hello` has been accepted, cancelling is immediate and complete: a later `primary_hello` for the cancelled ref is dropped rather than answered with a bundle its holder cannot open. Once `primary_hello` has been accepted, deriving the key bundle and sending `companion_finish` runs under the same lock `cancel_pair_code` takes, so the two race — if stage 2 already holds the lock, `companion_finish` goes out before `cancel_pair_code` gets a turn, and the phone's subsequent `pair-success` still completes the link. The library never revokes credentials the server has already issued.
+</Note>
+
+An expired code never blocks a new request — `CodeAlreadyOutstanding` is only returned while the previous code (or a pending `pair-success` for it) is still live.
 
 ### Pair code options
 
@@ -426,7 +500,12 @@ pub struct PairingCodeRefresh {
 }
 ```
 
-Fired when a `link_code_companion_reg` notification arrives with `stage="refresh_code"` (WA Web `refreshAltLinkingCode` / `forceManualRefresh`) and its `link_code_pairing_ref` matches the outstanding request. The typical reaction is to call [`Client::pair_with_code`](/api/client#pair_with_code) again with the same phone number — the previous code is no longer guaranteed valid. Register a handler with [`Bot::on_pair_code_refresh`](/api/bot#on_pair_code_refresh) or match on the event directly via `on_event`.
+`PairingCodeRefresh` now covers **two** triggers, matching WA Web's `Alt/DeviceLinkingApi.js` and `Link/DevicePhoneNumberCodeScreen.react.js`:
+
+1. **Server-requested.** A `link_code_companion_reg` notification arrives with `stage="refresh_code"` (WA Web `refreshAltLinkingCode` / `forceManualRefresh`) and its `link_code_pairing_ref` matches the outstanding request. `force_manual` reflects the notification's `force_manual_refresh` attribute.
+2. **Unanswered `companion_finish`.** The code was entered on the phone (`primary_hello` accepted) but no `pair-success` arrived within `PairCodeUtils::primary_hello_pair_success_timeout()` (WA Web's one-minute `primary_hello_expire` timer). A primary that fails to open the key bundle just goes quiet — silence is the only signal there is — so the client times the wait out itself and dispatches `PairingCodeRefresh` with `force_manual: false`.
+
+In both cases the outstanding flow is cleared **before** the event fires, so a handler can call [`Client::pair_with_code`](/api/client#pair_with_code) immediately without hitting [`PairCodeError::CodeAlreadyOutstanding`](#one-code-at-a-time). The previous code is no longer valid either way. Register a handler with [`Bot::on_pair_code_refresh`](/api/bot#on_pair_code_refresh) or match on the event directly via `on_event`.
 
 ### Two-Stage Flow
 
@@ -938,12 +1017,7 @@ Breaking change: `PairSuccess`, `PairError`, and `LoggedOut` (below) are now `#[
 
 ### QR code errors
 
-```rust
-// Handled internally, retries with new QR codes
-// If all QR codes expire, disconnects:
-info!("All QR codes for this session have expired.");
-client.disconnect().await;
-```
+QR codes are handled internally and retried automatically. If all refs expire, the client dispatches [`Event::PairingQrCodesExhausted`](/concepts/events#pairingqrcodesexhausted) and disconnects **only when no pair-code flow is outstanding** — see [QR ref exhaustion](#qr-ref-exhaustion).
 
 ### Pair code errors
 
@@ -966,6 +1040,14 @@ match client.pair_with_code(options).await {
     }
     Err(PairError::PairCode(PairCodeError::InvalidCustomCode)) => {
         eprintln!("Custom code must be 8 valid Crockford Base32 characters");
+    }
+    Err(PairError::PairCode(PairCodeError::CodeAlreadyOutstanding { remaining })) => {
+        // `remaining` reads `0` while a pair-success is pending on an
+        // already-entered code, not "no time left before you may retry".
+        eprintln!("A code is already outstanding ({remaining:?} left in its validity window)");
+    }
+    Err(PairError::PairCode(PairCodeError::Cancelled)) => {
+        eprintln!("cancel_pair_code() was called while companion_hello was in flight");
     }
     Err(PairError::PairCode(PairCodeError::MissingPairingRef)) => {
         eprintln!("Server did not return a pairing reference");
@@ -1007,6 +1089,10 @@ match client.pair_with_code(options).await {
     _ => {}
 }
 ```
+
+<Note>
+  `CodeAlreadyOutstanding` and `Cancelled` are new — see [One code at a time](#one-code-at-a-time). `CodeAlreadyOutstanding` means `pair_with_code` refused to supersede a code that is still outstanding — either within its validity window, or awaiting a `pair-success` after an accepted `primary_hello`; `Cancelled` means `cancel_pair_code()` withdrew the request while stage 1 (`companion_hello`) was in flight.
+</Note>
 
 <Note>
   A `PairError::RequestFailed` carrying `bad-request` (400) is not necessarily a permanent/invalid-input failure — the server reuses the same error for **rate-limiting** (it throttles pair-code requests per phone number), and the two are indistinguishable in the response. Back off and retry rather than treating every 400 as fatal. By default, the library canonicalizes `companion_platform_display`'s OS (see [`companion_platform_display`](#companion-platform-display)), so display-shaped rejections are generally ruled out unless you explicitly bypass canonicalization via `PairCodeOptions::display_os`. Any server `backoff` hint is preserved on the wrapped `IqError::ServerError` (see [Error Types](/api/errors#iqerror-base-type)).

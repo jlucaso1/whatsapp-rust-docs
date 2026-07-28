@@ -137,6 +137,7 @@ pub enum Event {
     PairingQrCode(PairingQrCode),
     PairingCode(PairingCode),
     PairingCodeRefresh(PairingCodeRefresh),
+    PairingQrCodesExhausted(PairingQrCodesExhausted),
     PairSuccess(PairSuccess),
     PairError(PairError),
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
@@ -537,17 +538,23 @@ Breaking change: `PairingCode` moved from inline fields on `Event::PairingCode {
 
 ### PairingCodeRefresh
 
-**Emitted:** When the server asks the companion to refresh an in-progress pair code (WA Web `refreshAltLinkingCode` / `forceManualRefresh`). Only fired while a pair-code flow is outstanding and the server's ref matches it — a `refresh_code` notification for a stale or unrelated flow is silently ignored.
+**Emitted:** When the in-progress phone-number pairing code should be replaced. Covers two triggers (WA Web `Alt/DeviceLinkingApi.js` + `Link/DevicePhoneNumberCodeScreen.react.js`): the server asking for it (`refreshAltLinkingCode` / `forceManualRefresh`, only while a pair-code flow is outstanding and the server's ref matches it — a `refresh_code` notification for a stale or unrelated flow is silently ignored), and a `companion_finish` that went unanswered for a minute (`PairCodeUtils::primary_hello_pair_success_timeout()`) — a primary that could not open the key bundle just goes quiet, so silence is the only signal there is.
 
 ```rust
-/// The server asked the companion to refresh an in-progress phone-number
-/// pairing code. The consumer should request a fresh code via
-/// `pair_with_code`; the previous code is no longer guaranteed valid.
+/// The in-progress phone-number pairing code should be replaced.
+///
+/// Emitted for the two cases WA Web regenerates on: the server asking for it
+/// (`refreshAltLinkingCode` / `forceManualRefresh`, ref-gated against the
+/// outstanding flow), and an unanswered `companion_finish`.
+///
+/// The outstanding flow is cleared before this fires, so the consumer can call
+/// `pair_with_code` straight away. The previous code is no longer valid.
 #[derive(Debug, Clone, Serialize, bon::Builder)]
 #[non_exhaustive]
 pub struct PairingCodeRefresh {
     /// `true` when the server set `force_manual_refresh` — the code must be
-    /// re-requested explicitly rather than auto-rotated.
+    /// re-requested explicitly rather than auto-rotated. Always `false` for
+    /// the unanswered-`companion_finish` timeout trigger.
     pub force_manual: bool,
 }
 ```
@@ -555,14 +562,61 @@ pub struct PairingCodeRefresh {
 **Example:**
 ```rust
 Event::PairingCodeRefresh(PairingCodeRefresh { force_manual, .. }) => {
-    // The previous code is no longer guaranteed valid — request a new one,
-    // e.g. by calling `client.pair_with_code(options)` again.
-    println!("Server requested a pair-code refresh (force_manual={force_manual})");
+    // The previous code is no longer valid, and the flow is already clear —
+    // request a new one, e.g. by calling `client.pair_with_code(options)` again.
+    println!("Pair code needs a refresh (force_manual={force_manual})");
 }
 ```
 
 <Note>
 Breaking change: `PairingCodeRefresh` moved from an inline `Event::PairingCodeRefresh { force_manual }` field to a dedicated sealed struct — `Event::PairingCodeRefresh(PairingCodeRefresh)`. A `matches!` check on the field becomes `matches!(event, Event::PairingCodeRefresh(r) if r.force_manual)`.
+</Note>
+
+<Note>
+The unanswered-`companion_finish` timeout trigger is new. If your handler assumed `PairingCodeRefresh` only ever came from the server, no code changes are required — the reaction (call `pair_with_code` again) is the same either way, and the outstanding flow is already cleared by the time the event fires in both cases.
+</Note>
+
+### PairingQrCodesExhausted
+
+**Emitted:** When the server's `<pair-device>` refs are used up — there is no QR left to render until the connection is re-established. WA Web's rotation timer (`Handle/PairDevice.js`) reports `UNPAIRED_IDLE` here and stops; it does not close the socket unconditionally, because a phone-number (pair-code) flow may still be riding the same connection.
+
+```rust
+/// The server's `<pair-device>` refs are used up: there is no QR left to
+/// render until the connection is re-established.
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingQrCodesExhausted {
+    /// `true` when the client closed the connection itself, which it only does
+    /// with no pair-code flow outstanding. `false` means the socket was left
+    /// up and reconnecting is the consumer's call.
+    pub disconnected: bool,
+}
+```
+
+**Example:**
+```rust
+Event::PairingQrCodesExhausted(PairingQrCodesExhausted { disconnected, .. }) => {
+    if disconnected {
+        // No pair-code flow was outstanding, so the client is tearing its own
+        // socket down and won't auto-reconnect. Call connect() yourself
+        // (with a short backoff) to get a fresh batch of refs.
+        println!("QR refs exhausted, disconnecting — call connect() to retry");
+    } else {
+        // A pair-code flow is still outstanding, so the socket is being left
+        // up to keep carrying it. There is simply no QR to show right now.
+        println!("QR refs exhausted, but a pair code is still in progress");
+    }
+}
+```
+
+See [QR ref exhaustion](/concepts/authentication#qr-ref-exhaustion) for why this no longer disconnects unconditionally.
+
+<Note>
+`disconnected: true` reports intent, not a completed action: the client dispatches this event *before* awaiting `disconnect()`, so the socket may still be open at the moment a handler observes it. A synchronous `EventHandler` runs inline ahead of the disconnect; a `Bot`/`on_event` closure runs off a channel on its own task and can race it either way. **No [`Event::Disconnected`](#disconnected) follows**, though: `disconnect()` sets `expected_disconnect`, and `Disconnected` is scoped to disconnects the client did not itself intend, so waiting on it here hangs forever. `disconnect()` also disables auto-reconnect — call [`connect()`](/api/client#connect) yourself when ready to retry; it returns `ConnectError::AlreadyConnected` if the previous teardown is still finishing, so back off briefly on that rather than treating it as fatal.
+</Note>
+
+<Note>
+This is a new event and a new `EventKind` variant, added at the **end** of `EventKind` (after `ServerAck`) rather than next to `Event::PairingQrCodesExhausted` — new kinds always go at the end, since the discriminant is what a consumer persists or transmits and inserting in the middle would renumber every kind after it.
 </Note>
 
 ### PairSuccess

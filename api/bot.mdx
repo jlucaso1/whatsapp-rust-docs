@@ -515,7 +515,7 @@ Bot::builder()
 ```
 
 <Tip>
-`platform_type` determines what device name is shown on the phone's "Linked Devices" list. Common values: `CHROME`, `FIREFOX`, `SAFARI`, `DESKTOP`. Only applied on the initial pairing — `DeviceProps` is not sent again after registration.
+`platform_type` determines the device name shown on the phone's **Linked Devices** list. Common values: `CHROME`, `FIREFOX`, `SAFARI`, `DESKTOP`. Only applied on the initial pairing — `DeviceProps` is not sent again after registration.
 </Tip>
 
 #### DevicePropsOverride
@@ -546,15 +546,16 @@ WA Web itself only ever sends one of two coherent `DeviceProps` shapes, chosen b
 | browser (this library's default) | `CHROME`/`FIREFOX`/… | `false` | unset |
 | win_hybrid | `UWP` | `true` | `365` |
 
-The library defaults to the browser row: pairing requests a recent history sync, not a full backfill, and `os`/`platform_type` stay off both rows (`"rust"` / `UNKNOWN`) so the library doesn't impersonate a specific client unless you configure one. To opt into a full backfill, set `require_full_sync` together with the matching `history_sync_config` fields — setting `require_full_sync` alone produces a combination no real WhatsApp client sends:
+The library's sync fields (`require_full_sync`, `history_sync_config`) default to the browser row's *sync behavior* — pairing requests a recent history sync, not a full backfill. The identity fields (`os`, `platform_type`) deliberately don't follow either row: they stay at `"rust"` / `UNKNOWN` so the library doesn't impersonate a specific client unless you configure one. To opt into a full backfill, set `require_full_sync` together with the matching `history_sync_config` fields — setting `require_full_sync` alone produces a combination no real WhatsApp client sends:
 
 ```rust
-use wacore::store::device::default_history_sync_config;
+use waproto::whatsapp::device_props::{HistorySyncConfig, PlatformType};
+use wacore::store::{DevicePropsOverride, device::default_history_sync_config};
 
 DevicePropsOverride::new()
     .with_platform_type(PlatformType::UWP)
     .with_require_full_sync(true)
-    .with_history_sync_config(wa::device_props::HistorySyncConfig {
+    .with_history_sync_config(HistorySyncConfig {
         full_sync_days_limit: Some(365),
         on_demand_ready: Some(true),
         complete_on_demand_ready: Some(true),
@@ -564,7 +565,7 @@ DevicePropsOverride::new()
 </Note>
 
 <Warning>
-Earlier versions requested a full history sync (`require_full_sync: true`) on every pairing by default, and advertised `support_call_log_history: false`. Both now match WA Web's own browser default: `require_full_sync` is `false` (a recent-only sync) and `support_call_log_history` is `true`. A bot that relied on receiving a full backfill at pairing time needs `.with_require_full_sync(true)` plus a matching `history_sync_config`, as shown above ([PR #1164](https://github.com/oxidezap/whatsapp-rust/pull/1164)).
+Earlier versions requested a full history sync (`require_full_sync: true`) on every pairing by default, and advertised `support_call_log_history: false`. Both now match WA Web's own browser default: `require_full_sync` is `false` (a recent-only sync) and `support_call_log_history` is `true`. If you relied on receiving a full backfill at pairing time, set `.with_require_full_sync(true)` plus a matching `history_sync_config`, as shown above ([PR #1164](https://github.com/oxidezap/whatsapp-rust/pull/1164)).
 </Warning>
 
 ### with_push_name

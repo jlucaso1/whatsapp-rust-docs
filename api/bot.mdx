@@ -490,49 +490,87 @@ By default, the client automatically fetches the latest WhatsApp Web version fro
 ### with_device_props
 
 ```rust
-pub fn with_device_props(
-    self,
-    os_name: Option<String>,
-    version: Option<wa::device_props::AppVersion>,
-    platform_type: Option<wa::device_props::PlatformType>
-) -> Self
+pub fn with_device_props(self, override_: DevicePropsOverride) -> Self
 ```
 
-Overrides device properties sent to WhatsApp servers.
+Overrides `DeviceProps` fields sent to WhatsApp servers during pairing. Takes a [`DevicePropsOverride`](#devicepropsoverride) built via its chained setters — a field left unset keeps the library's default for that field, it does not clear it.
 
-<ParamField path="os_name" type="Option<String>">
-  Operating system name (e.g., "macOS", "Windows", "Linux")
-</ParamField>
-
-<ParamField path="version" type="Option<AppVersion>">
-  App version struct
-</ParamField>
-
-<ParamField path="platform_type" type="Option<PlatformType>">
-  Platform type (determines device name shown on phone)
+<ParamField path="override_" type="DevicePropsOverride" required>
+  Builder describing which `DeviceProps` fields to override
 </ParamField>
 
 **Example:**
 ```rust
-use waproto::whatsapp::device_props::{AppVersion, PlatformType};
+use waproto::whatsapp::device_props::PlatformType;
+use wacore::store::DevicePropsOverride;
 
 Bot::builder()
+    .with_backend(backend)
     .with_device_props(
-        Some("macOS".to_string()),
-        Some(AppVersion {
-            primary: Some(2),
-            secondary: Some(0),
-            tertiary: Some(0),
-            ..Default::default()
-        }),
-        Some(PlatformType::Chrome),
+        DevicePropsOverride::new()
+            .with_os("macOS")
+            .with_platform_type(PlatformType::CHROME),
     )
     // ...
 ```
 
 <Tip>
-The `platform_type` determines what device name is shown on the phone's "Linked Devices" list. Common values: `Chrome`, `Firefox`, `Safari`, `Desktop`.
+`platform_type` determines the device name shown on the phone's **Linked Devices** list. Common values: `CHROME`, `FIREFOX`, `SAFARI`, `DESKTOP`. Only applied on the initial pairing — `DeviceProps` is not sent again after registration.
 </Tip>
+
+#### DevicePropsOverride
+
+```rust
+pub struct DevicePropsOverride {
+    pub os: Option<String>,
+    pub version: Option<wa::device_props::AppVersion>,
+    pub platform_type: Option<wa::device_props::PlatformType>,
+    pub require_full_sync: Option<bool>,
+    pub history_sync_config: Option<wa::device_props::HistorySyncConfig>,
+}
+```
+
+| Setter | Overrides | Library default |
+|---|---|---|
+| `.with_os(impl Into<String>)` | `os` | `"rust"` |
+| `.with_version(AppVersion)` | `version` | `0.1.0` |
+| `.with_platform_type(PlatformType)` | `platform_type` | `UNKNOWN` |
+| `.with_require_full_sync(bool)` | `require_full_sync` | `false` — requests a recent-only sync |
+| `.with_history_sync_config(HistorySyncConfig)` | `history_sync_config` | see below |
+
+<Note>
+WA Web itself only ever sends one of two coherent `DeviceProps` shapes, chosen by whether the companion is a browser or the Windows-native ("win_hybrid") client:
+
+| | `platform_type` | `require_full_sync` | `full_sync_days_limit` |
+|---|---|---|---|
+| browser (this library's default) | `CHROME`/`FIREFOX`/… | `false` | unset |
+| win_hybrid | `UWP` | `true` | `365` |
+
+The library's sync fields (`require_full_sync`, `history_sync_config`) default to the browser row's sync behavior. Pairing requests a recent history sync, not a full backfill.
+
+The identity fields (`os`, `platform_type`) deliberately follow neither row. They stay at `"rust"` / `UNKNOWN` by default, so the library doesn't impersonate a specific client unless you configure one.
+
+To opt into a full backfill, set `require_full_sync` together with the matching `history_sync_config` fields. Setting `require_full_sync` alone produces a combination no real WhatsApp client sends:
+
+```rust
+use waproto::whatsapp::device_props::{HistorySyncConfig, PlatformType};
+use wacore::store::{DevicePropsOverride, device::default_history_sync_config};
+
+DevicePropsOverride::new()
+    .with_platform_type(PlatformType::UWP)
+    .with_require_full_sync(true)
+    .with_history_sync_config(HistorySyncConfig {
+        full_sync_days_limit: Some(365),
+        on_demand_ready: Some(true),
+        complete_on_demand_ready: Some(true),
+        ..default_history_sync_config()
+    })
+```
+</Note>
+
+<Warning>
+Earlier versions requested a full history sync (`require_full_sync: true`) on every pairing by default, and advertised `support_call_log_history: false`. Both now match WA Web's own browser default: `require_full_sync` is `false` (a recent-only sync) and `support_call_log_history` is `true`. If you relied on receiving a full backfill at pairing time, set `.with_require_full_sync(true)` plus a matching `history_sync_config`, as shown above ([PR #1164](https://github.com/oxidezap/whatsapp-rust/pull/1164)).
+</Warning>
 
 ### with_push_name
 

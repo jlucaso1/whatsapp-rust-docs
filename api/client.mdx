@@ -269,6 +269,10 @@ Initiates pair code authentication as an alternative to QR code pairing. The ret
 
 This can run concurrently with QR code pairing — whichever completes first wins.
 
+<Note>
+**One code at a time.** Fails with `PairCodeError::CodeAlreadyOutstanding` while a previously issued code is still within its validity window, instead of silently replacing it — a second code does not replace the first for the phone, since the server routes `primary_hello` by number without ever seeing the code. Call [`cancel_pair_code`](#cancel_pair_code) first when the replacement is intentional. Do not call this on a schedule driven by QR-code rotation — the two flows have unrelated lifetimes. See [One code at a time](/concepts/authentication#one-code-at-a-time).
+</Note>
+
 <ParamField path="options" type="PairCodeOptions" required>
   Configuration for pair code authentication:
   - `phone_number` — Phone number in international format (e.g., `"15551234567"`)
@@ -291,6 +295,8 @@ This can run concurrently with QR code pairing — whichever completes first win
 | `PairCode(PhoneNumberTooShort)` | Fewer than 7 digits |
 | `PairCode(PhoneNumberNotInternational)` | Starts with `0` (not international format) |
 | `PairCode(InvalidCustomCode)` | Custom code is not 8 valid Crockford Base32 characters |
+| `PairCode(CodeAlreadyOutstanding { remaining })` | A previously issued code is still within its validity window — call `cancel_pair_code` first |
+| `PairCode(Cancelled)` | `cancel_pair_code` was called while `companion_hello` (stage 1) was still in flight |
 | `PairCode(InvalidPrimaryEphemeralKey)` / `InvalidPrimaryIdentityKey` | Peer key parsing failed (typed `CurveError` source) |
 | `PairCode(EphemeralKeyAgreement)` / `IdentityKeyAgreement` | Diffie–Hellman failed (typed `CurveError` source) |
 | `PairCode(AdvSecretKeyDerivation)` / `BundleKeyDerivation` | HKDF expand failed |
@@ -311,6 +317,22 @@ let options = PairCodeOptions {
 
 let code = client.pair_with_code(options).await?;
 println!("Enter this code on your phone: {}", code);
+```
+
+---
+
+### cancel_pair_code
+
+```rust
+pub async fn cancel_pair_code(self: &Arc<Self>)
+```
+
+Abandons the outstanding pair-code flow, if any — the explicit reset [`pair_with_code`](#pair_with_code) requires before it will mint a replacement (WA Web's `initializeAltDeviceLinking()`). After this the previous code can no longer complete: a `primary_hello` for it is dropped rather than answered with a bundle its holder cannot open. A no-op when no flow is outstanding.
+
+**Example:**
+```rust
+client.cancel_pair_code().await;
+let code = client.pair_with_code(new_options).await?;
 ```
 
 ---

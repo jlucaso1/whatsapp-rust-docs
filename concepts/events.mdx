@@ -2377,6 +2377,38 @@ pub struct IncomingCall {
     pub timestamp: DateTime<Utc>,
     pub offline: bool,
     pub action: CallAction,
+    /// Group snapshot embedded in an initial offer or active-call invitation. `Some` only for
+    /// group calls — see the VoIP guide's [Group calls](/guides/voip-calls#group-calls) section.
+    pub group: Option<Box<GroupCallUpdate>>,
+}
+```
+
+<Note>
+`group_jid: Some(...)` on `CallAction::Offer` (below) is what distinguishes a group call offer from a 1:1 one; `group` on `IncomingCall` carries its roster snapshot. See [Group calls](/guides/voip-calls#group-calls) and [Call links](/guides/voip-calls#call-links) in the VoIP guide for accepting one and attaching media.
+</Note>
+
+`GroupCallUpdate` is the same authoritative roster/relay type `CallHandle::group_state()` exposes once you've joined (via `GroupCallState::snapshot()` — see [Reading group state](/guides/voip-calls#reading-group-state)):
+
+```rust
+pub struct GroupCallUpdate {
+    pub call_id: String,
+    pub call_creator: Jid,
+    pub group_jid: Option<Jid>,
+    pub transaction_id: u32,
+    pub media: String,
+    pub connected_limit: u32,
+    pub joinable: bool,
+    pub av_upgradable: bool,
+    pub rekey_requested: bool,
+    pub participants: Vec<GroupCallParticipant>,
+    pub relay: Option<GroupCallRelay>,
+}
+
+pub struct GroupCallParticipant {
+    pub jid: Jid,
+    pub state: Option<String>,          // "connected", …
+    pub participant_type: Option<String>,
+    pub devices: Vec<GroupCallDevice>,  // jid, platform, pid, capability_version
 }
 ```
 

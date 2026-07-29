@@ -115,11 +115,15 @@ use compact_str::CompactString;
 pub struct Jid {
     pub user: CompactString,           // "15551234567"
     pub server: Server,                // Server::Pn (s.whatsapp.net)
-    pub agent: u8,                     // Agent byte (parsed from JID string)
+    pub agent: u8,                     // Agent byte — only meaningful for @bot/@interop; always 0 for Pn/Lid/Hosted/HostedLid
     pub device: u16,                   // Device ID (0 for primary)
     pub integrator: u16,               // Integrator ID (used with interop server)
 }
 ```
+
+<Note>
+  For the AD-capable servers (`Pn`, `Lid`, `Hosted`, `HostedLid`), the wire form spells the server as a leading domain byte on `AD_JID` (see [AD_JID](#ad_jid-device-specific-jid) below), which the decoder resolves into `server` and does not also copy into `agent`. Earlier versions kept a redundant copy in `agent`, so a JID decoded off the wire (`agent` set to the domain byte) and the same JID parsed from text (`agent` always `0`) compared unequal under the derived `PartialEq`/`Hash` — despite `Display` rendering them identically. `agent` now stays `0` for these servers on both paths; it is only ever nonzero for `Bot`/`Interop`, which do render it.
+</Note>
 
 The `user` field uses `CompactString` (re-exported from `compact_str`) instead of `String`. `CompactString` stores short strings inline (up to 24 bytes on 64-bit platforms) without heap allocation, which benefits typical phone numbers and user identifiers. The library re-exports it as `wacore_binary::CompactString` and `whatsapp_rust::CompactString` for convenience. `CompactString` implements `From<&str>`, `From<String>`, and `Deref<Target = str>`, so it works as a drop-in replacement in most contexts — but code that relied on `Jid.user` being a `String` (e.g., passing it to functions expecting `&String` or calling `String`-specific methods) may need updating.
 
@@ -529,7 +533,9 @@ The `domain_type` byte is **derived from the `Server` enum variant** at encoding
 The `domain_type` must be derived from the JID's `server` field via `server_to_domain_type()`, **not** from `jid.agent`. A previous bug wrote `jid.agent` (which is 0 for most JIDs) unconditionally, causing LID JIDs to be encoded with `domain_type=0` instead of `domain_type=1`. This made LID group messages silently rejected by the server with error 421.
 </Warning>
 
-Location: `wacore/binary/src/encoder.rs:699-705`, `362-369`
+On decode, the reverse used to have its own asymmetry: `domain_type` resolves to `server`, but the decoder also wrote that same byte into `agent` — a field the encoder never reads back out (it always re-derives `domain_type` from `server`) and `Display` never renders for these servers. The only effect was that `agent` differed depending on provenance: `0` for a JID parsed from text, the domain byte for one just decoded off the wire. Since `agent` is part of the derived `PartialEq`/`Hash`, the identical JID could compare unequal — the same shape of bug as the encoder one above, just on the other side of the wire. The decoder now leaves `agent` at `0` for `Pn`/`Lid`/`Hosted`/`HostedLid`, so encode → decode is idempotent and a wire-decoded JID equals the same JID parsed from text.
+
+Location: `wacore/binary/src/encoder.rs:699-705`, `362-369`; decoder fix: `wacore/binary/src/decoder.rs`
 
 ### List Encoding
 

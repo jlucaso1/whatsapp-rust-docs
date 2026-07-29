@@ -161,6 +161,15 @@ assert_eq!(parsed, Server::Group);
   If you previously compared `jid.server` to string constants like `"s.whatsapp.net"`, the `PartialEq<str>` impl on `Server` preserves backward compatibility. However, `match` on the enum variant is preferred for exhaustiveness checking and performance.
 </Note>
 
+`Server::parse_known(s: &str) -> Option<Self>` is an allocation-free alternative to `TryFrom<&str>`: it returns `None` for an unknown suffix instead of building a `JidError::InvalidFormat` (and the `String` message inside it). `TryFrom` is implemented on top of it, so the two always agree:
+
+```rust
+assert_eq!(Server::parse_known("g.us"), Some(Server::Group));
+assert_eq!(Server::parse_known("unknown"), None);
+```
+
+Reach for `parse_known` when you only need the `Option` — for example, classifying a short string that might not even be a JID, such as an email address that happens to contain an `@` — and `try_from` when the caller needs the descriptive error.
+
 String constants are still available for backward compatibility and use in non-JID contexts:
 
 | Constant | Value | Server variant |

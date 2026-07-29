@@ -69,7 +69,7 @@ pub trait HttpClient: MaybeSendSync {
 
 `execute` and `execute_upload` have one more `Err` case. If you read a **2xx** body past your declared cap (`max_body_bytes` on `UreqHttpClient`), fail that read — a truncated payload must never look like a complete one. `execute_streaming` doesn't raise this error: its reader just reaches EOF at the cap, and a downstream integrity check (MAC or SHA) catches the truncation instead. See [Internal Implementation](#internal-implementation) for how `UreqHttpClient` implements both halves of this.
 
-Read `status_code` off the `Ok` response to decide what to do next. Media download and upload use it to retry on the same host (5xx), refresh a stale media-auth token (401/403), or re-derive an expired URL (404/410) — see [Automatic retry and URL re-derivation](/api/download#automatic-retry-and-url-re-derivation). If you map 4xx/5xx to `Err` instead, you hide the status from that logic, and every retry repeats the same stale auth token.
+Read `status_code` off the `Ok` response to decide what to do next. Download and upload both use it to refresh a stale media-auth token (401/403) and to move to the next CDN host on other errors like 5xx — see [download's retry and URL re-derivation](/api/download#automatic-retry-and-url-re-derivation) and [upload's retry on auth errors](/api/upload#automatic-retry-on-auth-errors). Download has one case upload doesn't: it treats an expired URL (404/410) the same as an auth error and re-derives it. If you map 4xx/5xx to `Err` instead, you hide the status from all of this, and every retry repeats the same stale auth token.
 
 Some HTTP crates default the wrong way. `ureq`'s `http_status_as_error` turns non-2xx into an `Err` unless you disable it, which is why `UreqHttpClient` disables it on every request. If you build a custom client on `ureq` or a similar library, disable that default yourself. `MockHttpClient` below shows the shape a compliant implementation should have: `Err` only when there's no response to give at all.
 </Warning>
@@ -397,12 +397,17 @@ The `UreqHttpClient` wraps a shared `ureq::Agent` for connection pooling. All re
 #[derive(Debug, Clone)]
 pub struct UreqHttpClient {
     agent: ureq::Agent,
+    /// Cap for `execute` and the reader `execute_streaming` returns.
+    /// Defaults to WhatsApp's 2 GiB max file size; override with `with_max_body_bytes`.
+    max_body_bytes: u64,
 }
 
 impl UreqHttpClient {
     pub fn new() -> Self {
-        let agent = ureq::Agent::new_with_defaults();
-        Self { agent }
+        Self {
+            agent: ureq::Agent::new_with_defaults(),
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES, // 2 GiB
+        }
     }
 }
 ```
@@ -530,7 +535,7 @@ fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpRespons
 
 Notice `execute_streaming` doesn't error when a body exceeds `max_body_bytes`, unlike `read_body` above. `std::io::Read::take` reaches EOF at the cap instead of raising an error, so `execute_streaming` itself always returns `Ok` once the response headers arrive. This is deliberate, not an oversight: the caller (`Client::download`) buffers the reader into a sink that must not grow unbounded, and a body truncated at the cap fails the MAC/SHA integrity check that runs after the read — that's where the truncation surfaces, not here.
 
-`execute_upload` follows the buffered shape, not the streaming one: it applies `status_as_response` to the request builder, then reads the response through `read_body`. This is what makes [media auth-refresh on upload](/api/download#automatic-retry-and-url-re-derivation) reachable at all. Before this fix, a rejected upload's status was swallowed into an opaque transport error, so the media-conn refresh it should have triggered never ran.
+`execute_upload` follows the buffered shape, not the streaming one: it applies `status_as_response` to the request builder, then reads the response through `read_body`. This is what makes [upload's auth-error retry](/api/upload#automatic-retry-on-auth-errors) reachable at all. Before this fix, a rejected upload's status was swallowed into an opaque transport error, so the media-conn refresh it should have triggered never ran.
 
 ## Implementing custom HTTP clients
 
@@ -587,7 +592,7 @@ impl HttpClient for ReqwestHttpClient {
 }
 ```
 
-Notice what this example doesn't do: it never calls `.error_for_status()`. `reqwest::Response::send()` already returns `Ok` for a non-2xx status by default, so this example matches the `HttpClient` contract for free. Don't add `.error_for_status()` here — it turns every 4xx/5xx into an `Err` and breaks the contract.
+Notice what this example doesn't do: it never calls `.error_for_status()`. `reqwest::RequestBuilder::send()` (`req.send()` above) already returns `Ok` for a non-2xx status by default, so this example matches the `HttpClient` contract for free. Don't add `.error_for_status()` here — it turns every 4xx/5xx into an `Err` and breaks the contract.
 
 ### Example: mock client for testing
 

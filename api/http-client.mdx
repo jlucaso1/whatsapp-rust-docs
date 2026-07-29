@@ -533,7 +533,9 @@ fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpRespons
 }
 ```
 
-Notice `execute_streaming` doesn't error when a body exceeds `max_body_bytes`, unlike `read_body` above. `std::io::Read::take` reaches EOF at the cap instead of raising an error, so `execute_streaming` itself always returns `Ok` once the response headers arrive. This is deliberate, not an oversight: the caller (`Client::download`) buffers the reader into a sink that must not grow unbounded, and a body truncated at the cap fails the MAC/SHA integrity check that runs after the read — that's where the truncation surfaces, not here.
+Notice `execute_streaming` doesn't error when a body exceeds `max_body_bytes`, unlike `read_body` above. `std::io::Read::take` reaches EOF at the cap instead of raising an error, so `execute_streaming` itself always returns `Ok` once the response headers arrive.
+
+That silent truncation is safe inside `Client::download` and `download_to_writer`: they decrypt the result and verify a MAC or SHA over it, so a body truncated at the cap fails that check instead of passing as a complete file. It is **not** safe if you call `execute_streaming` directly, the way the [Streaming Download](#streaming-download) example above does — that example has no integrity check of its own, so a truncated body would come back as an ordinary success. If you call `execute_streaming` directly, check the response against an expected length (a `Content-Length` header, for example) or your own integrity check before you trust it.
 
 `execute_upload` follows the buffered shape, not the streaming one: it applies `status_as_response` to the request builder, then reads the response through `read_body`. This is what makes [upload's auth-error retry](/api/upload#automatic-retry-on-auth-errors) reachable at all. Before this fix, a rejected upload's status was swallowed into an opaque transport error, so the media-conn refresh it should have triggered never ran.
 

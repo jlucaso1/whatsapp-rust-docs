@@ -1052,9 +1052,9 @@ async fn read_pump(
 Implement the `HttpClient` trait for custom HTTP operations:
 
 <Warning>
-Make `self.send_request(&request)` below return `Ok` for a completed exchange, even a 4xx/5xx status. Reserve `Err` for when the exchange never happens at all — DNS failure, connection refused, a TLS error, or a timeout.
+Make `self.send_request(&request)` below return `Ok` for a completed exchange, even a 4xx/5xx status. Reserve `Err` for two cases: the exchange never starts at all (DNS failure, connection refused, a TLS error, a timeout), or a body read fails after a 2xx status (for example, the body exceeds a size cap you enforce).
 
-Media download and upload read `status_code` off the `Ok` response to retry the same host, refresh a stale media-auth token, or re-derive an expired URL. If you turn a non-2xx status into `Err` instead, you hide it from that logic, and every retry repeats the same stale token. See [HTTP Client Trait](/api/http-client#httpclient-trait) for the full contract, including how the bundled `UreqHttpClient` works around `ureq`'s opposite default.
+Media download and upload read `status_code` off the `Ok` response to refresh a stale media-auth token (401/403) or move to the next CDN host on other errors like 5xx; download additionally re-derives an expired URL (404/410) the same way. If you turn a non-2xx status into `Err` instead, you hide it from all of this, and every retry repeats the same stale token. See [HTTP Client Trait](/api/http-client#httpclient-trait) for the full contract, including how the bundled `UreqHttpClient` works around `ureq`'s opposite default.
 </Warning>
 
 ```rust

@@ -96,9 +96,13 @@ pub async fn run(self: &Arc<Self>)
 Main event loop that manages connection lifecycle with automatic reconnection.
 
 Runs indefinitely until:
-- `disconnect()` or `logout()` is called
+- `disconnect()`, `logout()`, or `signal_shutdown_sync()` is called
 - Auto-reconnect is disabled and connection fails
 - Client receives a fatal stream error (401 unauthorized, 409 conflict, or 516 device removed)
+
+<Note>
+If you call `disconnect()`, `logout()`, or `signal_shutdown_sync()` while `run()` is waiting out its reconnect backoff, the client interrupts the wait immediately. The backoff can otherwise run up to the 900s cap (see [Auto-Reconnection](#auto-reconnection)). So without this, awaiting `run()` right after requesting a stop could look like a 15-minute hang. For example, [`bot.run().await?`](/api/bot#run) returns a `BotHandle` immediately — awaiting that handle waits on this same `run()`. A per-connection shutdown does not cut the backoff short; that's the kind `run()` itself reconnects from. Only the three terminal calls above interrupt the wait.
+</Note>
 
 **Example:**
 ```rust
@@ -460,6 +464,7 @@ When the server returns a 429 stream error, the client bumps the internal backof
 | `disconnect()` called | No reconnect attempt |
 | `logout()` called | No reconnect attempt, device deregistered |
 | Auto-reconnect disabled | No reconnect attempt |
+| You call `disconnect()` / `logout()` / `signal_shutdown_sync()` during a backoff wait | The client interrupts the wait immediately; `run()` returns without waiting out the remaining delay |
 
 ---
 

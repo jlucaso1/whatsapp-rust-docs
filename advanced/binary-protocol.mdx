@@ -168,7 +168,7 @@ assert_eq!(Server::parse_known("g.us"), Some(Server::Group));
 assert_eq!(Server::parse_known("unknown"), None);
 ```
 
-Reach for `parse_known` when you only need the `Option` — for example, classifying a short string that might not even be a JID, such as an email address that happens to contain an `@` — and `try_from` when the caller needs the descriptive error.
+Use `parse_known` when you only need an `Option`. This is useful for classifying short strings that might not be JIDs, such as an email address containing `@`. Use `try_from` when you need a descriptive error.
 
 String constants are still available for backward compatibility and use in non-JID contexts:
 

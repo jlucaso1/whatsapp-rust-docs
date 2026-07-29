@@ -63,6 +63,10 @@ See the full table, including default/publish status, in [Installation](/install
   [PR #1128](https://github.com/oxidezap/whatsapp-rust/pull/1128) moved callee signaling into `accept(...).start()` itself. Before this PR, `start()` drove only the media plane and the application had to send `<preaccept>`/`<accept>` itself; see the note below for current behavior.
 </Warning>
 
+<Note>
+  This is the 1:1 path only. A group offer's `CallAction::Offer` also carries `group_jid: Some(...)` and would otherwise be caught by the same `is_video, ..` match below — guard on `group_jid: None` here and dispatch `Some(...)` to [Receiving a group call invite](#receiving-a-group-call-invite) instead.
+</Note>
+
 ```rust
 use whatsapp_rust::client::Client;
 use whatsapp_rust::types::events::Event;
@@ -72,7 +76,8 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
     match event {
         Event::IncomingCall(incoming) => {
             // Borrow the action so `incoming` is not partially moved before `.accept(&incoming)`.
-            if let CallAction::Offer { is_video, .. } = &incoming.action {
+            // group_jid: None excludes group offers — see the Note above.
+            if let CallAction::Offer { is_video, group_jid: None, .. } = &incoming.action {
                 let mut call = client.voip()
                     .accept(&incoming)
                     .audio(mic_source, speaker_sink);
@@ -416,12 +421,16 @@ let handle = client.voip()
     .audio(mic_source, speaker_sink)
     .start()
     .await?;
+```
 
-// Call the current members of an existing group
+```rust
+// Call the current members of an existing group.
+// audio()/video() take their endpoints by value, so this call needs its own
+// AudioSource/AudioSink instances rather than reusing mic_source/speaker_sink above.
 let group_jid: Jid = "120363012345678901@g.us".parse()?;
 let handle = client.voip()
     .group_call_by_id(&group_jid)
-    .audio(mic_source, speaker_sink)
+    .audio(other_mic_source, other_speaker_sink)
     .start()
     .await?;
 ```

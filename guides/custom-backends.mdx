@@ -1051,6 +1051,10 @@ async fn read_pump(
 
 Implement the `HttpClient` trait for custom HTTP operations:
 
+<Warning>
+`self.send_request(&request)` below must return `Ok` for a completed exchange even when the status is a 4xx/5xx — reserve `Err` for the exchange never happening (DNS, connect, TLS, timeout). Media download/upload read `status_code` off the `Ok` response to decide whether to retry the same host, refresh a stale media-auth token, or re-derive an expired URL; an implementation that turns a non-2xx into `Err` hides the status from that logic and every retry repeats the same stale token. See [HTTP Client Trait](/api/http-client#httpclient-trait) for the full contract, including how the bundled `UreqHttpClient` has to work around `ureq`'s opposite default.
+</Warning>
+
 ```rust
 use whatsapp_rust::http::{HttpClient, HttpRequest, HttpResponse};
 use wacore::net::StreamingHttpResponse;

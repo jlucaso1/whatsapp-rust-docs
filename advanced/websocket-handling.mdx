@@ -1102,19 +1102,21 @@ loop {
     let errors = self.auto_reconnect_errors.fetch_add(1, Ordering::Relaxed);
     let delay = fibonacci_backoff(errors + 1);
 
-    // Races the wait against a terminal shutdown so `disconnect()` /
-    // `logout()` / `signal_shutdown_sync()` interrupts it immediately —
-    // a bare `sleep(delay).await` would otherwise hold `run()` for up to
-    // the 900s cap after a caller had already asked it to stop.
+    // This races the wait against the client's terminal shutdown listener.
+    // If you call `disconnect()`, `logout()`, or `signal_shutdown_sync()`,
+    // the wait ends immediately. A bare `sleep(delay).await` would otherwise
+    // hold `run()` for up to the 900s cap after you'd already asked it to stop.
     select! {
         _ = sleep(delay) => {}
-        _ = shutdown_signal() => break,
+        _ = self.shutdown_signal() => break,
     }
 }
 ```
 
 <Note>
-The wait is deliberately raced against the loop's *terminal* shutdown signal, not the per-connection one `keepalive_loop` watches — that one fires on every disconnect the loop exists to reconnect from, and would collapse every backoff into a no-op if it interrupted the wait too. Only `disconnect()`, `logout()`, and `signal_shutdown_sync()` cut the backoff short; a routine disconnect-and-retry does not.
+`self.shutdown_signal()` above is `Client::shutdown_signal()`, the client's own terminal-shutdown listener — not the crate-level [`whatsapp_rust::shutdown_signal()`](/installation#graceful-shutdown) helper that waits for SIGINT/SIGTERM.
+
+This races the wait against that *terminal* signal, not the per-connection one `keepalive_loop` watches. The per-connection signal fires on every disconnect the loop exists to reconnect from. Watching it here would collapse every backoff into a no-op. Only `disconnect()`, `logout()`, and `signal_shutdown_sync()` fire the terminal signal and cut the backoff short. A routine disconnect-and-retry does not.
 </Note>
 
 ## Keepalive and dead socket detection

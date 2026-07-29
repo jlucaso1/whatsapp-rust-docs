@@ -64,6 +64,16 @@ pub trait HttpClient: MaybeSendSync {
 `supports_upload_streaming` / `execute_upload` were added in v0.6 to back [`Client::upload_stream`](/api/upload#upload-stream-constant-memory). Both have safe defaults (returning `false` / an error), so existing custom `HttpClient` implementations keep compiling — implement them only if you want constant-memory uploads through your client. `UreqHttpClient` implements both. `UploadBody` is `Box<dyn std::io::Read + Send>`.
 </Note>
 
+<Warning>
+**Return `Ok` for every completed exchange, even a non-2xx status.** Reserve `Err` for a request that never completed — DNS failure, connection refused, a TLS error, or a timeout.
+
+`execute` and `execute_upload` have one more `Err` case. If you read a **2xx** body past your declared cap (`max_body_bytes` on `UreqHttpClient`), fail that read — a truncated payload must never look like a complete one. `execute_streaming` doesn't raise this error: its reader just reaches EOF at the cap, and a downstream integrity check (MAC or SHA) catches the truncation instead. See [Internal Implementation](#internal-implementation) for how `UreqHttpClient` implements both halves of this.
+
+Read `status_code` off the `Ok` response to decide what to do next. Download and upload both use it to refresh a stale media-auth token (401/403) and to move to the next CDN host on other errors like 5xx — see [download's retry and URL re-derivation](/api/download#automatic-retry-and-url-re-derivation) and [upload's retry on auth errors](/api/upload#automatic-retry-on-auth-errors). Download has one case upload doesn't: it treats an expired URL (404/410) the same as an auth error and re-derives it. If you map 4xx/5xx to `Err` instead, you hide the status from all of this, and every retry repeats the same stale auth token.
+
+Some HTTP crates default the wrong way. `ureq`'s `http_status_as_error` turns non-2xx into an `Err` unless you disable it, which is why `UreqHttpClient` disables it on every request. If you build a custom client on `ureq` or a similar library, disable that default yourself. `MockHttpClient` below shows the shape a compliant implementation should have: `Err` only when there's no response to give at all.
+</Warning>
+
 ### Methods
 
 #### supports_streaming
@@ -90,8 +100,8 @@ async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
 - `request: HttpRequest` - The request to execute
 
 **Returns:**
-- `HttpResponse` with buffered body on success
-- `anyhow::Error` on failure
+- `HttpResponse` for any completed exchange — a non-2xx `status_code` is still `Ok`; read it to classify the response
+- `anyhow::Error` when the request never completed (a transport-level failure), or when a 2xx body exceeds your configured cap
 
 **Example:**
 ```rust
@@ -117,8 +127,8 @@ fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpRespons
 - `request: HttpRequest` - The request to execute
 
 **Returns:**
-- `StreamingHttpResponse` with streaming body reader
-- `anyhow::Error` on failure or if streaming is not supported
+- `StreamingHttpResponse` for any completed exchange — a non-2xx `status_code` is still `Ok`
+- `anyhow::Error` on a transport-level failure, or if streaming is not supported. A body past your cap is not one of these cases — the reader reaches EOF early instead; see the [contract note](#httpclient-trait) above
 
 **Example:**
 ```rust
@@ -387,12 +397,17 @@ The `UreqHttpClient` wraps a shared `ureq::Agent` for connection pooling. All re
 #[derive(Debug, Clone)]
 pub struct UreqHttpClient {
     agent: ureq::Agent,
+    /// Cap for `execute` and the reader `execute_streaming` returns.
+    /// Defaults to WhatsApp's 2 GiB max file size; override with `with_max_body_bytes`.
+    max_body_bytes: u64,
 }
 
 impl UreqHttpClient {
     pub fn new() -> Self {
-        let agent = ureq::Agent::new_with_defaults();
-        Self { agent }
+        Self {
+            agent: ureq::Agent::new_with_defaults(),
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES, // 2 GiB
+        }
     }
 }
 ```
@@ -411,6 +426,14 @@ let agent: ureq::Agent = Config::builder()
 
 `UreqHttpClient::new()` (the default agent) reports a `resource_report()` estimate for its idle connection pool — up to 3 idle connections, each with a 16 KiB input and 16 KiB output buffer, so `pool_connections: Some(3)`, `pool_buffer_bytes: Some(96 * 1024)`, `inflight_bytes: None`. `UreqHttpClient::with_agent(...)` (a caller-supplied agent) reports `None` — its buffer and pool configuration is opaque, so the client doesn't guess.
 
+ureq 3.3 treats any 4xx/5xx as `ureq::Error::StatusCode` by default — the opposite of the `HttpClient` contract above. `UreqHttpClient` sends every request through `status_as_response`, which disables `http_status_as_error` **per request** instead of once on the shared agent. That placement matters: a caller-supplied agent from [`with_agent`](#with_agent) carries ureq's own defaults, not `UreqHttpClient`'s, so only a per-request override reaches it too:
+
+```rust
+fn status_as_response<Any>(req: ureq::RequestBuilder<Any>) -> ureq::RequestBuilder<Any> {
+    req.config().http_status_as_error(false).build()
+}
+```
+
 The `execute` method clones the agent and wraps the call in `spawn_blocking`:
 
 ```rust
@@ -418,18 +441,19 @@ The `execute` method clones the agent and wraps the call in `spawn_blocking`:
 impl HttpClient for UreqHttpClient {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
         let agent = self.agent.clone();
+        let max_body_bytes = self.max_body_bytes;
         // ureq is blocking, so wrap in spawn_blocking
         tokio::task::spawn_blocking(move || {
             let response = match request.method.as_str() {
                 "GET" => {
-                    let mut req = agent.get(&request.url);
+                    let mut req = status_as_response(agent.get(&request.url));
                     for (key, value) in &request.headers {
                         req = req.header(key, value);
                     }
                     req.call()?
                 }
                 "POST" => {
-                    let mut req = agent.post(&request.url);
+                    let mut req = status_as_response(agent.post(&request.url));
                     for (key, value) in &request.headers {
                         req = req.header(key, value);
                     }
@@ -445,25 +469,47 @@ impl HttpClient for UreqHttpClient {
             };
 
             let status_code = response.status().as_u16();
-            let body_bytes = response.into_body().read_to_vec()?;
+            let body = read_body(response, max_body_bytes)?;
 
-            Ok(HttpResponse {
-                status_code,
-                body: body_bytes,
-            })
+            Ok(HttpResponse { status_code, body })
         })
         .await?
     }
 }
 ```
 
-The `execute_streaming` method is synchronous (no `spawn_blocking`) because it's called from within a blocking context. It also uses the shared agent:
+`read_body` is where the non-2xx contract meets your `max_body_bytes` cap, and it treats the two cases differently. A 2xx body *is* the payload, so an over-cap read stays an `Err` — you must never mistake a truncated media file for a complete one. A non-2xx body is diagnostic text (an error page), so `read_body` truncates it instead of erroring. That truncation cap is 64 KiB on top of `max_body_bytes`, not instead of it: losing the tail of an error page costs nothing, but losing the status code costs the media-conn refresh:
+
+```rust
+const ERROR_BODY_CAP: u64 = 64 * 1024;
+
+fn read_body(response: ureq::http::Response<ureq::Body>, max_body_bytes: u64) -> Result<Vec<u8>> {
+    if response.status().is_success() {
+        return Ok(response
+            .into_body()
+            .into_with_config()
+            .limit(max_body_bytes)
+            .read_to_vec()?);
+    }
+
+    let mut body = Vec::new();
+    let mut reader = std::io::Read::take(
+        response.into_body().into_reader(),
+        max_body_bytes.min(ERROR_BODY_CAP),
+    );
+    // A read that fails partway still leaves the status worth returning.
+    let _ = std::io::Read::read_to_end(&mut reader, &mut body);
+    Ok(body)
+}
+```
+
+The `execute_streaming` method is synchronous (no `spawn_blocking`) because it's called from within a blocking context. It also uses the shared agent and `status_as_response`:
 
 ```rust
 fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse> {
     let response = match request.method.as_str() {
         "GET" => {
-            let mut req = self.agent.get(&request.url);
+            let mut req = status_as_response(self.agent.get(&request.url));
             for (key, value) in &request.headers {
                 req = req.header(key, value);
             }
@@ -478,7 +524,7 @@ fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpRespons
     };
 
     let status_code = response.status().as_u16();
-    let reader = response.into_body().into_reader();
+    let reader = std::io::Read::take(response.into_body().into_reader(), self.max_body_bytes);
 
     Ok(StreamingHttpResponse {
         status_code,
@@ -486,6 +532,12 @@ fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpRespons
     })
 }
 ```
+
+Notice `execute_streaming` doesn't error when a body exceeds `max_body_bytes`, unlike `read_body` above. `std::io::Read::take` reaches EOF at the cap instead of raising an error, so `execute_streaming` itself always returns `Ok` once the response headers arrive.
+
+That silent truncation is safe inside `Client::download` and `download_to_writer`: they decrypt the result and verify a MAC or SHA over it, so a body truncated at the cap fails that check instead of passing as a complete file. It is **not** safe if you call `execute_streaming` directly, the way the [Streaming Download](#streaming-download) example above does — that example has no integrity check of its own, so a truncated body would come back as an ordinary success. If you call `execute_streaming` directly, check the response against an expected length (a `Content-Length` header, for example) or your own integrity check before you trust it.
+
+`execute_upload` follows the buffered shape, not the streaming one: it applies `status_as_response` to the request builder, then reads the response through `read_body`. This is what makes [upload's auth-error retry](/api/upload#automatic-retry-on-auth-errors) reachable at all. Before this fix, a rejected upload's status was swallowed into an opaque transport error, so the media-conn refresh it should have triggered never ran.
 
 ## Implementing custom HTTP clients
 
@@ -541,6 +593,8 @@ impl HttpClient for ReqwestHttpClient {
     // execute_streaming.
 }
 ```
+
+Notice what this example doesn't do: it never calls `.error_for_status()`. `reqwest::RequestBuilder::send()` (`req.send()` above) already returns `Ok` for a non-2xx status by default, so this example matches the `HttpClient` contract for free. Don't add `.error_for_status()` here — it turns every 4xx/5xx into an `Err` and breaks the contract.
 
 ### Example: mock client for testing
 

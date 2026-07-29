@@ -70,6 +70,10 @@ All download methods handle three categories of CDN errors automatically:
 
 For streaming downloads (`download_to_writer`), the writer is seeked back to position 0 before retrying so partial writes are overwritten. For in-memory downloads (`download()`), each retry gets a fresh buffer rather than reusing the previous one, so a failed host that wrote a longer body can't leave a stale tail behind a shorter successful retry.
 
+<Note>
+This classification reads `status_code` off a successfully completed HTTP exchange — it never sees a status that a custom `HttpClient` implementation turned into an `Err`. If you provide your own `HttpClient`, see the [non-2xx-as-`Ok` contract](/api/http-client#httpclient-trait) it must follow for this retry logic to work at all.
+</Note>
+
 ---
 
 ## download_to_writer

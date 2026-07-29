@@ -1,4 +1,4 @@
----
+[Resource from github at repo://oxidezap/whatsapp-rust-docs/sha/b61b832df2fbf80e918f171acf2aa03ef136ae48/contents/advanced/signal-protocol.mdx] ---
 title: 'Signal Protocol Implementation'
 description: 'Deep dive into end-to-end encryption, Double Ratchet algorithm, and Signal Protocol in whatsapp-rust'
 ---
@@ -2010,7 +2010,7 @@ pub fn sort_dedup_by_user(jids: &mut Vec<Jid>);
 pub fn sort_dedup_by_device(jids: &mut Vec<Jid>);
 ```
 
-`sort_dedup_by_device` keys on `Jid::identity_agent()` rather than the raw `agent` field, so its notion of "same device" matches exactly what `Jid`'s `PartialEq`/`Hash` already treat as equal (see [Binary Protocol](/advanced/binary-protocol#jid-encoding) for why the two fields differ). That has to hold in both directions: keying on the raw `agent` would let two JIDs that are actually one device — an inert agent byte on `Pn`/`Lid`/`Hosted`/`HostedLid`, same AD-JID, same Signal address — both survive the dedup and pick up two concurrent encryption jobs against one session; dropping `agent` from the key entirely would go too far the other way and silently collapse two genuinely distinct `@bot`/`@interop` devices, which *do* render it, losing a fan-out destination.
+`sort_dedup_by_device` keys on `Jid::identity_agent()` rather than the raw `agent` field. Its notion of "same device" then matches exactly what `Jid`'s `PartialEq`/`Hash` already treat as equal (see [Binary Protocol](/advanced/binary-protocol#jid-encoding) for why the two fields differ). Both directions matter here. Keying on the raw `agent` field can leave two JIDs that are actually one device — an inert agent byte on `Pn`/`Lid`/`Hosted`/`HostedLid`, but the same AD-JID and the same Signal address — both surviving the dedup, which gives that one session two concurrent encryption jobs. Dropping `agent` from the key entirely goes too far the other way: it silently collapses two genuinely distinct `@bot`/`@interop` devices, which *do* render the agent, losing a fan-out destination.
 
 Both use `sort_unstable_by` followed by `dedup_by`, comparing JID fields directly without allocating intermediate strings or hash sets. This is more efficient than the `HashSet<(String, String)>` approach because:
 

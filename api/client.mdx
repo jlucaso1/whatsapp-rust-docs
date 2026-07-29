@@ -100,6 +100,10 @@ Runs indefinitely until:
 - Auto-reconnect is disabled and connection fails
 - Client receives a fatal stream error (401 unauthorized, 409 conflict, or 516 device removed)
 
+<Note>
+A terminal shutdown (`disconnect()`, `logout()`, or `signal_shutdown_sync()`) that lands while `run()` is parked in its reconnect backoff interrupts the wait immediately instead of waiting it out. The backoff can run up to the 900s cap (see [Auto-Reconnection](#auto-reconnection)), so without this a caller `.await`ing `run()` right after requesting a stop — e.g. `Bot::run` — could see it hang for up to 15 minutes. A per-connection shutdown, the kind `run()` itself reconnects from, does *not* cut the backoff short; only a terminal shutdown does.
+</Note>
+
 **Example:**
 ```rust
 let client_clone = client.clone();
@@ -460,6 +464,7 @@ When the server returns a 429 stream error, the client bumps the internal backof
 | `disconnect()` called | No reconnect attempt |
 | `logout()` called | No reconnect attempt, device deregistered |
 | Auto-reconnect disabled | No reconnect attempt |
+| `disconnect()` / `logout()` / `signal_shutdown_sync()` during a backoff wait | Wait is interrupted immediately; `run()` returns without waiting out the remaining delay |
 
 ---
 

@@ -1101,9 +1101,21 @@ loop {
 
     let errors = self.auto_reconnect_errors.fetch_add(1, Ordering::Relaxed);
     let delay = fibonacci_backoff(errors + 1);
-    sleep(delay).await;
+
+    // Races the wait against a terminal shutdown so `disconnect()` /
+    // `logout()` / `signal_shutdown_sync()` interrupts it immediately —
+    // a bare `sleep(delay).await` would otherwise hold `run()` for up to
+    // the 900s cap after a caller had already asked it to stop.
+    select! {
+        _ = sleep(delay) => {}
+        _ = shutdown_signal() => break,
+    }
 }
 ```
+
+<Note>
+The wait is deliberately raced against the loop's *terminal* shutdown signal, not the per-connection one `keepalive_loop` watches — that one fires on every disconnect the loop exists to reconnect from, and would collapse every backoff into a no-op if it interrupted the wait too. Only `disconnect()`, `logout()`, and `signal_shutdown_sync()` cut the backoff short; a routine disconnect-and-retry does not.
+</Note>
 
 ## Keepalive and dead socket detection
 

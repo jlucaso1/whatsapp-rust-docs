@@ -340,7 +340,7 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 3. Check `expected_disconnect` → immediate reconnect if expected (e.g., 515)
 4. Stability-gated backoff reset: the counter resets to base only if the connection was authenticated (`<success>`) for at least 30s (`STABLE_CONNECTION_RESET_MS`, WA Web's `resetDelay`) **and** no explicit penalty (429, manual `reconnect()`) is pending for this cycle — a penalty survives even a stable connection (WA Web `cancelReset`)
 5. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
-6. Wait → attempt reconnection (with 20s connect timeout)
+6. Wait, racing the delay against a terminal shutdown so `disconnect()`/`logout()`/`signal_shutdown_sync()` interrupts it immediately instead of holding `run()` for up to the 900s cap → attempt reconnection (with 20s connect timeout)
 
 See [WebSocket & Noise Protocol - Fibonacci backoff](/advanced/websocket-handling#fibonacci-backoff) for the stability-reset and penalty-survival mechanics.
 

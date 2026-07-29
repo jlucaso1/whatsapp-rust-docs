@@ -547,6 +547,27 @@ The decoder now leaves `agent` at `0` for `Pn`/`Lid`/`Hosted`/`HostedLid`, so en
 
 Location: `wacore/binary/src/encoder.rs:699-705`, `362-369`; decoder fix: `wacore/binary/src/decoder.rs`
 
+#### INTEROP_JID (cross-platform interop JID)
+
+```rust
+// Format: INTEROP_JID + user + device (u16 BE) + integrator (u16 BE)
+// No server is written — the token itself implies Server::Interop
+self.write_u8(token::INTEROP_JID)?;
+self.write_string(user)?;
+self.write_u16_be(device)?;
+self.write_u16_be(integrator)?;
+```
+
+The encoder only takes this path when `server == Server::Interop && integrator != 0`. A zero-integrator interop JID still encodes as `JID_PAIR`, as it always has. Device-specific `Pn`/`Lid`/`Hosted`/`HostedLid` JIDs are unaffected — they continue to use `AD_JID`, as described above.
+
+<Warning>
+`JID_PAIR` has no field for `integrator`. Before this token was written, every interop JID encoded that way — including ones with a non-zero `integrator` — so the field was silently dropped on the way out, even though the decoder parses it on the way in. Two interop JIDs differing only in `integrator` addressed different things but produced identical bytes.
+</Warning>
+
+This token is asymmetric between the two directions, and deliberately so. WA Web's own writer emits only the three fields above. That writer is the evidence for what the server actually accepts. WA Web's *decoder* additionally reads a trailing server byte. That extra byte describes what the server sends to the client, not what it expects to receive. Our decoder mirrors that same trailing read. As a result, encoding an interop JID this way does not round-trip through our own decoder for that token. That is a property of the protocol having two different shapes for the two directions, not a bug to paper over by making both ends agree locally.
+
+Location: `wacore/binary/src/encoder.rs` (`write_interop_jid`, `needs_interop_jid`)
+
 ### List Encoding
 
 Lists (including node structures) have length-prefixed encoding:

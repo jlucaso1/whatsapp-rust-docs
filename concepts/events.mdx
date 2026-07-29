@@ -2377,8 +2377,15 @@ pub struct IncomingCall {
     pub timestamp: DateTime<Utc>,
     pub offline: bool,
     pub action: CallAction,
+    /// Group snapshot embedded in an initial offer or active-call invitation. `Some` only for
+    /// group calls — see the VoIP guide's [Group Calls](/guides/voip-calls#group-calls) section.
+    pub group: Option<Box<GroupCallUpdate>>,
 }
 ```
+
+<Note>
+`group_jid: Some(...)` on `CallAction::Offer` (below) is what distinguishes a group call offer from a 1:1 one; `group` on `IncomingCall` carries its roster snapshot. See [Group Calls](/guides/voip-calls#group-calls) and [Call Links](/guides/voip-calls#call-links) in the VoIP guide for accepting one and attaching media.
+</Note>
 
 The `action` field is a tagged enum that mirrors the inner stanza child (`<offer>`, `<offer_notice>`, `<preaccept>`, `<accept>`, `<reject>`, `<terminate>`):
 

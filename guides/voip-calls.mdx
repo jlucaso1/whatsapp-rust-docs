@@ -5,9 +5,13 @@ description: Place and answer end-to-end encrypted 1:1 voice and video calls wit
 
 ## Overview
 
-whatsapp-rust supports end-to-end encrypted 1:1 voice and video calls that interoperate with the official WhatsApp app. The full audio media path is implemented in pure Rust — encoding, E2E-SRTP encryption, relay transport, decryption, and decoding — while you supply mic capture and speaker playout (see Audio I/O below).
+whatsapp-rust supports end-to-end encrypted voice and video calls that interoperate with the official WhatsApp app — 1:1 calls, ad-hoc and group-bound **group calls**, and reusable **call links** with waiting rooms. The full audio media path is implemented in pure Rust — encoding, E2E-SRTP encryption, relay transport, decryption, and decoding — while you supply mic capture and speaker playout (see Audio I/O below).
 
 Video is **codec-neutral**: you hand the library complete H.264 Annex-B access units and it owns signaling, RTP packetization/reassembly, E2E-SRTP encryption, relay transport, and PLI/FIR-driven keyframe recovery. Encoding, decoding, capture, and display stay outside the library — the bundled CLI example drives them through `ffmpeg`/`ffplay`.
+
+<Note>
+  [PR #1130](https://github.com/oxidezap/whatsapp-rust/pull/1130) added group calls and call links on top of the 1:1 flow below — no separate feature flag, and no change to the 1:1 API. See [Group Calls](#group-calls) and [Call Links](#call-links).
+</Note>
 
 <Note>
   Voice and video calling are behind the optional `voip` feature flag. The default build is entirely unaffected — none of the codec or relay dependencies are compiled unless you opt in.
@@ -372,6 +376,10 @@ handle.stop_video().await?; // Idempotent.
 | `handle.announce_video_enabled().await` | Send the standalone `Enabled` stanza that completes a `start_video` upgrade. `whatsapp-rust`'s standard `<call>` handler already does this automatically on the peer's `UpgradeAccept` — only call it yourself if you're driving call signaling outside that handler |
 | `handle.stop_video().await` | Stop our own outbound video; idempotent. The peer's video plane is unaffected if they keep sending — see Video I/O above |
 | `handle.events()` | Subscribe to engine events (relay allocate, audio/video state changes, RTCP, failures) |
+| `handle.group_state()` | Roster/relay/waiting-room snapshot for a group or call-link call, `None` on a plain 1:1 call — see [Group Calls](#group-calls) |
+| `handle.invite_participant(&jid).await` / `handle.ring_participant(&jid).await` | Add or re-ring a participant, including promoting a 1:1 call to a group call — see [Promoting a 1:1 call to a group call](#promoting-a-1-1-call-to-a-group-call) |
+| `handle.set_approval_required(bool).await` / `handle.admit_waiting_user(&jid).await` / `handle.deny_waiting_user(&jid).await` | Call-link waiting-room admin controls — see [Waiting rooms](#waiting-rooms) |
+| `handle.set_hand_raised(bool).await` / `handle.send_reaction(emoji)` / `handle.start_screen_share(id).await` / `handle.stop_screen_share().await` | See [Reactions, Hand Raising & Screen Sharing](#reactions-hand-raising-and-screen-sharing) |
 
 ## Multi-Device Behavior
 
@@ -380,6 +388,167 @@ The library handles multi-device call scenarios automatically:
 - **Companion answering** — if another linked device picks up, the library performs a recv-key rekey to that device.
 - **Sibling dismiss** — if a sibling device declines or answers elsewhere, the call tears down cleanly on this device.
 - **Offline missed calls** — missed-call surfacing for devices that were offline when the call arrived.
+
+## Group Calls
+
+whatsapp-rust supports two ways to place a group call, both returning the same `CallHandle` as a 1:1 call and taking the same `.audio(...)` / `.encoded_audio(...)` / `.video(...)` builder methods described above:
+
+| Entry point | Use for |
+|---|---|
+| `client.voip().group_call(&targets)` | An ad-hoc call to specific users, not tied to a WhatsApp group. Optionally `.group(group_jid)` to bind it to an existing group anyway |
+| `client.voip().group_call_by_id(&group_jid)` | A call to the current members of an existing WhatsApp group — resolves the roster and excludes yourself automatically |
+
+```rust
+use whatsapp_rust::types::Jid;
+
+let alice: Jid = "15551234567@lid".parse()?;
+let bob: Jid = "15557654321@lid".parse()?;
+
+// Ad-hoc call to specific users
+let handle = client.voip()
+    .group_call(&[alice, bob])
+    .audio(mic_source, speaker_sink)
+    .start()
+    .await?;
+
+// Call the current members of an existing group
+let group_jid: Jid = "120363012345678901@g.us".parse()?;
+let handle = client.voip()
+    .group_call_by_id(&group_jid)
+    .audio(mic_source, speaker_sink)
+    .start()
+    .await?;
+```
+
+<Note>
+  A group call's connected roster is capped at `GROUP_CALL_MAX_PARTICIPANTS` (32, including yourself) — `group_call`/`group_call_by_id` reject a remote-target count outside 2..=31 with `CallError::Setup`. Targets must be unique and cannot include yourself.
+</Note>
+
+### Receiving a group call invite
+
+`Event::IncomingCall` fires the same way as for 1:1 calls (see [Answering an Incoming Call](#answering-an-incoming-call)), but a group offer's `CallAction::Offer` carries `group_jid: Some(...)`, and `IncomingCall::group` carries the roster snapshot embedded in the invitation. Signaling and media attach are two independent steps for a group call:
+
+```rust
+if let CallAction::Offer { group_jid: Some(group_jid), .. } = &incoming.action {
+    // Optional: send <preaccept> before your UI is ready to attach media.
+    client.voip().preaccept_group_invite(&incoming).await?;
+
+    // Send <accept> once the user answers...
+    client.voip().accept_group_invite(&incoming).await?;
+    // ...then attach media the same way you'd place the call yourself.
+    let handle = client.voip()
+        .group_call_by_id(group_jid)
+        .audio(mic_source, speaker_sink)
+        .start()
+        .await?;
+}
+```
+
+### Promoting a 1:1 call to a group call
+
+There's no separate "promote" call — invite or ring another user directly on an active `CallHandle` from a 1:1 call, and it becomes an ad-hoc group call in place. `handle.group_state()` starts returning `Some(...)` once the promotion completes:
+
+```rust
+// Add someone who isn't in the call yet
+handle.invite_participant(&carol).await?;
+
+// Ring someone the roster already knows about but who isn't currently connected
+handle.ring_participant(&dave).await?;
+```
+
+### Reading group state
+
+`handle.group_state() -> Option<GroupCallState>` returns the latest transaction-ordered roster/relay snapshot (`None` on a plain 1:1 call):
+
+```rust
+if let Some(state) = handle.group_state() {
+    if let Some(snapshot) = state.snapshot() {
+        for participant in &snapshot.participants {
+            println!("{}: connected={}", participant.jid, participant.is_connected());
+        }
+    }
+}
+```
+
+## Call Links
+
+Call links are reusable, shareable URLs (`https://call.whatsapp.com/<audio|video>/<token>`) that don't require a prior invite. Creating and previewing a link are direct calls on `client.voip()`; joining one uses the same builder shape as `group_call`/`group_call_by_id`:
+
+```rust
+use whatsapp_rust::voip::CallLinkMedia;
+
+// Create a link you can share
+let link = client.voip().create_call_link(CallLinkMedia::Video).await?;
+println!("share: {}", link.url()); // https://call.whatsapp.com/video/<token>
+
+// Preview a link without joining it (creator, waiting-room state, whether you're the admin)
+let preview = client.voip().preview_call_link(&link.token, CallLinkMedia::Video).await?;
+
+// Join it and attach media
+let handle = client.voip()
+    .call_link(&link.token, CallLinkMedia::Video)
+    .audio(mic_source, speaker_sink)
+    .video(camera_source, video_sink)
+    .start()
+    .await?;
+```
+
+<Note>
+  `call_link(...)`'s `media` must match how you attach: a `CallLinkMedia::Video` link requires `.video(...)`, and a `CallLinkMedia::Audio` link rejects `.video(...)` with `CallError::Media`. The signaling rate for `.audio(...)`/`.encoded_audio(...)` must be 16000 Hz — see [Audio codecs](#audio-codecs).
+</Note>
+
+`client.voip().join_call_link(...)` is the lower-level counterpart of `call_link(...).start()` — it performs admission (or enters the waiting room) and returns a `CallLinkJoin` without attaching media. Most applications want the builder instead.
+
+### Waiting rooms
+
+A call link can require approval before letting someone in. `handle.group_state().and_then(|s| s.waiting_room())` returns the current waiting room — `is_admin`, whether approval is `enabled`, and the pending `users` (each with a `jid` and a `state` string) — and `CallEvent::WaitingRoomUpdated` fires whenever it changes.
+
+If you're the link's admin, `CallHandle` exposes:
+
+```rust
+handle.set_approval_required(true).await?;      // turn the waiting room on/off
+handle.admit_waiting_user(&pending_jid).await?; // let someone in
+handle.deny_waiting_user(&pending_jid).await?;  // turn someone away
+```
+
+All three return `CallError::Media("waiting-room control requires an administrator")` if you're not the admin for the call's current generation.
+
+<Note>
+  A call link's waiting room can hold up to 128 pending users — a separate, larger cap from the 32-participant connected roster above.
+</Note>
+
+## Reactions, Hand Raising and Screen Sharing
+
+Available on any group-call `CallHandle` (ad-hoc, group-bound, or call-link):
+
+```rust
+handle.set_hand_raised(true).await?;    // raise/lower your hand
+handle.send_reaction("🎉")?;             // send an emoji reaction (not async)
+handle.send_reaction("")?;              // clear your own reaction
+handle.start_screen_share(None).await?; // share your video plane as a screen share
+handle.stop_screen_share().await?;
+```
+
+<Note>
+  `start_screen_share` reuses your call's active local **video** plane — it requires a video group call that's already sending video, and fails with `CallError::Media("screen sharing requires an active local video plane")` otherwise.
+</Note>
+
+Other participants' state surfaces on `handle.events()`, alongside the 1:1 `CallEvent` variants already covered in [Call Handle](#call-handle) (`RelayAllocated`, `VideoStateChanged`, RTCP, failures, …), which fire the same way in a group call:
+
+| `CallEvent` variant | Fires when |
+|---|---|
+| `HandRaised { participant, raised }` | A participant raises or lowers their hand |
+| `ScreenShareChanged { participant, screen_share }` | A participant starts or stops screen sharing |
+| `Reaction { participant, device, pid, emoji, removed }` | A participant sends or clears a reaction (`removed: true` and `emoji: None` on clear) |
+| `GroupUpdated` | A newer authoritative roster/relay snapshot committed |
+| `WaitingRoomUpdated` | A newer authoritative waiting-room snapshot committed |
+| `GroupControlRejected { control }` | A roster/epoch/reaction control you sent was rejected; the call itself stays up |
+| `GroupRekeyFailed` | A server-requested shared-key rotation couldn't be distributed |
+| `ForeignGroupAudio` | A standard-Opus fallback frame from a participant not using MLow |
+
+<Note>
+  Group calls and call links don't yet expose a mute-participant, remove-participant, or end-call-for-everyone API — waiting-room admission above is the only administrator control shipped so far.
+</Note>
 
 ## Architecture: `CallEngine`
 
@@ -451,9 +620,9 @@ The implementation is tested at multiple levels:
 
 ## Roadmap
 
-1:1 audio and video are the foundation. Natural follow-ups tracked upstream:
+1:1 audio/video and group calls/call links (see above) are the foundation. Natural follow-ups tracked upstream:
 
-- **Group calls** — the signaling and SFrame/SRTP key management generalize to multi-party; the engine is already participant-aware.
+- **Participant moderation** — no mute-participant, remove-participant, or end-call-for-everyone API yet; see the note at the end of [Reactions, Hand Raising and Screen Sharing](#reactions-hand-raising-and-screen-sharing).
 - **Deeper codec coverage** — inband FEC, PLC, CNG, and low-bitrate operating points for audio.
 - **Embedded demo** — the sans-IO core already builds for esp32.
 

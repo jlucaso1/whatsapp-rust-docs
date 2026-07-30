@@ -82,7 +82,7 @@ pub trait ErrorChainExt {
 
 - `sources()` — an iterator over the error and everything reachable from it via `source()`, nearest first. Use this to recover a domain type the other methods don't model.
 - `server_rejection()` — the [`ServerRejection`](#serverrejection) behind this error, if any of the three types that can carry one (`wacore::request::IqError`, `crate::request::IqError`, or the crate-boundary `ServerErrorCode`) appear anywhere in the chain. Reports IQ-level rejections only — `MexError::ExtensionError`'s `code` is a GraphQL extension code, a different space from the IQ `code` attribute, so it is deliberately not reported here.
-- `http_status()` — added in PR #1195. The HTTP status code behind this error, if any, recovered from a [`HttpStatusError`](#httpstatuserror) node anywhere in the chain. Populated by `Client::download`/`download_to_writer`/`download_from_params*`, `Client::upload`/`upload_stream`, `Client::fetch_sticker_pack`, and the internal app-version (`sw.js`) fetch behind `Client::connect` — each attaches the status of a *completed* HTTP exchange the client refused. Reports `None` when no HTTP exchange got that far (a socket that never connected, a body that failed to decrypt): that distinction is deliberate, so a caller forwarding media onward can tell "the CDN says this is gone" from "we broke" instead of laundering a local failure into an upstream status. Kept separate from `server_rejection()` — a CDN refusing a byte range and the chat server refusing a stanza are different layers with different remedies, so one accessor answering for both would report a number while hiding which thing to retry.
+- `http_status()` — added in PR #1195. Recovers the HTTP status code behind this error, if any, from a [`HttpStatusError`](#httpstatuserror) node anywhere in the chain. Populated by `Client::download`/`download_to_writer`/`download_from_params*`, `Client::upload`/`upload_stream`, `Client::fetch_sticker_pack`, and the internal app-version (`sw.js`) fetch behind `Client::connect`. Each of those attaches the status only when the client refused a *completed* HTTP exchange. `None` does not mean no HTTP exchange happened — a body that downloaded fine and then failed decryption or hash validation also reports `None`, since no refused status was ever attached. Treat `None` as "no typed refusal is on the chain," not as "nothing came back from the CDN," and inspect the underlying cause instead of assuming it is always the caller's own bug. Kept separate from `server_rejection()` — a CDN refusing a byte range and the chat server refusing a stanza are different layers with different remedies, so one accessor answering for both would report a number while hiding which thing to retry.
 - `is_timeout()` — whether the operation ran out of time: a request that got no answer, or a connect/handshake step that never completed.
 - `is_transport_unavailable()` — whether the failure was the transport being gone (disconnected, socket/channel closed) rather than the operation being refused. Mirrors the judgement the send and receive paths already make internally when deciding whether a failure is worth retrying.
 - `store_failure()` — the `StoreError` behind this error, if a persistence backend failed anywhere in the chain.
@@ -120,9 +120,14 @@ match client.download(downloadable).await {
     Err(e) => {
         let cause: &(dyn std::error::Error + 'static) = e.as_ref();
         match cause.http_status() {
-            Some(429) | Some(500..=599) => { /* back off and retry later */ }
+            // 500/502/503/504 are the CDN statuses normally worth a retry;
+            // 501/505 mean the request itself is unsupported and won't
+            // succeed on a resend. Apply your own policy per status.
+            Some(429) | Some(500) | Some(502) | Some(503) | Some(504) => {
+                /* back off and retry later */
+            }
             Some(status) => eprintln!("CDN refused with {status}: {e}"),
-            None => eprintln!("download failed with no HTTP exchange: {e}"),
+            None => eprintln!("no HTTP refusal status recoverable, inspect the cause: {e}"),
         }
     }
 }

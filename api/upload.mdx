@@ -880,13 +880,20 @@ match client.upload(data, media_type, Default::default()).await {
         let cause: &(dyn std::error::Error + 'static) = e.as_ref();
         match cause.http_status() {
             Some(401) | Some(403) => eprintln!("auth retry already exhausted: {e}"),
-            Some(429) | Some(500..=599) => { /* worth backing off and retrying later */ }
+            // 500/502/503/504 are the statuses normally worth a retry;
+            // 501/505 mean the request itself is unsupported and won't
+            // succeed on a resend. Apply your own policy per status.
+            Some(429) | Some(500) | Some(502) | Some(503) | Some(504) => {
+                /* worth backing off and retrying later */
+            }
             Some(status) => eprintln!("upload host refused with {status}: {e}"),
-            None => eprintln!("upload failed with no HTTP exchange: {e}"),
+            None => eprintln!("no HTTP refusal status recoverable, inspect the cause: {e}"),
         }
     }
 }
 ```
+
+`None` doesn't mean no HTTP exchange took place — only that no *refused* status was attached to this error. See [download's note on `None`](/api/download#recovering-the-cdn-status-by-type) for the same distinction on the mirrored path.
 
 ### Common upload errors
 

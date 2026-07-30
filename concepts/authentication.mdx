@@ -507,6 +507,60 @@ pub struct PairingCodeRefresh {
 
 In both cases the outstanding flow is cleared **before** the event fires, so a handler can call [`Client::pair_with_code`](/api/client#pair_with_code) immediately without hitting [`PairCodeError::CodeAlreadyOutstanding`](#one-code-at-a-time). The previous code is no longer valid either way. Register a handler with [`Bot::on_pair_code_refresh`](/api/bot#on_pair_code_refresh) or match on the event directly via `on_event`.
 
+### Pair code failure events
+
+**Event:** `Event::PairingCodeError(PairingCodeError)`
+
+```rust
+// wacore/src/types/events.rs
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingCodeError {
+    pub rejection: Option<PairCodeRejection>,   // The server's refusal, when it answered with one
+    pub backoff: Option<std::time::Duration>,   // The server's requested retry delay, when it named one
+    pub error: String,                          // The failure rendered for logs — do not branch on it
+}
+```
+
+The counterpart to `PairingCode` on the failure path, and the only surface that reports a failed request when pairing is driven by [`BotBuilder::with_pair_code`](/api/bot#with_pair_code): that call runs [`Client::pair_with_code`](/api/client#pair_with_code) inside a detached task, so nothing returns its `Err` to a caller. `pair_with_code` dispatches this event in addition to returning `Err`, mirroring how the success path both returns the code and emits `Event::PairingCode`. Register a handler with [`BotBuilder::on_pair_code_error`](/api/bot#on_pair_code_error) or match on the event directly via `on_event`.
+
+Fires for **every** failure, including local validation — a phone number that's too short never reaches the server. `rejection` is what distinguishes the two cases: `None` means the request never got an answer from the server (local validation, no connection, or a timeout); `Some(PairCodeRejection)` means the server answered with a refusal. A claim the failed request itself held is released before this fires, so `pair_with_code` can be called again immediately.
+
+Two failures do **not** dispatch this event, because for them a code may still be on its way and the event would say the opposite:
+
+- **`PairCodeError::CodeAlreadyOutstanding`** — refused precisely because an earlier code is still live; the consumer already has it from the `PairingCode` event that minted it.
+- **`PairCodeError::Cancelled`** — the caller withdrew this request via `cancel_pair_code`, and a replacement may already own the slot by the time this one resolves; reporting the withdrawn request would be uncorrelated with the flow that's actually running.
+
+Both are consequences of something the caller did, so neither is news to them, and a direct caller still receives the `Err` either way — only the event is suppressed. `PairError::lost_the_flow_to_another_request()` is `true` for exactly these two variants.
+
+#### PairCodeRejection
+
+```rust
+// wacore/src/pair_code.rs
+pub enum PairCodeRejection {
+    BadRequest,          // 400 — malformed, or throttled per phone number (server reuses this code)
+    Forbidden,           // 403
+    RateOverlimit,       // 429 — requesting codes too fast; the only correct response is to slow down
+    FeatureNotAvailable, // 452 — phone-number linking disabled for this account; retrying will not help
+    InternalServerError, // 500
+    Unknown(i32),        // a code outside WA Web's own accepted set
+}
+```
+
+The five named variants are the complete set WA Web's response parser (`WASmaxInMdIqMixinErrors.parseIqMixinErrors`) accepts; anything else makes its own RPC throw "unknown error", which is what `Unknown(code)` preserves here. Classified via `PairCodeRejection::from_server(code, text)` from *both* wire attributes together — WA Web asserts them as a literal pair (e.g. `429`/`rate-overlimit`) and falls back to its generic error path when they disagree, so a contradicting `text` classifies as `None` rather than aliasing the code to the named arm. An absent `text` is not treated as a contradiction; the code alone decides in that case.
+
+`PairCodeRejection::is_throttled()` is `true` for `RateOverlimit` and `BadRequest` — deliberately wider than the literal 429, because the server throttles pair-code requests per phone number under `bad-request` instead of `rate-overlimit`, and the two are indistinguishable on the wire. Treat a `true` here as "back off, then retry a bounded number of times," not as proof the request would eventually succeed. `FeatureNotAvailable` is never throttled — retrying cannot fix it, and WA Web falls back to the QR code instead.
+
+`PairError` (the `Err` `pair_with_code` returns) exposes the same classification without depending on the event:
+
+```rust
+impl PairError {
+    pub fn rejection(&self) -> Option<PairCodeRejection>;
+    pub fn backoff(&self) -> Option<std::time::Duration>;
+    pub fn lost_the_flow_to_another_request(&self) -> bool;
+}
+```
+
 ### Two-Stage Flow
 
 #### Stage 1: Hello
@@ -1095,7 +1149,11 @@ match client.pair_with_code(options).await {
 </Note>
 
 <Note>
-  A `PairError::RequestFailed` carrying `bad-request` (400) is not necessarily a permanent/invalid-input failure — the server reuses the same error for **rate-limiting** (it throttles pair-code requests per phone number), and the two are indistinguishable in the response. Back off and retry rather than treating every 400 as fatal. By default, the library canonicalizes `companion_platform_display`'s OS (see [`companion_platform_display`](#companion-platform-display)), so display-shaped rejections are generally ruled out unless you explicitly bypass canonicalization via `PairCodeOptions::display_os`. Any server `backoff` hint is preserved on the wrapped `IqError::ServerError` (see [Error Types](/api/errors#iqerror-base-type)).
+  Prefer [`PairError::rejection()`](#pair-code-failure-events) to matching on `bad-request` by string: the server reuses `PairCodeRejection::BadRequest` (400) for both malformed requests **and** its per-phone-number rate limit, and the two are indistinguishable on the wire. `PairCodeRejection::is_throttled()` covers this — it's `true` for both `BadRequest` and `RateOverlimit` — so back off and retry rather than treating every 400 as fatal. By default, the library canonicalizes `companion_platform_display`'s OS (see [`companion_platform_display`](#companion-platform-display)), so display-shaped rejections are generally ruled out unless you explicitly bypass canonicalization via `PairCodeOptions::display_os`. Any server `backoff` hint is preserved on the wrapped `IqError::ServerError` (see [Error Types](/api/errors#iqerror-base-type)) and surfaced directly via `PairError::backoff()`.
+</Note>
+
+<Note>
+  `PairError::RequestFailed`'s `Display` now renders exactly what it wraps (`{0}`) instead of the fixed string `"pair-code IQ request failed"` — so a log line that only prints the error (`{e}`) still shows the server's code and text, e.g. `429 (rate-overlimit)`.
 </Note>
 
 The previous catch-all `CryptoError(String)` and `RequestFailed(String)` variants have been split into typed variants that preserve their underlying source. Match on `std::error::Error::source()` (or downcast it) to inspect the inner `CurveError`, `CryptoProviderError`, or `IqError`.

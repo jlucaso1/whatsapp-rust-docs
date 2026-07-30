@@ -645,6 +645,10 @@ Bot::builder()
 Pair code runs concurrently with QR code pairing — whichever completes first wins.
 </Note>
 
+<Note>
+`with_pair_code` runs [`Client::pair_with_code`](/api/client#pair_with_code) in a detached task, so a failure never reaches a caller as an `Err` — it only reaches [`Event::PairingCodeError`](/concepts/events#pairingcodeerror). Register [`on_pair_code_error`](#on_pair_code_error) if the consumer must distinguish "still waiting for the user" from "no code is coming" (a rate-limited request otherwise looks identical to the former).
+</Note>
+
 <Tip>
 The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and a **canonicalized** OS derived from the device's `os` string: web variants emit `<Browser> (<OS>)` (Android `PlatformType`s map to `Chrome`, so they show as `Chrome (Android)` by default); explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`. The OS is coerced into a small server-safe set (`Windows`/`Mac OS`/`Linux`/`Android`/`iOS`) because the pair-code server rejects a non-OS display with `bad-request` — an arbitrary branding `os` string falls back to `Linux`. Set `PairCodeOptions::display_os` to send a real, non-canonical OS name verbatim instead. See [Authentication — companion_platform_display](/concepts/authentication#companion-platform-display) for the full classification table.
 </Tip>
@@ -687,6 +691,55 @@ Bot::builder()
 
 <Note>
 This callback fires for **two** triggers, not just a server request: the server asking for a refresh (only while a pair-code flow is outstanding and the notification's ref matches it — a `refresh_code` notification for a stale or unrelated flow is ignored), and a `companion_finish` that went unanswered for a minute after the phone entered the code (`force_manual` is always `false` for this second trigger). See [Pair code refresh events](/concepts/authentication#pair-code-refresh-events) for the full breakdown.
+</Note>
+
+### on_pair_code_error
+
+```rust
+pub fn on_pair_code_error<F, Fut>(self, handler: F) -> Self
+where
+    F: Fn(PairingCodeError, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Registers a handler for [`Event::PairingCodeError`](/concepts/events#pairingcodeerror), fired when a pair-code request fails and no code will be issued. The counterpart to [`on_pair_code_refresh`](#on_pair_code_refresh) on the failure path, and the **only** way to observe a [`with_pair_code`](#with_pair_code) request failing — that request runs in a detached task, so its `Err` reaches no caller.
+
+<ParamField path="handler" type="F" required>
+  Async function that receives the `PairingCodeError` event and `Arc<Client>`
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::pair_code::{PairCodeOptions, PairCodeRejection};
+
+Bot::builder()
+    .with_pair_code(PairCodeOptions {
+        phone_number: "15551234567".to_string(),
+        ..Default::default()
+    })
+    .on_pair_code_error(|err, client| async move {
+        eprintln!("Pair code request failed: {}", err.error);
+        match err.rejection {
+            Some(r) if r.is_throttled() => {
+                // Back off using the server's own hint when it gave one.
+                let delay = err.backoff.unwrap_or(std::time::Duration::from_secs(30));
+                tokio::time::sleep(delay).await;
+                let _ = client.pair_with_code(PairCodeOptions {
+                    phone_number: "15551234567".to_string(),
+                    ..Default::default()
+                }).await;
+            }
+            Some(PairCodeRejection::FeatureNotAvailable) => {
+                // Retrying will not help — fall back to QR pairing instead.
+            }
+            _ => {}
+        }
+    })
+    // ...
+```
+
+<Note>
+Branch on `err.rejection` rather than the message, which is not a stable surface — see [Pair code failure events](/concepts/authentication#pair-code-failure-events) for the full field breakdown and the two failures ([`PairCodeError::CodeAlreadyOutstanding`](/concepts/authentication#one-code-at-a-time) and `Cancelled`) that deliberately never reach this handler.
 </Note>
 
 ---

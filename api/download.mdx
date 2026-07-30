@@ -11,6 +11,10 @@ Download and decrypt media from a message.
 Only use `download` when you need the plaintext bytes (processing, transcoding, re-upload). To forward existing media unchanged, reuse the original message's CDN fields directly — no download required. See [media forwarding via CDN reuse](/guides/media-handling#forwarding-media-via-cdn-reuse).
 </Tip>
 
+<Tip>
+`download` and its siblings need a connected `Client` for most media — they ask the server for CDN hosts and an auth token (cached and refreshed automatically, not fetched on every call). The exception is `static_url` media (newsletter/channel content), which skips that round trip entirely — see the note below. If you've persisted a message's CDN fields and want to download after the session has disconnected, use [`MediaDownloader`](#mediadownloader) instead — it needs no `Client` at all.
+</Tip>
+
 ```rust
 pub async fn download(
     &self,
@@ -72,6 +76,10 @@ For streaming downloads (`download_to_writer`), the writer is seeked back to pos
 
 <Note>
 This classification reads `status_code` off a successfully completed HTTP exchange — it never sees a status that a custom `HttpClient` implementation turned into an `Err`. If you provide your own `HttpClient`, see the [non-2xx-as-`Ok` contract](/api/http-client#httpclient-trait) it must follow for this retry logic to work at all.
+</Note>
+
+<Note>
+`static_url` media (newsletter/channel content fetched from a fixed CDN URL) skips the media-conn round trip entirely: `download` and its siblings only ask the server for hosts when the downloadable has no `static_url`.
 </Note>
 
 ---
@@ -227,7 +235,154 @@ pub fn encrypted(
 ) -> Self
 ```
 
-`DownloadParams` implements [`Downloadable`](#downloadable-trait), so it works with `download`, `download_to_writer`, `download_from_params`, and `download_from_params_to_writer`.
+`DownloadParams` implements [`Downloadable`](#downloadable-trait), so it works with `download`, `download_to_writer`, `download_from_params`, `download_from_params_to_writer`, and [`MediaDownloader`](#mediadownloader).
+
+---
+
+## MediaDownloader
+
+Downloads and decrypts media from the CDN with **no connected `Client`**. Everything a download needs beyond the CDN hosts already lives in the [`Downloadable`](#downloadable-trait) itself — `MediaDownloader` takes the hosts (and, optionally, an auth token) up front instead of asking a live session for them, so a persisted reference (for example a stored [`DownloadParams`](#downloadparams)) stays downloadable after the client has disconnected.
+
+A live `Client` still needs a session to fetch its hosts (cached and refreshed automatically, not re-fetched on every call — see [Automatic retry and URL re-derivation](#automatic-retry-and-url-re-derivation)); `MediaDownloader` is the path for callers that have no session to ask with at all — a background worker, a queue consumer, or a CLI tool operating on data a paired client saved earlier.
+
+```rust
+pub struct MediaDownloader { /* private fields */ }
+
+impl MediaDownloader {
+    pub fn new(
+        http_client: Arc<dyn HttpClient>,
+        runtime: Arc<dyn Runtime>,
+        route: MediaRoute,
+    ) -> Self;
+
+    pub fn with_default_hosts(
+        http_client: Arc<dyn HttpClient>,
+        runtime: Arc<dyn Runtime>,
+    ) -> Self;
+
+    pub fn route(&self) -> &MediaRoute;
+
+    pub async fn download(
+        &self,
+        downloadable: &dyn Downloadable,
+    ) -> Result<Vec<u8>, MediaDownloadError>;
+
+    pub async fn download_to_writer<W: Write + Seek + Send + 'static>(
+        &self,
+        downloadable: &dyn Downloadable,
+        writer: W,
+    ) -> Result<W, MediaDownloadError>;
+}
+```
+
+<ParamField path="new::http_client" type="Arc<dyn HttpClient>" required>
+  The same `HttpClient` implementation you pass to `ClientBuilder`. See [HTTP Client Trait](/api/http-client).
+</ParamField>
+
+<ParamField path="new::runtime" type="Arc<dyn Runtime>" required>
+  Runtime abstraction used to run blocking decrypt/streaming work.
+</ParamField>
+
+<ParamField path="new::route" type="MediaRoute" required>
+  The CDN hosts to try, in order, and an optional auth token. See [`MediaRoute`](#mediaroute-and-mediahost) below.
+</ParamField>
+
+`download` and `download_to_writer` mirror `Client::download` and `Client::download_to_writer` — same streaming/buffered branching, same retry-on-another-host behavior across the route's hosts, same writer contract for the streaming variant. The one difference is the auth-refresh budget: a `Client` gets one retry with freshly fetched credentials after an auth or not-found error; `MediaDownloader` has no session to refresh credentials from, so that class of error is terminal on the first attempt.
+
+### Example: download after the session is gone
+
+```rust
+use std::sync::Arc;
+use wacore::download::MediaType;
+use whatsapp_rust::download::{DownloadParams, MediaDownloader};
+
+// Needs only an HttpClient + Runtime — no paired Client required.
+let downloader = MediaDownloader::with_default_hosts(http_client.clone(), runtime.clone());
+
+// `params` came from CDN fields you saved to your own store earlier, while
+// the client was still connected. (`PersistenceManager` covers device/session
+// state only — it doesn't store message metadata like this for you.)
+let params = DownloadParams::encrypted(
+    "/v/t62.7118-24/12345_67890",
+    &media_key,
+    &file_sha256,
+    &file_enc_sha256,
+    file_length,
+    MediaType::Image,
+);
+
+let bytes = downloader.download(&params).await?;
+```
+
+<Tip>
+`with_default_hosts` routes through [`DEFAULT_MEDIA_HOSTS`](#mediaroute-and-mediahost) with no auth token, which matches how WhatsApp Web's own download URL builder works — auth is an upload concern, not a download one. Pass an explicit `MediaRoute` to `new` if you need specific hosts or want to carry a token you obtained another way.
+</Tip>
+
+### MediaDownloadError
+
+```rust
+#[non_exhaustive]
+pub enum MediaDownloadError {
+    ReferenceRejected(anyhow::Error),
+    HostsUnreachable(anyhow::Error),
+    NoHosts,
+    Other(anyhow::Error),
+}
+```
+
+| Variant | Meaning |
+|---------|---------|
+| `ReferenceRejected` | The CDN rejected the request with 401/403/404/410. On a route built with [`MediaRoute::authenticated`](#mediaroute-and-mediahost), a 401/403 can mean only the *auth token* is stale — downloads don't strictly need one, so retrying with [`route.without_auth()`](#mediaroute-and-mediahost) before giving up can still succeed. A 404/410, or a 401/403 on an already-unauthenticated route, means the `direct_path` itself is expired or revoked and no host can serve it — that case is terminal. |
+| `HostsUnreachable` | Every host in the route failed for a reason other than the reference (transport failure, unexpected status, a body that failed to decrypt/verify). |
+| `NoHosts` | The `MediaRoute` named no hosts, so nothing was ever contacted. |
+| `Other` | The `Downloadable` didn't have the fields needed to build a request at all (e.g. no `direct_path` and no `static_url`), so — unlike `NoHosts` — no host was ever *going* to be contacted. Fix the metadata, not the network. |
+
+`MediaDownloadError` is `#[non_exhaustive]`; match it with a wildcard (`_ => `) arm so a future variant doesn't break your build.
+
+`Client::download` and `Client::download_to_writer` keep returning `anyhow::Error`: they already try a credential refresh before the error would escape, so the extra classification has nothing left to add there.
+
+### MediaRoute and MediaHost
+
+`MediaRoute` replaces the old `MediaConnection` type — it is the low-level input to [`DownloadUtils::prepare_download_requests`](#key-methods) and to `MediaDownloader`. Where `MediaConnection` required an `auth: String`, `MediaRoute` makes it `auth: Option<String>`, because the CDN gates a download on the signed `direct_path` and its hash token, not on a session credential.
+
+```rust
+pub struct MediaHost {
+    pub hostname: String,
+}
+
+impl MediaHost {
+    pub fn new(hostname: impl Into<String>) -> Self;
+}
+
+pub struct MediaRoute {
+    pub hosts: Vec<MediaHost>,
+    pub auth: Option<String>,
+}
+
+impl MediaRoute {
+    pub fn authenticated(hosts: Vec<MediaHost>, auth: String) -> Self;
+    pub fn unauthenticated(hosts: Vec<MediaHost>) -> Self;
+    pub fn without_auth(self) -> Self;
+    pub fn default_hosts() -> Self;
+}
+
+pub const DEFAULT_MEDIA_HOSTS: [&str; 2] = ["mmg.whatsapp.net", "mmg-fallback.whatsapp.net"];
+```
+
+| Constructor | Use when |
+|-------------|----------|
+| `MediaRoute::authenticated(hosts, auth)` | You have both server-provided hosts and a media auth token (what a connected `Client` builds from its `MediaConn`). |
+| `MediaRoute::unauthenticated(hosts)` | You have hosts but no token — the common case for `MediaDownloader`. |
+| `route.without_auth()` | You have an authenticated route but want to keep using it past the token's lifetime; drops the token rather than sending a stale one. |
+| `MediaRoute::default_hosts()` | You have neither — routes through [`DEFAULT_MEDIA_HOSTS`](#mediaroute-and-mediahost), the CDN hosts WhatsApp Web itself carries in its binary-protocol token dictionary. This is only a convenience: a live session should still take its hosts from the server, which is what lets a test harness point downloads at itself. |
+
+<Note>
+`MediaRoute`'s `Debug` implementation is hand-written to print `auth: Some("<redacted>")` / `auth: None` instead of the token itself, so a stray `{:?}` or tracing field can't leak a live credential into a log.
+</Note>
+
+<Warning>
+**Breaking change (as of PR #1194):** `wacore::download::MediaConnection` (`{ hosts: Vec<MediaHost>, auth: String }`) no longer exists. If you built one directly and passed it to `DownloadUtils::prepare_download_requests`, migrate by constructing the equivalent `MediaRoute` in its place: `MediaRoute::authenticated(hosts, auth)`. (The `From<&MediaConn> for MediaRoute` impl is unrelated to this migration — it converts `whatsapp_rust`'s own `mediaconn::MediaConn`, the server response a connected `Client` refreshes internally, and is what `Client::prepare_requests` uses under the hood.) `Client::download` and friends are unaffected either way; this only touches callers using the lower-level `DownloadUtils` type directly.
+</Warning>
 
 ---
 
@@ -484,5 +639,5 @@ use whatsapp_rust::download::DownloadUtils;
 | `decrypt_stream_to_writer(reader, media_key, media_type, writer)` | Streaming decryption directly into a writer with constant memory usage |
 | `validate_plaintext_sha256(data, expected_sha256)` | Validates SHA-256 hash of plaintext media (in-memory) |
 | `copy_and_validate_plaintext_to_writer(reader, expected_sha256, writer)` | Streams plaintext media to a writer while validating SHA-256 hash |
-| `prepare_download_requests(downloadable, media_conn)` | Builds CDN request URLs with host failover |
+| `prepare_download_requests(downloadable, route)` | Builds CDN request URLs with host failover. Takes a [`MediaRoute`](#mediaroute-and-mediahost) (previously `MediaConnection`) — hosts plus an optional auth token |
 | `get_media_keys(media_key, app_info)` | Derives IV, cipher key, and MAC key via HKDF |

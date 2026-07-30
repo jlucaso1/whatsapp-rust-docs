@@ -702,7 +702,7 @@ where
     Fut: Future<Output = ()> + Send + 'static
 ```
 
-Registers a handler for [`Event::PairingCodeError`](/concepts/events#pairingcodeerror), fired when a pair-code flow fails — either a stage-1 request that never gets a code issued, or a stage-2 `companion_finish` the server refuses after a code was already entered on the phone. The counterpart to [`on_pair_code_refresh`](#on_pair_code_refresh) on the failure path, and a dedicated convenience over matching the event yourself in `on_event` — either works, but this is the only way to observe a [`with_pair_code`](#with_pair_code) request failing at all: that request runs in a detached task, so its `Err` reaches no caller.
+Registers a handler for [`Event::PairingCodeError`](/concepts/events#pairingcodeerror), fired when a pair-code flow fails — either a stage-1 request that never gets a code issued, or a stage-2 `companion_finish` the server refuses after a code was already entered on the phone. The counterpart to [`on_pair_code_refresh`](#on_pair_code_refresh) on the failure path, and a dedicated convenience over matching the event yourself in `on_event` — either works, but this is the only way to observe a [`with_pair_code`](#with_pair_code) request's `Err` at all: that request runs in a detached task, so the `Err` it would otherwise return reaches no caller directly.
 
 <ParamField path="handler" type="F" required>
   Async function that receives the `PairingCodeError` event and `Arc<Client>`

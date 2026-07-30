@@ -702,7 +702,7 @@ where
     Fut: Future<Output = ()> + Send + 'static
 ```
 
-Registers a handler for [`Event::PairingCodeError`](/concepts/events#pairingcodeerror), fired when a pair-code request fails and no code will be issued. The counterpart to [`on_pair_code_refresh`](#on_pair_code_refresh) on the failure path, and the **only** way to observe a [`with_pair_code`](#with_pair_code) request failing — that request runs in a detached task, so its `Err` reaches no caller.
+Registers a handler for [`Event::PairingCodeError`](/concepts/events#pairingcodeerror), fired when a pair-code request fails and no code will be issued. The counterpart to [`on_pair_code_refresh`](#on_pair_code_refresh) on the failure path, and a dedicated convenience over matching the event yourself in `on_event` — either works, but this is the only way to observe a [`with_pair_code`](#with_pair_code) request failing at all: that request runs in a detached task, so its `Err` reaches no caller.
 
 <ParamField path="handler" type="F" required>
   Async function that receives the `PairingCodeError` event and `Arc<Client>`
@@ -710,29 +710,39 @@ Registers a handler for [`Event::PairingCodeError`](/concepts/events#pairingcode
 
 **Example:**
 ```rust
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use whatsapp_rust::pair_code::{PairCodeOptions, PairCodeRejection};
+
+const MAX_THROTTLE_RETRIES: u32 = 3;
+let retries = Arc::new(AtomicU32::new(0));
 
 Bot::builder()
     .with_pair_code(PairCodeOptions {
         phone_number: "15551234567".to_string(),
         ..Default::default()
     })
-    .on_pair_code_error(|err, client| async move {
-        eprintln!("Pair code request failed: {}", err.error);
-        match err.rejection {
-            Some(r) if r.is_throttled() => {
-                // Back off using the server's own hint when it gave one.
-                let delay = err.backoff.unwrap_or(std::time::Duration::from_secs(30));
-                tokio::time::sleep(delay).await;
-                let _ = client.pair_with_code(PairCodeOptions {
-                    phone_number: "15551234567".to_string(),
-                    ..Default::default()
-                }).await;
+    .on_pair_code_error(move |err, client| {
+        let retries = retries.clone();
+        async move {
+            eprintln!("Pair code request failed: {}", err.error);
+            match err.rejection {
+                // Cap attempts — a persistently throttled number should stop
+                // retrying rather than loop forever on repeated PairingCodeError.
+                Some(r) if r.is_throttled() && retries.fetch_add(1, Ordering::Relaxed) < MAX_THROTTLE_RETRIES => {
+                    // Back off using the server's own hint when it gave one.
+                    let delay = err.backoff.unwrap_or(std::time::Duration::from_secs(30));
+                    tokio::time::sleep(delay).await;
+                    let _ = client.pair_with_code(PairCodeOptions {
+                        phone_number: "15551234567".to_string(),
+                        ..Default::default()
+                    }).await;
+                }
+                Some(PairCodeRejection::FeatureNotAvailable) => {
+                    // Retrying will not help — fall back to QR pairing instead.
+                }
+                _ => {}
             }
-            Some(PairCodeRejection::FeatureNotAvailable) => {
-                // Retrying will not help — fall back to QR pairing instead.
-            }
-            _ => {}
         }
     })
     // ...

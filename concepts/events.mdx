@@ -605,7 +605,7 @@ pub struct PairingCodeError {
 
 **Example:**
 ```rust
-Event::PairingCodeError(PairingCodeError { rejection, backoff, error }) => {
+Event::PairingCodeError(PairingCodeError { rejection, backoff, error, .. }) => {
     eprintln!("Pair code request failed: {error}");
     if rejection.is_some_and(PairCodeRejection::is_throttled) {
         // Back off, then retry — using the server's own delay when it named one.

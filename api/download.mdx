@@ -64,6 +64,33 @@ match client.download(downloadable).await {
 }
 ```
 
+### Recovering the CDN status by type
+
+`download` still returns bare `anyhow::Error`, but as of PR #1195 the status the CDN refused is recoverable by type via [`ErrorChainExt::http_status()`](/api/errors#error-chain-recovery) instead of only by parsing the message:
+
+```rust
+use whatsapp_rust::ErrorChainExt;
+
+match client.download(downloadable).await {
+    Ok(data) => { /* ... */ }
+    Err(e) => {
+        let cause: &(dyn std::error::Error + 'static) = e.as_ref();
+        match cause.http_status() {
+            // 500/502/503/504 are the CDN statuses normally worth a retry;
+            // 501/505 mean the request itself is unsupported and won't
+            // succeed on a resend. Apply your own policy per status.
+            Some(429) | Some(500) | Some(502) | Some(503) | Some(504) => {
+                /* worth backing off and retrying later */
+            }
+            Some(status) => eprintln!("CDN refused with {status}: {e}"),
+            None => eprintln!("no HTTP refusal status recoverable, inspect the cause: {e}"),
+        }
+    }
+}
+```
+
+`None` doesn't mean no HTTP exchange took place — it means no *refused* status was attached. A socket that never connected reports `None`, but so does a body that downloaded successfully and then failed decryption or hash validation: neither case has a CDN status to recover, so there's nothing to forward upstream. Inspect the underlying cause (`cause.source()` or the message) rather than assuming either case is always yours to fix.
+
 ### Automatic retry and URL re-derivation
 
 All download methods handle three categories of CDN errors automatically:
@@ -73,6 +100,8 @@ All download methods handle three categories of CDN errors automatically:
 - **Other errors (e.g., 500):** The client tries the next available CDN host without refreshing credentials. Hosts are tried in priority order (primary first, then fallback).
 
 For streaming downloads (`download_to_writer`), the writer is seeked back to position 0 before retrying so partial writes are overwritten. For in-memory downloads (`download()`), each retry gets a fresh buffer rather than reusing the previous one, so a failed host that wrote a longer body can't leave a stale tail behind a shorter successful retry.
+
+If every retry is exhausted, the status of the final refusal survives into the error `download`/`download_to_writer` return — recover it with `ErrorChainExt::http_status()` as shown [above](#recovering-the-cdn-status-by-type) rather than parsing the message.
 
 <Note>
 This classification reads `status_code` off a successfully completed HTTP exchange — it never sees a status that a custom `HttpClient` implementation turned into an `Err`. If you provide your own `HttpClient`, see the [non-2xx-as-`Ok` contract](/api/http-client#httpclient-trait) it must follow for this retry logic to work at all.
@@ -411,6 +440,8 @@ pub async fn fetch_sticker_pack(
 </ResponseField>
 
 Under the hood the client GETs `https://static.whatsapp.net/sticker?lottie=1&cat=sticker_pack_data&id={pack_id}&lg={locale}`, parses the JSON envelope, and constructs the `StickerPack`. The endpoint is unauthenticated — the call works whether or not you are paired.
+
+A non-2xx response fails with the same contract as `download`: the status is recoverable via `ErrorChainExt::http_status()` (added in PR #1195), not only by parsing the error message.
 
 ```rust
 use whatsapp_rust::Client;

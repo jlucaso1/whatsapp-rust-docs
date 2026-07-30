@@ -9,6 +9,8 @@ As of PR #1090, the connect/lifecycle surface (`Client::connect`, `wait_for_sock
 
 As of PR #1100, every wrapping variant that used to be `#[error(transparent)]` is `#[error("{0}")]` instead — same `Display` output, but the wrapped error is now reachable via `std::error::Error::source()` instead of being erased. [`ErrorChainExt`](#error-chain-recovery) is a new extension trait, implemented for every `std::error::Error`, that walks that chain for you: `server_rejection()`, `is_timeout()`, `is_transport_unavailable()`, and `store_failure()` answer type-agnostically across every error on this page, without downcasting or string-matching. See [Error chain recovery](#error-chain-recovery) below.
 
+As of PR #1195, `ErrorChainExt` also answers `http_status()` — the HTTP status code behind a refused download, upload, sticker-pack fetch, or app-version fetch, recovered from a [`HttpStatusError`](#httpstatuserror) node the same way `server_rejection()` recovers an IQ rejection. This is the one place the "lower-level APIs … may still surface `anyhow::Error` directly" caveat above gets a typed escape hatch: `download`/`upload` still return `anyhow::Error`, but the status inside that error is now recoverable by type instead of by parsing `Display` text. See [Error chain recovery](#error-chain-recovery) below.
+
 ## Error hierarchy
 
 ```
@@ -71,6 +73,7 @@ Added in PR #1100. Before this, `#[error(transparent)]` on a wrapping variant ma
 pub trait ErrorChainExt {
     fn sources(&self) -> Sources<'_>;
     fn server_rejection(&self) -> Option<ServerRejection<'_>>;
+    fn http_status(&self) -> Option<u16>;
     fn is_timeout(&self) -> bool;
     fn is_transport_unavailable(&self) -> bool;
     fn store_failure(&self) -> Option<&StoreError>;
@@ -79,6 +82,7 @@ pub trait ErrorChainExt {
 
 - `sources()` — an iterator over the error and everything reachable from it via `source()`, nearest first. Use this to recover a domain type the other methods don't model.
 - `server_rejection()` — the [`ServerRejection`](#serverrejection) behind this error, if any of the three types that can carry one (`wacore::request::IqError`, `crate::request::IqError`, or the crate-boundary `ServerErrorCode`) appear anywhere in the chain. Reports IQ-level rejections only — `MexError::ExtensionError`'s `code` is a GraphQL extension code, a different space from the IQ `code` attribute, so it is deliberately not reported here.
+- `http_status()` — added in PR #1195. The HTTP status code behind this error, if any, recovered from a [`HttpStatusError`](#httpstatuserror) node anywhere in the chain. Populated by `Client::download`/`download_to_writer`/`download_from_params*`, `Client::upload`/`upload_stream`, `Client::fetch_sticker_pack`, and the internal app-version (`sw.js`) fetch behind `Client::connect` — each attaches the status of a *completed* HTTP exchange the client refused. Reports `None` when no HTTP exchange got that far (a socket that never connected, a body that failed to decrypt): that distinction is deliberate, so a caller forwarding media onward can tell "the CDN says this is gone" from "we broke" instead of laundering a local failure into an upstream status. Kept separate from `server_rejection()` — a CDN refusing a byte range and the chat server refusing a stanza are different layers with different remedies, so one accessor answering for both would report a number while hiding which thing to retry.
 - `is_timeout()` — whether the operation ran out of time: a request that got no answer, or a connect/handshake step that never completed.
 - `is_transport_unavailable()` — whether the failure was the transport being gone (disconnected, socket/channel closed) rather than the operation being refused. Mirrors the judgement the send and receive paths already make internally when deciding whether a failure is worth retrying.
 - `store_failure()` — the `StoreError` behind this error, if a persistence backend failed anywhere in the chain.
@@ -106,6 +110,24 @@ let cause: &(dyn std::error::Error + 'static) = err.as_ref();
 if cause.is_timeout() { /* ... */ }
 ```
 
+`http_status()` follows the same pattern — useful for `download`/`upload`, which still return bare `anyhow::Error`:
+
+```rust
+use whatsapp_rust::ErrorChainExt;
+
+match client.download(downloadable).await {
+    Ok(bytes) => { /* ... */ }
+    Err(e) => {
+        let cause: &(dyn std::error::Error + 'static) = e.as_ref();
+        match cause.http_status() {
+            Some(429) | Some(500..=599) => { /* back off and retry later */ }
+            Some(status) => eprintln!("CDN refused with {status}: {e}"),
+            None => eprintln!("download failed with no HTTP exchange: {e}"),
+        }
+    }
+}
+```
+
 ### ServerRejection
 
 ```rust
@@ -120,11 +142,25 @@ pub struct ServerRejection<'a> {
 
 Borrowed from whichever error in the chain carried it, so recovering one costs no allocation.
 
+### HttpStatusError
+
+Added in PR #1195, in `whatsapp_rust::http`. Carries the status of an HTTP exchange the client refused — the source node `http_status()` looks for.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("HTTP status {status}")]
+pub struct HttpStatusError {
+    pub status: u16,
+}
+```
+
+The download and upload paths attach this as the `source` of the `anyhow::Error` they return — `anyhow::Error::new(HttpStatusError { status }).context("Download failed with status: 403")` — so the message a caller logs is unchanged while the status becomes reachable by type via `http_status()` instead of only by parsing that message. Re-exported as `whatsapp_rust::http::HttpStatusError`.
+
 <Note>
 Rendering changed alongside the `source()` fix: a wrapping variant's `Display` still prints exactly what it wraps, so code that concatenates every node in a chain (a logging layer, a `display_chain` helper) now sees the same sentence repeated once per wrapping variant — e.g. `CommunityError::Group(GroupError::Iq(..))` is three nodes rendering one sentence three times. That repetition is the cost of keeping the wrapped error downcastable. Print the innermost cause, or collapse equal neighbours, rather than joining every node in the chain.
 </Note>
 
-`ErrorChainExt`, `ServerRejection`, and `Sources` are re-exported from the crate root (`whatsapp_rust::ErrorChainExt`, `whatsapp_rust::ServerRejection`, `whatsapp_rust::Sources`).
+`ErrorChainExt`, `ServerRejection`, and `Sources` are re-exported from the crate root (`whatsapp_rust::ErrorChainExt`, `whatsapp_rust::ServerRejection`, `whatsapp_rust::Sources`). `HttpStatusError` lives at `whatsapp_rust::http::HttpStatusError` — it is not re-exported from the crate root, since most callers only need `http_status()` and never need to name the type itself.
 
 ## Domain error types
 
@@ -391,7 +427,7 @@ pub enum ConnectError {
 - `AlreadyConnected` — a connection is already up, or another `connect()` attempt is already in flight. This is the old `ClientError::AlreadyConnected` case, moved here.
 - `NotActivated` — construction never completed (only reachable with the `client-lifecycle` feature), so the attempt was rejected before any I/O.
 - `Timeout` — a step of the connect flow ran out of time. `stage` says which one (see [`ConnectStage`](#connectstage) below); `wait_for_socket`/`wait_for_connected` always report `Socket`/`Ready` respectively.
-- `Version` / `Transport` — the app-version resolution or transport factory failed outright (not a timeout).
+- `Version` / `Transport` — the app-version resolution or transport factory failed outright (not a timeout). As of PR #1195, if `Version` was caused by a non-2xx response fetching the app version (`sw.js`), the status is recoverable via `err.http_status()` ([`ErrorChainExt`](#error-chain-recovery)) instead of only appearing in the message.
 - `Handshake` — the Noise handshake failed after the transport was up. Wraps `HandshakeError` (see [WebSocket & Noise Protocol](/advanced/websocket-handling#handshake-errors)) via `#[from]`, so `?` still works and `matches!(err, ConnectError::Handshake(e) if e.is_transient())` replaces the old `err.downcast_ref::<HandshakeError>()` pattern for deciding whether a failed reconnect attempt is worth retrying.
 
 Added in PR #1100: `ConnectError::is_timeout()` is an exhaustively-matched method that reports `true` for `Timeout` and for a `Handshake(e)` where `e.is_timeout()` (`HandshakeError` gained the same method). Prefer [`ErrorChainExt::is_timeout()`](#error-chain-recovery) unless you specifically hold a `ConnectError` and want to skip the chain walk.
@@ -629,3 +665,34 @@ fn is_transport_unavailable(err: &anyhow::Error) -> bool {
 If you concatenated an error's full chain (e.g. a logging layer joining every `source()` node into one string), be aware the text changed: a wrapping variant still renders exactly what it wraps, so `#[error(transparent)]` becoming `#[error("{0}")]` means a chain like `CommunityError::Group(GroupError::Iq(..))` now repeats the same sentence once per wrapping node instead of once. Each error's own `Display` output — what you get from `{e}` on a single error value — is unchanged. Print the innermost cause, or collapse equal neighbours, rather than joining every node.
 
 `#[non_exhaustive]` was added to four error enums that were missing it: `wacore::pair_code::PairCodeError`, `wacore::shortcake::ShortcakeError`, `wacore::iq::chatstate::ChatstateParseError`, and `wacore::iq::dirty::DirtyBitParseError`. An exhaustive `match` on any of these from outside their defining crate now fails with `E0004`; add a `_ => {}` arm.
+
+### From PR #1195: recovering an HTTP status by type
+
+If you were matching on the text of a download/upload error to classify it (e.g. `e.to_string().contains("403")`), switch to [`ErrorChainExt::http_status()`](#error-chain-recovery):
+
+```rust
+// Before — fragile string matching
+match client.download(downloadable).await {
+    Err(e) if e.to_string().contains("401") || e.to_string().contains("403") => {
+        // ...
+    }
+    Err(e) => eprintln!("download failed: {e}"),
+    Ok(bytes) => { /* ... */ }
+}
+
+// After
+use whatsapp_rust::ErrorChainExt;
+match client.download(downloadable).await {
+    Err(e) => {
+        let cause: &(dyn std::error::Error + 'static) = e.as_ref();
+        match cause.http_status() {
+            Some(401) | Some(403) => { /* ... */ }
+            Some(status) => eprintln!("download refused with {status}: {e}"),
+            None => eprintln!("download failed: {e}"),
+        }
+    }
+    Ok(bytes) => { /* ... */ }
+}
+```
+
+Messages are unchanged either way — `http_status()` is purely additive, recovering a fact that was already in the text but previously reachable only by parsing it.

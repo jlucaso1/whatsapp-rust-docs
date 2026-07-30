@@ -867,18 +867,45 @@ The upload method automatically retries when WhatsApp's CDN returns HTTP 401 or 
 
 For non-auth HTTP errors (such as 500), the client tries the next available CDN host without refreshing credentials. Hosts are tried in priority order — primary hosts first, then fallback hosts.
 
+### Recovering the host's status by type
+
+As of PR #1195, `upload_error_from_response` attaches the refusing host's status as a typed [`HttpStatusError`](/api/errors#httpstatuserror) node, not only into the error message. If every host in the failover list refuses, the status of the last refusal survives into the returned error and is recoverable with [`ErrorChainExt::http_status()`](/api/errors#error-chain-recovery) — no string matching required:
+
+```rust
+use whatsapp_rust::ErrorChainExt;
+
+match client.upload(data, media_type, Default::default()).await {
+    Ok(upload) => { /* Success */ }
+    Err(e) => {
+        let cause: &(dyn std::error::Error + 'static) = e.as_ref();
+        match cause.http_status() {
+            Some(401) | Some(403) => eprintln!("auth retry already exhausted: {e}"),
+            Some(429) | Some(500..=599) => { /* worth backing off and retrying later */ }
+            Some(status) => eprintln!("upload host refused with {status}: {e}"),
+            None => eprintln!("upload failed with no HTTP exchange: {e}"),
+        }
+    }
+}
+```
+
 ### Common upload errors
 
 <ParamField path="HTTP 4xx/5xx" type="error">
   CDN returned error status. Auth errors (401/403) are retried automatically with fresh credentials. Other errors are tried against alternate CDN hosts.
   
   ```rust
+  use whatsapp_rust::ErrorChainExt;
+
   match client.upload(data, media_type, Default::default()).await {
-      Err(e) if e.to_string().contains("Upload failed") => {
-          eprintln!("CDN error: {}", e);
-          // Retry or use fallback
+      Err(e) => {
+          let cause: &(dyn std::error::Error + 'static) = e.as_ref();
+          if let Some(status) = cause.http_status() {
+              eprintln!("CDN error {status}: {e}");
+              // Retry or use fallback
+          } else {
+              eprintln!("Other error: {}", e);
+          }
       }
-      Err(e) => eprintln!("Other error: {}", e),
       Ok(upload) => { /* Success */ }
   }
   ```

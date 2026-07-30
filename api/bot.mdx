@@ -690,7 +690,7 @@ Bot::builder()
 ```
 
 <Note>
-This callback fires for **two** triggers, not just a server request: the server asking for a refresh (only while a pair-code flow is outstanding and the notification's ref matches it — a `refresh_code` notification for a stale or unrelated flow is ignored), and an accepted `companion_finish` whose `pair-success` then went unanswered for a minute (`force_manual` is always `false` for this second trigger). A `companion_finish` the server actively *refuses* is reported through [`on_pair_code_error`](#on_pair_code_error) instead, immediately rather than after this timeout. See [Pair code refresh events](/concepts/authentication#pair-code-refresh-events) for the full breakdown.
+This callback fires for **two** triggers, not just a server request: the server asking for a refresh (only while a pair-code flow is outstanding and the notification's ref matches it — a `refresh_code` notification for a stale or unrelated flow is ignored), and a non-refused `companion_finish` — accepted, or its own 30s wait going unanswered — whose `pair-success` then went unanswered for a minute (`force_manual` is always `false` for this second trigger). A `companion_finish` the server actively *refuses* is reported through [`on_pair_code_error`](#on_pair_code_error) instead, immediately rather than after this timeout — register that handler too if you need to react to a refusal, since it no longer reaches this one. See [Pair code refresh events](/concepts/authentication#pair-code-refresh-events) for the full breakdown.
 </Note>
 
 ### on_pair_code_error

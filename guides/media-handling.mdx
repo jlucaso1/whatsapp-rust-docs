@@ -124,7 +124,7 @@ See [Download API reference](/api/download#download_from_params_to_writer) for s
 
 ### Downloading without an active session
 
-`client.download()` and its variants need a connected `Client` — they ask the server for CDN hosts and an auth token. If you've persisted a message's CDN fields (for example as a [`DownloadParams`](/api/download#downloadparams)) and want to fetch that media later, after the session that received it has disconnected, use [`MediaDownloader`](/api/download#mediadownloader) instead. It needs only an `HttpClient` and a `Runtime` — no `Client`, no pairing:
+`client.download()` and its variants need a connected `Client` for most media — they ask the server for CDN hosts and an auth token (cached and refreshed automatically, not fetched on every call). The exception is `static_url` media (newsletter/channel content), which skips that entirely — see the [Download API reference](/api/download#download) for details. If you've persisted a message's CDN fields (for example as a [`DownloadParams`](/api/download#downloadparams)) and want to fetch that media later, after the session that received it has disconnected, use [`MediaDownloader`](/api/download#mediadownloader) instead. It needs only an `HttpClient` and a `Runtime` — no `Client`, no pairing:
 
 ```rust
 use std::sync::Arc;

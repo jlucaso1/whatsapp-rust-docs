@@ -137,6 +137,7 @@ pub enum Event {
     PairingQrCode(PairingQrCode),
     PairingCode(PairingCode),
     PairingCodeRefresh(PairingCodeRefresh),
+    PairingCodeError(PairingCodeError),
     PairingQrCodesExhausted(PairingQrCodesExhausted),
     PairSuccess(PairSuccess),
     PairError(PairError),
@@ -574,6 +575,46 @@ Breaking change: `PairingCodeRefresh` moved from an inline `Event::PairingCodeRe
 
 <Note>
 The unanswered-`companion_finish` timeout trigger is new. If your handler assumed `PairingCodeRefresh` only ever came from the server, no code changes are required — the reaction (call `pair_with_code` again) is the same either way, and the outstanding flow is already cleared by the time the event fires in both cases.
+</Note>
+
+### PairingCodeError
+
+**Emitted:** When a phone-number pair-code request fails, so no code will be shown. `Client::pair_with_code` dispatches this in addition to returning `Err` — it's the *only* surface that reports the failure when pairing is driven by [`BotBuilder::with_pair_code`](/api/bot#with_pair_code), since that request runs in a detached task and its `Err` reaches no caller.
+
+```rust
+/// A phone-number pair-code request failed, so no code will be shown.
+///
+/// Fires for every failure, including local validation (a too-short phone
+/// number never reaches the server) — a consumer waiting on a code needs to
+/// learn that it is not coming, whatever the reason.
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct PairingCodeError {
+    /// The server's refusal, when it answered with one. `None` when the
+    /// failure was local (validation, no connection) or the request went
+    /// unanswered (timeout) — nothing was refused, so there is no status to
+    /// report.
+    pub rejection: Option<PairCodeRejection>,
+    /// How long the server asked the client to wait, from the `backoff`
+    /// attribute. Usually absent.
+    pub backoff: Option<std::time::Duration>,
+    /// The failure rendered for logs. Do not branch on it; use `rejection`.
+    pub error: String,
+}
+```
+
+**Example:**
+```rust
+Event::PairingCodeError(PairingCodeError { rejection, backoff, error, .. }) => {
+    eprintln!("Pair code request failed: {error}");
+    if rejection.is_some_and(PairCodeRejection::is_throttled) {
+        // Back off, then retry — using the server's own delay when it named one.
+    }
+}
+```
+
+<Note>
+Two failures never reach this event, because for them a code may still be on its way and the event would say the opposite: `PairCodeError::CodeAlreadyOutstanding` (an earlier code is still live — the consumer already has it from the `PairingCode` that minted it) and `PairCodeError::Cancelled` (the caller withdrew this request, and a replacement may already own the slot by the time it resolves). Both are consequences of something the caller did, so neither is news to them, and a direct caller still receives the `Err` either way. See [Pair code failure events](/concepts/authentication#pair-code-failure-events) for `PairCodeRejection`'s variants and the full breakdown, and [`BotBuilder::on_pair_code_error`](/api/bot#on_pair_code_error) to register a handler.
 </Note>
 
 ### PairingQrCodesExhausted

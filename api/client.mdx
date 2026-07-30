@@ -277,6 +277,10 @@ This can run concurrently with QR code pairing — whichever completes first win
 **One code at a time.** Fails with `PairCodeError::CodeAlreadyOutstanding` while a previous code is still outstanding, instead of silently replacing it. "Outstanding" means either the previous code's validity window hasn't elapsed yet, *or* its `primary_hello` was already accepted and a `pair-success` for it is still pending — that second case can outlast the validity window by up to a minute, and `remaining` reads as `0` for it since there's no window left to report. A second code does not replace the first for the phone: the server routes `primary_hello` by number and never sees the code itself, so whoever is still reading the older one reaches stage 2 regardless. Call [`cancel_pair_code`](#cancel_pair_code) first when the replacement is intentional. Do not call this on a schedule driven by QR-code rotation — the two flows have unrelated lifetimes. See [One code at a time](/concepts/authentication#one-code-at-a-time).
 </Note>
 
+<Note>
+On any failure other than `CodeAlreadyOutstanding` or `Cancelled`, this also dispatches [`Event::PairingCodeError`](/concepts/authentication#pair-code-failure-events) before returning the `Err` — the only surface [`BotBuilder::with_pair_code`](/api/bot#with_pair_code) can report through, since that path drives this call from a detached task. A direct caller sees the failure both ways: as the returned `Err` and, unless it's one of those two exclusions, on the event bus.
+</Note>
+
 <ParamField path="options" type="PairCodeOptions" required>
   Configuration for pair code authentication:
   - `phone_number` — Phone number in international format (e.g., `"15551234567"`)
@@ -306,7 +310,27 @@ This can run concurrently with QR code pairing — whichever completes first win
 | `PairCode(AdvSecretKeyDerivation)` / `BundleKeyDerivation` | HKDF expand failed |
 | `PairCode(BundleAead)` | AES-GCM encryption of the key bundle failed (typed `CryptoProviderError` source) |
 | `PairCode(MissingPairingRef)` | Server response missing pairing ref |
-| `RequestFailed` | Server IQ request failed (typed `IqError` source) |
+| `RequestFailed` | Server IQ request failed (typed `IqError` source). `Display` renders exactly what it wraps (e.g. `429 (rate-overlimit)`) |
+
+`PairError` also exposes the server's refusal as a typed status, so a consumer doesn't have to match the message:
+
+```rust
+impl PairError {
+    /// The server's refusal, classified from its `code`/`text` pair. An
+    /// unrecognized code still comes back as `Some(PairCodeRejection::Unknown)`.
+    /// `None` only when nothing was refused (local validation, no connection,
+    /// timeout), or the server paired a *named* code with a contradicting `text`.
+    pub fn rejection(&self) -> Option<PairCodeRejection>;
+    /// The server's requested retry delay, when it named one.
+    pub fn backoff(&self) -> Option<std::time::Duration>;
+    /// `true` for `CodeAlreadyOutstanding` and `Cancelled` — failures that
+    /// don't mean "no code is coming", because another flow may still own
+    /// the slot. `Event::PairingCodeError` is not dispatched for these.
+    pub fn lost_the_flow_to_another_request(&self) -> bool;
+}
+```
+
+See [Pair code failure events](/concepts/authentication#pair-code-failure-events) for `PairCodeRejection`'s five named variants (`BadRequest`, `Forbidden`, `RateOverlimit`, `FeatureNotAvailable`, `InternalServerError`) plus its `Unknown(i32)` fallback, and for `is_throttled()`.
 
 **Example:**
 ```rust

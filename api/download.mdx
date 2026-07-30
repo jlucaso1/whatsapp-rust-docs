@@ -99,7 +99,7 @@ All download methods handle three categories of CDN errors automatically:
 - **Media not found (404/410):** When a media URL has expired or the file has been relocated, the CDN returns 404 or 410. The client treats this the same as an auth error — it invalidates the cached connection, re-derives download URLs with fresh credentials and hosts, and retries once. This matches WhatsApp Web's `MediaNotFoundError` handling.
 - **Other errors (e.g., 500):** The client tries the next available CDN host without refreshing credentials. Hosts are tried in priority order (primary first, then fallback).
 
-For streaming downloads (`download_to_writer`), the writer is seeked back to position 0 before retrying so partial writes are overwritten. For in-memory downloads (`download()`), each retry gets a fresh buffer rather than reusing the previous one, so a failed host that wrote a longer body can't leave a stale tail behind a shorter successful retry.
+For streaming downloads (`download_to_writer`), every attempt — including the first — starts by truncating the writer to empty via [`DownloadWriter::truncate`](#downloadwriter-trait) and rewinding it, so a host that streamed out plaintext before failing its MAC can't leave a tail behind a shorter successful retry. If every host fails, the writer is truncated to empty one final time on a best-effort basis rather than left holding unverified bytes. For in-memory downloads (`download()`), each retry gets a fresh buffer rather than reusing the previous one, for the same reason.
 
 If every retry is exhausted, the status of the final refusal survives into the error `download`/`download_to_writer` return — recover it with `ErrorChainExt::http_status()` as shown [above](#recovering-the-cdn-status-by-type) rather than parsing the message.
 
@@ -119,8 +119,10 @@ Download media to a writer using streaming when available, with automatic buffer
 
 When the HTTP client supports streaming (`supports_streaming()` returns `true`), the entire HTTP download, decryption, and file write happen in a single blocking thread with ~40KB memory usage regardless of file size. When streaming is not available, the method automatically falls back to a buffered download — fetching the full response into memory, then decrypting and writing to the writer. This ensures `download_to_writer` works with any `HttpClient` implementation.
 
+The writer must implement [`DownloadWriter`](#downloadwriter-trait) rather than plain `Write + Seek` — see that section for why, and for what a custom writer needs to add.
+
 ```rust
-pub async fn download_to_writer<W: Write + Seek + Send + 'static>(
+pub async fn download_to_writer<W: DownloadWriter + Send + 'static>(
     &self,
     downloadable: &dyn Downloadable,
     writer: W,
@@ -131,12 +133,12 @@ pub async fn download_to_writer<W: Write + Seek + Send + 'static>(
   Message containing downloadable media
 </ParamField>
 
-<ParamField path="writer" type="W: Write + Seek + Send + 'static" required>
-  Writer for streaming output. Must be Send + 'static for use in blocking task.
+<ParamField path="writer" type="W: DownloadWriter + Send + 'static" required>
+  Writer for streaming output. Must implement [`DownloadWriter`](#downloadwriter-trait) and be Send + 'static for use in blocking task.
 </ParamField>
 
 <ResponseField name="writer" type="W">
-  Returns the writer after successful download, seeked back to position 0.
+  Returns the writer after a successful download, holding exactly the decrypted media and seeked back to position 0 — nothing a caller left in it beforehand, and no tail from a host that failed partway through, survives.
 </ResponseField>
 
 ### Example: streaming download
@@ -146,12 +148,64 @@ use std::fs::File;
 
 let file = File::create("large_video.mp4")?;
 let file = client.download_to_writer(video_msg.as_ref(), file).await?;
-// File is seeked back to start and can be reused
+// File holds exactly the downloaded media, seeked to start, and can be reused
 ```
 
 <Note>
   When using an HTTP client that supports streaming (like the default `UreqHttpClient`), memory usage is constant ~40KB (8KB read buffer + decryption state). HTTP clients that don't support streaming fall back to buffered downloads, which load the full file into memory before writing.
 </Note>
+
+<Note>
+  If the download fails on every host, the writer is emptied too, on a best-effort basis: a sink that refuses to empty is logged rather than replacing the download's own error. This only matters to a caller who kept a separate handle to the writer (e.g. a shared/cloneable writer), since `download_to_writer` otherwise consumes it and returns nothing on failure.
+</Note>
+
+---
+
+## DownloadWriter Trait
+
+<Warning>
+**Breaking change (as of PR #1197):** `download_to_writer`, `download_from_params_to_writer`, and `MediaDownloader::download_to_writer` now take `W: DownloadWriter` instead of `W: Write + Seek`. `std::fs::File`, `std::io::Cursor<Vec<u8>>`, `std::io::Cursor<&mut Vec<u8>>`, `std::io::BufWriter<W: DownloadWriter>`, and `&mut W where W: DownloadWriter` all implement it already, so call sites using those types need no changes. A custom writer type needs one additional method — see below.
+</Warning>
+
+`download_to_writer` needs more than `Write + Seek` from its sink: it needs to be able to empty it.
+
+```rust
+pub trait DownloadWriter: std::io::Write + std::io::Seek {
+    /// Shorten the sink to `len` bytes, discarding anything beyond it.
+    /// Only ever called with a length the sink already reaches.
+    fn truncate(&mut self, len: u64) -> std::io::Result<()>;
+}
+```
+
+Media is authenticated by a single MAC over the whole ciphertext, so decryption has necessarily streamed plaintext into the writer by the time a forged body is caught, and a retry against the next host may end up writing fewer bytes than the attempt it replaces. Rewinding with `seek` alone can't remove bytes that are already there — shortening a sink requires a concrete operation (`File::set_len`, `Vec::truncate`) that no `std` trait exposes. `DownloadWriter::truncate` names that operation, which is what lets `download_to_writer` guarantee: **exactly the media on success, empty on failure.**
+
+Every attempt begins by truncating the writer to 0 and rewinding it, so only that attempt's own bytes are ever present when it finishes — including on an append-mode `File`, where truncating (not just seeking) is what brings the write position back to the start, since files opened for appending ignore `seek` and always write at the end.
+
+### Built-in implementations
+
+| Type | `truncate` behavior |
+|------|------|
+| `std::fs::File` | Calls `File::set_len` |
+| `std::io::Cursor<Vec<u8>>` | Calls `Vec::truncate`, saturating rather than failing if `len` doesn't fit in `usize` |
+| `std::io::Cursor<&mut Vec<u8>>` | Same as above, over the borrowed buffer |
+| `std::io::BufWriter<W: DownloadWriter>` | Flushes first (buffered bytes count toward the sink's length), then delegates to the inner writer |
+| `&mut W where W: DownloadWriter` | Delegates to the wrapped writer |
+
+### Implementing DownloadWriter for a custom writer
+
+Any writer type used with `download_to_writer` that isn't one of the built-ins above — including a wrapper around one, like a progress-reporting adapter — needs its own `DownloadWriter` impl. For a wrapper, this is normally a one-line delegation:
+
+```rust
+use wacore::download::DownloadWriter;
+
+impl<W: DownloadWriter> DownloadWriter for ProgressWriter<W> {
+    fn truncate(&mut self, len: u64) -> std::io::Result<()> {
+        self.inner.truncate(len)
+    }
+}
+```
+
+See [Streaming with Progress](/guides/media-handling#streaming-with-progress) for the full `ProgressWriter` example, including its `Write` and `Seek` impls.
 
 ---
 
@@ -201,10 +255,10 @@ let image_bytes = client.download_from_params(&params).await?;
 
 ## download_from_params_to_writer
 
-Streaming variant of `download_from_params` that writes to a writer.
+Streaming variant of `download_from_params` that writes to a writer. Same writer contract as [`download_to_writer`](#download_to_writer): the writer must implement [`DownloadWriter`](#downloadwriter-trait), and holds exactly the decrypted media on success.
 
 ```rust
-pub async fn download_from_params_to_writer<W: Write + Seek + Send + 'static>(
+pub async fn download_from_params_to_writer<W: DownloadWriter + Send + 'static>(
     &self,
     params: &DownloadParams,
     writer: W,
@@ -215,12 +269,12 @@ pub async fn download_from_params_to_writer<W: Write + Seek + Send + 'static>(
   The CDN/crypto fields needed to fetch and decrypt the media. See [`DownloadParams`](#downloadparams).
 </ParamField>
 
-<ParamField path="writer" type="W" required>
+<ParamField path="writer" type="W: DownloadWriter + Send + 'static" required>
   Writer for streaming output
 </ParamField>
 
 <ResponseField name="writer" type="W">
-  Returns the writer after successful download
+  Returns the writer after a successful download, holding exactly the decrypted media
 </ResponseField>
 
 ---
@@ -296,7 +350,7 @@ impl MediaDownloader {
         downloadable: &dyn Downloadable,
     ) -> Result<Vec<u8>, MediaDownloadError>;
 
-    pub async fn download_to_writer<W: Write + Seek + Send + 'static>(
+    pub async fn download_to_writer<W: DownloadWriter + Send + 'static>(
         &self,
         downloadable: &dyn Downloadable,
         writer: W,

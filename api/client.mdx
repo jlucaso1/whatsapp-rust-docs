@@ -316,9 +316,10 @@ On any failure other than `CodeAlreadyOutstanding` or `Cancelled`, this also dis
 
 ```rust
 impl PairError {
-    /// The server's refusal, classified from its `code`/`text` pair. `None`
-    /// when nothing was refused (local validation, no connection, timeout)
-    /// or the server sent a code/text pair WA Web itself wouldn't accept.
+    /// The server's refusal, classified from its `code`/`text` pair. An
+    /// unrecognized code still comes back as `Some(PairCodeRejection::Unknown)`.
+    /// `None` only when nothing was refused (local validation, no connection,
+    /// timeout), or the server paired a *named* code with a contradicting `text`.
     pub fn rejection(&self) -> Option<PairCodeRejection>;
     /// The server's requested retry delay, when it named one.
     pub fn backoff(&self) -> Option<std::time::Duration>;

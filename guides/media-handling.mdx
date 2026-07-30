@@ -619,9 +619,10 @@ if let Some(img) = message.image_message.as_option() {
 
 ### Streaming with Progress
 
-A writer passed to `download_to_writer` must implement [`DownloadWriter`](/api/download#downloadwriter-trait), not just `Write + Seek` — see that reference for why. For a wrapper like this one, the impl is a one-line delegation to the inner writer:
+When you pass a writer to `download_to_writer`, you must implement [`DownloadWriter`](/api/download#downloadwriter-trait), not just `Write + Seek` — see that reference for why. For a wrapper like this one, the impl is a one-line delegation to the inner writer, plus resetting your own tracked state to match:
 
 ```rust
+use std::fs::File;
 use std::io::{Write, Seek};
 use std::sync::{Arc, Mutex};
 use wacore::download::DownloadWriter;
@@ -652,7 +653,12 @@ impl<W: Seek> Seek for ProgressWriter<W> {
 
 impl<W: DownloadWriter> DownloadWriter for ProgressWriter<W> {
     fn truncate(&mut self, len: u64) -> std::io::Result<()> {
-        self.inner.truncate(len)
+        self.inner.truncate(len)?;
+        // download_to_writer truncates to 0 at the start of every attempt
+        // (including retries after a failed host), so the counter has to
+        // follow along or it double-counts bytes from an attempt that failed.
+        *self.total.lock().unwrap() = len as usize;
+        Ok(())
     }
 }
 
@@ -679,7 +685,7 @@ Both `download` and `upload` methods automatically retry when WhatsApp's CDN ret
 This retry behavior is fully transparent — no changes are needed in your code. Both `download` and `upload` handle auth refresh, URL re-derivation, and host failover automatically, with a maximum of one credential refresh per operation. [`MediaDownloader`](/api/download#mediadownloader) follows the same host-failover behavior but skips the credential refresh, since it has no session to refresh from — see [Downloading without an active session](#downloading-without-an-active-session).
 </Note>
 
-For streaming downloads (`download_to_writer`), the writer is automatically emptied and rewound before each retry — including the first attempt — so a host that streamed out plaintext before failing its MAC can't leave a tail behind a shorter successful retry. If every host fails, the writer is emptied one last time on a best-effort basis rather than left holding unverified bytes. See [`DownloadWriter`](/api/download#downloadwriter-trait) for the trait this relies on.
+For streaming downloads (`download_to_writer`), the client empties and rewinds your writer before each attempt, including the first, so a host that streamed out plaintext before failing its MAC can't leave a tail behind a shorter successful retry. If every host fails, the client empties the writer one last time on a best-effort basis rather than leaving it holding unverified bytes. See [`DownloadWriter`](/api/download#downloadwriter-trait) for the trait this relies on.
 
 ### Additional retry logic
 

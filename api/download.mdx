@@ -161,7 +161,7 @@ let file = client.download_to_writer(video_msg.as_ref(), file).await?;
 
 ---
 
-## DownloadWriter Trait
+## DownloadWriter trait
 
 <Warning>
 **Breaking change (as of PR #1197):** `download_to_writer`, `download_from_params_to_writer`, and `MediaDownloader::download_to_writer` now take `W: DownloadWriter` instead of `W: Write + Seek`. `std::fs::File`, `std::io::Cursor<Vec<u8>>`, `std::io::Cursor<&mut Vec<u8>>`, `std::io::BufWriter<W: DownloadWriter>`, and `&mut W where W: DownloadWriter` all implement it already, so call sites using those types need no changes. A custom writer type needs one additional method — see below.
@@ -177,9 +177,9 @@ pub trait DownloadWriter: std::io::Write + std::io::Seek {
 }
 ```
 
-Media is authenticated by a single MAC over the whole ciphertext, so decryption has necessarily streamed plaintext into the writer by the time a forged body is caught, and a retry against the next host may end up writing fewer bytes than the attempt it replaces. Rewinding with `seek` alone can't remove bytes that are already there — shortening a sink requires a concrete operation (`File::set_len`, `Vec::truncate`) that no `std` trait exposes. `DownloadWriter::truncate` names that operation, which is what lets `download_to_writer` guarantee: **exactly the media on success, empty on failure.**
+Media is authenticated by a single MAC over the whole ciphertext, so decryption has necessarily streamed plaintext into the writer by the time a forged body is caught, and a retry against the next host may end up writing fewer bytes than the attempt it replaces. Rewinding with `seek` alone can't remove bytes that are already there — shortening a sink requires a concrete operation (`File::set_len`, `Vec::truncate`) that no `std` trait exposes. `DownloadWriter::truncate` names that operation, which is what lets `download_to_writer` guarantee: **exactly the media on success**, and **empty on failure on a best-effort basis** (a sink that refuses to empty during that final cleanup is logged, not treated as fatal — see the note above).
 
-Every attempt begins by truncating the writer to 0 and rewinding it, so only that attempt's own bytes are ever present when it finishes — including on an append-mode `File`, where truncating (not just seeking) is what brings the write position back to the start, since files opened for appending ignore `seek` and always write at the end.
+Every attempt begins by truncating the writer to 0, which clears its length, and then seeking it to 0, which resets its position — two separate operations that both matter on an append-mode `File`: appending forces every write to the file's current end regardless of position, so truncating to 0 is what makes that end (and therefore the next write) land at the start; a bare `seek` would change the position but not the end, and appending would still write there. On success, `download_to_writer` performs one further `seek(0)` after the writer's own bytes are in place, which is the "seeked back to position 0" postcondition on the returned writer described above.
 
 ### Built-in implementations
 

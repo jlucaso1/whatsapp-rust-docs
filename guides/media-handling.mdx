@@ -147,7 +147,7 @@ let data = downloader.download(&params).await?;
 ```
 
 <Note>
-`MediaDownloader` mirrors `client.download()`'s streaming/buffered behavior and host failover, but it can't refresh credentials — there's no session to get fresh ones from. A rejected reference (expired or revoked) fails immediately instead of retrying, and the error is a typed [`MediaDownloadError`](/api/download#mediadownloaderror) rather than `anyhow::Error`.
+`MediaDownloader` mirrors `client.download()`'s streaming/buffered behavior and host failover, but it can't refresh credentials — there's no session to get fresh ones from. A rejection fails immediately instead of retrying, and the error is a typed [`MediaDownloadError`](/api/download#mediadownloaderror) rather than `anyhow::Error`. On a route built with `MediaRoute::authenticated`, a 401/403 can mean only the *auth token* went stale, not the reference itself — retry once with `route.without_auth()` before treating it as expired or revoked. See [`MediaDownloadError`](/api/download#mediadownloaderror) for the full breakdown.
 </Note>
 
 ## Thumbnails

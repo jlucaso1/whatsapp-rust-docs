@@ -12,7 +12,7 @@ Only use `download` when you need the plaintext bytes (processing, transcoding, 
 </Tip>
 
 <Tip>
-`download` needs a connected `Client` because it asks the server for CDN hosts and an auth token. If you've persisted a message's CDN fields and want to download after the session has disconnected, use [`MediaDownloader`](#mediadownloader) instead — it needs no `Client` at all.
+`download` and its siblings need a connected `Client` for most media — they ask the server for CDN hosts and an auth token (cached and refreshed automatically, not fetched on every call). The exception is `static_url` media (newsletter/channel content), which skips that round trip entirely — see the note below. If you've persisted a message's CDN fields and want to download after the session has disconnected, use [`MediaDownloader`](#mediadownloader) instead — it needs no `Client` at all.
 </Tip>
 
 ```rust
@@ -79,7 +79,7 @@ This classification reads `status_code` off a successfully completed HTTP exchan
 </Note>
 
 <Note>
-`static_url` media (newsletter/channel content fetched from a fixed CDN URL) skips the media-conn round trip entirely — `prepare_requests` only asks the server for hosts when the downloadable has no `static_url`.
+`static_url` media (newsletter/channel content fetched from a fixed CDN URL) skips the media-conn round trip entirely: `download` and its siblings only ask the server for hosts when the downloadable has no `static_url`.
 </Note>
 
 ---
@@ -243,7 +243,7 @@ pub fn encrypted(
 
 Downloads and decrypts media from the CDN with **no connected `Client`**. Everything a download needs beyond the CDN hosts already lives in the [`Downloadable`](#downloadable-trait) itself — `MediaDownloader` takes the hosts (and, optionally, an auth token) up front instead of asking a live session for them, so a persisted reference (for example a stored [`DownloadParams`](#downloadparams)) stays downloadable after the client has disconnected.
 
-A live `Client` keeps asking the server for its hosts on every download; `MediaDownloader` is the path for callers that have no session to ask with — a background worker, a queue consumer, or a CLI tool operating on data a paired client saved earlier.
+A live `Client` still needs a session to fetch its hosts (cached and refreshed automatically, not re-fetched on every call — see [Automatic retry and URL re-derivation](#automatic-retry-and-url-re-derivation)); `MediaDownloader` is the path for callers that have no session to ask with at all — a background worker, a queue consumer, or a CLI tool operating on data a paired client saved earlier.
 
 ```rust
 pub struct MediaDownloader { /* private fields */ }
@@ -299,8 +299,9 @@ use whatsapp_rust::download::{DownloadParams, MediaDownloader};
 // Needs only an HttpClient + Runtime — no paired Client required.
 let downloader = MediaDownloader::with_default_hosts(http_client.clone(), runtime.clone());
 
-// `params` came from something you persisted earlier, e.g. via `PersistenceManager`
-// or your own store, while the client was still connected.
+// `params` came from CDN fields you saved to your own store earlier, while
+// the client was still connected. (`PersistenceManager` covers device/session
+// state only — it doesn't store message metadata like this for you.)
 let params = DownloadParams::encrypted(
     "/v/t62.7118-24/12345_67890",
     &media_key,
@@ -331,10 +332,12 @@ pub enum MediaDownloadError {
 
 | Variant | Meaning |
 |---------|---------|
-| `ReferenceRejected` | The CDN rejected the reference itself (401/403/404/410). The `direct_path` or its token is expired or revoked, and — with no session to refresh from — another host cannot serve it either. Terminal: retrying without new credentials won't help. |
+| `ReferenceRejected` | The CDN rejected the request with 401/403/404/410. On a route built with [`MediaRoute::authenticated`](#mediaroute-and-mediahost), a 401/403 can mean only the *auth token* is stale — downloads don't strictly need one, so retrying with [`route.without_auth()`](#mediaroute-and-mediahost) before giving up can still succeed. A 404/410, or a 401/403 on an already-unauthenticated route, means the `direct_path` itself is expired or revoked and no host can serve it — that case is terminal. |
 | `HostsUnreachable` | Every host in the route failed for a reason other than the reference (transport failure, unexpected status, a body that failed to decrypt/verify). |
 | `NoHosts` | The `MediaRoute` named no hosts, so nothing was ever contacted. |
-| `Other` | No host was contacted and none could be — the `Downloadable` is missing fields needed to build a URL at all. Fix the metadata, not the network. |
+| `Other` | The `Downloadable` didn't have the fields needed to build a request at all (e.g. no `direct_path` and no `static_url`), so — unlike `NoHosts` — no host was ever *going* to be contacted. Fix the metadata, not the network. |
+
+`MediaDownloadError` is `#[non_exhaustive]`; match it with a wildcard (`_ => `) arm so a future variant doesn't break your build.
 
 `Client::download` and `Client::download_to_writer` keep returning `anyhow::Error`: they already try a credential refresh before the error would escape, so the extra classification has nothing left to add there.
 
@@ -378,7 +381,7 @@ pub const DEFAULT_MEDIA_HOSTS: [&str; 2] = ["mmg.whatsapp.net", "mmg-fallback.wh
 </Note>
 
 <Warning>
-**Breaking change (as of PR #1194):** `wacore::download::MediaConnection` was replaced by `MediaRoute`. If you called `DownloadUtils::prepare_download_requests` directly with a `MediaConnection`, migrate with `MediaRoute::from(&media_conn)` (a `From<&MediaConn>` impl is provided) or by constructing a `MediaRoute` via `MediaRoute::authenticated(hosts, auth)`. `Client::download` and friends are unaffected — this only touches callers using the lower-level `DownloadUtils` / `MediaConnection` types directly.
+**Breaking change (as of PR #1194):** `wacore::download::MediaConnection` (`{ hosts: Vec<MediaHost>, auth: String }`) no longer exists. If you built one directly and passed it to `DownloadUtils::prepare_download_requests`, migrate by constructing the equivalent `MediaRoute` in its place: `MediaRoute::authenticated(hosts, auth)`. (The `From<&MediaConn> for MediaRoute` impl is unrelated to this migration — it converts `whatsapp_rust`'s own `mediaconn::MediaConn`, the server response a connected `Client` refreshes internally, and is what `Client::prepare_requests` uses under the hood.) `Client::download` and friends are unaffected either way; this only touches callers using the lower-level `DownloadUtils` type directly.
 </Warning>
 
 ---

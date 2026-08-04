@@ -2224,24 +2224,24 @@ pub struct AppStateSyncFailed {
 ```
 
 **Fields:**
-- `fatal` - Collections the server refused outright (HTTP 400/404 on the syncd IQ). Terminal for this connection — repeating the request gets the same answer, so the client stops retrying these until the next fresh connection.
+- `fatal` - Collections the server refused outright (the syncd IQ came back with an IQ-level error code such as `400`/`404`, not an HTTP status). Terminal for the current connection — repeating the request on it gets the same answer — but not permanent: a fresh connection gets to try again.
 - `retryable` - Collections that didn't sync but a later attempt can. The client backs off and retries these on its own schedule (1 second, doubling, capped at an hour), so a handler doesn't need to trigger a retry itself.
 - `skipped` - Collections another in-flight sync or patch send already held, so this particular sync did nothing for them. Not an error — the equivalent work is happening elsewhere and will report its own outcome.
-- `connected` - Whether the client went on to dispatch [`Event::Connected`](#connected) despite the incomplete sync. `true` only when a `fatal` collection was involved (see the Note below); a purely `retryable`/`skipped` outcome during the initial bootstrap keeps the connection from completing and reconnects instead, so `connected` is `false` there.
+- `connected` - Whether the client was already connected (or went on to dispatch [`Event::Connected`](#connected)) when this event fired, rather than an indicator of which bucket is non-empty. During the initial bootstrap it's `false` if the 180s deadline expired with only retryable/skipped collections outstanding (the client reconnects to retry instead) and `true` if a fatal collection made the client stop waiting and connect anyway. Outside the bootstrap, background syncs always run on an already-connected client, so `connected` is `true` there regardless of which buckets are populated.
 
 <Note>
-Collections are identified by their wire name (`critical_block`, `regular_high`, `regular_low`, `regular`) rather than an enum, so this payload stays stable if the set of collections changes.
+Collections are identified by their wire name (`critical_block`, `critical_unblock_low`, `regular_high`, `regular_low`, `regular`) rather than an enum, so this payload stays stable if the set of collections changes.
 
-`fatal` is the bucket a consumer usually has to act on. WhatsApp Web treats a fatal `critical_block` failure as grounds to notify the primary device and log out; this library does not end a session on its own. Instead, during the initial connection bootstrap, a fatal `critical_block` outcome makes the client stop waiting on it, dispatch `Event::Connected` anyway, and then dispatch this event with `connected: true` — the account is usable but missing whatever that collection carries (for `critical_block`, that includes push name, so presence stays unavailable until a later background retry succeeds). See [Critical app-state sync (pairing bootstrap)](/concepts/architecture#critical-app-state-sync-pairing-bootstrap) for the full bootstrap flow.
+`fatal` is the bucket a consumer usually has to act on. WhatsApp Web treats a fatal `critical_block` failure as grounds to notify the primary device and log out; this library does not end a session on its own. Instead, during the initial connection bootstrap, a fatal `critical_block` outcome makes the client stop waiting on it, dispatch `Event::Connected` anyway, and then dispatch this event with `connected: true` — the account is usable but missing whatever that collection carries. A `fatal` outcome does not retry on its own connection (WhatsApp Web's `COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY` path is explicitly gated off for `critical_block`, and this client implements no alternative for it); the collection gets another chance only on the account's next fresh connection. `critical_block` includes the `setting_pushName` mutation, so unless the push name was already known some other way (e.g. `Bot::with_push_name`, or a name learned earlier via history sync or a prior session), presence stays unavailable until that next connection syncs it. See [Critical app-state sync (pairing bootstrap)](/concepts/architecture#critical-app-state-sync-pairing-bootstrap) for the full bootstrap flow.
 
-A background sync outside the bootstrap path (the `ib` dirty-resync handler, group `server_sync` notifications, periodic app-state resync) reports through this same event when it leaves collections unsynced, always with `connected: true` since the client was already connected before that sync ran.
+A background sync outside the bootstrap path (the `ib` dirty-resync handler, group `server_sync` notifications, periodic app-state resync) reports through this same event when it leaves collections unsynced, always with `connected: true` since the client was already connected before that sync ran. Only its `retryable` collections back off and retry automatically; any `fatal` collection it reports is subject to the same next-connection-only recovery as the bootstrap path.
 </Note>
 
 **Example:**
 ```rust
 Event::AppStateSyncFailed(AppStateSyncFailed { fatal, retryable, connected, .. }) => {
     if !fatal.is_empty() {
-        eprintln!("app-state collections permanently unsynced: {fatal:?}");
+        eprintln!("app-state collections unsynced on this connection: {fatal:?}");
     }
     if !retryable.is_empty() {
         println!("app-state collections retrying in background: {retryable:?}");

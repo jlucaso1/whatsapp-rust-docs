@@ -1316,7 +1316,7 @@ If a record already has a stranded ceiling — written by a build that predates 
 
 ### Waiving the counter lease
 
-The batched lease above assumes the durable snapshot `SessionRecord`/`SenderKeyRecord` serialize to is the store of record. A consumer whose own persistence is already synchronous and durable before the ciphertext reaches the wire — the [component export](#record-components) case below is the motivating one — gets nothing from the lease and pays for it anyway: `into_components()` has to materialize the full reservation on *every* export, since nothing else in the projection could re-derive it later. Four consecutive DM sends through such a store land on the wire at counters `0, 64, 128, 192` instead of `0, 1, 2, 3`, and the peer buffers 63 skipped message keys per gap.
+The batched lease above assumes the durable snapshot `SessionRecord`/`SenderKeyRecord` serialize to is the store of record. Some consumers don't fit that assumption: their own persistence is already synchronous and durable before the ciphertext reaches the wire, so the lease gives them nothing. The [component export](#record-components) case below is the motivating one. Such a consumer still pays for the lease, because `into_components()` has to materialize the full reservation on *every* export — nothing else in the projection could re-derive it later. Four consecutive DM sends through such a store land on the wire at counters `0, 64, 128, 192` instead of `0, 1, 2, 3`, and the peer buffers 63 skipped message keys per gap.
 
 `SessionRecord::waive_counter_lease()` and `SenderKeyRecord::waive_counter_lease()` let that consumer say so, per record, once it's loaded:
 

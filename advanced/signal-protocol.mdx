@@ -1314,9 +1314,33 @@ A live reload never surfaces this, since a trusted-incarnation reload (above) sk
 
 If a record already has a stranded ceiling — written by a build that predates this fix — it recovers on its own the next time you use that address; you don't need to delete the row by hand. See [undecodable session rows](/concepts/storage#signalstorecache).
 
+### Waiving the counter lease
+
+The batched lease above assumes the durable snapshot `SessionRecord`/`SenderKeyRecord` serialize to is the store of record. A consumer whose own persistence is already synchronous and durable before the ciphertext reaches the wire — the [component export](#record-components) case below is the motivating one — gets nothing from the lease and pays for it anyway: `into_components()` has to materialize the full reservation on *every* export, since nothing else in the projection could re-derive it later. Four consecutive DM sends through such a store land on the wire at counters `0, 64, 128, 192` instead of `0, 1, 2, 3`, and the peer buffers 63 skipped message keys per gap.
+
+`SessionRecord::waive_counter_lease()` and `SenderKeyRecord::waive_counter_lease()` let that consumer say so, per record, once it's loaded:
+
+```rust
+let mut record = SessionRecord::from_components(components)?;
+record.waive_counter_lease();
+```
+
+```rust
+let mut record = SenderKeyRecord::from_components(components)?;
+record.waive_counter_lease()?;
+```
+
+- **The policy is the consumer's, never inferred.** Nothing about a record's stored representation says whether a lease is in force — the same components can come from a consumer that wants the lease and one that does not — so this call has to happen on every load that should waive it, not just once. There is no build feature or store-shape heuristic that does it implicitly.
+- **This gives up a real guarantee.** Message keys and IVs derive deterministically from the counter, so without the lease a crash between the encrypt and the write can reissue a counter and, with it, its (key, IV) pair. Only make this trade if persistence is synchronous and durable before the wire — the same requirement the [store incarnation](#clean-reload-vs-crash-recovery) trusted-reload path assumes for a different reason.
+- **A reservation the record already carries still burns once.** A record loaded from a snapshot written while the lease was in force may already have published counters below its ceiling; waiving doesn't make that untrue. The call materializes that ceiling into the chain — archived states included, the same way `into_components()` already would — and then the lease is gone, so it only pays that cost once instead of on every subsequent export.
+- **An unadvanceable ceiling is handled differently per record**, matching how their exports already differ: `SessionRecord::waive_counter_lease()` has no failure path — a chain too stale to fast-forward is dropped fail-closed, per session, without discarding the rest of the record. `SenderKeyRecord` has one shared chain rather than per-peer sessions, so dropping it isn't a safe partial failure; `waive_counter_lease()` returns `Err` instead and leaves the record on its lease rather than dropping the ceiling and risking reissue.
+- **The default is unchanged.** A record that never calls this keeps the lease, the wire gate, and the fast-forward-on-load exactly as documented above.
+
+Location: `wacore/libsignal/src/protocol/counter_lease.rs`, `wacore/libsignal/src/protocol/state/session.rs`, `wacore/libsignal/src/protocol/sender_keys.rs`
+
 ## Record components
 
-`wacore-libsignal` exposes owned, validated projections of `SessionRecord` and `SenderKeyRecord` called **components**. Use them when you need to interchange or inspect session and sender-key record state without depending on the generated protobuf schema directly — for example in custom store implementations, migration tooling, or offline debugging. This API is purely additive: the protobuf-backed `serialize()`/`deserialize()` path is unchanged. A record does not round-trip through `into_components()` → `from_components()` → `serialize()` byte-for-byte — the conversion applies the validated, normalized export rules described below (counter-lease advancement, stale-chain removal, and bounded truncation), so treat it as a safe normalized re-encoding rather than a lossless copy.
+`wacore-libsignal` exposes owned, validated projections of `SessionRecord` and `SenderKeyRecord` called **components**. Use them when you need to interchange or inspect session and sender-key record state without depending on the generated protobuf schema directly — for example in custom store implementations, migration tooling, or offline debugging. This API is purely additive: the protobuf-backed `serialize()`/`deserialize()` path is unchanged. A record does not round-trip through `into_components()` → `from_components()` → `serialize()` byte-for-byte — the conversion applies the validated, normalized export rules described below (counter-lease advancement, stale-chain removal, and bounded truncation), so treat it as a safe normalized re-encoding rather than a lossless copy. A store built on components alone re-materializes the lease's reservation on every export; see [Waiving the counter lease](#waiving-the-counter-lease) above if that store's own persistence is already durable before the wire.
 
 ```rust
 // wacore/libsignal/src/protocol/record_components.rs, re-exported from

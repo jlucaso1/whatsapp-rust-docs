@@ -673,7 +673,7 @@ pub enum NodeContentRef<'a> {
 <Note>
   `NodeRef::content` dropped its `Box` — it is now `Option<NodeContentRef<'a>>` rather than `Option<Box<NodeContentRef<'a>>>`. Code matching on it via `.as_deref()` should switch to `.as_ref()`; a `Box<NodeContentRef<'_>>` you're holding directly derefs the same as before.
 
-  The box existed only to keep `NodeRef` pointer-sized, but for the commonest node in a fanout — a leaf with `Cow::Borrowed` byte content, which already allocates nothing — the box was the *only* allocation. Removing it cuts allocations per decode by 40% on a fanout (45 → 27) and drops native decode time by 11.2% on both the fanout and large-stanza benchmarks. `size_of::<NodeRef>()` grows from 48 to 72 bytes in exchange, which does not regress any measured shape, including one with no content to begin with.
+  The box existed only to keep `NodeRef::content` pointer-sized, but for the commonest node in a fanout — a leaf with `Cow::Borrowed` byte content, which already allocates nothing — the box was the *only* allocation. Removing it cuts allocations per decode by 40% on a fanout (45 → 27) and drops native decode time by 11.2% on both the fanout and large-stanza benchmarks. `size_of::<NodeRef>()` grows from 48 to 72 bytes in exchange, which does not regress any measured shape, including one with no content to begin with.
 
   `NodeContentRef::Nodes` keeps its own `Box<NodeVec<'a>>` — that recursion is what makes the type coherent, and removing it isn't part of this change.
 </Note>

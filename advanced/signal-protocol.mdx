@@ -2166,7 +2166,7 @@ Benchmarked in `wacore/benches/sender_key_derivation_benchmark.rs` against a rec
 | group encrypt | 239.6 simulated us | 158.7 simulated us | 149.6 simulated us |
 | group decrypt | 230.6 simulated us | 189.6 simulated us | 180.9 simulated us |
 
-Prewarming recovers roughly 90% and 82% of the gap between rebuilding cold and keeping the record warm; what's left is the correspondence check plus the caller-side cache lookup — real work a record that's never discarded doesn't pay.
+Prewarming recovers roughly 90% of the gap between rebuilding cold and keeping the record warm for group encrypt, and 82% for group decrypt; what's left is the correspondence check plus the caller-side cache lookup — real work a record that's never discarded doesn't pay.
 
 Location: `wacore/libsignal/src/protocol/sender_keys.rs`, `wacore/libsignal/src/core/curve.rs`
 

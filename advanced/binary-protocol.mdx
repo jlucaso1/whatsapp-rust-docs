@@ -654,7 +654,7 @@ pub enum NodeStr<'a> {
 pub struct NodeRef<'a> {
     pub tag: NodeStr<'a>,          // Borrowed or inline
     pub attrs: AttrsRef<'a>,       // Vec<(NodeStr<'a>, ValueRef<'a>)>
-    pub content: Option<Box<NodeContentRef<'a>>>,
+    pub content: Option<NodeContentRef<'a>>,
 }
 
 pub enum NodeContentRef<'a> {
@@ -668,6 +668,12 @@ pub enum NodeContentRef<'a> {
 
 <Note>
   `NodeStr` replaces the previous `Cow<'a, str>` used in `NodeRef`, `AttrsRef`, `ValueRef`, and `NodeContentRef`. The key difference is that the `Owned` variant uses `CompactString` (inline up to 24 bytes) instead of `String` (always heap-allocated), reducing allocation pressure for the many short protocol strings that can't be statically interned.
+</Note>
+
+<Note>
+  `content` used to be `Option<Box<NodeContentRef<'a>>>`. The box existed only to keep `NodeRef` pointer-sized and was never a deliberate design decision — profiling a group-message fanout (one child `NodeRef` per device) found it responsible for the only allocation most content-bearing nodes made, about 11% of decode time in that shape. The field is now `Option<NodeContentRef<'a>>` directly: `size_of::<NodeRef>()` grows from 48 to 72 bytes, paid back by removing that allocation on every node that carries content (string, bytes, or children). Nodes with no content, like a bare `<ack/>`, are unaffected either way.
+
+  Code matching on `node.content` doesn't need a match-arm change, but code borrowing through it — `node.content.as_deref()` — needs to become `node.content.as_ref()`, since there is no longer a `Box` to deref through.
 </Note>
 
 Location: `wacore/binary/src/node.rs:10-106`, `465-469`, `437-441`
@@ -812,6 +818,8 @@ fn unpack_nibble(packed: u8, position: u8) -> u8 {
 }
 ```
 
+Unpacking a run of packed values dispatches through a 256-entry byte-pair table — one lookup and a 2-byte store per input byte, rather than the two-shift/two-lookup scalar walk this snippet shows. This is an implementation detail of `read_packed`; the nibble/hex value mapping above still describes what each byte decodes to.
+
 Location: `wacore/binary/src/decoder.rs:400-450`
 
 ## Performance Optimizations
@@ -935,6 +943,15 @@ Inline capacity 2 is the measured optimum: the per-recipient fanout nodes (`to` 
 The `spilled()` method on `SmallVec` reports whether a given node's attrs overflowed to the heap — useful in allocation tests (see `wacore/binary/tests/attrs_inline_alloc.rs`).
 
 Location: `wacore/binary/src/node.rs`, `wacore/binary/tests/attrs_inline_alloc.rs`
+
+### Unboxed content, byte-pair unpacking
+
+Two more `wacore/binary` decode-path changes worth knowing about if you're timing this yourself:
+
+- **`NodeRef::content` dropped its `Box`** (see the note under [Zero-copy decoding](#zero-copy-decoding)). Removing the allocation cuts instructions 9.5% on a group-fanout decode (one child per device) and 5.8% on a small ack, at the cost of growing `NodeRef` from 48 to 72 bytes.
+- **`read_packed` unpacks through a 256-entry byte-pair table** instead of a per-byte scalar loop (see [Unpacking](#unpacking)). This was the larger win: a small-stanza decode that mixes a JID pair, nibble-packed, and hex-packed values dropped 15.5% in instructions.
+
+Both are internal to the decoder — no signature or wire-format change — but they explain why decode benchmarks on 30-byte-ack and fanout-shaped stanzas moved between recent versions.
 
 ## Common protocol patterns
 

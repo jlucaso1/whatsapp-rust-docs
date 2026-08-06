@@ -2129,6 +2129,47 @@ fn get_buffer(&mut self) -> &mut Vec<u8> {
 
 Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`
 
+### Prewarming sender-key derivations
+
+`SenderKeyState` memoizes two curve derivations behind `OnceLock`s: the signing key's Edwards conversion (`PrivateKey::precompute_signing_cache`) and the verifier's Edwards entries (`PreparedVerifyingKey::precompute`). Both are expensive relative to the rest of an encrypt/decrypt, and both are cheap to reuse — as long as something keeps the memo warm across operations. A caller that keeps the loaded `SenderKeyRecord` between operations gets that for free. A caller that discards it, e.g. one that persists through [`into_components()`](#record-components) and reconstructs the record on every load, previously had no way to keep the warm derivation either: the memo lives on the record, and the `OnceLock`s only fill from inside.
+
+As of [#1213](https://github.com/oxidezap/whatsapp-rust/pull/1213), `SenderKeyState` exposes two setters that let such a caller hand back a derivation it already computed, instead of letting the state re-derive it:
+
+```rust
+impl SenderKeyState {
+    pub fn prewarm_signing_key(&self, key: PrivateKey) -> Result<(), InvalidSenderKeySessionError>;
+    pub fn prewarm_verifying_key(
+        &self,
+        verifier: PreparedVerifyingKey,
+    ) -> Result<(), InvalidSenderKeySessionError>;
+}
+```
+
+Both take `&self` — `OnceLock::set` doesn't need `&mut` — and are reached through `SenderKeyRecord::sender_key_state()` right after a fresh load:
+
+```rust
+let mut record = SenderKeyRecord::from_components(components)?;
+let state = record.sender_key_state()?;
+state.prewarm_signing_key(cached_signing_key.clone())?;   // send side
+state.prewarm_verifying_key(cached_verifier.clone())?;    // receive side
+```
+
+- **Correspondence is checked, not assumed.** A key or verifier that doesn't belong to this state's signing key is rejected with `InvalidSenderKeySessionError`, and the state is left free to derive for itself — accepting foreign material without checking would sign or verify under the wrong key. The check is cheap on both sides: `PreparedVerifyingKey` already holds the Montgomery bytes, so `PreparedVerifyingKey::is_for(&PublicKey)` is a 32-byte comparison, and a private key compares by its clamped serialized form. Neither redoes the derivation the caller is trying to skip.
+- **Already-warm is a no-op, not an error.** Prewarming over a memo that's already populated (by a prior prewarm, or by lazy use) leaves it alone — the value in place is the same derivation, so surfacing an error would force the caller to track state that changes nothing.
+- **Hold the key warm before caching it, or the setter's payoff disappears.** Every read of the signing-key memo hands out a clone, and `PrivateKey`'s Edwards cache is a per-instance `OnceLock` — a clone of a cold key re-derives on its own. `prewarm_signing_key` warms whatever it's given before storing it, so a single cold call still leaves the memo warm, but a caller that repeatedly hands over cold clones pays the derivation every time. Call `PrivateKey::precompute_signing_cache()` once when the key first enters your own cache, then clone the warm copy into each `prewarm_signing_key` call. The verifying-key side needs no such care: `PreparedVerifyingKey`'s entries sit behind a shared handle, so warming one instance warms every clone of it, including the copy in your cache.
+- **The caller takes on the cache's lifetime.** Injecting a derivation makes the caller responsible for how long it (and any private material in it) lives, which the state would otherwise own only for its own lifetime. A caller that calls neither setter is unaffected — the lazy derivation behaves exactly as before.
+
+Benchmarked in `wacore/benches/sender_key_derivation_benchmark.rs` against a record kept warm the whole time and one rebuilt from components with no prewarming (CI's instruction-count figures, which don't move between runs):
+
+| | rebuilt, no prewarm | prewarmed | kept warm |
+| --- | --- | --- | --- |
+| group encrypt | 239.6 us | 158.7 us | 149.6 us |
+| group decrypt | 230.6 us | 189.6 us | 180.9 us |
+
+Prewarming recovers roughly 90% and 82% of the gap between rebuilding cold and keeping the record warm; what's left is the correspondence check plus the caller-side cache lookup — real work a record that's never discarded doesn't pay.
+
+Location: `wacore/libsignal/src/protocol/sender_keys.rs`, `wacore/libsignal/src/core/curve.rs`
+
 ## Public API
 
 The `client.signal()` accessor exposes low-level Signal protocol operations for direct use. This includes 1:1 and group encryption/decryption, session validation, session deletion, participant node creation, and device resolution.

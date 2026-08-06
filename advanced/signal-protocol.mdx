@@ -982,9 +982,9 @@ pub fn derive_keys(secret_input: &[u8]) -> (RootKey, ChainKey, InitialPQRKey) {
 
 Location: `wacore/libsignal/src/protocol/ratchet.rs:18-39`
 
-### X25519 Key Agreement
+### X25519 key agreement
 
-Every DH step in session setup, and every ratchet turn, goes through this — `RootKey::create_chain` calls it once per turn, which in an alternating conversation is per message:
+`calculate_agreement` runs during session setup, and again whenever the session performs a DH ratchet step — when an incoming message carries a remote ratchet key the local session hasn't chained on yet. `get_or_create_chain_key` calls `RootKey::create_chain` once to derive the new receiving chain; `DeferredSenderRatchet::apply` then calls it a second time, with a freshly generated local key, to derive the new sending chain. Each `create_chain` call performs exactly one agreement, so a single DH ratchet step costs two. Messages within an already-open chain advance via `ChainKey::step_with_message_keys` instead, which costs none.
 
 ```rust
 pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError>
@@ -992,7 +992,13 @@ pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], Cur
 
 Location: `wacore/libsignal/src/core/curve.rs`
 
-As of PR #1218, the agreement routes through the same pluggable crypto-provider trait as the other primitives on this page (`SignalCryptoProvider`, overridden via `set_crypto_provider` in `wacore/libsignal/src/crypto/provider.rs`) instead of calling the X25519 implementation directly. The default is this crate's own implementation and cannot fail. A substituted backend can refuse the operation; that surfaces as `CurveError::AgreementFailed` and, through `SignalProtocolError`, as `KeyAgreementFailed` — a refusal is treated as a local failure and takes priority over the MAC-based decrypt verdicts (`InvalidMessage`, `BadMac`) rather than being reported as message corruption.
+As of PR #1218, `calculate_agreement` routes through `SignalCryptoProvider::x25519_agreement`. AES-256-CBC above uses the same pluggable crypto-provider hook; HKDF-SHA256 does not — it always calls `hkdf::Hkdf` directly. Override the hook with `set_crypto_provider` (`wacore/libsignal/src/crypto/provider.rs`) to run the agreement on another backend. The default is this crate's own implementation, and it cannot fail.
+
+If you install a backend that can refuse the operation, you see the refusal as `CurveError::AgreementFailed`. Through `SignalProtocolError`, it reaches you as `KeyAgreementFailed`. The decrypt path treats a refusal as a local failure, not message corruption: it takes priority over the MAC-based verdicts (`InvalidMessage`, `BadMac`).
+
+<Note>
+Call `set_crypto_provider` before any crypto call, key agreement included. The provider installs once — a call made after the default provider has already initialized returns an error instead of replacing it.
+</Note>
 
 ## PreKey Management
 

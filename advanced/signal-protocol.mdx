@@ -982,6 +982,18 @@ pub fn derive_keys(secret_input: &[u8]) -> (RootKey, ChainKey, InitialPQRKey) {
 
 Location: `wacore/libsignal/src/protocol/ratchet.rs:18-39`
 
+### X25519 Key Agreement
+
+Every DH step in session setup, and every ratchet turn, goes through this — `RootKey::create_chain` calls it once per turn, which in an alternating conversation is per message:
+
+```rust
+pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError>
+```
+
+Location: `wacore/libsignal/src/core/curve.rs`
+
+As of PR #1218, the agreement routes through the same pluggable crypto-provider trait as the other primitives on this page (`SignalCryptoProvider`, overridden via `set_crypto_provider` in `wacore/libsignal/src/crypto/provider.rs`) instead of calling the X25519 implementation directly. The default is this crate's own implementation and cannot fail. A substituted backend can refuse the operation; that surfaces as `CurveError::AgreementFailed` and, through `SignalProtocolError`, as `KeyAgreementFailed` — a refusal is treated as a local failure and takes priority over the MAC-based decrypt verdicts (`InvalidMessage`, `BadMac`) rather than being reported as message corruption.
+
 ## PreKey Management
 
 Pre-keys enable asynchronous session establishment in the Signal Protocol. whatsapp-rust manages pre-key generation and upload to match WhatsApp Web's behavior.

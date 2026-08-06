@@ -671,7 +671,7 @@ pub enum NodeContentRef<'a> {
 </Note>
 
 <Note>
-  `content` used to be `Option<Box<NodeContentRef<'a>>>`. The box existed only to keep `NodeRef` pointer-sized and was never a deliberate design decision — profiling a group-message fanout (one child `NodeRef` per device) found it responsible for the only allocation most content-bearing nodes made, about 11% of decode time in that shape. The field is now `Option<NodeContentRef<'a>>` directly: `size_of::<NodeRef>()` grows from 48 to 72 bytes, paid back by removing that allocation on every node that carries content (string, bytes, or children). Nodes with no content, like a bare `<ack/>`, are unaffected either way.
+  `content` used to be `Option<Box<NodeContentRef<'a>>>`. The box existed only to keep the `content` field itself pointer-sized (`NodeContentRef` is larger than a pointer) and was never a deliberate design decision — profiling a group-message fanout (one child `NodeRef` per device) found it responsible for the only allocation most content-bearing nodes made, about 11% of decode time in that shape. The field is now `Option<NodeContentRef<'a>>` directly: `size_of::<NodeRef>()` grows from 48 to 72 bytes, paid back by removing that allocation on every node that carries content (string, bytes, or children). Nodes with no content, like a bare `<ack/>`, are unaffected either way.
 
   Code matching on `node.content` doesn't need a match-arm change, but code borrowing through it — `node.content.as_deref()` — needs to become `node.content.as_ref()`, since there is no longer a `Box` to deref through.
 </Note>
@@ -818,7 +818,7 @@ fn unpack_nibble(packed: u8, position: u8) -> u8 {
 }
 ```
 
-Unpacking a run of packed values dispatches through a 256-entry byte-pair table — one lookup and a 2-byte store per input byte, rather than the two-shift/two-lookup scalar walk this snippet shows. This is an implementation detail of `read_packed`; the nibble/hex value mapping above still describes what each byte decodes to.
+Unpacking a run of packed values dispatches through a 256-entry byte-pair table — one lookup and a 2-byte store per input byte, rather than the two-shift/two-lookup scalar walk this snippet shows. This is an implementation detail of `read_packed`; the value mapping above still describes what each nibble decodes to for `NIBBLE_8`. `HEX_8` unpacking is the mirror of [`pack_hex`](#hex-packing) shown earlier — 0–9 to digits, 10–15 to `A`–`F` — not the nibble table above.
 
 Location: `wacore/binary/src/decoder.rs:400-450`
 

@@ -948,10 +948,10 @@ Location: `wacore/binary/src/node.rs`, `wacore/binary/tests/attrs_inline_alloc.r
 
 Two more `wacore/binary` decode-path changes worth knowing about if you're timing this yourself:
 
-- **`NodeRef::content` dropped its `Box`** (see the note under [Zero-copy decoding](#zero-copy-decoding)). Removing the allocation cuts instructions 9.5% on a group-fanout decode (one child per device) and 5.8% on a small ack, at the cost of growing `NodeRef` from 48 to 72 bytes.
+- **`NodeRef::content` dropped its `Box`** (see the note under [Zero-copy decoding](#zero-copy-decoding)). The saved allocation only exists on nodes that carry content, so the gain tracks how much of a decode is content-bearing: instructions on a group-fanout decode (one child `NodeRef` per device) drop 9.5%, at the cost of growing `NodeRef` from 48 to 72 bytes. A content-less node like a bare `<ack/>` makes the same allocations either way.
 - **`read_packed` unpacks through a 256-entry byte-pair table** instead of a per-byte scalar loop (see [Unpacking](#unpacking)). This was the larger win: a small-stanza decode that mixes a JID pair, nibble-packed, and hex-packed values dropped 15.5% in instructions.
 
-Both are internal to the decoder — no signature or wire-format change — but they explain why decode benchmarks on 30-byte-ack and fanout-shaped stanzas moved between recent versions.
+Neither changes the wire format. The byte-pair table is purely internal to `read_packed`. Unboxing `NodeRef::content` does change a public field's type — see the caller migration (`as_deref()` → `as_ref()`) noted above — but no method signature changes.
 
 ## Common protocol patterns
 

@@ -671,11 +671,11 @@ pub enum NodeContentRef<'a> {
 </Note>
 
 <Note>
-  `NodeRef::content` dropped its `Box` — it is now `Option<NodeContentRef<'a>>` rather than `Option<Box<NodeContentRef<'a>>>`. Code matching on it via `.as_deref()` should switch to `.as_ref()`; a `Box<NodeContentRef<'_>>` you're holding directly derefs the same as before.
+  `NodeRef::content` dropped its `Box` — it is now `Option<NodeContentRef<'a>>` rather than `Option<Box<NodeContentRef<'a>>>`. If you match on it with `.as_deref()`, use `.as_ref()` instead. If you hold a `Box<NodeContentRef<'_>>` directly, it still dereferences the same as before.
 
-  The box existed only to keep `NodeRef::content` pointer-sized, but for the commonest node in a fanout — a leaf with `Cow::Borrowed` byte content, which already allocates nothing — the box was the *only* allocation. Removing it cuts allocations per decode by 40% on a fanout (45 → 27) and drops native decode time by 11.2% on both the fanout and large-stanza benchmarks. `size_of::<NodeRef>()` grows from 48 to 72 bytes in exchange, which does not regress any measured shape, including one with no content to begin with.
+  The box existed only to keep `NodeRef::content` pointer-sized, but for the commonest node in a fanout — a leaf with `Cow::Borrowed` byte content, which already allocates nothing — the box was the *only* allocation. Removing it cuts allocations per decode by 40% on a fanout (45 → 27) and drops native decode time by 11.2% on both the fanout and large-stanza benchmarks. `size_of::<NodeRef>()` grows from 48 to 72 bytes in exchange (on 64-bit platforms), which does not regress any measured shape, including one with no content to begin with.
 
-  `NodeContentRef::Nodes` keeps its own `Box<NodeVec<'a>>` — that recursion is what makes the type coherent, and removing it isn't part of this change.
+  `NodeContentRef::Nodes` keeps its own `Box<NodeVec<'a>>`: without it, the recursive child-node type would have no finite size. Removing that box isn't part of this change.
 </Note>
 
 Location: `wacore/binary/src/node.rs:10-106`, `465-469`, `437-441`
@@ -944,7 +944,7 @@ The `spilled()` method on `SmallVec` reports whether a given node's attrs overfl
 
 Location: `wacore/binary/src/node.rs`, `wacore/binary/tests/attrs_inline_alloc.rs`
 
-### Unboxed NodeRef content
+### Unboxed `NodeRef` content
 
 `NodeRef::content` (`Option<NodeContentRef<'a>>`) has no `Box` around the inner value — see the note under [Zero-copy decoding](#zero-copy-decoding). On `bench_unmarshal_fanout`, this drops allocations per decode from 45 to 27 and instructions by 9.5% under callgrind (the instrument CodSpeed uses), alongside an 11.2% native wall-time improvement on both the fanout and large-stanza benchmarks. `bench_unmarshal_small`, which carries no content, is unaffected either way — the gain tracks how many nodes in the tree carry content, not a fixed per-node cost.
 

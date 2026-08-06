@@ -2131,9 +2131,9 @@ Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`
 
 ### Prewarming sender-key derivations
 
-`SenderKeyState` memoizes two curve derivations behind `OnceLock`s: the signing key's Edwards conversion (`PrivateKey::precompute_signing_cache`) and the verifier's Edwards entries (`PreparedVerifyingKey::precompute`). Both are expensive relative to the rest of an encrypt/decrypt, and both are cheap to reuse — as long as something keeps the memo warm across operations. A caller that keeps the loaded `SenderKeyRecord` between operations gets that for free. A caller that discards it, e.g. one that persists through [`into_components()`](#record-components) and reconstructs the record on every load, previously had no way to keep the warm derivation either: the memo lives on the record, and the `OnceLock`s only fill from inside.
+`SenderKeyState` memoizes two curve derivations behind `OnceLock`s: the signing key's Edwards conversion (`PrivateKey::precompute_signing_cache`) and the verifier's Edwards entries (`PreparedVerifyingKey::precompute`). Both are expensive relative to the rest of an encrypt/decrypt. Both are cheap to reuse, as long as something keeps the memo warm across operations. If you keep the loaded `SenderKeyRecord` between operations, you get that for free. If you discard it instead — for example, if you persist through [`into_components()`](#record-components) and reconstruct the record on every load — you previously had no way to keep the warm derivation either. The memo lives on the record, and the `OnceLock`s only fill from inside.
 
-As of [#1213](https://github.com/oxidezap/whatsapp-rust/pull/1213), `SenderKeyState` exposes two setters that let such a caller hand back a derivation it already computed, instead of letting the state re-derive it:
+As of [#1213](https://github.com/oxidezap/whatsapp-rust/pull/1213), `SenderKeyState` exposes two setters. Use them to hand back a derivation you already computed, instead of letting the state re-derive it:
 
 ```rust
 impl SenderKeyState {
@@ -2145,19 +2145,19 @@ impl SenderKeyState {
 }
 ```
 
-Both take `&self` — `OnceLock::set` doesn't need `&mut` — and are reached through `SenderKeyRecord::sender_key_state()` right after a fresh load:
+Both take `&self` — `OnceLock::set` doesn't need `&mut`. Reach them through `SenderKeyRecord::sender_key_state()` right after a fresh load:
 
 ```rust
-let mut record = SenderKeyRecord::from_components(components)?;
+let record = SenderKeyRecord::from_components(components)?;
 let state = record.sender_key_state()?;
 state.prewarm_signing_key(cached_signing_key.clone())?;   // send side
 state.prewarm_verifying_key(cached_verifier.clone())?;    // receive side
 ```
 
-- **Correspondence is checked, not assumed.** A key or verifier that doesn't belong to this state's signing key is rejected with `InvalidSenderKeySessionError`, and the state is left free to derive for itself — accepting foreign material without checking would sign or verify under the wrong key. The check is cheap on both sides: `PreparedVerifyingKey` already holds the Montgomery bytes, so `PreparedVerifyingKey::is_for(&PublicKey)` is a 32-byte comparison, and a private key compares by its clamped serialized form. Neither redoes the derivation the caller is trying to skip.
-- **Already-warm is a no-op, not an error.** Prewarming over a memo that's already populated (by a prior prewarm, or by lazy use) leaves it alone — the value in place is the same derivation, so surfacing an error would force the caller to track state that changes nothing.
-- **Hold the key warm before caching it, or the setter's payoff disappears.** Every read of the signing-key memo hands out a clone, and `PrivateKey`'s Edwards cache is a per-instance `OnceLock` — a clone of a cold key re-derives on its own. `prewarm_signing_key` warms whatever it's given before storing it, so a single cold call still leaves the memo warm, but a caller that repeatedly hands over cold clones pays the derivation every time. Call `PrivateKey::precompute_signing_cache()` once when the key first enters your own cache, then clone the warm copy into each `prewarm_signing_key` call. The verifying-key side needs no such care: `PreparedVerifyingKey`'s entries sit behind a shared handle, so warming one instance warms every clone of it, including the copy in your cache.
-- **The caller takes on the cache's lifetime.** Injecting a derivation makes the caller responsible for how long it (and any private material in it) lives, which the state would otherwise own only for its own lifetime. A caller that calls neither setter is unaffected — the lazy derivation behaves exactly as before.
+- **Correspondence is checked, not assumed.** If you pass a key or verifier that doesn't belong to this state's signing key, it's rejected with `InvalidSenderKeySessionError`, and the state is left free to derive for itself. Accepting foreign material without checking would sign or verify under the wrong key. The check is cheap on both sides: `PreparedVerifyingKey` already holds the Montgomery bytes, so `PreparedVerifyingKey::is_for(&PublicKey)` is a 32-byte comparison. A private key compares by its clamped serialized form. Neither redoes the derivation you're trying to skip.
+- **Already-warm is a no-op, not an error.** If you prewarm a memo that's already populated — by a prior prewarm, or by lazy use — it's left alone. The value in place is the same derivation, so surfacing an error would force you to track state that changes nothing.
+- **Hold the key warm before caching it, or you lose the payoff.** Every read of the signing-key memo hands out a clone, and `PrivateKey`'s Edwards cache is a per-instance `OnceLock` — a clone of a cold key re-derives on its own. `prewarm_signing_key` warms whatever you give it before storing it, so a single cold call still leaves the memo warm. But if you repeatedly hand over cold clones, you pay the derivation every time. Call `PrivateKey::precompute_signing_cache()` once when the key first enters your own cache, then clone the warm copy into each `prewarm_signing_key` call. You don't need that care on the verifying-key side: `PreparedVerifyingKey`'s entries sit behind a shared handle, so warming one instance warms every clone of it, including the copy in your cache.
+- **You take on the cache's lifetime.** Injecting a derivation makes you responsible for how long it — and any private material in it — lives, which the state would otherwise own only for its own lifetime. If you call neither setter, you're unaffected: the lazy derivation behaves exactly as before.
 
 Benchmarked in `wacore/benches/sender_key_derivation_benchmark.rs` against a record kept warm the whole time and one rebuilt from components with no prewarming. CI reads these benchmarks by instruction count rather than wall-clock time — the figures below are simulated microseconds modeled from that count, stable across runs, and comparable to each other but not to a real-time measurement:
 

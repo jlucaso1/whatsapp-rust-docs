@@ -1999,13 +1999,13 @@ See [Signal Protocol - Digest key validation](/advanced/signal-protocol#digest-k
 
 ### Signed pre-key rotation
 
-Rotation itself runs automatically: once per connection, after the post-login pre-key upload, the client checks whether the signed pre-key is due for rotation (weekly by default) and, if so, generates a fresh one, uploads it via an `encrypt`/`<rotate>` IQ, and retains the previous key so in-flight prekey messages still decrypt. Automatic rotation failures are logged and retried on a later connect — they never fail login.
+Rotation itself runs automatically: once per connection, after the post-login pre-key upload, the client checks whether the signed pre-key is due for rotation (every 27 days, matching WA Web's own `ROTATE_KEY` cadence — not configurable) and, if so, generates a fresh one, uploads it via an `encrypt`/`<rotate>` IQ, and retains the previous key so in-flight prekey messages still decrypt. Automatic rotation failures are logged and retried on a later connect — they never fail login. As of [#1237](https://github.com/oxidezap/whatsapp-rust/pull/1237), a failed upload also schedules its retry: a `5xx` gets a 24-hour backoff, and any other rejection the server actually issued consumes the full cadence instead of re-running the upload on every reconnect.
 
 ```rust
 pub async fn rotate_signed_pre_key(&self) -> Result<(), SignalMaintenanceError>
 ```
 
-`rotate_signed_pre_key()` is a public method — callers can force an out-of-cadence rotation directly instead of waiting for the weekly check. It shares a lock with the automatic path (so a manual call can't race a background rotation) and, unlike the automatic path, propagates failures to the caller as [`SignalMaintenanceError`](/api/errors#signalmaintenanceerror) instead of only logging them. As of PR #1090 this replaces bare `anyhow::Error`.
+`rotate_signed_pre_key()` is a public method — callers can force an out-of-cadence rotation directly instead of waiting for the 27-day check. It shares a lock with the automatic path (so a manual call can't race a background rotation) and, unlike the automatic path, propagates failures to the caller as [`SignalMaintenanceError`](/api/errors#signalmaintenanceerror) instead of only logging them. As of PR #1090 this replaces bare `anyhow::Error`. A failure from a manual call never reschedules the automatic cadence — only the automatic path's own failures do.
 
 See [Signal Protocol - Signed pre-key rotation (RotateKeyJob)](/advanced/signal-protocol#signed-pre-key-rotation-rotatekeyjob) for the full sequence, wire format, and error handling.
 

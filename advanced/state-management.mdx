@@ -262,10 +262,14 @@ pub enum DeviceCommand {
         signature: [u8; 64],
         rotation_ms: i64,
     },
-    /// Seed the rotation cadence baseline without touching the key. Used once
-    /// for devices upgraded in with `last_signed_pre_key_rotation_ms == 0`, so
-    /// the first rotation lands a full interval out instead of firing
-    /// immediately on the next connect.
+    /// Write the rotation cadence clock without touching the key. Two callers:
+    /// a one-time baseline seed for devices upgraded in with
+    /// `last_signed_pre_key_rotation_ms == 0` (so the first rotation lands a
+    /// full interval out instead of firing immediately on the next connect),
+    /// and a backdated timestamp after a failed upload — see
+    /// `rotation_timestamp_after_failed_upload` — so a transient server error
+    /// buys a short retry and a definitive rejection consumes the cadence
+    /// instead of re-running the upload on every reconnect.
     SetSignedPreKeyRotationBaseline(i64),
 }
 ```

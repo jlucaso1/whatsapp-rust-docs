@@ -148,7 +148,7 @@ See [custom backends](/guides/custom-backends) for implementing your own runtime
 
 **Location:** `src/client.rs`
 
-**Purpose:** Orchestrates connection lifecycle, event bus, and high-level operations. Uses `async-lock` (runtime-agnostic) instead of Tokio-specific primitives for state whose critical section awaits; state whose critical section never awaits (a clone, a store, a set op) uses a `std::sync` lock instead, and state that is built once and never replaced uses `std::sync::OnceLock`. A `std::sync::MutexGuard` isn't `Send`, so on a path that must produce a `Send` future (e.g. a spawned task) holding one across an `.await` is a compile error rather than something a reviewer has to catch by hand ([#1227](https://github.com/oxidezap/whatsapp-rust/pull/1227)).
+**Purpose:** Orchestrates connection lifecycle, event bus, and high-level operations. The synchronization primitive follows the shape of the state, not a single default. State whose critical section awaits uses `async-lock` (runtime-agnostic, not Tokio-specific). State whose critical section never awaits — a clone, a store, a set op — uses a `std::sync` lock instead. State that is built once and never replaced uses `std::sync::OnceLock`. On a path that must produce a `Send` future (e.g. a spawned task), a `std::sync::MutexGuard` isn't `Send`, so holding one across an `.await` there is a compile error rather than something a reviewer has to catch by hand ([#1227](https://github.com/oxidezap/whatsapp-rust/pull/1227)).
 
 ```rust
 pub struct Client {

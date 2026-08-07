@@ -546,18 +546,18 @@ cargo run --example benchmark --features danger-skip-tls-verify
   O exemplo de benchmark requer a feature flag `danger-skip-tls-verify` porque foi projetado para uso com servidores de teste locais.
 </Note>
 
-Para benchmarks de integração mais abrangentes com rastreamento de alocações, a suíte `bench-integration` mede cenários do mundo real (conectar, enviar, receber, reconectar) e reporta o tempo de relógio e contagens de alocação no heap por operação:
+Para benchmarks de integração mais abrangentes, a suíte `bench-integration` mede cenários do mundo real (conectar, enviar, receber, reconectar) contra um servidor mock:
 
 ```bash
 # Requer um servidor mock (por exemplo, Bartender)
 MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" \
-  cargo run -p bench-integration --release
+  cargo bench -p bench-integration
 ```
 
-Para benchmarks de protocolo de baixo nível, o crate `wacore` inclui uma suíte de benchmarks com [iai-callgrind](https://github.com/iai-callgrind/iai-callgrind) que mede contagens de instruções para o pipeline completo de envio/recebimento (mensagens DM e em grupo com várias contagens de participantes), codificação do protocolo binário, operações do Signal Protocol e geração de tokens de reporte:
+Para benchmarks de protocolo de baixo nível, o crate `wacore` inclui uma suíte de benchmarks com [divan](https://github.com/nvzqz/divan) — acompanhada no CI pelo [CodSpeed](https://codspeed.io) — que cobre o pipeline completo de envio/recebimento (mensagens DM e em grupo com várias contagens de participantes), codificação do protocolo binário, operações do Signal Protocol e geração de tokens de reporte:
 
 ```bash
-# Executa todos os benchmarks do wacore (requer valgrind e iai-callgrind-runner)
+# Executa todos os benchmarks do wacore
 cargo bench --workspace
 ```
 

@@ -22,9 +22,14 @@ This is a separate, opt-in crate — adding it does not change any behavior for 
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-chat-store = "0.1"
-whatsapp-rust-sqlite-storage = "0.6"
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
 ```
+
+<Note>
+  `whatsapp-rust-chat-store` is **not published to crates.io** (its schema and query surface are still moving), so it comes from the git source. Pin `whatsapp-rust` and `whatsapp-rust-sqlite-storage` to the **same** revision: a registry copy and a git copy of `whatsapp-rust-sqlite-storage` are two distinct crates to Cargo, and `ChatStore::new` only accepts the `SqliteStore` from the copy it was compiled against.
+</Note>
 
 | Feature | Description | Included by default |
 |---------|-------------|-----------------|

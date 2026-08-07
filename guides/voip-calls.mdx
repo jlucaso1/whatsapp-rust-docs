@@ -19,29 +19,18 @@ Video is **codec-neutral**: you hand the library complete H.264 Annex-B access u
 
 ## Enabling the feature
 
-<Warning>
-  The `voip` feature landed on `main` with [PR #918](https://github.com/oxidezap/whatsapp-rust/pull/918) (audio), [PR #1024](https://github.com/oxidezap/whatsapp-rust/pull/1024) (video), and [PR #1050](https://github.com/oxidezap/whatsapp-rust/pull/1050) (encoded audio + native Opus, and the feature split below) and will be included in the next published release. Until then, depend on the git source:
-</Warning>
+`voip` ships in the published crate as of **0.7.0** — no git source needed:
+
+```toml
+[dependencies]
+whatsapp-rust = { version = "0.7", features = ["voip"] }
+async-channel = "2"  # needed to implement AudioSource / AudioSink / VideoSource / VideoSink
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+```
 
 <Warning>
   [PR #1051](https://github.com/oxidezap/whatsapp-rust/pull/1051) changed `CallHandle::accept_video`'s signature and the shape of `CallEvent::VideoStateChanged` to close a race where a cancelled or superseded video-upgrade request could still attach a camera. If you're upgrading from before this PR, see [Peer initiates](#video-io) below and the `VideoUpgradeToken` field on the event.
 </Warning>
-
-```toml
-[dependencies]
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", features = ["voip"] }
-async-channel = "2"  # needed to implement AudioSource / AudioSink / VideoSource / VideoSink
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
-```
-
-Once a release that includes `voip` is published, you can switch to the version form:
-
-```toml
-[dependencies]
-whatsapp-rust = { version = "0.7", features = ["voip"] }  # update when released
-async-channel = "2"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
-```
 
 `voip` is a backward-compatible aggregate for `voip-mlow` + `voip-libopus` — both codec adapters linked in. If you only need one codec, or you exchange codec packets with an external encoder/decoder, pick a narrower feature instead:
 

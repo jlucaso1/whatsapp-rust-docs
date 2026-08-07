@@ -1161,9 +1161,15 @@ The signed pre-key minted at pairing was otherwise **permanent** — a forward-s
 **Cadence:**
 
 - Checked once per connection. Spawned right after the startup pre-key upload during post-login init, so a slow or failing rotation IQ never delays the rest of login.
-- Rotates once `now - last_signed_pre_key_rotation_ms >= SIGNED_PRE_KEY_ROTATION_INTERVAL_MS` (7 days / weekly). This interval is the one value **not** grounded in the captured WA Web bundle — there `RotateKeyJob` is a persisted, server-tuned background job — so it's a tunable policy default.
+- Rotates once `now - last_signed_pre_key_rotation_ms >= SIGNED_PRE_KEY_ROTATION_INTERVAL_MS` (27 days). This matches the interval WA Web's `ROTATE_KEY` task returns to its scheduler (`WAWebTasksDefinitions`, confirmed against a fresh captured WA Web bundle) and is **not** configurable — there is no A/B property behind the value, so a per-client override would only widen the public API for a number the official client hardcodes identically. `rotate_signed_pre_key()` remains the escape hatch for forcing a rotation out of band.
 - A device upgraded in with the field at `0` gets a one-time baseline stamp (`DeviceCommand::SetSignedPreKeyRotationBaseline`) instead of rotating immediately, so its first rotation lands a full interval out.
 - Single-flighted via `Client::signed_pre_key_rotation_lock` so overlapping post-login tasks (from reconnect churn) can't run the rotate/upload/prune sequence concurrently; a losing task just no-ops for that check.
+
+<Note>
+  Prior to [whatsapp-rust#1237](https://github.com/oxidezap/whatsapp-rust/pull/1237) the interval was 7 days. Production logs showed every observed `InvalidSignedPreKeyId` decrypt failure falling inside the 21-day decrypt window (`SIGNED_PRE_KEY_RETENTION * interval`) that cadence produced — the shortest window of WA Web, zapo, and whatsapp-rust despite whatsapp-rust retaining three keys where zapo retains one. Widening the interval to 27 days quadruples the window to 81 days at unchanged storage cost (the three retained records cost 555 bytes regardless of cadence) and a quarter of the rotation IQs, device-state writes, and keypair generations per year.
+</Note>
+
+**Retention:** `SIGNED_PRE_KEY_RETENTION` stays at 3 (the current key plus the 2 most recent rotated-out keys). WA Web never prunes signed pre-keys at all — the private key stays on disk forever, which buys interop at the cost of the exact forward-secrecy property rotation exists to provide. whatsapp-rust keeps the bound: a rotated-out key survives for `SIGNED_PRE_KEY_RETENTION * SIGNED_PRE_KEY_ROTATION_INTERVAL_MS` (81 days), after which its private key is destroyed and any prekey message still naming it gets a retry rather than a decrypt.
 
 **Wire format** (`RotateSignedPreKeySpec`, reuses the upload path's `<skey>` encoder so the two can never drift):
 
@@ -1189,11 +1195,18 @@ The signed pre-key minted at pairing was otherwise **permanent** — a forward-s
 
 **Error handling** (mirrors WA Web's `RotateKeyJob` ladder; a rotation failure never fails login):
 
-| Response | Action |
-|----------|--------|
-| `406` / `409` (deterministic rejection of this key) | Drop the staged candidate and remint a fresh one on a later connect — reusing it would wedge rotation forever. |
-| Other server error (rate limits, `>=500`, ...) | Keep the staged candidate and retry it as-is on a later connect. |
-| Transport failure (ambiguous — the server may have accepted it) | Keep the staged candidate and retry it as-is on a later connect. |
+| Response | Candidate | Next attempt |
+|----------|-----------|---------------|
+| `406` / `409` (deterministic rejection of this key) | Dropped — reusing it would wedge rotation forever, so a fresh candidate is minted on the next attempt. | Full cadence (27 days): the server rejects the same way again on the next reconnect, so the rejection consumes the cadence instead of retrying on every connection. |
+| Other `4xx` (e.g. `429`, rate limits) | Kept, retried as-is. | Full cadence — same reasoning as `406`/`409`. |
+| `5xx` (transient server error) | Kept, retried as-is. | 24 hours (`SIGNED_PRE_KEY_SERVER_ERROR_BACKOFF_MS`), capped at the cadence — a transient fault gets a short retry instead of waiting out the full interval. |
+| Transport failure (ambiguous — the server may have accepted it) | Kept, retried as-is. | Next connect — the cadence is left untouched, since the upload may have already succeeded. |
+
+The retry delay is expressed as a backdated cadence timestamp (`rotation_timestamp_after_failed_upload`, persisted via the same `DeviceCommand::SetSignedPreKeyRotationBaseline` command used for baseline seeding) rather than a second field, so `should_rotate_signed_pre_key` still reads a single timestamp. Only the cadence-driven caller (`maybe_rotate_signed_pre_key`) writes this schedule on failure — a manual `rotate_signed_pre_key()` call leaves the cadence untouched on failure either way, so a forced rotation can't drag an unrelated automatic rotation forward or backward.
+
+<Warning>
+  Regression versus the pre-[#1237](https://github.com/oxidezap/whatsapp-rust/pull/1237) behavior: a `4xx` response that is neither `406` nor `409` (for example a `429` rate-limit) now waits the full 27-day cadence instead of retrying on every reconnect. This matches both WA Web and zapo, and is considered acceptable because the current signed pre-key keeps working throughout — a deferred rotation costs window, not liveness.
+</Warning>
 
 **Backend fallback for rotated-out ids:**
 
@@ -1202,10 +1215,14 @@ Before this feature, `Device::load_signed_prekey` (`src/store/signal.rs`) return
 **Retry, not NACK, once the id ages past retention:** A sender's `PreKeySignalMessage` can still name a signed pre-key id that has since aged past `SIGNED_PRE_KEY_RETENTION` (3 total: current + 2 rotated-out) — the backend fallback above has nothing left to return, and `InvalidSignedPreKeyId` is the correct, permanent answer. On the 1:1 decrypt path (`src/message/receive.rs`), this now routes to a retry receipt (`RetryReason::InvalidKeyId`) carrying the current bundle, mirroring the sibling `InvalidPreKeyId` arm — instead of falling through to the catch-all `UnhandledError` nack, which would drop the stanza from the offline queue and lose the 1:1 message permanently and silently.
 
 <Note>
-  `Client::rotate_signed_pre_key()` is a public method — callers can force an out-of-cadence rotation directly instead of waiting for the weekly check. It shares `signed_pre_key_rotation_lock` with the automatic path (so a manual call can't race a background rotation) and propagates upload failures to the caller rather than swallowing them.
+  `SignedPreKeyAdapter::get_signed_pre_key` (`src/store/signal_adapter.rs`) logs a warning naming both the requested id and the current device id whenever neither the device field nor the backend fallback resolves an id, so the two ways this can happen — a peer holding a bundle older than the retention window, versus a peer naming an id we never minted — stay distinguishable from the log alone. `InvalidSignedPreKeyId` itself carries no payload, so this is the only place either id is recorded.
 </Note>
 
-Location: `src/features/rotate_key.rs`, `src/store/signal.rs`, `src/message/receive.rs`, `wacore/src/iq/prekeys.rs`, `wacore/src/store/commands.rs`
+<Note>
+  `Client::rotate_signed_pre_key()` is a public method — callers can force an out-of-cadence rotation directly instead of waiting for the 27-day check. It shares `signed_pre_key_rotation_lock` with the automatic path (so a manual call can't race a background rotation) and propagates upload failures to the caller rather than swallowing them.
+</Note>
+
+Location: `src/features/rotate_key.rs`, `src/store/signal.rs`, `src/store/signal_adapter.rs`, `src/message/receive.rs`, `wacore/src/iq/prekeys.rs`, `wacore/src/store/commands.rs`
 
 ### Re-pair pre-key healing (v0.6)
 

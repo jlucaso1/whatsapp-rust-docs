@@ -5,9 +5,9 @@ description: "0.7.0 is on crates.io. VoIP, native plugins, tracing, and metrics 
 
 ## Release
 
-**`whatsapp-rust` 0.7.0 and the whole workspace are published to crates.io ([#1219](https://github.com/oxidezap/whatsapp-rust/pull/1219))**
+**`whatsapp-rust` 0.7.0 and every publishable workspace crate are on crates.io ([#1219](https://github.com/oxidezap/whatsapp-rust/pull/1219))**
 
-`whatsapp-rust`, `wacore`, `wacore-appstate`, `wacore-binary`, `wacore-derive`, `wacore-libsignal`, `wacore-noise`, `waproto`, `whatsapp-rust-sqlite-storage`, `whatsapp-rust-tokio-transport`, and `whatsapp-rust-ureq-http-client` all went out at `0.7.0`.
+`whatsapp-rust`, `wacore`, `wacore-appstate`, `wacore-binary`, `wacore-derive`, `wacore-libsignal`, `wacore-noise`, `waproto`, `whatsapp-rust-sqlite-storage`, `whatsapp-rust-tokio-transport`, and `whatsapp-rust-ureq-http-client` all went out at `0.7.0`. `whatsapp-rust-chat-store` and `whatsapp-rust-plugin-metrics` are held back — see below. The [v0.7.0 release notes](https://github.com/oxidezap/whatsapp-rust/releases/tag/v0.7.0) cover the 488 PRs behind it; this entry is the upgrade-facing summary.
 
 ```toml
 [dependencies]
@@ -32,11 +32,11 @@ These landed on `main` after 0.6.0 and are now in the published crate — drop a
 
 **The `moka-cache` feature is gone.** It was a default feature in 0.6.0. If your `Cargo.toml` names it explicitly, remove the line — see [moka dropped for a portable cache](/changelog/2026-06-14-drop-moka-portable-cache).
 
-**The `debug-diagnostics` feature is gone**, along with the `memory_diagnostics()` / `MemoryDiagnostics` surface it gated. Use [`Client::stats()`](/api/client) instead.
+**The `debug-diagnostics` feature is gone**, along with the `memory_diagnostics()` / `MemoryDiagnostics` surface it gated. The replacement is split in two and needs no feature flag: [`Client::memory_report()`](/api/client#memory_report) returns the cache entry counts and retained-byte estimates that `MemoryDiagnostics` carried, and [`Client::stats()`](/api/client#stats) returns the wire I/O and activity counters.
 
-**Minimum versions moved.** The workspace now declares an MSRV of **1.94**, and the crate requires **tokio 1.53.1** or newer. Edition 2024 needs no nightly; only the default `simd` feature does, because it uses the unstable `portable_simd` API.
+**Minimum versions moved.** The workspace declares an MSRV for the first time, at **1.94** (0.6.0 declared none), and the crate requires **tokio 1.53.1** or newer. Edition 2024 needs no nightly; only the default `simd` feature does, because it uses the unstable `portable_simd` API.
 
-**`whatsapp-rust-chat-store` is not published.** Its schema and query surface are still moving, so it is held back from crates.io (`publish = false`) and stays reachable only through the git source. Pin `whatsapp-rust` and `whatsapp-rust-sqlite-storage` to the same revision when you use it — a registry copy and a git copy of `whatsapp-rust-sqlite-storage` are two distinct crates to Cargo, and `ChatStore::new` only accepts the `SqliteStore` from the copy it was compiled against. See [Chat Store](/api/chat-store).
+**`whatsapp-rust-chat-store` is not published.** Its schema and query surface are still moving, so it is held back from crates.io (`publish = false`) and stays reachable only through the git source — as does `whatsapp-rust-plugin-metrics`. When you use the chat store, put `whatsapp-rust` and `whatsapp-rust-sqlite-storage` on that same revision: a registry copy and a git copy of `whatsapp-rust-sqlite-storage` are two distinct crates to Cargo, and `ChatStore::new` only accepts the `SqliteStore` from the copy it was compiled against. See [Chat Store](/api/chat-store).
 
 ## Release pipeline
 

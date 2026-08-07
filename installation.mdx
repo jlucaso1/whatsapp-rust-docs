@@ -165,19 +165,23 @@ The optional `whatsapp-rust-chat-store` crate — an event-sourced SQLite chat/m
 | `search` | SQLite FTS5 full-text message search | ❌ No |
 
 <Note>
-  This crate is **not published to crates.io** — its schema and query surface are still moving, and publishing would pin both. Depend on the git source until it is released, and point `whatsapp-rust` (and `whatsapp-rust-sqlite-storage`, if you declare it) at the **same** git revision. A registry copy and a git copy of `whatsapp-rust-sqlite-storage` are two distinct crates to Cargo, and `ChatStore::new` would reject the `SqliteStore` from the other one.
+  This crate is **not published to crates.io** — its schema and query surface are still moving, and publishing would pin both. Depend on the git source until it is released, and move `whatsapp-rust` and `whatsapp-rust-sqlite-storage` to the **same** git revision. A registry copy and a git copy of `whatsapp-rust-sqlite-storage` are two distinct crates to Cargo, and `ChatStore::new` would reject the `SqliteStore` from the other one — so the registry snippets above don't mix with this one.
 </Note>
 
 ```toml Cargo.toml
 [dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
 whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
 ```
 
 To enable full-text search, turn on the `search` feature:
 
 ```toml Cargo.toml
 [dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
 whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["search"] }
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
 ```
 
 See [Chat Store](/api/chat-store) for the full API.

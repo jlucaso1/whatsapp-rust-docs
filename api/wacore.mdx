@@ -737,7 +737,7 @@ Strong typing throughout:
 
 ## Benchmarks
 
-The project includes two categories of benchmarks: **protocol-level** (divan, tracked on CodSpeed) and **integration-level** (real client operations with allocation tracking).
+The project includes two categories of benchmarks, both divan suites tracked on CodSpeed: **protocol-level**, measured under the instruction-count and memory instruments, and **integration-level**, real client operations measured under the instruction-count instrument only.
 
 ### Protocol benchmarks (divan / CodSpeed)
 
@@ -774,8 +774,9 @@ wacore includes a suite of [divan](https://github.com/nvzqz/divan) benchmarks �
 #### Running protocol benchmarks
 
 ```bash
-# Run all benchmarks across the workspace
-cargo bench --workspace
+# Every suite in the default workspace members. Not `--workspace`: that also
+# picks up bench-integration, which needs the mock server described below
+cargo bench
 
 # Run a specific benchmark suite
 cargo bench -p wacore --bench send_receive_benchmark
@@ -789,7 +790,7 @@ cargo bench -p wacore --features voip --bench sframe_varint_benchmark
 
 ### Integration benchmarks
 
-The `bench-integration` suite (`tests/bench-integration/benches/integration.rs`) drives real client operations end-to-end against a mock server. It is a divan bench target as well, so it reports through CodSpeed rather than the custom timing/allocation binary it replaced. It installs a `DeterministicAlloc` global allocator whose `realloc` always allocates-and-copies — the system allocator's in-place growth depends on live heap layout and would otherwise be charged to the benchmark as run-to-run memory noise.
+The `bench-integration` suite (`tests/bench-integration/benches/integration.rs`) drives real client operations end-to-end against a mock server. It is a divan bench target as well, so it reports through CodSpeed rather than the custom timing/allocation binary it replaced — under the instruction-count instrument only, so it yields no allocation figures. It installs a `DeterministicAlloc` global allocator whose `realloc` always allocates-and-copies — the system allocator's in-place growth depends on live heap layout and would otherwise be charged to the benchmark as run-to-run memory noise.
 
 #### Scenarios
 

@@ -17,18 +17,19 @@ Antes de instalar whatsapp-rust, certifique-se de ter:
 
 ## Adicione ao seu projeto
 
-Adicione whatsapp-rust e suas dependências necessárias ao seu `Cargo.toml`:
+`whatsapp-rust` reexporta a pilha inteira (`wacore`, `wacore_binary`, `waproto` e todas as implementações incluídas), então **uma linha de dependência basta** para a maioria dos projetos:
 
 <CodeGroup>
 
 ```toml Nightly (padrão)
 [dependencies]
 whatsapp-rust = "0.7"
-whatsapp-rust-sqlite-storage = "0.7"
-whatsapp-rust-tokio-transport = "0.7"
-whatsapp-rust-ureq-http-client = "0.7"
-wacore = "0.7"
-waproto = "0.7"
+# Só é preciso declarar um crate irmão para features específicas dele:
+# whatsapp-rust-sqlite-storage = "0.7"
+# whatsapp-rust-tokio-transport = "0.7"
+# whatsapp-rust-ureq-http-client = "0.7"
+# wacore = "0.7"
+# waproto = "0.7"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -42,15 +43,15 @@ whatsapp-rust = { version = "0.7", default-features = false, features = [
     "tokio-native",
     "signal",
 ] }
-whatsapp-rust-sqlite-storage = "0.7"
-whatsapp-rust-tokio-transport = "0.7"
-whatsapp-rust-ureq-http-client = "0.7"
+# wacore também precisa de default-features = false para a unificação de
+# features não reativar o simd
 wacore = { version = "0.7", default-features = false }
-waproto = "0.7"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 </CodeGroup>
+
+Todo caminho de sub-crate é alcançável pelo crate principal — `whatsapp_rust::waproto::whatsapp` (apelidado como `wa` no `prelude`), `whatsapp_rust::wacore`, `whatsapp_rust::wacore_binary`, `whatsapp_rust::store::SqliteStore`, `whatsapp_rust::http::UreqHttpClient` e `whatsapp_rust::transport::TokioWebSocketTransportFactory`. O mesmo vale para os crates de terceiros cujos tipos aparecem na API pública (`anyhow`, `async_trait`, `bytes`, `chrono`, `futures`, `serde`, `serde_json`, `async_channel`, `buffa`): você nunca precisa adicioná-los nem fixar suas versões.
 
 ## Feature flags
 
@@ -124,6 +125,25 @@ Para usar um SQLite instalado no sistema em vez da versão empacotada:
 [dependencies]
 whatsapp-rust-sqlite-storage = { version = "0.7", default-features = false }
 ```
+
+O crate opcional `whatsapp-rust-chat-store` — um histórico de conversas/mensagens em SQLite baseado em eventos, que **não** é reexportado por `whatsapp-rust` — tem sua própria feature flag:
+
+| Feature | Descrição | Incluída por padrão |
+|---------|-----------|---------------------|
+| `search` | Busca textual completa de mensagens via SQLite FTS5 | ❌ Não |
+
+<Note>
+  Este crate **não é publicado no crates.io** — seu esquema e sua superfície de consulta ainda estão mudando, e publicar fixaria os dois. Dependa da fonte git até que ele seja lançado e mova `whatsapp-rust` e `whatsapp-rust-sqlite-storage` para a **mesma** revisão git. Para o Cargo, uma cópia do registry e uma cópia do git de `whatsapp-rust-sqlite-storage` são crates distintos, e `ChatStore::new` rejeitaria o `SqliteStore` da outra — ou seja, os trechos com versão do registry acima não se misturam com este.
+</Note>
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["search"] }
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+```
+
+Veja [Chat Store](/api/chat-store) para a API completa.
 
 <Note>
   As features padrão fornecem tudo que é necessário para a maioria dos casos de uso. Personalize features somente se tiver requisitos específicos.

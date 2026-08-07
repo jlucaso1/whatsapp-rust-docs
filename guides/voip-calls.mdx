@@ -24,9 +24,10 @@ Video is **codec-neutral**: you hand the library complete H.264 Annex-B access u
 ```toml
 [dependencies]
 whatsapp-rust = { version = "0.7", features = ["voip"] }
-async-channel = "2"  # needed to implement AudioSource / AudioSink / VideoSource / VideoSink
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
+
+`AudioSource` / `AudioSink` / `VideoSource` / `VideoSink` are channel-based, and the examples below build those channels through `whatsapp_rust::async_channel` — the re-export, so you don't have to add or version-pin `async-channel` yourself.
 
 <Warning>
   [PR #1051](https://github.com/oxidezap/whatsapp-rust/pull/1051) changed `CallHandle::accept_video`'s signature and the shape of `CallEvent::VideoStateChanged` to close a race where a cancelled or superseded video-upgrade request could still attach a camera. If you're upgrading from before this PR, see [Peer initiates](#video-io) below and the `VideoUpgradeToken` field on the event.
@@ -156,7 +157,7 @@ The `AudioSource` / `AudioSink` implementation from the example:
 
 ```rust
 use whatsapp_rust::voip::{AudioSource, AudioSink};
-use async_channel;
+use whatsapp_rust::async_channel;
 
 struct MyMic { receiver: async_channel::Receiver<Vec<i16>> }
 struct MySpeaker { sender: async_channel::Sender<Vec<i16>> }
@@ -213,6 +214,7 @@ The source sends one complete raw codec packet per `Bytes`, paced every 60 ms. T
 
 ```rust
 use whatsapp_rust::bytes::Bytes;
+use whatsapp_rust::async_channel;
 use whatsapp_rust::voip::{AudioFormat, EncodedAudioFrame};
 
 let (encoded_tx, encoded_rx) = async_channel::bounded::<Bytes>(3);
@@ -270,7 +272,7 @@ Video works the same way, one layer up: you supply `VideoSource` and `VideoSink`
 
 ```rust
 use whatsapp_rust::voip::{VideoSource, VideoSink, VideoFrame};
-use async_channel;
+use whatsapp_rust::async_channel;
 
 struct MyCamera { receiver: async_channel::Receiver<Vec<u8>> }
 struct MyDisplay { sender: async_channel::Sender<VideoFrame> }

@@ -534,7 +534,7 @@ cargo run --example benchmark --features danger-skip-tls-verify
   The benchmark example requires the `danger-skip-tls-verify` feature flag because it's designed for use with local test servers.
 </Note>
 
-For more comprehensive integration benchmarks, the `bench-integration` suite measures real-world scenarios (connect, send, receive, reconnect) against a mock server:
+For end-to-end numbers, run the `bench-integration` suite — it drives real scenarios (connect, send, receive, reconnect) against a mock server, so point `MOCK_SERVER_URL` at one before you start:
 
 ```bash
 # Requires a mock server (e.g., Bartender)
@@ -542,11 +542,15 @@ MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" \
   cargo bench -p bench-integration
 ```
 
-For low-level protocol benchmarks, the `wacore` crate includes a [divan](https://github.com/nvzqz/divan) benchmark suite — tracked in CI through [CodSpeed](https://codspeed.io) — covering the full send/receive pipeline (DM and group messaging with various participant counts), binary protocol encoding, Signal Protocol operations, and reporting token generation:
+For low-level protocol numbers, run the [divan](https://github.com/nvzqz/divan) suites in `wacore` — CI tracks the same ones through [CodSpeed](https://codspeed.io). They cover the full send/receive pipeline (DM and group messaging with various participant counts), binary protocol encoding, Signal Protocol operations, and reporting token generation:
 
 ```bash
-# Run all wacore benchmarks
-cargo bench --workspace
+# Default workspace members only — this leaves out bench-integration,
+# which needs the mock server above
+cargo bench
+
+# The voip-gated suites need their feature turned on
+cargo bench -p wacore --features voip
 ```
 
 See the [wacore benchmarks documentation](/api/wacore#benchmarks) for details on each suite, allocation optimizations, and CI integration.

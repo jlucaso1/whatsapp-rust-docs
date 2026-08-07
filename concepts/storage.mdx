@@ -965,6 +965,10 @@ let backend = Arc::new(
 `SqliteStore::new` and `SqliteStore::new_for_device` are unchanged — they delegate to `SqliteStoreConfig::default()` internally. Raising `pool_size` above `1` makes *writes* concurrent, which SQLite does not want — two deferred transactions that both read and then write deadlock on the upgrade, and `busy_timeout` cannot break it. `read_pool_size` (set via the `with_read_pool_size` builder, or the struct field directly) is the knob for concurrency instead: it reserves connections purely for reads, which WAL lets run alongside a pending write without contending for the write lock. Left at `0`, reads queue on the same permit as writes exactly as before this knob existed.
 </Note>
 
+<Note>
+As of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222), `read_pool_size` also covers most of `SqliteStore`'s own `SignalStore`/`AppSyncStore`/`ProtocolStore`/`DeviceStore` reads, not just [`whatsapp-rust-chat-store`](/api/chat-store)'s queries. Session, identity, sender-key, and pre-key lookups on the decrypt path — `get_session`, `load_identity`, `get_sender_key`, `load_prekey`, and similar — now run on the reader pool. Before this change they queued behind `pool_size`'s write-path permits even with `read_pool_size` set, so this raises the ceiling on read concurrency during a write-behind flush. A handful of reads stay on the write queue by design: app-state sync key lookups, `messageSecret` reads, and `get_devices` among them, since a stale answer for these would go out on the wire, fail an operation outright, or get promoted into a cache unconditionally. Widening `read_pool_size` past `0` now buys concurrency for most of the read surface, not just chat/message queries.
+</Note>
+
 **Multi-session measurements (from PR #926):**
 
 | | before | after (default config) |

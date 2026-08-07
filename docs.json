@@ -145,6 +145,7 @@
                 "group": "Changelog",
                 "pages": [
                   "changelog/overview",
+                  "changelog/2026-08-07-release-0-7-0",
                   "changelog/2026-06-15-token-tiny-map",
                   "changelog/2026-06-14-drop-moka-portable-cache",
                   "changelog/2026-06-12-binary-size-ci",

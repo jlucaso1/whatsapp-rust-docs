@@ -9,7 +9,7 @@ description: "Platform-agnostic WhatsApp protocol implementation"
 
 ```toml
 [dependencies]
-wacore = "0.6"
+wacore = "0.7"
 ```
 
 ## Philosophy
@@ -737,19 +737,20 @@ Strong typing throughout:
 
 ## Benchmarks
 
-The project includes two categories of benchmarks: **protocol-level** (iai-callgrind, deterministic instruction counts) and **integration-level** (real client operations with allocation tracking).
+The project includes two categories of benchmarks, both divan suites tracked on CodSpeed: **protocol-level**, measured under the instruction-count and memory instruments, and **integration-level**, real client operations measured under the instruction-count instrument only.
 
-### Protocol benchmarks (iai-callgrind)
+### Protocol benchmarks (divan / CodSpeed)
 
-wacore includes a suite of [iai-callgrind](https://github.com/iai-callgrind/iai-callgrind) benchmarks that measure instruction counts for core protocol operations. These benchmarks run under Valgrind's Callgrind tool, producing deterministic, low-noise measurements that are suitable for CI regression tracking.
+wacore includes a suite of [divan](https://github.com/nvzqz/divan) benchmarks — through the `codspeed-divan-compat` harness — that measure core protocol operations. Locally they run as ordinary divan wall-time benchmarks; in CI the `codspeed.yml` workflow runs them under [CodSpeed](https://codspeed.io)'s deterministic instrumentation for low-noise regression tracking, sharded across two jobs (`wacore`/`wacore-noise` and `wacore-binary`/`wacore-libsignal`/`wacore-appstate`).
 
 #### Prerequisites
 
-Running the protocol benchmarks requires:
+- **Nightly Rust** (the project pins `nightly-2026-06-16`)
+- Nothing else for a local `cargo bench` — the CodSpeed runner supplies the Valgrind-based instrumentation in CI
 
-- **Nightly Rust** (the project pins `nightly-2026-04-05`)
-- **Valgrind** installed on your system
-- **iai-callgrind-runner** (`cargo install iai-callgrind-runner --version 0.16.1`)
+<Note>
+  Bench auto-discovery is off (`autobenches = false`): only the explicit `[[bench]]` targets in each crate's `Cargo.toml` are built, so a stray file under `benches/` is never compiled as a phantom bench.
+</Note>
 
 #### Available suites
 
@@ -757,42 +758,52 @@ Running the protocol benchmarks requires:
 |-------|----------|------------------|
 | `send_receive_benchmark` | `wacore/benches/send_receive_benchmark.rs` | Full send/receive pipeline — DM send, DM receive, group send (steady-state skmsg), group send with SKDM distribution (10/50/256 participants), and group receive. Uses real `prepare_peer_stanza` and `prepare_group_stanza` functions with in-memory Signal stores |
 | `reporting_token_benchmark` | `wacore/benches/reporting_token_benchmark.rs` | Reporting token generation — key derivation, token calculation, and full generation pipeline for simple and extended messages |
+| `token_lookup_benchmark` | `wacore/benches/token_lookup_benchmark.rs` | Protocol token resolution through the compile-time `tiny_map` dispatch |
+| `history_sync_benchmark` | `wacore/benches/history_sync_benchmark.rs` | History-sync payload decompression and parsing |
+| `appstate_sync_benchmark` | `wacore/benches/appstate_sync_benchmark.rs` | App-state mutation decode and patch application |
+| `message_utils_benchmark` | `wacore/benches/message_utils_benchmark.rs` | Message helper paths (padding, secret derivation, edit/revoke plumbing) |
+| `sender_key_derivation_benchmark` | `wacore/benches/sender_key_derivation_benchmark.rs` | Sender-key chain derivation, including the prewarm path |
+| `signal_address_probe_benchmark` | `wacore/benches/signal_address_probe_benchmark.rs` | Server-aware Signal address lookup probes |
+| `sframe_varint_benchmark` | `wacore/benches/sframe_varint_benchmark.rs` | SFrame varint header codec (requires the `voip` feature) |
+| `voip_benchmark` | `wacore/benches/voip_benchmark.rs` | VoIP media-path hot loops (requires the `voip` feature) |
 | `binary_benchmark` | `wacore/binary/benches/binary_benchmark.rs` | Binary protocol encoding/decoding — marshal and unmarshal operations for various node sizes and structures |
+| `jid_benchmark` | `wacore/binary/benches/jid_benchmark.rs` | JID parsing, formatting, and equality |
+| `appstate_benchmark` | `wacore/appstate/benches/appstate_benchmark.rs` | App-state hash/MAC primitives |
 | `libsignal_benchmark` | `wacore/libsignal/benches/libsignal_benchmark.rs` | Signal Protocol operations — session establishment, message encrypt/decrypt, sender key distribution, and group cipher operations |
 
 #### Running protocol benchmarks
 
 ```bash
-# Run all benchmarks across the workspace
-cargo bench --workspace
+# Every suite in the default workspace members. Not `--workspace`: that also
+# picks up bench-integration, which needs the mock server described below
+cargo bench
 
 # Run a specific benchmark suite
 cargo bench -p wacore --bench send_receive_benchmark
 cargo bench -p wacore --bench reporting_token_benchmark
 cargo bench -p wacore-binary --bench binary_benchmark
 cargo bench -p wacore-libsignal --bench libsignal_benchmark
-```
 
-Each benchmark produces instruction counts and optionally generates flamegraph SVGs for profiling hotspots.
+# Feature-gated suites
+cargo bench -p wacore --features voip --bench sframe_varint_benchmark
+```
 
 ### Integration benchmarks
 
-The `bench-integration` test suite (`tests/bench-integration/`) measures real-world client operations end-to-end, including wall-clock time and heap allocation counts. It uses a custom `CountingAlloc` global allocator that tracks every allocation and byte count, then produces `customSmallerIsBetter` JSON output for CI trend tracking.
+The `bench-integration` suite (`tests/bench-integration/benches/integration.rs`) drives real client operations end-to-end against a mock server. It is a divan bench target as well, so it reports through CodSpeed rather than the custom timing/allocation binary it replaced — under the instruction-count instrument only, so it yields no allocation figures. It installs a `DeterministicAlloc` global allocator whose `realloc` always allocates-and-copies — the system allocator's in-place growth depends on live heap layout and would otherwise be charged to the benchmark as run-to-run memory noise.
 
 #### Scenarios
 
 | Scenario | What it measures |
 |----------|------------------|
 | `connect_to_ready` | Client creation through `Connected` event — includes transport connect, Noise handshake, and initial sync |
-| `send_message` | Single DM send (sender side) — protobuf encoding, Signal encrypt, node marshal, and WebSocket write. Also measures amortized cost over 20 consecutive sends |
-| `send_and_receive_message` | Full round-trip — send a DM and wait for delivery on the receiver. Also measures amortized cost over 20 round-trips |
-| `reconnect` | Disconnect and reconnect cycle — measures the time and allocations to re-establish a session |
-
-Each scenario reports three metrics: `alloc_count` (number of heap allocations), `alloc_bytes` (total bytes allocated), and `wall_ms` (elapsed wall-clock time). Amortized scenarios divide totals by the number of iterations for per-operation costs.
+| `send_message` | DM send (sender side) — protobuf encoding, Signal encrypt, node marshal, and WebSocket write. Runs once per batch size, so per-operation cost is visible against the fixed setup |
+| `send_and_receive` | Full round-trip — send a DM and wait for delivery on the receiver, also across batch sizes |
+| `reconnect` | Disconnect and reconnect cycle — the cost of re-establishing a session |
 
 #### Running integration benchmarks
 
-Integration benchmarks require a mock WhatsApp server (e.g., [Bartender](https://github.com/whiskeysockets-devtools/bartender)):
+These benchmarks cannot run without the mock server ([Bartender](https://github.com/whiskeysockets-devtools/bartender)) reachable at `MOCK_SERVER_URL`, so in practice they execute in CI under `cargo codspeed run`:
 
 ```bash
 # Start the mock server (Docker)
@@ -800,13 +811,11 @@ docker run -d -p 8080:8080 ghcr.io/whiskeysockets-devtools/bartender:latest
 
 # Run the benchmarks
 MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" \
-  cargo run -p bench-integration --release
+  cargo bench -p bench-integration
 ```
 
-The output is a JSON array of `customSmallerIsBetter` entries printed to stdout, suitable for consumption by [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
-
 <Note>
-Integration benchmarks require the `danger-skip-tls-verify` feature, which is enabled automatically via the `bench-integration` crate's `Cargo.toml`. You can also enable DHAT heap profiling with `--features dhat-heap` for detailed allocation flamegraphs.
+Integration benchmarks require the `danger-skip-tls-verify` feature, which is enabled automatically via the `bench-integration` crate's `Cargo.toml`. `tests/bench-integration` is not a workspace default member, so `-p bench-integration` is required — a bare invocation discovers no benchmarks for it.
 </Note>
 
 ### Allocation optimizations
@@ -829,23 +838,16 @@ The library includes several allocation-reduction strategies that the integratio
 
 ### CI integration
 
-The repository includes GitHub Actions workflows for both benchmark types:
+Both benchmark types run from a single workflow, `.github/workflows/codspeed.yml`, on every push to `main` and on pull requests. CodSpeed stores the baselines and reports per-PR deltas.
 
-**Protocol benchmarks** (`.github/workflows/benchmark.yml`):
-- Runs on every push to `main` and on pull requests
-- Uses [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark) to store baselines and generate trend charts on GitHub Pages
-- A custom parser script (`.github/scripts/iai-to-benchmark-json.py`) converts iai-callgrind instruction counts into the `customSmallerIsBetter` JSON format
-- Pull requests receive a collapsed PR comment (via `.github/scripts/bench-comment.py`) grouping benchmarks into **regressions** (>5% slower), **improvements** (>5% faster), and **unchanged**
-- The PR comment is idempotent — subsequent benchmark runs update the existing comment instead of creating duplicates
+**Protocol benchmarks:**
+- Sharded across two jobs — `wacore`/`wacore-noise` and `wacore-binary`/`wacore-libsignal`/`wacore-appstate` — so one shard failing doesn't cancel the other; CodSpeed merges the shards into one run
+- Run under both the simulation (instruction-count) and memory instruments
+- `MALLOC_*` environment variables freeze glibc malloc's adaptive thresholds, whose allocation-history-dependent decisions otherwise read as spurious deltas
 
-**Integration benchmarks** (`.github/workflows/bench-integration.yml`):
-- Runs on every push to `main` and on pull requests
-- Spins up a Bartender mock server as a Docker service container
-- Measures allocation counts, allocation bytes, and wall-clock time for each scenario
-- Pushes to `main` store the baseline for trend tracking
-- Pull requests compare against the baseline
-
-Raw benchmark output for both suites is uploaded as artifacts (retained for 30 days) for debugging.
+**Integration benchmarks:**
+- Run in their own job with a Bartender mock server as a Docker service container
+- Simulation instrument only, no memory instrument: `send_and_receive` drives a live async round-trip whose in-flight pipeline buffers straddle divan sample boundaries, so its memory figure tracked runner scheduling rather than code and tripped false regressions. The deterministic memory signal lives in the single-threaded unit benches instead
 
 ## Next steps
 

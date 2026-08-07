@@ -7,7 +7,8 @@ description: Adicione whatsapp-rust ao seu projeto Rust
 
 Antes de instalar whatsapp-rust, certifique-se de ter:
 
-- **Rust nightly** (padrão) — necessário para a edição Rust 2024 e o protocolo binário otimizado com SIMD. O projeto fixa `nightly-2026-04-05` via `rust-toolchain.toml`. Veja [Usando Rust stable](#usando-rust-stable) se você precisa de suporte ao toolchain stable.
+- **Rust nightly** (padrão) — necessário apenas pela feature padrão `simd`, que usa a API instável `portable_simd`. O projeto fixa `nightly-2026-06-16` via `rust-toolchain.toml`.
+- **Rust 1.94 ou mais novo** — o MSRV do workspace. A edição 2024 em si não exige nightly, então o stable funciona assim que o `simd` é desabilitado. Veja [Usando Rust stable](#usando-rust-stable).
 - Gerenciador de pacotes **Cargo**
 
 <Note>
@@ -16,24 +17,25 @@ Antes de instalar whatsapp-rust, certifique-se de ter:
 
 ## Adicione ao seu projeto
 
-Adicione whatsapp-rust e suas dependências necessárias ao seu `Cargo.toml`:
+`whatsapp-rust` reexporta a pilha inteira (`wacore`, `wacore_binary`, `waproto` e todas as implementações incluídas), então **uma linha de dependência basta** para a maioria dos projetos:
 
 <CodeGroup>
 
 ```toml Nightly (padrão)
 [dependencies]
-whatsapp-rust = "0.6"
-whatsapp-rust-sqlite-storage = "0.6"
-whatsapp-rust-tokio-transport = "0.6"
-whatsapp-rust-ureq-http-client = "0.6"
-wacore = "0.6"
-waproto = "0.6"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+whatsapp-rust = "0.7"
+# Só é preciso declarar um crate irmão para features específicas dele:
+# whatsapp-rust-sqlite-storage = "0.7"
+# whatsapp-rust-tokio-transport = "0.7"
+# whatsapp-rust-ureq-http-client = "0.7"
+# wacore = "0.7"
+# waproto = "0.7"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```toml Rust Stable
 [dependencies]
-whatsapp-rust = { version = "0.6", default-features = false, features = [
+whatsapp-rust = { version = "0.7", default-features = false, features = [
     "sqlite-storage",
     "tokio-transport",
     "tokio-runtime",
@@ -41,15 +43,15 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
     "tokio-native",
     "signal",
 ] }
-whatsapp-rust-sqlite-storage = "0.6"
-whatsapp-rust-tokio-transport = "0.6"
-whatsapp-rust-ureq-http-client = "0.6"
-wacore = { version = "0.6", default-features = false }
-waproto = "0.6"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+# wacore também precisa de default-features = false para a unificação de
+# features não reativar o simd
+wacore = { version = "0.7", default-features = false }
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 </CodeGroup>
+
+Todo caminho de sub-crate é alcançável pelo crate principal — `whatsapp_rust::waproto::whatsapp` (apelidado como `wa` no `prelude`), `whatsapp_rust::wacore`, `whatsapp_rust::wacore_binary`, `whatsapp_rust::store::SqliteStore`, `whatsapp_rust::http::UreqHttpClient` e `whatsapp_rust::transport::TokioWebSocketTransportFactory`. O mesmo vale para os crates de terceiros cujos tipos aparecem na API pública (`anyhow`, `async_trait`, `bytes`, `chrono`, `futures`, `serde`, `serde_json`, `async_channel`, `buffa`): você nunca precisa adicioná-los nem fixar suas versões.
 
 ## Feature flags
 
@@ -64,7 +66,19 @@ whatsapp-rust suporta diversas features opcionais:
 | `sqlite-storage` | Backend de armazenamento SQLite | ✅ Sim |
 | `simd` | Codificação/decodificação do protocolo binário otimizada com SIMD (**requer Rust nightly**) | ✅ Sim |
 | `signal` | Manipulação de sinais Unix (desligamento gracioso em SIGTERM/Ctrl+C) | ✅ Sim |
+| `tracing` | Emite spans/eventos `tracing` em connect, send, receive, IQ, app state, pareamento, mídia e fluxos de sessão. Veja [Observabilidade](/advanced/observability) | ❌ Não |
+| `tracing-pii` | Mostra números de telefone crus nos campos do `tracing` em vez do `pn#<token>` redigido. Apenas para depuração local — nunca habilite em produção | ❌ Não |
+| `metrics` | Emite contadores, histogramas e gauges `wa_*` pela fachada [`metrics`](https://docs.rs/metrics). Veja [Métricas](/advanced/metrics) | ❌ Não |
+| `client-lifecycle` | Seam de ciclo de vida de extensões com escopo de geração (`ClientLifecycle`, `ConnectionScope`). Habilitada automaticamente por `plugins` | ❌ Não |
+| `plugins` | Host nativo de plugins em tempo de build: registro tipado de `ClientPlugin` via `ClientBuilder`, APIs com escopo de capacidade e ciclo de vida de tarefas por geração. Habilita `client-lifecycle` (veja [Plugins nativos](/advanced/plugins)) | ❌ Não |
+| `voip` | Chamadas de voz e vídeo 1:1, perfil completo: adaptadores MLow + libopus, plano de vídeo H.264 neutro de codec, criptografia E2E-SRTP e transporte por relay. Alias para `voip-mlow` + `voip-libopus` (veja [Chamadas VoIP](/guides/voip-calls)) | ❌ Não |
+| `voip-runtime` | Feature base interna habilitada por toda feature `voip-*` (driver Tokio, transporte por relay, DTLS/SCTP). Não é para ser nomeada diretamente — escolha `voip-encoded` ou uma feature de codec | ❌ Não |
+| `voip-encoded` | Perfil `voip` mais estreito: apenas transporte por relay e a fronteira de áudio codificado, sem codec embutido — forneça pacotes Opus/MLOW do seu próprio encoder/decoder | ❌ Não |
+| `voip-mlow` | `voip-encoded` mais o codec MLOW puro-Rust embutido | ❌ Não |
+| `voip-libopus` | `voip-encoded` mais o adaptador de codec opcional libopus via FFI | ❌ Não |
+| `legacy-session-interop` | Interop tipada com o modelo decodificado do `SessionRecord` v1 legado do libsignal, para migrar estado de autenticação produzido externamente | ❌ Não |
 | `danger-skip-tls-verify` | Pula a verificação TLS (inseguro) | ❌ Não |
+| `danger-skip-cert-chain-verify` | Pula a checagem da cadeia de certificados no handshake Noise (inseguro) | ❌ Não |
 | `debug-snapshots` | Snapshots de protocolo para debug | ❌ Não |
 
 <Tip>
@@ -81,7 +95,7 @@ Para usar whatsapp-rust em um ambiente de navegador WASM, habilite a feature `js
 
 ```toml Cargo.toml
 [dependencies]
-wacore = { version = "0.6", default-features = false, features = ["js"] }
+wacore = { version = "0.7", default-features = false, features = ["js"] }
 ```
 
 O crate `waproto` tem suas próprias feature flags:
@@ -96,7 +110,7 @@ O `build.rs` sempre executa e gera `whatsapp.rs` no `OUT_DIR` — nenhuma featur
 
 ```toml Cargo.toml
 [dependencies]
-waproto = { version = "0.6", features = ["serde-snake-case"] }
+waproto = { version = "0.7", features = ["serde-snake-case"] }
 ```
 
 O crate `whatsapp-rust-sqlite-storage` tem suas próprias feature flags:
@@ -109,8 +123,27 @@ Para usar um SQLite instalado no sistema em vez da versão empacotada:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-sqlite-storage = { version = "0.6", default-features = false }
+whatsapp-rust-sqlite-storage = { version = "0.7", default-features = false }
 ```
+
+O crate opcional `whatsapp-rust-chat-store` — um histórico de conversas/mensagens em SQLite baseado em eventos, que **não** é reexportado por `whatsapp-rust` — tem sua própria feature flag:
+
+| Feature | Descrição | Incluída por padrão |
+|---------|-----------|---------------------|
+| `search` | Busca textual completa de mensagens via SQLite FTS5 | ❌ Não |
+
+<Note>
+  Este crate **não é publicado no crates.io** — seu esquema e sua superfície de consulta ainda estão mudando, e publicar fixaria os dois. Dependa da fonte git até que ele seja lançado e mova `whatsapp-rust` e `whatsapp-rust-sqlite-storage` para a **mesma** revisão git. Para o Cargo, uma cópia do registry e uma cópia do git de `whatsapp-rust-sqlite-storage` são crates distintos, e `ChatStore::new` rejeitaria o `SqliteStore` da outra — ou seja, os trechos com versão do registry acima não se misturam com este.
+</Note>
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["search"] }
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+```
+
+Veja [Chat Store](/api/chat-store) para a API completa.
 
 <Note>
   As features padrão fornecem tudo que é necessário para a maioria dos casos de uso. Personalize features somente se tiver requisitos específicos.
@@ -118,14 +151,14 @@ whatsapp-rust-sqlite-storage = { version = "0.6", default-features = false }
 
 ## Usando Rust stable
 
-Por padrão, whatsapp-rust usa a **edição Rust 2024** e habilita a feature `simd`, que usa a API `portable_simd` do Rust para codificação/decodificação otimizada do protocolo binário. Ambos exigem um toolchain Rust **nightly**. O projeto fixa `nightly-2026-04-05` via `rust-toolchain.toml`.
+whatsapp-rust usa a **edição Rust 2024** e declara um MSRV de **1.94** — ambos suportados pelo Rust stable. A única parte exclusiva do nightly é a feature padrão `simd`, que usa a API instável `portable_simd` do Rust para codificação/decodificação otimizada do protocolo binário. O projeto em si fixa `nightly-2026-06-16` via `rust-toolchain.toml`.
 
 Para compilar com **Rust stable**, desabilite a feature `simd` definindo `default-features = false`. Você deve fazer isso em **ambos** `whatsapp-rust` e `wacore` — caso contrário, a [unificação de features](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) do Cargo irá reabilitar SIMD através da dependência `wacore`:
 
 ```toml Cargo.toml
 [dependencies]
 # Desabilita os padrões (remove `simd`), depois reabilita o resto
-whatsapp-rust = { version = "0.6", default-features = false, features = [
+whatsapp-rust = { version = "0.7", default-features = false, features = [
     "sqlite-storage",
     "tokio-transport",
     "tokio-runtime",
@@ -135,14 +168,14 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
 ] }
 # wacore também precisa de default-features = false para evitar que
 # a unificação de features reabilite simd
-wacore = { version = "0.6", default-features = false }
+wacore = { version = "0.7", default-features = false }
 
 # Estes crates não dependem de SIMD — nenhuma mudança necessária
-whatsapp-rust-sqlite-storage = "0.6"
-whatsapp-rust-tokio-transport = "0.6"
-whatsapp-rust-ureq-http-client = "0.6"
-waproto = "0.6"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+whatsapp-rust-sqlite-storage = "0.7"
+whatsapp-rust-tokio-transport = "0.7"
+whatsapp-rust-ureq-http-client = "0.7"
+waproto = "0.7"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 <Warning>
@@ -167,7 +200,7 @@ Se você quiser usar apenas features específicas:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust = { version = "0.6", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
+whatsapp-rust = { version = "0.7", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
 ```
 
 ## Verifique a instalação

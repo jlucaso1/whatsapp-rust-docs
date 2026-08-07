@@ -7,7 +7,8 @@ description: Add whatsapp-rust to your Rust project
 
 Before installing whatsapp-rust, ensure you have:
 
-- **Rust nightly** (default) — required for Rust edition 2024 and SIMD-optimized binary protocol. The project pins `nightly-2026-04-05` via `rust-toolchain.toml`. See [Using stable Rust](#using-stable-rust) if you need stable toolchain support.
+- **Rust nightly** (default) — required only by the default `simd` feature, which uses the unstable `portable_simd` API. The project pins `nightly-2026-06-16` via `rust-toolchain.toml`.
+- **Rust 1.94 or newer** — the workspace MSRV. Edition 2024 itself needs no nightly, so stable works once `simd` is off. See [Using stable Rust](#using-stable-rust).
 - **Cargo** package manager
 
 <Note>
@@ -20,8 +21,8 @@ Before installing whatsapp-rust, ensure you have:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust = "0.6"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+whatsapp-rust = "0.7"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 Every sub-crate path is reachable through the main crate:
@@ -49,7 +50,7 @@ The same holds for git consumers — no need to pin every sibling crate:
 ```toml Cargo.toml
 [dependencies]
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 If you need to declare a sibling crate explicitly (for example to enable a crate-specific feature flag), you can still add it individually. The full multi-crate form:
@@ -58,19 +59,19 @@ If you need to declare a sibling crate explicitly (for example to enable a crate
 
 ```toml Nightly (default)
 [dependencies]
-whatsapp-rust = "0.6"
+whatsapp-rust = "0.7"
 # Only needed for crate-specific features not exposed through whatsapp-rust:
-# whatsapp-rust-sqlite-storage = "0.6"
-# whatsapp-rust-tokio-transport = "0.6"
-# whatsapp-rust-ureq-http-client = "0.6"
-# wacore = "0.6"
-# waproto = "0.6"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+# whatsapp-rust-sqlite-storage = "0.7"
+# whatsapp-rust-tokio-transport = "0.7"
+# whatsapp-rust-ureq-http-client = "0.7"
+# wacore = "0.7"
+# waproto = "0.7"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```toml Stable Rust
 [dependencies]
-whatsapp-rust = { version = "0.6", default-features = false, features = [
+whatsapp-rust = { version = "0.7", default-features = false, features = [
     "sqlite-storage",
     "tokio-transport",
     "tokio-runtime",
@@ -78,8 +79,8 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
     "tokio-native",
     "signal",
 ] }
-wacore = { version = "0.6", default-features = false }
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+wacore = { version = "0.7", default-features = false }
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 </CodeGroup>
@@ -100,14 +101,16 @@ whatsapp-rust supports several optional features:
 | `tracing` | Emit `tracing` spans/events across connect, send, receive, IQ, app state, pairing, media, and session flows. See [Observability](/advanced/observability) | ❌ No |
 | `tracing-pii` | Render raw phone numbers in `tracing` fields instead of redacted `pn#<token>`. Local debugging only — never enable in production | ❌ No |
 | `metrics` | Emit `wa_*` counters, histograms, and gauges through the [`metrics`](https://docs.rs/metrics) facade for Prometheus/OTLP dashboards. See [Metrics](/advanced/metrics) | ❌ No |
-| `client-lifecycle` | Low-level, generation-scoped extension lifecycle seam (`ClientLifecycle`, `ConnectionScope`). Enabled automatically by `plugins`; enable it directly only if you need lifecycle hooks without the full native plugin host. **Requires git source — not in published 0.6** | ❌ No |
-| `plugins` | Build-time native plugin host: type-safe `ClientPlugin` registration through `ClientBuilder`, capability-scoped APIs, and generation-scoped task lifecycle. Enables `client-lifecycle`. **Requires git source — not in published 0.6** (see [Native plugins](/advanced/plugins)) | ❌ No |
-| `voip` | 1:1 voice and video calls, full profile: bundled MLow + libopus codec adapters, codec-neutral H.264 video plane, E2E-SRTP encryption, relay transport. Alias for `voip-mlow` + `voip-libopus`. **Requires git source — not in published 0.6** (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
-| `voip-runtime` | Internal base feature enabled by every `voip-*` feature below (Tokio driver, relay transport, DTLS/SCTP). Not meant to be named directly — pick `voip-encoded` or a codec feature instead. **Requires git source — not in published 0.6** | ❌ No |
-| `voip-encoded` | Narrower `voip` profile: relay transport and encoded-audio boundary only, no bundled codec — supply raw Opus/MLOW packets from your own encoder/decoder. **Requires git source — not in published 0.6** | ❌ No |
-| `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW codec. **Requires git source — not in published 0.6** | ❌ No |
-| `voip-libopus` | `voip-encoded` plus the optional libopus FFI codec adapter. **Requires git source — not in published 0.6** | ❌ No |
+| `client-lifecycle` | Low-level, generation-scoped extension lifecycle seam (`ClientLifecycle`, `ConnectionScope`). Enabled automatically by `plugins`; enable it directly only if you need lifecycle hooks without the full native plugin host | ❌ No |
+| `plugins` | Build-time native plugin host: type-safe `ClientPlugin` registration through `ClientBuilder`, capability-scoped APIs, and generation-scoped task lifecycle. Enables `client-lifecycle` (see [Native plugins](/advanced/plugins)) | ❌ No |
+| `voip` | 1:1 voice and video calls, full profile: bundled MLow + libopus codec adapters, codec-neutral H.264 video plane, E2E-SRTP encryption, relay transport. Alias for `voip-mlow` + `voip-libopus` (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
+| `voip-runtime` | Internal base feature enabled by every `voip-*` feature below (Tokio driver, relay transport, DTLS/SCTP). Not meant to be named directly — pick `voip-encoded` or a codec feature instead | ❌ No |
+| `voip-encoded` | Narrower `voip` profile: relay transport and encoded-audio boundary only, no bundled codec — supply raw Opus/MLOW packets from your own encoder/decoder | ❌ No |
+| `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW codec | ❌ No |
+| `voip-libopus` | `voip-encoded` plus the optional libopus FFI codec adapter | ❌ No |
+| `legacy-session-interop` | Typed interop with the decoded legacy libsignal `SessionRecord` v1 model, for migrating externally produced auth state. See [Signal Protocol](/advanced/signal-protocol) | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
+| `danger-skip-cert-chain-verify` | Skip the Noise handshake certificate-chain check (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
 
 <Tip>
@@ -124,7 +127,7 @@ To use whatsapp-rust in a WASM browser environment, enable the `js` feature on `
 
 ```toml Cargo.toml
 [dependencies]
-wacore = { version = "0.6", default-features = false, features = ["js"] }
+wacore = { version = "0.7", default-features = false, features = ["js"] }
 ```
 
 The `waproto` crate has its own feature flags:
@@ -139,7 +142,7 @@ The `waproto` crate has its own feature flags:
 
 ```toml Cargo.toml
 [dependencies]
-waproto = { version = "0.6", features = ["serde-snake-case"] }
+waproto = { version = "0.7", features = ["serde-snake-case"] }
 ```
 
 The `whatsapp-rust-sqlite-storage` crate has its own feature flags:
@@ -152,7 +155,7 @@ To use a system-installed SQLite instead of the bundled version:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-sqlite-storage = { version = "0.6", default-features = false }
+whatsapp-rust-sqlite-storage = { version = "0.7", default-features = false }
 ```
 
 The optional `whatsapp-rust-chat-store` crate — an event-sourced SQLite chat/message history store, not re-exported through `whatsapp-rust` — has its own feature flag:
@@ -161,16 +164,24 @@ The optional `whatsapp-rust-chat-store` crate — an event-sourced SQLite chat/m
 |---------|-------------|-----------------|
 | `search` | SQLite FTS5 full-text message search | ❌ No |
 
+<Note>
+  This crate is **not published to crates.io** — its schema and query surface are still moving, and publishing would pin both. Depend on the git source until it is released, and move `whatsapp-rust` and `whatsapp-rust-sqlite-storage` to the **same** git revision. A registry copy and a git copy of `whatsapp-rust-sqlite-storage` are two distinct crates to Cargo, and `ChatStore::new` would reject the `SqliteStore` from the other one — so the registry snippets above don't mix with this one.
+</Note>
+
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-chat-store = "0.1"
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
 ```
 
 To enable full-text search, turn on the `search` feature:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust-chat-store = { version = "0.1", features = ["search"] }
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["search"] }
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
 ```
 
 See [Chat Store](/api/chat-store) for the full API.
@@ -181,14 +192,14 @@ See [Chat Store](/api/chat-store) for the full API.
 
 ## Using stable Rust
 
-By default, whatsapp-rust uses Rust **edition 2024** and enables the `simd` feature, which uses Rust's `portable_simd` API for optimized binary protocol encoding/decoding. Both of these require a **nightly** Rust toolchain. The project pins `nightly-2026-04-05` via `rust-toolchain.toml`.
+whatsapp-rust uses Rust **edition 2024** and declares an MSRV of **1.94**, both of which stable Rust supports. The one nightly-only piece is the default `simd` feature, which uses Rust's unstable `portable_simd` API for optimized binary protocol encoding/decoding. The project itself pins `nightly-2026-06-16` via `rust-toolchain.toml`.
 
 To compile on **stable Rust**, disable the `simd` feature by setting `default-features = false`. You must do this on **both** `whatsapp-rust` and `wacore` — otherwise Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) will re-enable SIMD through the `wacore` dependency:
 
 ```toml Cargo.toml
 [dependencies]
 # Disable defaults (removes `simd`), then re-enable everything else
-whatsapp-rust = { version = "0.6", default-features = false, features = [
+whatsapp-rust = { version = "0.7", default-features = false, features = [
     "sqlite-storage",
     "tokio-transport",
     "tokio-runtime",
@@ -198,14 +209,14 @@ whatsapp-rust = { version = "0.6", default-features = false, features = [
 ] }
 # wacore also needs default-features = false to prevent feature unification
 # from re-enabling simd
-wacore = { version = "0.6", default-features = false }
+wacore = { version = "0.7", default-features = false }
 
 # These crates have no SIMD dependency — no changes needed
-whatsapp-rust-sqlite-storage = "0.6"
-whatsapp-rust-tokio-transport = "0.6"
-whatsapp-rust-ureq-http-client = "0.6"
-waproto = "0.6"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread"] }
+whatsapp-rust-sqlite-storage = "0.7"
+whatsapp-rust-tokio-transport = "0.7"
+whatsapp-rust-ureq-http-client = "0.7"
+waproto = "0.7"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
 
 <Warning>
@@ -230,7 +241,7 @@ If you want to use only specific features:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust = { version = "0.6", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
+whatsapp-rust = { version = "0.7", default-features = false, features = ["sqlite-storage", "tokio-transport"] }
 ```
 
 ## Verify installation
@@ -265,7 +276,7 @@ Pull from GitHub Container Registry — a single manifest resolves to `linux/amd
 docker pull ghcr.io/oxidezap/whatsapp-rust:latest
 ```
 
-Tagged releases are also available (e.g. `ghcr.io/oxidezap/whatsapp-rust:0.6.0`). The image is published on every push to `main`, on `v*` tags, and can be triggered manually via the Actions tab.
+Tagged releases are also available (e.g. `ghcr.io/oxidezap/whatsapp-rust:0.7.0`). The image is published on every push to `main`, on `v*` tags, and can be triggered manually via the Actions tab.
 
 ### Build from source
 

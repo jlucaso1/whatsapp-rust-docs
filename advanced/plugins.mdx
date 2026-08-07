@@ -17,20 +17,11 @@ The plugin host is intentionally native-only today: it is trusted in-process Rus
 
 Native plugins live behind the opt-in `plugins` feature, which also enables the lower-level `client-lifecycle` feature.
 
-<Warning>
-  The `plugins` feature landed on `main` with [PR #1061](https://github.com/oxidezap/whatsapp-rust/pull/1061) and will be included in the next published release. Until then, depend on the git source:
-</Warning>
+`plugins` ships in the published crate as of **0.7.0** — no git source needed:
 
 ```toml Cargo.toml
 [dependencies]
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", features = ["plugins"] }
-```
-
-Once a release that includes `plugins` is published, you can switch to the version form:
-
-```toml Cargo.toml
-[dependencies]
-whatsapp-rust = { version = "0.7", features = ["plugins"] }  # update when released
+whatsapp-rust = { version = "0.7", features = ["plugins"] }
 ```
 
 A default build has neither plugin fields nor their runtime branches. If you're implementing a plugin directly in your application, enable `plugins` there. If you're publishing a reusable plugin crate, enable `plugins` on its own `whatsapp-rust` dependency instead — Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) then activates the host for any application that depends on your crate, so its `Cargo.toml` doesn't need to enable `plugins` itself.

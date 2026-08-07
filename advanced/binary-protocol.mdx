@@ -696,12 +696,12 @@ Location: `wacore/binary/src/decoder.rs`
 
 ```rust
 pub struct OwnedNodeRef {
-    inner: Yoke<NodeRef<'static>, Vec<u8>>,
+    inner: Yoke<NodeRef<'static>, Bytes>,
 }
 
 impl OwnedNodeRef {
     /// Decode a node from an owned buffer.
-    pub fn new(buffer: Vec<u8>) -> Result<Self>;
+    pub fn new(buffer: impl Into<Bytes>) -> Result<Self>;
 
     /// Access the borrowed node.
     pub fn get(&self) -> &NodeRef<'_>;
@@ -709,12 +709,17 @@ impl OwnedNodeRef {
     /// Convert to an owned Node (allocates — use sparingly).
     pub fn to_owned_node(&self) -> Node;
 
+    /// The whole backing buffer, verbatim: exactly what `new` consumed.
+    pub fn backing_bytes(&self) -> Bytes;
+
     // Convenience accessors: tag(), attrs(), get_attr(),
-    // children(), get_optional_child(), content_bytes(), etc.
+    // children(), get_optional_child(), content_bytes(), slice_bytes(), etc.
 }
 ```
 
 Received stanzas flow through the system as `Arc<OwnedNodeRef>`, giving handlers cheap shared access to the zero-copy decoded node. The `to_owned_node()` method is available as an escape hatch when you need a fully owned `Node`, but it allocates all strings and bytes — defeating the zero-copy benefit.
+
+`backing_bytes()` goes the other direction: it hands back the entire decoded buffer as a `Bytes` — a refcount bump into the same allocation `slice_bytes()` already views into, not a copy. It returns exactly what was passed to `new()` — the buffer after decompression, past the leading format byte `unpack` already strips. That's not necessarily the raw bytes as they arrived on the wire. Use it when you need to forward that buffer onward — to another process, a recording, a replay harness — instead of reading it. Re-encoding via `marshal_ref` is the alternative, and a worse one here: it costs a second pass over the tree, and it's only byte-faithful while the token dictionaries match the ones that decoded the node. `backing_bytes()` has no such dependency; it stays true regardless of what the dictionaries do.
 
 Location: `wacore/binary/src/node.rs:594-693`
 

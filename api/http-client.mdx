@@ -313,16 +313,17 @@ See [custom backends — proxy and custom TLS](/guides/custom-backends#proxy-and
 
 ### Sharing one client across many sessions
 
-If your process runs many WhatsApp sessions, build **one** `UreqHttpClient` and hand a clone to each `BotBuilder::with_http_client` rather than constructing one per session. `UreqHttpClient` is `Clone`, and cloning it shares the underlying `ureq::Agent` — and therefore its connection pool — instead of copying it.
+If your process runs many WhatsApp sessions, build **one** `UreqHttpClient` and hand a clone to each `BotBuilder::with_http_client` instead of constructing one per session. `UreqHttpClient` is `Clone`. Cloning it shares the underlying `ureq::Agent` — and therefore its connection pool — rather than copying it.
 
-This is worth doing because `Client::connect()` fetches `https://web.whatsapp.com/sw.js` to check for a version update unless you've set `with_version` or the cached version is under 24h old, so a session opens a pooled TLS connection on connect even if it never touches media. ureq keeps that connection idle rather than closing it, at roughly 98 KiB per client. Sharing one agent across sessions pays that cost once for the whole process instead of once per session — worthwhile from roughly ten concurrent sessions up.
+Share the client because `Client::connect()` fetches `https://web.whatsapp.com/sw.js` to check for a version update, unless you've set `with_version` or the cached version is under 24h old. Each session that connects opens a pooled TLS connection this way, even if it never touches media. ureq keeps that connection idle instead of closing it, at roughly 98 KiB per client — a measured figure for one retained connection, not the same thing as the `resource_report()` pool-cap estimate below (see the note there for why they differ). Share one agent across sessions and you pay that cost once for the whole process instead of once per session, which is worth doing from roughly ten concurrent sessions up.
 
-This is safe to share: `sw.js` is unauthenticated and identical for every session, and media requests carry their own auth per request, so a shared connection doesn't leak anything between sessions that the shared source IP doesn't already reveal. Concurrency isn't affected either — ureq opens a new connection whenever no idle one matches the target host, so the pool only caps how many idle connections are *retained*, not how many requests can run at once.
+You can share the connection safely. `sw.js` is unauthenticated and identical for every session, and media requests carry their own auth per request, so a shared connection doesn't leak anything between sessions beyond what the shared source IP already reveals. Sharing doesn't limit concurrency either: ureq opens a new connection whenever no idle one matches the target host, so the pool only caps how many idle connections it retains, not how many requests can run at once.
 
 ```rust
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
 let shared_http_client = UreqHttpClient::new();
+let mut handles = Vec::new();
 
 for backend in session_backends {
     let bot = Bot::builder()
@@ -331,6 +332,10 @@ for backend in session_backends {
         // ...
         .build()
         .await?;
+
+    // spawn() runs the bot in the background and returns a BotHandle;
+    // keep it so the handle (and the task it tracks) isn't dropped.
+    handles.push(bot.spawn());
 }
 ```
 
@@ -447,7 +452,9 @@ let agent: ureq::Agent = Config::builder()
     .into();
 ```
 
-`UreqHttpClient::new()` (the default agent) tracks whether it has ever dispatched a request it could actually send. Before that, `resource_report()` reports `pool_connections: Some(0)`, `pool_buffer_bytes: Some(0)`, `inflight_bytes: None` — ureq allocates its buffers per connection, not per agent, so a client that has never connected really does hold an empty pool. Once a request has gone out, it reports the cap instead: up to 3 idle connections, each with a 16 KiB input and 16 KiB output buffer, so `pool_connections: Some(3)`, `pool_buffer_bytes: Some(96 * 1024)`. That cap is an upper bound estimate, not a live measurement, and it stays set even if every subsequent request fails — a failed or redirected request still opens (or reuses) a connection, so the pool is no longer provably empty. "Dispatched" is decided *before* the request goes on the wire — a request ureq itself refuses to build (an unsupported method, a malformed URI, or a header it rejects) never flips the flag. Cloning a client shares the underlying `ureq::Agent` and therefore its pool, so a request made through one clone is reflected in every other clone's `resource_report()`. `UreqHttpClient::with_agent(...)` (a caller-supplied agent) reports `None` throughout — its buffer and pool configuration is opaque, and since every clone of that agent shares one pool it may already have connected before reaching this client, so an empty pool isn't a safe guess either.
+`UreqHttpClient::new()` (the default agent) tracks whether it has ever dispatched a request it could actually send. Before that, `resource_report()` reports `pool_connections: Some(0)`, `pool_buffer_bytes: Some(0)`, `inflight_bytes: None` — ureq allocates its buffers per connection, not per agent, so a client that has never connected really does hold an empty pool. Once a request has gone out, it reports the cap instead: up to 3 idle connections, each with a 16 KiB input and 16 KiB output buffer, so `pool_connections: Some(3)`, `pool_buffer_bytes: Some(96 * 1024)`. That cap is an upper bound estimate, not a live measurement, and it stays set even if every subsequent request fails — a failed or redirected request still opens (or reuses) a connection, so the pool is no longer provably empty. "Dispatched" is decided *before* the request goes on the wire — a request ureq itself refuses to build (an unsupported method, a malformed URI, or a header it rejects) never flips the flag. `UreqHttpClient::with_agent(...)` (a caller-supplied agent) reports `None` throughout — its buffer and pool configuration is opaque, and since every clone of that agent shares one pool it may already have connected before reaching this client, so an empty pool isn't a safe guess either.
+
+Cloning a client shares the underlying `ureq::Agent` and therefore its pool: a request made through one clone is reflected in every other clone's `resource_report()`, including clones held by other sessions when you've [shared one client across many sessions](#sharing-one-client-across-many-sessions). `pool_connections` and `pool_buffer_bytes` describe that one shared pool, not a per-session allocation. If you sum `Client::resource_report().await.http` across sessions that share a client, sum it once for the shared agent instead of once per session — otherwise you count the same pool N times over.
 
 ureq 3.3 treats any 4xx/5xx as `ureq::Error::StatusCode` by default — the opposite of the `HttpClient` contract above. `UreqHttpClient` sends every request through `status_as_response`, which disables `http_status_as_error` **per request** instead of once on the shared agent. That placement matters: a caller-supplied agent from [`with_agent`](#with_agent) carries ureq's own defaults, not `UreqHttpClient`'s, so only a per-request override reaches it too:
 

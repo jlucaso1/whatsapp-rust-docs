@@ -750,3 +750,1477 @@ Rather than distributing the sender key to all group devices on every message, t
 1. Loads the per-device sender key map — first checking the in-memory cache, falling back to the database via `get_sender_key_devices`
 2. Resolves all current group participant devices
 3. Computes the diff — only devices with `has_key=false` or not yet tracked receive the SKDM
+4. Passes the targeted device list to `prepare_group_stanza` via the `skdm_target_devices` parameter
+
+<Note>
+On the **first** group send (or any send where the cached map is empty), the filter still runs unconditionally — every resolved participant device is treated as `has_key=false` and receives the SKDM. This matches WhatsApp Web, which iterates an empty `senderKey` Map as `false` per participant. There is no early-exit for an empty cache; otherwise the very first message after a fresh start would skip distribution entirely.
+</Note>
+
+<Note>
+**Own devices are never marked `has_key=true` ([#999](https://github.com/oxidezap/whatsapp-rust/pull/999)).** The post-ACK warm mark excludes the account's own companion devices, matching WhatsApp Web's `!isMeDevice` guard on `markHasSenderKey`. They therefore never leave the "not yet tracked" bucket above and are re-included as SKDM targets on every send — see the follow-up note under ["Parallelized group encrypt fan-out"](#parallelized-group-encrypt-fan-out) for why. External group members are unaffected: a successful distribution still marks them warm.
+</Note>
+
+Location: `src/send.rs`, `src/client/sender_keys.rs`, `wacore/src/send.rs`
+
+### Parallelized group encrypt fan-out
+
+The group send path no longer serializes encryption behind a client-level lock. `prepare_group_stanza` and `encrypt_for_devices` now take an explicit `&runtime` handle (`&*self.runtime`) so per-device encryption can run on `runtime::blocking()` tasks concurrently. Combined with the move to `update_device_lists` (batched device-registry writes) and a no-lock `IdentityAdapter::is_trusted_identity` stub, group fan-out scales with the runtime's worker count rather than with a single critical section.
+
+This is an internal performance change — no public method on `Client::send_message` was renamed, and the order of `<to>` children in the resulting stanza is unchanged. If you implemented a custom `SignalStore`, note that `update_device_lists(records: Vec<DeviceListRecord>)` is now part of the trait so the fan-out can batch its writes.
+
+<Note>
+While *per-device* encryption runs concurrently, the sender-key chain is protected by **two separate locks per `(group, sender)` pair**:
+
+1. **Session-setup lock** (`SenderKeyStore::session_setup_lock`) — held only across `ensure_sessions_for_devices` (prekey fetch + X3DH). May span network I/O. Warm sends (no SKDM needed) never take it, so they are never blocked by a cold send's network round-trip.
+
+2. **Chain lock** (`SenderKeyStore::sender_key_lock`) — held across SKDM creation + pairwise encrypt fan-out + `skmsg` encrypt. Pure CPU; never spans network I/O. This is the invariant that prevents two concurrent sends from splitting the key between the SKDM and the `skmsg`.
+
+Prior to [#807](https://github.com/oxidezap/whatsapp-rust/pull/807), a single chain lock covered both phases, causing concurrent group sends to serialize behind a server round-trip whenever a new session needed to be established. Now only the CPU phase is in the critical section. Different groups (or different senders) encrypt fully in parallel, unchanged.
+
+`encrypt_for_devices` is composed of two public halves: `ensure_sessions_for_devices` (network, returns `SessionPlan`) and `encrypt_for_devices_with_sessions` (CPU, consumes `SessionPlan`). The DM path calls `encrypt_for_devices` unchanged; the group path calls them separately with the chain lock taken only around the second.
+</Note>
+
+<Note>
+**Per-device session lock around the SKDM fan-out (v0.6).** The chain lock above only serializes the sender-key chain — it does not cover the *pairwise* Signal sessions that `encrypt_for_devices_with_sessions` mutates for each SKDM target device. Those are the same pairwise sessions the DM path locks (see "DM per-device locking" under [Single-allocation session lock keys](#single-allocation-session-lock-keys) below) via `session_lock_for()` / `session_guards_for()`. Before [#990](https://github.com/oxidezap/whatsapp-rust/pull/990), the group fan-out held only the chain lock, a disjoint key, so a concurrent DM (or another group send) sharing a device could race that device's pairwise ratchet — both sides load chain index *N* and both store *N+1*, silently dropping one advance. When the lost advance carried the SKDM, that member never received the sender key and every subsequent `skmsg` stayed undecryptable for it until a retry re-distributed.
+
+`prepare_group_stanza` now acquires the SKDM targets' per-device session locks through `SendContextResolver::lock_device_sessions()` before taking the chain lock, and releases them right after the fan-out — the `skmsg` chain encrypt that follows only touches the sender-key chain, never a pairwise session. The `Client` implementation of this hook reuses `build_session_lock_keys()` + `session_guards_for()`, so the group and DM paths serialize on the exact same mutexes, in the same sorted order, and always acquire session locks before the chain lock — no path takes the reverse order, so this cannot deadlock. The hook defaults to a no-op, so a custom `SendContextResolver` (as used in tests and benches) is unaffected unless it opts in.
+</Note>
+
+<Note>
+**Session-setup failures are isolated per device (v0.6).** `ensure_sessions_for_devices` used to abort with `Err` the moment `process_prekey_bundle` failed for *any* one target device. Since `prepare_group_stanza` gates the entire SKDM fan-out on `session_plan.is_some()`, one device's X3DH failure nulled the plan and **every** device in the cohort — not just the failing one — got no SKDM, even though the `skmsg` still shipped and the phash covered the full set. An external member recovers via a retry receipt, but an own companion's retry hits `mark_forget_sender_key` with `exclude_own_devices=true`, which filters own-user JIDs and returns early — so that companion stayed `has_key=true` forever and couldn't decrypt the group from that device until an unrelated full rotation (participant removal or PN↔LID migration).
+
+As of [#996](https://github.com/oxidezap/whatsapp-rust/pull/996), a device whose session setup fails is logged and skipped rather than aborting the plan — matching WhatsApp Web's `GroupKeyDistributionMsg`, which wraps each device's `ensureE2ESessions` in its own try/catch and drops only the failing one. The sessionless device is then naturally excluded by the encrypt fan-out (which already skips devices without a session), so every other device still receives its pairwise SKDM.
+
+[#996](https://github.com/oxidezap/whatsapp-rust/pull/996) closed the primary harm — an *unrelated* device's setup failure no longer suppresses the whole cohort's SKDM. A narrower window remained: the **warm mark** (`update_sender_key_devices`, called after the server ACK) recorded the *full* distribution target as `has_key=true`, including our own companion devices, regardless of whether each one's pairwise SKDM encryption actually succeeded. Since the forget path (`mark_forget_sender_key`) excludes own devices for the reason above, an own companion whose one SKDM encryption failed — or that was warm-marked without ever receiving a node — was marked warm and could **never** be un-marked: a permanent orphan until an unrelated full rotation. External devices didn't have this problem; they recover through the retry-receipt forget path.
+
+[#999](https://github.com/oxidezap/whatsapp-rust/pull/999) closes this residual by excluding own devices from the warm mark too (`exclude_own_devices=true`), mirroring WhatsApp Web's `ParticipantStore` helper, which guards *both* `markHasSenderKey` and `markForgetSenderKey` with the same `!isMeDevice` check. Own companions are therefore never memoized as `has_key=true` — `filter_skdm_targets` (["Per-device sender key tracking → Incremental targeting"](#per-device-sender-key-tracking) above) always re-includes them, so they get a fresh SKDM on every group send. This is a deliberate trade-off (a few extra pairwise SKDM nodes per send when the account has companions) in exchange for making the orphan impossible. External devices are unaffected: a successful distribution still marks them warm, and the retry-receipt path still repairs any that go stale.
+</Note>
+
+<Note>
+**The group distribution lane now guards the full audit-reset-redistribute sequence, not just the SKDM fan-out ([#1043](https://github.com/oxidezap/whatsapp-rust/pull/1043)).** Previously `Client::group_distribution_lock()` (see ["Parallelized group encrypt fan-out"](#parallelized-group-encrypt-fan-out) above) was taken only around the cold SKDM send itself. Sender-key deletion (participant-removal rotation, forced own-key rotation), per-device tracker resets, and the status-broadcast distribution path could run concurrently with that lock held elsewhere, letting an encrypt racing a rotation restore a retired key after deletion, or a tracker reset race stale delivery marks back onto a new chain.
+
+`rotate_sender_key_on_participant_remove`, `force_rotate_own_sender_key` (now taking `&Jid` instead of a pre-stringified group ID), warm group sends, status sends, phash-mismatch recovery, and periodic sender-key rotation all now hold the same per-group lane across their own-key delete/reset and the following redistribution. A rotation that arrives while a send is mid-fan-out waits for the lane instead of deleting the chain state out from under it; a send that arrives mid-rotation waits for the rotation to finish before re-auditing device state. Held lanes are never capacity-evicted, so a live rotation or fan-out cannot be silently dropped from the map mid-operation (see `group_distribution_locks_capacity` in the [Cache Configuration reference](/api/bot#cache-configuration-reference)).
+</Note>
+
+<Note>
+**Sender-key tracker resets are DB-first ([#1043](https://github.com/oxidezap/whatsapp-rust/pull/1043)).** `reset_sender_key_device_tracking` replaces the old direct `clear_sender_key_devices` + cache-invalidate call at every rotation and redistribution site. It clears the per-device tracking row-by-row in the database first, and only invalidates the in-memory `SenderKeyDeviceCache` after that durable clear succeeds. If the DB clear fails, every existing tracked row is instead marked cold (`has_key=false`) as a fallback so the next send still re-distributes; if that fallback write also fails, the operation returns an error and the send stays fail-closed rather than risking a stale `has_key=true` row surviving onto a freshly rotated chain.
+
+The unknown-participant rotation in [retry receipt handling](/advanced/retry-admission) is a special case: `handle_retry_receipt` deletes the own sender key and resets tracking for a `<receipt type="retry">` from an unrecognized group participant, then must still fall through to the per-chat resend rate limiter and other throttles further down the same function. The signal cache is now explicitly flushed right after the rotation — before any later throttle can return early — so a rotation is never left un-persisted by an unrelated early exit later in the same call.
+</Note>
+
+<Note>
+**Observability: distribution-lane pressure is exposed on `memory_report()` ([#1043](https://github.com/oxidezap/whatsapp-rust/pull/1043)).** `Client::memory_report()` now reports `group_distribution_locks` (live lane count), `group_distribution_lock_evictions` (cumulative cold evictions), and `group_distribution_lock_eviction_blocks` (cumulative evictions skipped because the lane was live) — see [`memory_report()`](/api/client#memory_report). These update only under capacity pressure and add no allocation or per-message cost below the soft cap.
+</Note>
+
+### In-memory sender key device cache
+
+The `SenderKeyDeviceCache` provides an in-memory caching layer over the per-device sender key tracking data stored in the database. Without this cache, every group send would require a database round-trip to load the sender key device map — the cache eliminates that overhead after the first load for each group.
+
+```rust
+pub(crate) struct SenderKeyDeviceCache {
+    inner: Cache<String, Arc<SenderKeyDeviceMap>>,
+}
+```
+
+**Key design decisions:**
+
+- **Time-to-idle eviction:** The cache uses TTI semantics (default: 1 hour, 500 entries), so entries for inactive groups are automatically evicted while frequently-used groups stay cached
+- **Pre-parsed, pre-indexed maps:** Database rows are parsed into a `SenderKeyDeviceMap` struct that provides O(1) lookups by user and device ID, avoiding per-query string parsing
+- **Single-flight initialization:** The `get_or_init` method uses `PortableCache`'s single-flight `get_with` — if multiple concurrent group sends for the same group trigger a cache miss simultaneously, only one database read executes and all callers share the result
+- **Explicit invalidation:** The cache is invalidated when sender key state changes (rotation, error recovery, retry failures) so stale data is never served
+
+```rust
+// Atomic get-or-init: concurrent callers for the same group
+// share the single database read result
+let cached_map = self
+    .sender_key_device_cache
+    .get_or_init(group_jid, async {
+        let db_rows = pm.get_sender_key_devices(group_jid).await.unwrap_or_default();
+        Arc::new(SenderKeyDeviceMap::from_db_rows(&db_rows))
+    })
+    .await;
+```
+
+**`SenderKeyDeviceMap` structure:**
+
+The `SenderKeyDeviceMap` pre-parses JID strings from the database into a user-to-devices HashMap for efficient lookup:
+
+```rust
+pub(crate) struct SenderKeyDeviceMap {
+    /// user → (device_id → has_key)
+    devices: HashMap<Arc<str>, HashMap<u16, bool>>,
+    /// Users with at least one has_key=false device
+    forgotten_users: HashSet<Arc<str>>,
+}
+```
+
+**Cache invalidation points:**
+
+| Event | Action |
+|-------|--------|
+| Sender key rotation (`rotateKey`) | Invalidate group entry |
+| `NoSenderKeyState` error during send | Invalidate group entry |
+| Retry failure for a group message | Invalidate group entry |
+| Server rejects group stanza | Invalidate group entry |
+| New device added (`patch_device_add`) | Invalidate all entries |
+| Device removed (`patch_device_remove`) | Invalidate all entries |
+| Identity change (`clear_device_record`) | No global tracker wipe — per-device SKDM redistribution is driven by retry receipts (`markForgetSenderKey`), matching WhatsApp Web's `WAWebUpdateLocalSignalSession`. The `status@broadcast` sender key is still deleted for forward secrecy. |
+
+You can tune the cache capacity and TTI via the `sender_key_devices_cache` field in [`CacheConfig`](/api/bot#cache-configuration-reference).
+
+Location: `src/sender_key_device_cache.rs`, `src/send.rs`
+
+### Phash validation for stale device list detection
+
+When sending group, status, or DM messages, the library validates the participant hash (`phash`) returned in the server's acknowledgment against the locally computed `phash`. A mismatch indicates that the server's view of participant devices differs from the client's — meaning the local device list is stale.
+
+**How it works:**
+
+1. Before sending, the client obtains the locally computed `phash` — from the stanza `phash` attribute for group/status messages, or from `PreparedDmStanza.phash` for DMs
+2. A `PhashWaiter` (expected hash, target JID, whether to also invalidate the group cache) is registered for the message ID via `register_phash_waiter` — a map entry, not a channel or a task
+3. The message stanza is sent to the server
+4. When the server's ack for that message ID arrives, the read loop compares its `phash` attribute against the expected value inline, with no task involved
+5. On a match the entry is just dropped; on a mismatch the client spawns a task to invalidate caches — so a send only pays for a task in the uncommon case, not on every send ([#1116](https://github.com/oxidezap/whatsapp-rust/pull/1116))
+
+**On mismatch, the following caches are invalidated:**
+
+| Send path | Sender key device cache | Group info cache | Device registry |
+|-----------|------------------------|-----------------|----------------|
+| Group messages | Invalidated | Invalidated | — |
+| Status messages | Invalidated | Not invalidated | — |
+| DM messages | — | — | Recipient + own PN devices invalidated |
+
+For DM messages, the phash covers both recipient and own devices (matching WA Web's `syncDeviceListJob([recipient, me])`). On mismatch, the client invalidates the device registry cache for both the recipient's user JID and your own phone number (PN) JID, ensuring the next send re-fetches the current device list for both parties.
+
+```rust
+// src/send.rs — simplified phash validation flow
+
+// Group/status path: phash from stanza attribute
+let our_phash = stanza.attrs().optional_string("phash").map(|s| s.into_owned());
+
+// DM path: phash from PreparedDmStanza (not on the wire)
+let dm_phash = prepared.phash;
+
+// On DM phash mismatch:
+if !jid.is_group() && !jid.is_status_broadcast() {
+    client.invalidate_device_cache(&jid.user).await;
+    if let Some(own_pn) = &client.persistence_manager.get_device_snapshot().pn {
+        client.invalidate_device_cache(&own_pn.user).await;
+    }
+}
+```
+
+<Note>
+The phash check never blocks the send path. If the server's ack never arrives, nothing polls the waiter directly — it is swept out on the keepalive tick, and is guaranteed to survive the sweep immediately following its registration (so a waiter is never dropped mid-flight) but is removed on the sweep after that. Since each keepalive tick lands 15–30 seconds after the last, the actual time-to-live is roughly one to two tick intervals — about 15 to 60 seconds, depending on where registration falls relative to the sweep cycle — rather than the old fixed 10-second timeout. The sweep runs before keepalive's own idle early-return, so a connection with steady inbound traffic — which skips sending pings — still gets its stale waiters cleared; a stranded waiter would otherwise read as an outstanding IQ and suppress pings for the life of the connection. This matches WhatsApp Web's approach of using phash as a best-effort staleness detector rather than a hard requirement.
+</Note>
+
+#### WA Web phash parity (v0.6)
+
+Two corrections aligned the group phash with WA Web's `phashV2`:
+
+- **Full device set, every send.** The group phash is now computed over the *complete* resolved participant device set plus the sending device on every send — not just the devices that received an SKDM in that stanza. Warm sends (which distribute no new SKDM) now pass the full resolved set via the `all_devices_for_phash` parameter to `prepare_group_stanza`, so the phash matches the server's view even when the SKDM target set is empty. Status broadcasts keep their prior phash behavior.
+- **Standard base64 alphabet.** The phash now encodes with the standard base64 alphabet (`+` / `/`) instead of URL-safe (`-` / `_`), matching WA Web and whatsmeow.
+
+The client also now **persists group metadata** locally after a query and sends the stored participant phash on the next group query, letting the server answer `not-modified` (304) when membership is unchanged — saving a full metadata round-trip.
+
+Location: `src/send.rs`, `src/client.rs`
+
+## Cryptographic Primitives
+
+### AES-256-CBC (message content)
+
+Used for encrypting message bodies in both 1:1 and group messages:
+
+```rust
+pub fn aes_256_cbc_encrypt_into(
+    plaintext: &[u8],
+    key: &[u8],      // 32 bytes
+    iv: &[u8],       // 16 bytes
+    output: &mut Vec<u8>,
+) -> Result<()>
+```
+
+Location: `wacore/libsignal/src/crypto/aes_cbc.rs`
+
+### Thread-Local Buffers
+
+The implementation uses thread-local buffers to reduce allocations:
+
+```rust
+thread_local! {
+    static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = ...;
+    static DECRYPTION_BUFFER: RefCell<EncryptionBuffer> = ...;
+}
+
+// Usage in session_cipher.rs:99-111
+let ctext = ENCRYPTION_BUFFER.with(|buffer| {
+    let mut buf_wrapper = buffer.borrow_mut();
+    let buf = buf_wrapper.get_buffer();
+    aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(), 
+                            message_keys.iv(), buf)?;
+    let result = std::mem::take(buf);
+    buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
+    Ok::<Vec<u8>, SignalProtocolError>(result)
+})?;
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:14-54`
+
+### HKDF-SHA256
+
+Used for key derivation in session initialization:
+
+```rust
+pub fn derive_keys(secret_input: &[u8]) -> (RootKey, ChainKey, InitialPQRKey) {
+    let mut secrets = [0; 96];
+    hkdf::Hkdf::<sha2::Sha256>::new(None, secret_input)
+        .expand(b"WhisperText", &mut secrets)
+        .expect("valid length");
+    // Split into RootKey[32], ChainKey[32], PQRKey[32]
+}
+```
+
+Location: `wacore/libsignal/src/protocol/ratchet.rs:18-39`
+
+### X25519 key agreement
+
+`calculate_agreement` runs during session setup, and again whenever the session performs a DH ratchet step — when an incoming message carries a remote ratchet key the local session hasn't chained on yet. `get_or_create_chain_key` calls `RootKey::create_chain` once to derive the new receiving chain; `DeferredSenderRatchet::apply` then calls it a second time, with a freshly generated local key, to derive the new sending chain. Each `create_chain` call performs exactly one agreement, so a single DH ratchet step costs two. Messages within an already-open chain advance via `ChainKey::step_with_message_keys` instead, which costs none.
+
+```rust
+pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError>
+```
+
+Location: `wacore/libsignal/src/core/curve.rs`
+
+As of PR #1218, `calculate_agreement` routes through `SignalCryptoProvider::x25519_agreement`. AES-256-CBC above uses the same pluggable crypto-provider hook; HKDF-SHA256 does not — it always calls `hkdf::Hkdf` directly. Override the hook with `set_crypto_provider` (`wacore/libsignal/src/crypto/provider.rs`) to run the agreement on another backend. The default is this crate's own implementation, and it cannot fail.
+
+If you install a backend that can refuse the operation, you see the refusal as `CurveError::AgreementFailed`. Through `SignalProtocolError`, it reaches you as `KeyAgreementFailed`. The decrypt path treats a refusal as a local failure, not message corruption: it takes priority over the MAC-based verdicts (`InvalidMessage`, `BadMac`).
+
+<Note>
+Call `set_crypto_provider` before any crypto call, key agreement included. The provider installs once — a call made after the default provider has already initialized returns an error instead of replacing it.
+</Note>
+
+## PreKey Management
+
+Pre-keys enable asynchronous session establishment in the Signal Protocol. whatsapp-rust manages pre-key generation and upload to match WhatsApp Web's behavior.
+
+### Configuration
+
+The per-batch upload count is configurable through the builder/factory API (default `812`, matching WhatsApp Web's `UPLOAD_KEYS_COUNT`). The upload-trigger threshold is a private constant.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| [`BotBuilder::with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`Client::set_wanted_pre_key_count`](/api/client#set-wanted-pre-key-count) | 812 | Number of pre-keys generated and uploaded per batch. Clamped to `5..=65_535` at upload time. |
+| `MIN_PRE_KEY_COUNT` (private const) | 5 | Minimum server-side pre-key count before triggering an upload. |
+
+```rust
+// Via the Bot builder
+Bot::builder()
+    .with_wanted_pre_key_count(256) // smaller batches for embedded consumers
+    // ...
+
+// Or directly on a Client constructed by hand (before connect)
+client.set_wanted_pre_key_count(256);
+```
+
+Values outside `[5, 65_535]` are clamped at upload time (an out-of-range value logs a `warn!`). The floor avoids an empty-but-flagged pool or a re-upload loop. The ceiling is the wire-format limit: the upload IQ encodes the pre-key list length as a `u16`, so a larger batch would generate keys locally and then fail to encode.
+
+Per-key X25519 generation and protobuf encoding for the batch are offloaded via `wacore::runtime::blocking` (runtime-agnostic; runs inline on wasm) since the caller-controlled batch size can be large.
+
+### Pre-key ID counter and wrap-around
+
+Pre-key IDs use a persistent monotonic counter (`Device::next_pre_key_id`) that only increases, matching WhatsApp Web's `NEXT_PK_ID` pattern:
+
+```rust
+// Determine starting ID using both the persistent counter AND the store max
+let max_id = backend.get_max_prekey_id().await?;
+let start_id = if device_snapshot.next_pre_key_id > 0 {
+    std::cmp::max(device_snapshot.next_pre_key_id, max_id + 1)
+} else {
+    // Migration: start from MAX(key_id) + 1
+    max_id + 1
+};
+```
+
+This approach prevents ID collisions when pre-keys are consumed non-sequentially from the store.
+
+**24-bit wrap-around:**
+
+WhatsApp Web uses 24-bit pre-key IDs on the wire (3-byte big-endian), so valid IDs range from 1 to 16,777,215 (2^24 − 1). When the persistent counter grows past this boundary, modular arithmetic wraps IDs back into the valid range:
+
+```rust
+const MAX_PREKEY_ID: u32 = 16777215; // 2^24 - 1
+
+// Wrap start ID into valid [1, MAX_PREKEY_ID] range
+let start_id = ((raw_start as u64 - 1) % MAX_PREKEY_ID as u64) as u32 + 1;
+
+// Each key ID in the batch is also wrapped
+let pre_key_id = (((start_id as u64 - 1) + i as u64) % (MAX_PREKEY_ID as u64)) as u32 + 1;
+
+// After upload, the persisted next_pre_key_id wraps too
+let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64)
+    % (MAX_PREKEY_ID as u64)) as u32 + 1;
+```
+
+<Note>
+  If the counter wraps while unconsumed high-ID pre-keys still exist in the store, the database upsert (`ON CONFLICT DO UPDATE`) silently overwrites them. This is an accepted trade-off because the server consumes keys well before a full 16M cycle completes.
+</Note>
+
+Location: `src/prekeys.rs`
+
+### Retry-receipt prekey marking
+
+When building a retry receipt that includes keys (`should_include_keys`), the one-time prekey handed directly to the peer is now also marked uploaded via `mark_single_prekey_uploaded`, matching WhatsApp Web's `markKeyAsUploaded`. Without this, the same prekey ID could be re-offered to the server pool in the next batch upload — a third party fetching the bundle could then consume the identical one-time ID and fail to decrypt.
+
+`mark_single_prekey_uploaded` requires a held `prekey_upload_lock` guard (a compile-time proof, not just a runtime convention) so the get-or-gen and the watermark write are atomic against the batch upload path. It only advances `first_unupload_pre_key_id` when the id being marked is still the current window head (idempotent no-op otherwise), and collapses `next_pre_key_id` onto the wrapped low watermark only when marking the terminal id at the 24-bit edge — a non-terminal high-end head keeps its surviving window key.
+
+The device account is validated **before** the prekey is reserved/marked, so a missing account fails the retry-receipt build without silently abandoning a one-time prekey from the upload window.
+
+Location: `src/prekeys.rs`, `src/retry.rs`
+
+### Force-refreshing pre-keys for device migration
+
+When migrating a device from an external source (e.g., a Baileys session into an `InMemoryBackend`), the server may still hold pre-key IDs whose private key material you cannot reconstruct. Any `pkmsg` referencing those IDs will fail permanently with `InvalidPreKeyId`.
+
+The public `refresh_pre_keys()` method force-uploads a fresh batch of `Client::wanted_pre_key_count()` pre-keys (default 812; tunable via [`with_wanted_pre_key_count`](/api/bot#with-wanted-pre-key-count) / [`set_wanted_pre_key_count`](/api/client#set-wanted-pre-key-count)), giving the server new IDs the caller has locally. Old unmatched IDs drain naturally as peers consume them.
+
+```rust
+// After restoring a session from another library
+client.refresh_pre_keys().await?;
+```
+
+Internally, this acquires `prekey_upload_lock` to prevent races with the count-based and digest-repair upload paths, then calls `upload_pre_keys_with_retry(force: true)` which uses Fibonacci backoff (1s, 2s, 3s, 5s, 8s, ... capped at 610s).
+
+Two related public methods build on the same `prekey_upload_lock`-guarded path:
+
+- `Client::refresh_pre_keys_with_count(count)` — same force-upload as `refresh_pre_keys()`, but with a caller-chosen batch size instead of the configured [`wanted_pre_key_count`](#configuration).
+- `Client::ensure_pre_keys()` — a non-forced check-and-top-up: uploads only if the server-side pool is below the low-water mark, rather than unconditionally replacing it.
+
+Location: `src/prekeys.rs:263-266`
+
+### Digest key validation
+
+After connection, the client validates that the server's copy of the key bundle matches local keys. This matches WhatsApp Web's `WAWebDigestKeyJob.digestKey()` flow.
+
+**Wire format:**
+
+```xml
+<!-- Request -->
+<iq xmlns="encrypt" type="get" to="s.whatsapp.net" id="...">
+  <digest/>
+</iq>
+
+<!-- Response -->
+<iq from="s.whatsapp.net" id="..." type="result">
+  <digest>
+    <registration>[4-byte BE registration ID]</registration>
+    <type>[1-byte: 5]</type>
+    <identity>[32-byte identity public key]</identity>
+    <skey>
+      <id>[3-byte BE signed pre-key ID]</id>
+      <value>[32-byte signed pre-key public]</value>
+      <signature>[64-byte signature]</signature>
+    </skey>
+    <list>
+      <id>[3-byte BE prekey ID]</id>
+      ...
+    </list>
+    <hash>[20-byte SHA-1 hash]</hash>
+  </digest>
+</iq>
+```
+
+**Validation process:**
+
+1. Query the server for the key bundle digest via `DigestKeyBundleSpec`
+2. If the server returns **404** (no record), trigger a full pre-key re-upload
+3. If the server returns **406/503** or other errors, log and skip
+4. On success, compare registration IDs
+5. Load each pre-key referenced by the server and extract its public key
+6. Compute a local SHA-1 digest over: identity public key + signed pre-key public + signed pre-key signature + all pre-key public keys
+7. Compare the local hash against the server-provided hash
+
+<Note>
+  The `<list>` node contains `<id>` children (not `<key>` children). The parser iterates all children of `<list>` without tag filtering, matching WhatsApp Web's `mapChildren` behavior which does not filter by tag name.
+</Note>
+
+<Warning>
+  Hash mismatches or missing local pre-keys are logged but do **not** trigger a re-upload. Only a 404 response (server has no record) triggers re-upload. This matches WhatsApp Web's behavior where `validateLocalKeyBundle` exceptions are caught without re-uploading — the normal [`RotateKeyJob`](#signed-pre-key-rotation-rotatekeyjob) eventually refreshes the signed pre-key.
+</Warning>
+
+<Note>
+  `Client::validate_digest_key()` is a public method — callers can trigger this validation pass on demand instead of only relying on the automatic post-connection check.
+</Note>
+
+Location: `src/prekeys.rs:218-344`, `wacore/src/iq/prekeys.rs:170-302`
+
+### Signed pre-key rotation (RotateKeyJob)
+
+The signed pre-key minted at pairing was otherwise **permanent** — a forward-secrecy gap. whatsapp-rust mirrors WhatsApp Web's `RotateKeyJob`: on a cadence, generate a fresh signed pre-key, upload it, and retain the previous keys so prekey messages already in flight against a rotated-out key still decrypt.
+
+**Cadence:**
+
+- Checked once per connection. Spawned right after the startup pre-key upload during post-login init, so a slow or failing rotation IQ never delays the rest of login.
+- Rotates once `now - last_signed_pre_key_rotation_ms >= SIGNED_PRE_KEY_ROTATION_INTERVAL_MS` (27 days). This matches the interval WA Web's `ROTATE_KEY` task returns to its scheduler (`WAWebTasksDefinitions`, confirmed against a fresh captured WA Web bundle) and is **not** configurable — there is no A/B property behind the value, so a per-client override would only widen the public API for a number the official client hardcodes identically. `rotate_signed_pre_key()` remains the escape hatch for forcing a rotation out of band.
+- A device upgraded in with the field at `0` gets a one-time baseline stamp (`DeviceCommand::SetSignedPreKeyRotationBaseline`) instead of rotating immediately, so its first rotation lands a full interval out.
+- Single-flighted via `Client::signed_pre_key_rotation_lock` so overlapping post-login tasks (from reconnect churn) can't run the rotate/upload/prune sequence concurrently; a losing task just no-ops for that check.
+
+<Note>
+  Prior to [whatsapp-rust#1237](https://github.com/oxidezap/whatsapp-rust/pull/1237) the interval was 7 days. Production logs showed every observed `InvalidSignedPreKeyId` decrypt failure falling inside the 21-day decrypt window (`SIGNED_PRE_KEY_RETENTION * interval`) that cadence produced — the shortest window of WA Web, zapo, and whatsapp-rust despite whatsapp-rust retaining three keys where zapo retains one. Widening the interval to 27 days quadruples the window to 81 days at unchanged storage cost (the three retained records cost 555 bytes regardless of cadence) and a quarter of the rotation IQs, device-state writes, and keypair generations per year.
+</Note>
+
+**Retention:** `SIGNED_PRE_KEY_RETENTION` stays at 3 (the current key plus the 2 most recent rotated-out keys). WA Web never prunes signed pre-keys at all — the private key stays on disk forever, which buys interop at the cost of the exact forward-secrecy property rotation exists to provide. whatsapp-rust keeps the bound: a key remains addressable for `SIGNED_PRE_KEY_RETENTION * SIGNED_PRE_KEY_ROTATION_INTERVAL_MS` (81 days) counted from when it was minted — that is, for the 2 rotation cycles (54 days) after it is first rotated out — after which its private key is destroyed and any prekey message still naming it gets a retry rather than a decrypt.
+
+**Wire format** (`RotateSignedPreKeySpec`, reuses the upload path's `<skey>` encoder so the two can never drift):
+
+```xml
+<iq xmlns="encrypt" type="set" to="s.whatsapp.net" id="...">
+  <rotate>
+    <skey>
+      <id>[3-byte BE signed pre-key ID]</id>
+      <value>[32-byte signed pre-key public]</value>
+      <signature>[64-byte signature]</signature>
+    </skey>
+  </rotate>
+</iq>
+```
+
+**Rotation sequence** (`Client::rotate_signed_pre_key`):
+
+1. Compute `new_id = current_id + 1`, wrapping to `1` at the 24-bit border (same scheme as one-time pre-key IDs).
+2. Stage the new key pair in the `signed_prekeys` backend table **before** upload — an already-staged candidate for that id is reused verbatim, so a retry after an ambiguous failure re-uploads the exact key the server may have already accepted instead of minting a different one under the same id.
+3. Retain the outgoing (current) key in the backend table **before** upload, so once the server accepts the new key the old id's decrypt window is already durable — no post-acceptance write can strand it.
+4. Upload via the `<rotate>` IQ above.
+5. On success, `DeviceCommand::SetSignedPreKey` atomically installs the new key pair, id, signature, and rotation timestamp. The now-redundant staged copy is dropped, and retained signed pre-keys are pruned (newest-id-first) to `SIGNED_PRE_KEY_RETENTION` (3 total: the current key + the 2 most recent rotated-out keys).
+
+**Error handling** (mirrors WA Web's `RotateKeyJob` ladder; a rotation failure never fails login):
+
+| Response | Candidate | Next attempt |
+|----------|-----------|---------------|
+| `406` / `409` (deterministic rejection of this key) | Dropped — reusing it would wedge rotation forever, so a fresh candidate is minted on the next attempt. | Full cadence (27 days): the server rejects the same way again on the next reconnect, so the rejection consumes the cadence instead of retrying on every connection. |
+| Other `4xx` (e.g. `429`, rate limits) | Kept, retried as-is. | Full cadence — same reasoning as `406`/`409`. |
+| `5xx` (transient server error) | Kept, retried as-is. | 24 hours (`SIGNED_PRE_KEY_SERVER_ERROR_BACKOFF_MS`), capped at the cadence — a transient fault gets a short retry instead of waiting out the full interval. |
+| Transport failure (ambiguous — the server may have accepted it) | Kept, retried as-is. | Next connect — the cadence is left untouched, since the upload may have already succeeded. |
+
+The retry delay is expressed as a backdated cadence timestamp (`rotation_timestamp_after_failed_upload`, persisted via the same `DeviceCommand::SetSignedPreKeyRotationBaseline` command used for baseline seeding) rather than a second field, so `should_rotate_signed_pre_key` still reads a single timestamp. Only the cadence-driven caller (`maybe_rotate_signed_pre_key`) writes this schedule on failure — a manual `rotate_signed_pre_key()` call leaves the cadence untouched on failure either way, so a forced rotation can't drag an unrelated automatic rotation forward or backward.
+
+<Warning>
+  Regression versus the pre-[#1237](https://github.com/oxidezap/whatsapp-rust/pull/1237) behavior: a `4xx` response that is neither `406` nor `409` (for example a `429` rate-limit) now waits the full 27-day cadence instead of retrying on every reconnect. This matches both WA Web and zapo, and is considered acceptable because the current signed pre-key keeps working throughout — a deferred rotation costs window, not liveness.
+</Warning>
+
+**Backend fallback for rotated-out ids:**
+
+Before this feature, `Device::load_signed_prekey` (`src/store/signal.rs`) returned a record only when the requested id matched the *current* `signed_pre_key_id` field — the `signed_prekeys` backend table (which already existed, with full CRUD) was never consulted for other ids. Rotating the key in place would therefore make any in-flight prekey message naming the old id fail with `InvalidSignedPreKeyId`. `load_signed_prekey` and `contains_signed_prekey` now fall back to the backend table for non-current ids, which is what makes rotation safe to ship.
+
+**Retry, not NACK, once the id ages past retention:** A sender's `PreKeySignalMessage` can still name a signed pre-key id that has since aged past `SIGNED_PRE_KEY_RETENTION` (3 total: current + 2 rotated-out) — the backend fallback above has nothing left to return, and `InvalidSignedPreKeyId` is the correct, permanent answer. On the 1:1 decrypt path (`src/message/receive.rs`), this now routes to a retry receipt (`RetryReason::InvalidKeyId`) carrying the current bundle, mirroring the sibling `InvalidPreKeyId` arm — instead of falling through to the catch-all `UnhandledError` nack, which would drop the stanza from the offline queue and lose the 1:1 message permanently and silently.
+
+<Note>
+  `SignedPreKeyAdapter::get_signed_pre_key` (`src/store/signal_adapter.rs`) logs a warning naming both the requested id and the current device id whenever neither the device field nor the backend fallback resolves an id, so the two ways this can happen — a peer holding a bundle older than the retention window, versus a peer naming an id we never minted — stay distinguishable from the log alone. `InvalidSignedPreKeyId` itself carries no payload, so this is the only place either id is recorded.
+</Note>
+
+<Note>
+  `Client::rotate_signed_pre_key()` is a public method — callers can force an out-of-cadence rotation directly instead of waiting for the 27-day check. It shares `signed_pre_key_rotation_lock` with the automatic path (so a manual call can't race a background rotation) and propagates upload failures to the caller rather than swallowing them.
+</Note>
+
+Location: `src/features/rotate_key.rs`, `src/store/signal.rs`, `src/store/signal_adapter.rs`, `src/message/receive.rs`, `wacore/src/iq/prekeys.rs`, `wacore/src/store/commands.rs`
+
+### Re-pair pre-key healing (v0.6)
+
+If the user re-pairs the device (for example by re-scanning the QR code), the server discards its copy of our pre-key bundle even though `Device::server_has_prekeys` may still read `true` from the previous pairing. v0.6 resets `server_has_prekeys = false` immediately after a successful re-pair so the next connect uploads a fresh batch instead of trusting the stale flag.
+
+The lock-acquisition for the digest-key validator also moved into `validate_digest_key` itself. Previously the caller held `prekey_upload_lock` before calling the validator, which would deadlock when validation hit a 404 and tried to acquire the same lock to perform the re-upload. The lock now wraps only the re-upload path, so the 404→re-upload transition completes without contention.
+
+Location: `src/handlers/notification.rs`, `src/pair.rs`, `src/prekeys.rs`
+
+### ADV companion identity validation
+
+When fetching a pre-key bundle for a contact's companion device (WhatsApp Web / Desktop), the bundle's `<device-identity>` element is validated to confirm that the fetched identity key is cryptographically bound to the account. This guards against a relay substituting a forged identity key, matching WA Web's `SessionApi.createSignalSession`.
+
+**Account key resolution** mirrors WA Web's `validateADVwithIdentityKey` (`e.accountSignatureKey || t`):
+
+1. **In-blob key**: If `ADVSignedDeviceIdentity.account_signature_key` is present and non-empty, it is used directly.
+2. **Stored identity fallback**: The server legitimately omits this field for a contact's companion because the client already holds the contact's primary (device 0) identity in the Signal identity store. When the field is absent, `Client::load_account_identity` loads it — reading through the `SignalStoreCache` so any unflushed mutations from the current session are visible. `PreKeyFetchSpec::with_account_identities` threads the pre-loaded map into `wacore`'s stateless prekey parser, keeping store access in the `whatsapp-rust` crate.
+
+**Validation results** (`wacore::adv::AdvValidation`):
+
+| Variant | Condition | Action |
+|---------|-----------|--------|
+| `Valid` | Both account and device signatures verified | Session is established normally |
+| `Invalid` | Blob is malformed, or signatures fail against the available key | Bundle is rejected — a relay swapping in a forged identity lands here |
+| `NoAccountKey` | Neither the blob nor the store has the key | Bundle is kept, ADV check skipped (logged as `warn!`) |
+
+`NoAccountKey` does not weaken security beyond the pre-existing "device-identity absent" path: a relay could already strip the entire `<device-identity>` element to bypass the check. It exists so brand-new contacts whose primary identity has never been seen are not silently dropped.
+
+The same three-state validation applies in the retry-receipt handler (`src/retry.rs`) when a companion device requests a re-send.
+
+Location: `wacore/src/adv.rs`, `wacore/src/iq/prekeys.rs`, `src/prekeys.rs`
+
+## Storage Integration
+
+whatsapp-rust integrates Signal Protocol storage through a layered architecture:
+
+```
+src/store/
+├── signal.rs               # SignalStore trait impl for Device (identity, session, prekey, sender key)
+├── signal_adapter.rs       # SignalProtocolStoreAdapter — cache-backed adapter bridging wacore traits to libsignal traits
+└── signal_cache.rs         # Re-export of wacore::store::signal_cache::SignalStoreCache
+```
+
+The `Device` struct implements the libsignal `SessionStore`, `IdentityKeyStore`, and other traits. These are wrapped by `SignalProtocolStoreAdapter`, which adds the `SignalStoreCache` layer — sessions are cached as `SessionRecord` objects (not bytes), with serialization deferred to `flush()`.
+
+Each store (sessions, identities, sender keys) is flushed **independently** under its own lock. Only one store is locked during its I/O — the other two remain free for concurrent encrypt/decrypt operations. The lock is held from snapshot through write through clear, so mutations to the same store are blocked until flush completes, preventing dirty-set races:
+
+```rust
+// SignalProtocolStoreAdapter reads/writes through the cache
+#[async_trait]
+impl SessionStore for SessionAdapter {
+    async fn load_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<SessionRecord>, SignalProtocolError> {
+        // Returns cached SessionRecord object directly (no deserialization)
+        // Cold load deserializes from backend bytes once and caches the object
+        self.cache.get_session(&addr_str, &*device.backend).await
+    }
+
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: SessionRecord,  // Takes ownership — zero-cost move
+    ) -> Result<(), SignalProtocolError> {
+        // Stores the SessionRecord object in cache, marks dirty
+        // Serialization happens only during flush()
+        self.cache.put_session(&addr_str, record).await;
+        Ok(())
+    }
+}
+```
+
+### Flush scheduling: send vs. receive
+
+*When* the dirty Signal cache reaches the backend differs by direction, because the two directions have different recovery properties:
+
+- **Send (DM/1:1 sessions)** persists through a batched **counter lease**. `SessionRecord` reserves its outbound sender-chain counter `SENDER_CHAIN_RESERVATION_BATCH` (64) values at a time, via `SessionRecord::reserve_sender_chain_counters`. A send covered by an unexhausted lease is already durable — it only schedules the same coalesced write-behind as the receive path below. The send that exhausts the lease, roughly 1 in 64, raises the ceiling and flushes **synchronously, before the stanza reaches the wire**. If that flush fails, the send aborts instead of transmitting an advance it couldn't save. Reusing an outbound counter reuses its message key and IV, so no counter can ever be used before its lease is durable. The lease field is local-only: it's field 100 in the encoded `SessionRecord`, outside the vendored `whatsapp.proto`. By default (`SessionRecord::deserialize`), every load fast-forwards the sender chain to the lease ceiling, so a crash mid-lease can never re-derive a possibly-spent counter — the store-backed load path relaxes this only for a *trusted* reload, via the incarnation marker described below.
+- **Send (group and status sends)** follows the same lease pattern as DMs. `SenderKeyRecord` reserves its outbound chain iteration `SENDER_CHAIN_RESERVATION_BATCH` (64) at a time via `SenderKeyRecord::reserve_iterations`, using the same field-100 local-only encoding and the same fast-forward-on-load recovery as `SessionRecord`. A send within an unexhausted lease rides the coalesced write-behind; only the send that raises the ceiling, roughly 1 in 64, flushes synchronously before the stanza reaches the wire. Status posts go through the same group-encrypt path and inherit this behavior; status *reactions* are a DM-branch send and always followed the DM lease instead. Production encryption (`wacore::send::encrypt_group_message`) delegates to the same `group_encrypt` primitive these guarantees live in, so there is exactly one sender-key encrypt/advance/store implementation — earlier, a second unguarded copy on the production path meant most warm group sends skipped the pre-wire flush entirely.
+- **Receive** (live traffic, outside the offline-drain batcher) routes through a single-flight coalescing scheduler (`src/signal_flush.rs`) instead of flushing per stanza: a burst of receives folds into one flush per ~25ms window, retried with exponential backoff (up to a 5s cap) on backend failure. This is safe because a lost receive-side advance simply re-derives forward on the next message (the receiving chain derives `CK_n → CK_n+1`), and a consumed one-time prekey stays buffered until its session is durable — a crash inside the window is recoverable.
+
+**Every direct Signal-mutating call site now shares the same gate ([#1048](https://github.com/oxidezap/whatsapp-rust/pull/1048)).** The public [`Signal::encrypt_group_message` and `Signal::create_participant_nodes`](/api/signal) accessors, plus VoIP's outbound call-key fanout (`place_call` in `src/voip/facade.rs`), used to call `Client::flush_signal_cache_batch_safe()` — an unconditional flush — after releasing their session or sender-key chain locks, regardless of whether the mutation actually raised a lease's durable ceiling. They now call the same `Client::persist_signal_state_pre_wire()` gate the primary `wacore::send` path uses: a warm call already covered by an existing lease rides the coalesced write-behind and returns immediately, while only the roughly-1-in-64 call that raises the ceiling still flushes synchronously before its ciphertext is used or sent. Measured against the same real-SQLite harness: warm group encryption dropped from 84.69 ms to 23.98 ms per 1,024-call sample (-71.7%), and warm 4-recipient participant fanout dropped from 49.16 ms to 8.69 ms per 256-call sample (-82.3%). Safety is unchanged — the per-entry durability check that guards what gets written is identical in both cases; the difference is that `flush_signal_cache_batch_safe()` always entered the flush path even on a warm lease, while `persist_signal_state_pre_wire()` skips it entirely once the raised lease is already durable. This removes redundant synchronous I/O, not any safety guarantee.
+
+<Warning>
+Downgrading to a version that predates the counter lease after running a leased version: the older version ignores the lease field(s) and could reuse counters/iterations that were only reserved (not yet actually sent) by the lease. This applies to `SenderKeyRecord` (group/status sends) as well as `SessionRecord` (DM sends). Avoid downgrading a device's local state across this boundary.
+</Warning>
+
+<Warning>
+The pre-wire gate is a point-in-time check, not a lock held across the flush, and this specifically affects **DM sessions**: `needs_pre_wire_flush()` inspects pending reservations once, and `flush()` skips any session entry that is currently checked out by a concurrent operation (`SessionEntry::CheckedOut`), still returning `Ok` for the entries it did persist. If another task checks out the same session between this send's lock release and its flush, that session's reservation can remain pending even though the flush "succeeded" — the caller proceeds to write its stanza regardless. This is a property of `SignalStoreCache::flush` itself, not specific to retries; it affects any pre-wire-gated DM send that races a concurrent, *still in-progress* operation on the same session. Sender-key entries have no analogous checked-out state — `get_sender_key` clones an `Arc` without removing the cached record, so every dirty sender-key entry is included in a flush's batch — so group/status sends are not exposed to this race. This is unrelated to what happens if that concurrent operation is then *cancelled*: see [Cancellation-safe session checkouts](#cancellation-safe-session-checkouts) — a dropped checkout restores its entry synchronously rather than leaving it stranded, but the deferred entry still isn't included in a flush that already ran before the restore.
+</Warning>
+
+Deleting a session or sender-key record — an identity change, a session reset, a rotated sender key — creates a tombstone rather than clearing the record's pending gate immediately. If a durability gate was open on the record at delete time, `SignalStoreCache` keeps it open until the backend's `delete_session`/`delete_sender_key` call actually succeeds; a failed delete leaves `needs_pre_wire_flush()` returning `true` and is retried on the next flush. Earlier, the gate was released as soon as the tombstone was applied to the in-memory cache, so a failed delete or a crash in that window could let ciphertext reach the wire while the pre-delete chain state was still loadable from the backend, re-deriving already-used key material on reload. A lossy `clear()` still drops a pending tombstone gate — the tombstone is discarded from the in-memory cache without issuing the backend delete, so the old chain state may remain in the backend.
+
+### Clean reload vs. crash recovery
+
+Fast-forwarding past a lease's reserved ceiling on every reload is the safe default, but it's also overly conservative for the common case: a clean reconnect or a same-process store re-creation never actually risked losing an in-flight send, yet unconditionally fast-forwarding still burned a full unused batch every time. 32 clean reconnects could push a sender-key chain 2,048 iterations ahead and get rejected once a peer who missed the intervening messages hit `MAX_FORWARD_JUMPS` (2,000).
+
+`SignalStoreCache`, and the direct, non-cached `Device` store, now tag a durably-reserved record with a random 128-bit **store incarnation**, carried in a second local-only field (101, alongside the lease's field 100) on both `SessionRecord` and `SenderKeyRecord`:
+
+- A live `SignalStoreCache` generates one incarnation marker when it's constructed. A reload that observes a matching marker proves the record came from *this same live cache* and was never lost to a crash, so it's exact: the chain resumes at the next iteration instead of fast-forwarding.
+- A reload with no marker, a different marker, or a malformed/duplicated marker is untrusted and keeps the conservative fast-forward — this covers process restarts, a freshly constructed cache, and any genuinely lossy discard.
+- [`SignalStoreCache::clear_after_flush()`](/concepts/architecture#disconnect-cleanup), used by connection teardown, only evicts a store once it's fully settled — no dirty, deleted, checked-out, or pending-wire-gate entries. Anything a concurrent write installs after the flush stays resident (and the incarnation stays put) until a later flush settles it; only an actual lossy discard rotates the marker.
+- Direct `Device` stores hold one process-level incarnation in an `OnceLock` instead of a per-cache one. Since these stores synchronously await the backend write before returning ciphertext, a new `Device` wrapping the same backend in the same process is a clean, trusted reload; a process restart gets a fresh marker and stays conservative.
+
+This adds no field to the public `Device` struct and no synchronous I/O — a marker is generated only when a cache or process starts, or when a lossy boundary invalidates trust.
+
+The scheduler is generation-scoped (embeds the connection generation in its atomic state), so a reconnect during an in-flight flush needs no explicit reset: a stale worker from the previous connection cannot mutate the new generation's state, and stands down when it observes a foreign generation.
+
+The offline drain, identity-change recovery, and teardown all keep their own **synchronous** flushes — they gate acks, receipts, or follow-up reads on durability and are not routed through the receive coalescer. (Teardown's flush is itself conditional: `teardown_inbound_commits_bounded` only flushes on a durable drain with no outstanding batch entries; on a timeout or non-durable/pending entries, it clears the cache without flushing instead, relying on server redelivery rather than risking a persisted-but-incomplete advance.) See [Inbound Durability Hook](/advanced/inbound-durability) for the drain-batch commit ordering, which this coalescing does not change.
+
+Retry-receipt recovery (`handle_retry_receipt` resending to a DM or group requester, `src/retry.rs`) instead shares the DM/group send durability rule above through one helper, `send_retry_stanza`: the session lock is released first, then `persist_signal_state_pre_wire()` runs — flushing synchronously if the retry's Signal advance crossed an unpersisted lease boundary — before the stanza is written to the wire. An `Err` from that flush aborts the retry instead of transmitting an advance it couldn't save; for a DM retry specifically, see the point-in-time caveat above for the narrower case where the flush reports success without having actually persisted this retry's own checked-out session (group retries are not exposed to that race — see the same caveat). This replaced an earlier unconditional full flush that ran only *after* the retry stanza had already reached the wire — a crash or persistence failure in that window could reload the old chain state after the ciphertext was already sent.
+
+Call [`Client::flush_pending_signal_state()`](/api/client#flush_pending_signal_state) to force a deterministic settle — e.g. before reading persisted Signal state directly, or ahead of a non-graceful shutdown. Never call it from inside an `InboundDurabilityHook` or a synchronous, inline `EventHandler::handle_event` implementation, since settling re-enters the processing permit those run under and would deadlock during an offline-sync drain. Ordinary `Bot` closure handlers are unaffected — both default delivery modes run the callback in a detached task off the permit.
+
+### DH ratchet resets rebase the lease
+
+A DH ratchet doesn't extend the current sender chain — it replaces it in place. The ratchet installs fresh key material from a new random ephemeral at counter zero and drops the retired chain instead of archiving it. The counter lease described above is a **record-level** ceiling, but the chain it bounds is **per-ratchet-epoch**. Without a matching lease rebase, the ceiling keeps describing a chain that no longer exists.
+
+For ping-pong traffic, that gap is one batch and you'd never notice it. It's different for a peer you only ever monologue at — say, your own other device, which gets a copy of every message you send but rarely replies. The chain climbs past `MAX_RESERVATION_FAST_FORWARD` before one reply triggers the ratchet, and the ceiling ends up stranded thousands of counters above a chain that just restarted at zero.
+
+A live reload never surfaces this, since a trusted-incarnation reload (above) skips the fast-forward entirely. The gap only shows up on **recovery** — a restart, or any lossy cache reset. There, the reload has to fast-forward across a span no send ever created. It refuses past `MAX_RESERVATION_FAST_FORWARD` and fails the whole record load. From that point the address is stranded: every path that could repair the session — inbound decrypt, the group-send fan-out, the retry-receipt handler — has to load the unloadable record first.
+
+`SessionRecord::rebase_lease_after_sender_chain_reset()` closes this gap. As part of the same mutation that swaps in the fresh chain, it lowers the ceiling to at most one `SENDER_CHAIN_RESERVATION_BATCH`. It only ever lowers, never raises, so you can never publish a counter under a ceiling that isn't yet durable. The lowering happens atomically with the chain swap, so no snapshot can pair the retired chain with a ceiling rebased for it, or vice versa. Rebasing to one batch instead of zero keeps the fresh chain's first counters lease-covered, so steady-state ping-pong keeps its write-behind send path instead of paying a synchronous flush on the very next send. A chain that's *archived* rather than discarded keeps its claim on the lease instead: `promote_fresh_state` burns the outgoing state to the ceiling before resetting it.
+
+If a record already has a stranded ceiling — written by a build that predates this fix — it recovers on its own the next time you use that address; you don't need to delete the row by hand. See [undecodable session rows](/concepts/storage#signalstorecache).
+
+### Waiving the counter lease
+
+The batched lease above assumes the durable snapshot `SessionRecord`/`SenderKeyRecord` serialize to is the store of record. Some consumers don't fit that assumption: their own persistence is already synchronous and durable before the ciphertext reaches the wire, so the lease gives them nothing. The [component export](#record-components) case below is the motivating one. Such a consumer still pays for the lease, because `into_components()` has to materialize the full reservation on *every* export — nothing else in the projection could re-derive it later. Four consecutive DM sends through such a store land on the wire at counters `0, 64, 128, 192` instead of `0, 1, 2, 3`, and the peer buffers 63 skipped message keys per gap.
+
+`SessionRecord::waive_counter_lease()` and `SenderKeyRecord::waive_counter_lease()` let that consumer say so, per record, once it's loaded:
+
+```rust
+let mut record = SessionRecord::from_components(components)?;
+record.waive_counter_lease();
+```
+
+```rust
+let mut record = SenderKeyRecord::from_components(components)?;
+record.waive_counter_lease()?;
+```
+
+- **The policy is the consumer's, never inferred.** Nothing about a record's stored representation says whether a lease is in force — the same components can come from a consumer that wants the lease and one that does not — so this call has to happen on every load that should waive it, not just once. There is no build feature or store-shape heuristic that does it implicitly.
+- **This gives up a real guarantee.** Message keys and IVs derive deterministically from the counter, so without the lease a crash between the encrypt and the write can reissue a counter and, with it, its (key, IV) pair. Only make this trade if persistence is synchronous and durable before the wire — the same property a direct `Device` store already has for itself, since it awaits the backend write before returning ciphertext (see [store incarnation](#clean-reload-vs-crash-recovery)). `SignalStoreCache`'s trusted reload relies on a different, weaker guarantee — a matching live-cache incarnation, not synchronous durability, since its warm sends ride the coalesced write-behind — so don't read the two as the same requirement.
+- **A reservation the record already carries still burns once.** A record loaded from a snapshot written while the lease was in force may already have published counters below its ceiling; waiving doesn't make that untrue. The call materializes that ceiling into the chain — archived states included, the same way `into_components()` already would — and then the lease is gone, so it only pays that cost once instead of on every subsequent export.
+- **An unadvanceable ceiling is handled differently per record**, matching how their exports already differ: `SessionRecord::waive_counter_lease()` has no failure path — a chain too stale to fast-forward is dropped fail-closed, per session, without discarding the rest of the record. `SenderKeyRecord` has one shared chain rather than per-peer sessions, so dropping it isn't a safe partial failure; `waive_counter_lease()` returns `Err` instead and leaves the record on its lease rather than dropping the ceiling and risking reissue.
+- **The default is unchanged.** A record that never calls this keeps the lease, the wire gate, and the fast-forward-on-load exactly as documented above.
+
+Location: `wacore/libsignal/src/protocol/counter_lease.rs`, `wacore/libsignal/src/protocol/state/session.rs`, `wacore/libsignal/src/protocol/sender_keys.rs`
+
+## Record components
+
+`wacore-libsignal` exposes owned, validated projections of `SessionRecord` and `SenderKeyRecord` called **components**. Use them when you need to interchange or inspect session and sender-key record state without depending on the generated protobuf schema directly — for example in custom store implementations, migration tooling, or offline debugging. This API is purely additive: the protobuf-backed `serialize()`/`deserialize()` path is unchanged. A record does not round-trip through `into_components()` → `from_components()` → `serialize()` byte-for-byte — the conversion applies the validated, normalized export rules described below (counter-lease advancement, stale-chain removal, and bounded truncation), so treat it as a safe normalized re-encoding rather than a lossless copy. A store built on components alone re-materializes the lease's reservation on every export; see [Waiving the counter lease](#waiving-the-counter-lease) above if that store's own persistence is already durable before the wire.
+
+```rust
+// wacore/libsignal/src/protocol/record_components.rs, re-exported from
+// wacore/libsignal/src/protocol/mod.rs
+pub use record_components::{
+    PendingKeyExchangeComponents, PendingPreKeyComponents, SenderChainKeyComponents,
+    SenderKeyRecordComponents, SenderKeyStateComponents, SenderMessageKeyComponents,
+    SenderSigningKeyComponents, SessionChainComponents, SessionChainKeyComponents,
+    SessionComponents, SessionMessageKeyComponents, SessionMessageKeyMaterial,
+    SessionRecordComponents,
+};
+```
+
+### Session and sender-key shapes
+
+`SessionRecordComponents` mirrors the `current_session` / archived `previous_sessions` split already described in [Arc previous sessions](#arc-previous-sessions); `SenderKeyRecordComponents` mirrors a `SenderKeyRecord`'s state list:
+
+```rust
+pub struct SessionRecordComponents {
+    pub current_session: Option<SessionComponents>,
+    pub previous_sessions: Vec<SessionComponents>,
+}
+
+pub struct SessionComponents {
+    pub session_version: Option<u32>,
+    pub local_identity_public: Option<Vec<u8>>,
+    pub remote_identity_public: Option<Vec<u8>>,
+    pub root_key: Option<Vec<u8>>,
+    pub previous_counter: Option<u32>,
+    pub sender_chain: Option<SessionChainComponents>,
+    pub receiver_chains: Vec<SessionChainComponents>,
+    pub pending_key_exchange: Option<PendingKeyExchangeComponents>,
+    pub pending_pre_key: Option<PendingPreKeyComponents>,
+    pub remote_registration_id: Option<u32>,
+    pub local_registration_id: Option<u32>,
+    pub needs_refresh: Option<bool>,
+    pub alice_base_key: Option<Vec<u8>>,
+}
+
+pub struct SessionChainComponents {
+    pub sender_ratchet_key: Option<Vec<u8>>,
+    pub sender_ratchet_key_private: Option<Vec<u8>>,
+    pub chain_key: Option<SessionChainKeyComponents>,
+    pub message_keys: Vec<SessionMessageKeyComponents>,
+}
+
+pub struct SenderKeyRecordComponents {
+    pub states: Vec<SenderKeyStateComponents>,
+}
+
+pub struct SenderKeyStateComponents {
+    pub key_id: u32,
+    pub chain_key: SenderChainKeyComponents,           // { iteration: u32, seed: Vec<u8> }
+    pub signing_key: SenderSigningKeyComponents,        // { public: Vec<u8>, private: Option<Vec<u8>> }
+    pub message_keys: Vec<SenderMessageKeyComponents>,  // { iteration: u32, seed: Vec<u8> }
+}
+```
+
+`SessionMessageKeyComponents` and `SenderMessageKeyComponents` hold skipped out-of-order message keys, keyed by chain index/iteration. A session message key's secret material is `SessionMessageKeyMaterial`:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SessionMessageKeyMaterial {
+    Seed([u8; 32]),
+    Derived {
+        cipher_key: [u8; 32],
+        mac_key: [u8; 32],
+        iv: [u8; 16],
+    },
+}
+```
+
+As of [#1210](https://github.com/oxidezap/whatsapp-rust/pull/1210), the seed is persisted alongside the keys it derives, not just accepted on import. Previously `Seed` was only a compact import form, expanded through the same canonical derivation used elsewhere (see [`MessageKeyGenerator`](#chain-key-ratcheting)). Now a skipped key's seed round-trips back out on export too. `session_structure::chain::MessageKey` carries an additive `seed` field (local field 100) alongside the pre-existing `cipher_key`/`mac_key`/`iv`. `from_structure` prefers the seed when present: it re-derives from the seed and rejects the record if the result disagrees with the stored triple, since the seed supersedes the triple on export and a mismatch means a corrupt record. `Derived` now comes back only for a key persisted *before* this change — one that never wrote a seed. Both variants are fixed-width and `Copy`, so `into_structure()`, the reverse direction, is now infallible; it used to validate a `Vec` length.
+
+<Note>
+**Breaking for direct consumers of these types.** `SessionMessageKeyMaterial::Seed` and `Derived` switched from `Vec<u8>` fields to fixed-width arrays. Match both variants — don't assume `Derived` is the only exported form. `MessageKeyGenerator::Keys(MessageKeys)` was also removed; nothing in the workspace constructed it. Build a seeded key with `MessageKeyGenerator::new_from_seed` instead. If you downgrade to a build predating #1210 and write a record back out, the seed drops silently — decrypt is unaffected, but the key becomes unexportable again.
+</Note>
+
+Conversions:
+
+```rust
+impl SessionRecord {
+    pub fn from_components(value: SessionRecordComponents) -> Result<Self, SignalProtocolError>;
+    pub fn into_components(mut self) -> Result<SessionRecordComponents, SignalProtocolError>;
+}
+impl SenderKeyRecord {
+    pub fn from_components(value: SenderKeyRecordComponents) -> Result<Self, SignalProtocolError>;
+    pub fn into_components(mut self) -> Result<SenderKeyRecordComponents, SignalProtocolError>;
+}
+```
+
+### Import validation
+
+`from_components` enforces the same structural invariants the canonical protobuf reader relies on elsewhere in this codebase, rather than accepting whatever shape the caller hands it:
+
+- A **sender chain** (the local sending ratchet chain within a pairwise session — not to be confused with a group sender-key chain) must be structurally complete: ratchet public key present, a 32-byte ratchet private key, and a chain key with both its index and 32-byte secret set. An incomplete sender chain fails with `SignalProtocolError::InvalidArgument`; a session with *no* sender chain at all (e.g. one just received and not yet replied to) is fine and imports as `sender_chain: None`.
+- A **receiver chain** must never carry `sender_ratchet_key_private` — receiver chains never own the remote party's private key, so import fails if one is set. Symmetrically, projecting a persisted record into components always reports a receiver chain's `sender_ratchet_key_private` as `None`, silently dropping any non-canonical private material a legacy record might contain, matching how the canonical reader already treats that field.
+- Raw 32-byte public keys and canonically-serialized public keys (type byte + 32 bytes) are both accepted on import; whichever form was imported, `into_components()` always exports canonical serialization.
+
+### Export normalization
+
+`into_components()` never hands back a session or sender-key chain whose counter could be replayed on re-import:
+
+- Any durably reserved sender-chain counter range — see the counter-lease mechanics in [Flush scheduling: send vs. receive](#flush-scheduling-send-vs-receive) — is advanced to its exclusive ceiling before export. Re-importing the exported components can't reuse a counter value that was only reserved, not yet actually sent.
+- A sender chain too stale to fast-forward past its reservation is dropped from the exported chain rather than aborting the whole export — the rest of the record (receiver chains, other archived sessions) still exports normally.
+- `SessionRecordComponents.previous_sessions` is truncated to `ARCHIVED_STATES_MAX_LENGTH` (40) and `SenderKeyRecordComponents.states` is truncated to `MAX_SENDER_KEY_STATES` (5) — the same bounds the records themselves already enforce. See [Protocol safety limits](#protocol-safety-limits).
+
+### `has_usable_sender_chain`
+
+```rust
+impl SessionState {
+    pub fn has_usable_sender_chain(&self) -> Result<bool, InvalidSessionError>;
+}
+impl SessionRecord {
+    pub fn has_usable_sender_chain(&self) -> Result<bool, SignalProtocolError>;
+}
+```
+
+Checks whether a session has a sender chain it could actually encrypt with, rather than assuming one exists. Previously this was effectively best-effort/always-true; the current implementation returns `Ok(false)` (not an error) when no sender chain is set at all, and otherwise structurally validates the ratchet public key, the ratchet private key, and the chain key are all present before returning `Ok(true)` — the same completeness check `from_components` applies on import. `SessionRecord::has_usable_sender_chain` delegates to the current session's check, returning `Ok(false)` when there is no current session.
+
+Location: `wacore/libsignal/src/protocol/state/session.rs`
+
+### Debug output redacts secrets
+
+`Debug` on every `*Components` type — `SessionComponents`, `SessionChainComponents`, `SessionChainKeyComponents`, `PendingKeyExchangeComponents`, `PendingPreKeyComponents`, `SenderChainKeyComponents`, `SenderSigningKeyComponents`, `SenderMessageKeyComponents`, and `SessionMessageKeyMaterial` — prints private keys, chain/root keys, seeds, and cipher/mac/IV material as `<redacted>`, while structural fields (indices, counters, iteration numbers, key presence) print plainly:
+
+```rust
+println!("{chain:?}");
+// SessionChainKeyComponents { index: Some(7), key: <redacted> }
+```
+
+This makes it safe to log or assert against a `*Components` value in application code without writing a custom `Debug` impl to avoid leaking key material.
+
+**Example — inspecting whether a session can currently send, without touching protobuf types:**
+
+```rust
+// `record: SessionRecord` loaded from your store
+if record.has_usable_sender_chain()? {
+    let components = record.into_components()?;
+    println!("{:?}", components.current_session); // secrets redacted
+}
+```
+
+Location: `wacore/libsignal/src/protocol/record_components.rs`
+
+### Legacy session v1 interop
+
+Behind the opt-in `legacy-session-interop` Cargo feature (default off, forwarded through `wacore` and the root `whatsapp-rust` crate), `wacore-libsignal` exposes a typed, transport-agnostic model of the **decoded** legacy libsignal `SessionRecord` v1 layout — the format this project's stores used before the canonical shapes above. It exists for migration tooling importing an externally produced v1 store into the canonical `SessionRecord`, or projecting a canonical record back into v1 terms; ordinary clients never enable it, so the model compiles out of native builds entirely.
+
+Container decoding — turning a legacy store's transport bytes into these typed fields — is explicitly out of scope; callers own that step and hand this module owned values (`Bytes`, integers, enums). The module owns everything downstream: chain-role selection, counter translation, lifecycle ordering, pruning, ratchet reconstruction, and skipped-key derivation.
+
+```rust
+// wacore/libsignal/src/protocol/legacy_session.rs, re-exported from
+// wacore/libsignal/src/protocol/mod.rs behind `legacy-session-interop`
+pub use legacy_session::{
+    LegacyIndexedSessionV1, LegacySessionBaseKeyRoleV1, LegacySessionChainCounterV1,
+    LegacySessionChainKeyV1, LegacySessionChainRoleV1, LegacySessionChainV1,
+    LegacySessionDispositionV1, LegacySessionFieldV1, LegacySessionIndexV1,
+    LegacySessionInteropError, LegacySessionKeyPairV1, LegacySessionLocalContext,
+    LegacySessionMessageKeyV1, LegacySessionPendingPreKeyV1, LegacySessionRatchetV1,
+    LegacySessionRecordV1, LegacySessionUnrepresentableFieldV1, LegacySessionV1,
+};
+```
+
+**Import — v1 into canonical:**
+
+```rust
+impl LegacySessionRecordV1 {
+    pub fn from_indexed_sessions(
+        sessions: Vec<LegacyIndexedSessionV1>,
+    ) -> Result<Self, LegacySessionInteropError>;
+
+    pub fn into_session_record(
+        self,
+        context: LegacySessionLocalContext,
+    ) -> Result<SessionRecord, LegacySessionInteropError>;
+}
+```
+
+`from_indexed_sessions` validates that each entry's outer map key matches its own session's base key and rejects duplicate base keys or more than one `Current` session. `into_session_record` then validates every session — chain roles, key lengths, counters, skipped-key indexes, pending pre-keys, and the same canonical limits enforced in [Import validation](#import-validation) — retains archived sessions by close time, reorders them by last use to match the v1 decrypt search, truncates to `ARCHIVED_STATES_MAX_LENGTH`, and reuses `SessionRecord::from_components` to build the canonical record. `LegacySessionLocalContext` supplies the local identity key and registration ID, since v1 sessions never persisted them.
+
+A v1 sending chain seeds `previous_counter` at `-1` for a ratchet step over a chain that has never sent; `LegacySessionChainCounterV1` floors that at zero on import instead of treating it as an error. Every other out-of-range counter fails typed as `InvalidChainCounter`.
+
+**Export — canonical into v1 (operational, not byte-exact):**
+
+```rust
+impl SessionRecord {
+    pub fn into_legacy_session_v1_operational(
+        self,
+    ) -> Result<LegacySessionRecordV1, LegacySessionInteropError>;
+}
+```
+
+This is a deterministic operational projection, not a round trip: v1 lifecycle timestamps and base-key lookup roles are reconstructed from canonical search/eviction order rather than recovered verbatim, since the canonical record never persisted them in the first place. State the v1 format genuinely cannot represent is rejected with a typed error instead of being silently dropped or inferred — a session with no sender chain, a non-current `session_version`, a pending key exchange, or a `needs_refresh` flag all fail as `NotRepresentable`; a pending pre-key whose base key doesn't match the session's own base key fails as `PendingPreKeyBaseMismatch` rather than producing v1 state the importer would reject on the way back in.
+
+A receiver chain holding a *derived* (seedless) skipped-message key fails as `ChainNotRepresentable::DerivedMessageKey` — it has no inverse to a v1 seed. Before [#1210](https://github.com/oxidezap/whatsapp-rust/pull/1210), this was every skipped key without exception. Import expanded a v1 seed into derived keys, and export could never recover it, so a v1 record with a skipped key failed to round-trip even on the very first cycle. Now that the seed rides along with the keys it derives (see [`SessionMessageKeyMaterial`](#session-and-sender-key-shapes) above), only a key persisted *before* that change still hits this error — one that never had a seed to retain. A skipped key imported or received after #1210 carries its seed through export and projects normally. That holds permanently, until the key is consumed or evicted.
+
+<Note>
+CI runs a dedicated `cargo nextest run --features legacy-session-interop` job as of #1210. The feature was previously off in every job. This entire module's test suite — including the regression test for the bug above — compiled away and never ran.
+</Note>
+
+Every type in the module redacts key material from `Debug` — root keys, chain keys, ratchet key pairs, skipped-message seeds, and identity keys all print as `<redacted>`; only structural fields (roles, counters, indexes, session/chain counts) print plainly, the same convention as the canonical [`*Components` types](#debug-output-redacts-secrets).
+
+Location: `wacore/libsignal/src/protocol/legacy_session.rs`
+
+## Security Considerations
+
+### Identity key trust
+
+The implementation verifies identity keys before encryption/decryption:
+
+```rust
+if !crate::protocol::storage::is_trusted_identity(
+    identity_store,
+    remote_address,
+    &their_identity_key,
+    Direction::Sending,
+)
+.await?
+{
+    return Err(SignalProtocolError::UntrustedIdentity(
+        remote_address.clone(),
+    ));
+}
+```
+
+As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), this calls the free `is_trusted_identity` resolver (see [Unboxed identity and session hooks](#unboxed-identity-and-session-hooks)) rather than the trait method directly, so a store's `try_is_trusted_identity` hook gets a chance to answer first.
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:309-325`
+
+### Self-only protocol message gating
+
+`app_state_sync_key_share`, `app_state_sync_key_request`, and `history_sync_notification` are protocol messages WhatsApp Web treats as "self-only": they only carry meaning when delivered from your own account to another of your linked devices. v0.6 hardens `handle_decrypted_plaintext` so that incoming copies of these messages are dropped unless `MessageInfo.source.is_from_me` is `true`, matching WA Web's `WAWebKeyManagementHandleKeyShareApi` and whatsmeow's gating.
+
+The consequences if the gate is missing:
+
+- A spoofed `app_state_sync_key_share` from a peer would let an attacker inject an app-state encryption key, leading to attacker-controlled mutations of your contacts, blocklist, archive state, etc.
+- A spoofed `app_state_sync_key_request` from a peer would make the client share its app-state encryption keys with an attacker instead of only with the account's own companion devices.
+- A spoofed `history_sync_notification` would point the client at attacker-supplied media for ingestion as your own history.
+
+If you implement a custom message dispatcher, replicate this `is_from_me` check before honoring any of these protocol messages. Other protocol-message types (`REVOKE`, `EPHEMERAL_SETTING`, `MESSAGE_EDIT`, …) keep their existing semantics.
+
+Location: `src/message.rs` (`handle_decrypted_plaintext`)
+
+### Duplicate message detection
+
+The protocol detects and rejects duplicate messages:
+
+```rust
+if chain_index > counter {
+    return match state.get_message_keys(their_ephemeral, counter)? {
+        Some(keys) => Ok(keys),
+        None => Err(SignalProtocolError::DuplicateMessage(chain_index, counter)),
+    };
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:822-827`
+
+As of [#1072](https://github.com/oxidezap/whatsapp-rust/pull/1072), a `DuplicatedMessage` from one candidate session is not terminal — the search keeps trying the remaining current and archived sessions, including a **closed** receiver chain (one with no chain-key seed left, only leftover skipped keys). This covers re-initiations, which reuse the peer's signed pre-key as a ratchet key: a delayed message whose skipped key survives only in an archived session still decrypts, and a closed chain still recognizes a replay of an already-consumed counter instead of falling through to a generic failure.
+
+Once every session has been tried, a recognized `DuplicatedMessage` outranks `BadMac` in the final classification: a sibling session that happens to share the same ratchet key derives different message keys for the same counter and fails its MAC as expected noise, but the decrypting client already knows this counter was consumed elsewhere. Classifying that as `BadMac` would trigger a retry receipt for a message the peer already delivered; the duplicate verdict wins instead, so the replay is acknowledged and silently dropped.
+
+### Log level discipline
+
+The protocol layer follows strict rules about what cryptographic material appears in logs and at which level:
+
+- **No private keys or secrets are ever logged** — `ChainKey`, `MessageKeys`, and `RootKey` types do not expose their key bytes through logging
+- **Public keys appear only at `warn`/`error` levels** — and only when something has gone wrong (untrusted identity, MAC failure)
+- **MAC key fingerprints are truncated** — only the first 4 bytes (8 hex chars) are logged during MAC verification failures, not the full key:
+  ```rust
+  let mac_key_fingerprint: String = hex::encode(mac_key_bytes).chars().take(8).collect();
+  ```
+- **Ratchet keys in debug logs** — successful decryptions log the sender ratchet public key (never private) at `debug` level for diagnostics
+- **Pre-key operations** use `debug` for routine operations and `warn`/`info` for exceptional conditions
+
+<Note>
+  The Signal protocol layer (`wacore/libsignal/src/protocol/`) uses no `trace!`-level logging. Sensitive operations stay at `debug` or above to avoid leaking material in verbose log configurations.
+</Note>
+
+### Session state corruption
+
+Detailed logging helps diagnose crypto failures:
+
+```rust
+fn create_decryption_failure_log(
+    remote_address: &ProtocolAddress,
+    errs: &[SignalProtocolError],
+    record: &SessionRecord,
+    ciphertext: &SignalMessage,
+) -> Result<String>
+```
+
+This generates comprehensive error logs showing:
+- All attempted session states
+- Receiver chain information
+- Message metadata (sender ratchet key, counter)
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:365-454`
+
+### Protocol safety limits
+
+The implementation enforces several hard limits to prevent resource exhaustion and cryptographic failures:
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `MAX_PREKEY_ID` | 16,777,215 (2^24 − 1) | Maximum valid pre-key ID (24-bit wire format) |
+| `MAX_FORWARD_JUMPS` | 2,000 | Maximum message skip in a ratchet chain — peer sessions and group sender keys |
+| `MAX_FORWARD_JUMPS_SELF` | 25,000 | Maximum message skip for a session with your own other devices (wider, still bounded) |
+| `MAX_MESSAGE_KEYS` | 2,000 | Maximum cached out-of-order message keys per chain |
+| `MAX_RECEIVER_CHAINS` | 5 | Maximum receiver chains per session |
+| `ARCHIVED_STATES_MAX_LENGTH` | 40 | Maximum archived session states |
+| `MAX_SENDER_KEY_STATES` | 5 | Maximum sender key states per group |
+| `MESSAGE_KEY_PRUNE_THRESHOLD` | 50 | Amortized eviction trigger for old message keys |
+| Chain key index | u32::MAX | Overflow returns `InvalidState` error (not silent wrap) |
+
+Location: `wacore/libsignal/src/protocol/consts.rs`
+
+### Self-DM / sibling decryption recovery
+
+When a message from your own primary phone or another linked companion fails to decrypt, the v0.6 client distinguishes the failure mode and applies the matching recovery strategy:
+
+| Internal `RetryReason` | Trigger | Recovery |
+|---|---|---|
+| `NoSession` | `SessionNotFound` (no Signal session yet for the device) | Request a fresh prekey bundle via retry receipt; install the new session before retrying decryption. |
+| `BadMac` | Ratchet desync (`InvalidMessage` / mac failure) on an existing session | Mark the session for re-creation, throttled per peer via the `session_recreate_history` cache so repeated BadMacs don't loop, and re-send via a peer-addressed `pkmsg` carrying our identity. |
+
+The throttle is a per-peer cooldown (1-hour TTL after the last recreate). In v0.6 the implementation moved from a `Mutex<HashMap<Jid, Instant>>` to a bounded TTL cache (`PortableCache`, ~256 entries): the per-peer check-and-stamp is now atomic (serialized by the existing per-peer session lock) and lock-free at the map level, so concurrent retry-receipt spawns from the same peer can't trigger duplicate recreates. The behavior is unchanged — if a peer is already in cooldown, the client skips re-creation and falls back to a normal retry receipt rather than thrashing the session. Under more than ~256 distinct peers retrying within the window, the cache may evict a recent entry, costing at most one extra recreate (bounded and self-healing). Peer-addressed `pkmsg` carries the protocol identity so the receiver can verify ownership before installing the new session, blocking spoofed sibling recoveries.
+
+This closed a deadlock where self-DM fan-out to a sibling device produced repeated BadMac decrypt failures: the recipient would request a retry, the sender would re-encrypt against the same broken session, and the cycle would continue until the user manually relogged. With the throttled re-creation plus identity-validated pkmsg, the second receipt installs a fresh session and decryption resumes.
+
+Self-DM fan-out also gained WA Web parity for the BadMac case: when our own primary phone reports BadMac, the client now treats it as a session-level recovery rather than dropping the message, matching `WAWebDecryptOrThrow`'s branch on session divergence.
+
+Location: `src/client.rs`, `src/retry.rs`, `wacore/libsignal/src/protocol/session_cipher.rs`, `wacore/src/send.rs`
+
+## Performance optimizations
+
+### Session object cache
+
+The `SignalStoreCache` stores sessions and sender keys as deserialized objects (`SessionRecord` and `SenderKeyRecord`) rather than serialized bytes, matching WhatsApp Web's architecture where the JS object IS the cache. Serialization only happens during `flush()` to the database — not on every `store_session` or `put_sender_key` call.
+
+```rust
+// wacore/src/store/signal_cache.rs
+enum SessionEntry {
+    /// Arc so peek_session (retry / LID-migration checks) bumps a refcount
+    /// instead of deep-cloning the record (KBs with archived states).
+    Present(Arc<SessionRecord>),
+    Absent,
+    /// Taken by a destructive-update load; has_session treats as present.
+    /// Carries enough identity to reject a stale owner — see
+    /// "Cancellation-safe session checkouts" below.
+    CheckedOut {
+        had_session: bool,
+        token: NonZeroU64,
+    },
+}
+
+struct SessionStoreState {
+    cache: HashMap<Arc<str>, SessionEntry>,  // Objects, not bytes
+    dirty: HashSet<Arc<str>>,
+    deleted: HashSet<Arc<str>>,
+    incarnation: StoreIncarnation,
+    checkout_generation: u64,
+    next_checkout_token: u64,
+}
+
+// Sender keys use the same object-caching pattern
+struct SenderKeyStoreState {
+    cache: HashMap<Arc<str>, Option<SenderKeyRecord>>,  // Objects, not bytes
+    dirty: HashSet<Arc<str>>,
+}
+```
+
+This eliminates protobuf encode (on store) and decode (on load) from the per-message hot path for both 1:1 and group messages. The `store_session` method takes `SessionRecord` by value, enabling zero-cost moves from the protocol layer:
+
+```rust
+// wacore/libsignal/src/protocol/storage/traits.rs
+pub trait SessionStore {
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: SessionRecord,  // Owned — zero-cost move, no clone
+    ) -> Result<()>;
+}
+```
+
+All four protocol-layer call sites (`message_encrypt`, `message_decrypt_signal`, `message_decrypt_prekey`, `process_prekey_bundle`) — plus PreKey setup and group preflight mutations — take ownership of the record and drop it immediately after storing. Taking ownership eliminates the `.clone()` in the adapter and the compiler enforces no use-after-store. As of [#1044](https://github.com/oxidezap/whatsapp-rust/pull/1044), these call sites obtain the record through the `SessionCheckout` guard (below) rather than a bare `load_session`/`store_session` pair, so the zero-cost move still applies but the checkout is now cancellation-safe.
+
+**Per-message hot path impact:**
+
+| Operation | Before | After |
+|-----------|--------|-------|
+| `store_session` | clone all fields + protobuf encode | move (zero-cost) |
+| `load_session` | protobuf decode + construct | clone current session only (`previous_sessions` O(1) via Arc) |
+| `peek_session` | deep-clone record (1–2 KB) | `Arc` refcount bump; returns `Option<Arc<SessionRecord>>` |
+| `store_sender_key` | serialize to bytes + store bytes | store `SenderKeyRecord` object directly |
+| `load_sender_key` (`&self`) | load bytes + deserialize | return cached `SenderKeyRecord` object (read lock only) |
+| `flush` (batched) | write bytes to DB | serialize sessions + sender keys + write bytes to DB |
+
+### Cancellation-safe session checkouts
+
+As of [#1044](https://github.com/oxidezap/whatsapp-rust/pull/1044), the record backing a `CheckedOut` entry is owned by a `SessionCheckout<'a>` guard (`wacore/libsignal/src/protocol/storage/traits.rs`) instead of being a bare marker. This closes a gap where cancelling the future mid-mutation — a Tokio task abort, a `select!` losing a race, a timeout — could leave only the marker behind: the ratchet advance the future was computing was lost, and a decrypt's ratchet advance could persist without its matching identity write, or vice versa.
+
+`SessionCheckout` is obtained via `SessionCheckout::load` (existing session) or `load_or_create` (synthesizes `SessionRecord::new_fresh()` if absent, tracked via `had_session`), exposes `record()`/`record_mut()` for the protocol layer to mutate in place, and is consumed by either:
+- `commit(self)` — stores the mutated record back through `try_store_session_from_checkout`, or
+- `discard(self)` — releases a deliberately-rejected *fresh* (never-had-a-session) checkout without storing.
+
+If neither runs because the guard is dropped first (the cancellation case), `Drop` synchronously puts the record back itself — no caller code has to remember to handle cancellation. If the sessions mutex is uncontended, restoration is immediate; if a concurrent `flush()` holds the lock, the restore is queued as a `PendingSessionRestore` and replayed the next time any operation acquires the sessions lock, so an aborted task's state is never dropped even though it can't wait for the lock itself. The queue itself (`SyncMutex<Vec<PendingSessionRestore>>`) is unbounded — every lock acquisition drains it first, so it only grows if cancellations under lock contention arrive faster than anything else touches the session store, which does not happen under normal load.
+
+Every checkout carries a `SessionCheckoutKey { generation, token }`: `checkout_generation` increments on every lossy `clear()`, and `token` is assigned monotonically per checkout of a given address. A restore is rejected (rather than silently applied) unless both match the cache's current state — this stops a checkout issued before a session reset from resurrecting stale state, and stops a stale owner from clobbering a newer checkout of the same address.
+
+`flush()` and cache eviction (`clear_after_flush`) now preserve live `CheckedOut` entries — and any PreKey deletion buffered against that address — instead of dropping them; the deferred prekey delete and the session's own persistence both wait for a later flush once the checkout completes, rather than being lost.
+
+`SessionStore` gained five `#[doc(hidden)]` methods with pass-through default bodies (`load_session_for_update`, `try_load_session_for_update`, `try_store_session_from_checkout`, `cancel_session_checkout`, `complete_session_checkout`), so existing custom `SessionStore` implementations keep compiling unchanged — only a backend that wants the destructive-update fast path needs to implement them.
+
+### Unboxed identity and session hooks
+
+As of [#1124](https://github.com/oxidezap/whatsapp-rust/pull/1124), the same "sync hook first, boxed async fallback second" pattern above extends to three more per-message checks: `IdentityKeyStore::try_is_trusted_identity`, `IdentityKeyStore::try_save_identity`, and `SessionStore::try_has_session`. `#[async_trait]` boxes every store method into a `Pin<Box<dyn Future>>`, regardless of whether the answer is already known. The bundled `IdentityAdapter`'s async `is_trusted_identity` body is an unconditional `Ok(true)` — WA Web `isTrustedIdentity` parity, since identity *changes* surface through `save_identity` rather than through trust checks. That box was therefore pure overhead, paid once per encrypt and once per decrypt.
+
+Each hook defaults to `None`, and `None` means "I cannot answer synchronously" — never "the answer is the default":
+- `try_save_identity` declines when nothing is cached for the address, so the caller reads the backend. Answering from an empty cache would report every identity as new.
+- `try_has_session` declines when the cache cannot answer, rather than reporting "no session" and forcing a needless session rebuild.
+- `try_is_trusted_identity` can always answer **for the bundled adapter specifically**, because its async `is_trusted_identity` is already the unconditional `Ok(true)` above. This is not a general license to short-circuit trust checks: a custom `IdentityKeyStore` whose async `is_trusted_identity` enforces a real policy must not copy this hook verbatim — returning `Some(Ok(true))` unconditionally would let it bypass that policy. Such a store should return `None` unless it can decide synchronously without skipping any of its own trust logic.
+
+Three free functions in `wacore::libsignal::protocol` — `is_trusted_identity`, `save_identity`, `has_session` — express "ask the hook, then await the fallback" once instead of at each of the eight call sites that previously called the trait methods directly:
+
+```rust
+// wacore/libsignal/src/protocol/storage/traits.rs
+pub async fn is_trusted_identity<S: IdentityKeyStore + ?Sized>(
+    store: &S,
+    address: &ProtocolAddress,
+    identity: &IdentityKey,
+    direction: Direction,
+) -> Result<bool> {
+    match store.try_is_trusted_identity(address, identity, direction) {
+        Some(answer) => answer,
+        None => store.is_trusted_identity(address, identity, direction).await,
+    }
+}
+```
+
+`message_encrypt`, `message_decrypt_signal`, and `ensure_sessions_for_devices` now call through these resolvers instead of the trait methods directly. The hooks are purely additive: a custom `IdentityKeyStore`/`SessionStore` that implements only the async methods keeps compiling and behaving unchanged, since declining both hooks falls through to exactly the async path it always ran.
+
+### Arc previous sessions
+
+`SessionRecord.previous_sessions` is wrapped in `Arc<Vec<SessionStructure>>`, making clone O(1) for the ~40 archived previous sessions that previously accounted for ~40% of the serialize cost:
+
+```rust
+// wacore/libsignal/src/protocol/state/session.rs
+pub struct SessionRecord {
+    current_session: Option<SessionState>,
+    /// Wrapped in Arc so cloning is O(1). Only mutated on rare paths via Arc::make_mut.
+    previous_sessions: Arc<Vec<SessionStructure>>,
+}
+```
+
+Only rare operations (archive current session, promote previous session, take/restore during session setup) trigger `Arc::make_mut` and a deep copy.
+
+### Chain key buffer reuse
+
+As of [#1137](https://github.com/oxidezap/whatsapp-rust/pull/1137), advancing a chain key no longer allocates a fresh buffer for its persisted 32-byte key material on every step. `SessionState` stores each chain key's bytes as `Option<bytes::Bytes>` on the underlying protobuf `ChainKey` field. `Bytes` is immutable, so writing the ratcheted key used to be an unconditional `Bytes::copy_from_slice(..)` on every send or receive that advances a session's chain key. In the harness benchmark that motivated this change — a single-device 1:1 pingpong session — a full message round trip advances chain keys three times (twice sending, once receiving); a real send can touch more sessions than that, since [DM device fanout](#dm-device-fanout) encrypts separately for every resolved recipient and own-device session.
+
+`write_chain_key` (`wacore/libsignal/src/protocol/state/session.rs`) instead reuses the existing buffer in place when it safely can:
+
+```rust
+fn write_chain_key(field: &mut Option<bytes::Bytes>, key: &[u8]) {
+    if let Some(existing) = field.take()
+        && existing.len() == key.len()
+        && let Ok(mut owned) = existing.try_into_mut()
+    {
+        owned.copy_from_slice(key);
+        *field = Some(owned.freeze());
+        return;
+    }
+    *field = Some(bytes::Bytes::copy_from_slice(key));
+}
+```
+
+Reuse only happens when both guards pass: `try_into_mut()` succeeds solely when the `Bytes` is uniquely owned (no other clone observing the old key), and the length check keeps a differently-sized buffer (e.g. from a legacy record) from reaching `copy_from_slice` at all — like the slice method it resolves to via `DerefMut`, a length mismatch there panics rather than writing anything. Either guard failing falls back to the original allocating behavior. In steady state a checked-out session record is uniquely owned — the cache takes it out of its `Arc` via `try_unwrap` (see [Session object cache](#session-object-cache) above) — so the fallback is rare.
+
+### Redundant signal store write elimination
+
+The `SignalStoreCache` uses targeted deduplication strategies per store type. For identities (which rarely change), `put_dedup()` compares incoming bytes against the cached value and skips if identical:
+
+```rust
+// wacore/src/store/signal_cache.rs — ByteStoreState
+fn put_dedup(&mut self, address: &str, data: &[u8]) {
+    if let Some(Some(existing)) = self.cache.get(address)
+        && existing.as_ref() == data
+    {
+        return; // Skip — data unchanged, no dirty mark
+    }
+    self.put(address, data);
+}
+```
+
+Sessions and sender keys use unconditional `put()` since they change with every message — dedup would always fail and waste CPU cycles. This split avoids unnecessary database writes during `flush()` while not adding overhead where it provides no benefit.
+
+### Key reuse in cache
+
+The `key_for()` method on `SessionStoreState`, `SenderKeyStoreState`, and `ByteStoreState` reuses existing `Arc<str>` keys from the HashMap via `get_key_value()`, avoiding a heap allocation on every cache operation:
+
+```rust
+fn key_for(&self, address: &str) -> Arc<str> {
+    match self.cache.get_key_value(address) {
+        Some((existing, _)) => existing.clone(),  // O(1) refcount bump
+        None => Arc::from(address),                // Only on first insert
+    }
+}
+```
+
+On the hot path (put/delete for addresses already in the cache), this is always a refcount bump instead of a heap allocation.
+
+### Single-allocation session lock keys
+
+Session lock keys use the full Signal protocol address string (e.g., `5511999887766@c.us.0`). The `JidExt` trait provides methods for generating these strings, defined in `wacore/src/types/jid.rs`:
+
+```rust
+pub trait JidExt {
+    /// Construct a fresh ProtocolAddress for this JID.
+    fn to_protocol_address(&self) -> ProtocolAddress;
+
+    /// Signal address string: `{user}[:device]@{server}`
+    /// Device part only included when device != 0.
+    fn to_signal_address_string(&self) -> String;
+
+    /// Full protocol address string: `{signal_address_string}.0`
+    /// Equivalent to `to_protocol_address().to_string()` but avoids the
+    /// intermediate ProtocolAddress allocation — one String instead of two.
+    fn to_protocol_address_string(&self) -> String;
+
+    /// Rewrite a reusable ProtocolAddress in place for this JID.
+    /// See [Reusable hot-loop address construction](#reusable-hot-loop-address-construction).
+    fn reset_protocol_address(&self, addr: &mut ProtocolAddress);
+}
+```
+
+`to_protocol_address_string()` is used on hot paths (message encryption and decryption) as the key for `session_locks`. It pre-sizes the output buffer and builds the `String` in a single allocation. Constructing a `ProtocolAddress` itself no longer allocates for addresses that fit inline (see [Single-buffer ProtocolAddress](#single-buffer-protocoladdress) below), but `.to_string()` on top of it still does, so `to_protocol_address_string()` remains the cheaper path when only the string is needed.
+
+The `write_protocol_address_to()` free function provides the same formatting but writes into a caller-supplied `&mut String` buffer, enabling buffer reuse across multiple JIDs.
+
+**Format examples:**
+
+| JID | Signal address | Protocol address string |
+|-----|---------------|------------------------|
+| `5511999887766@s.whatsapp.net` | `5511999887766@c.us` | `5511999887766@c.us.0` |
+| `5511999887766:33@s.whatsapp.net` | `5511999887766:33@c.us` | `5511999887766:33@c.us.0` |
+| `123456789@lid` | `123456789@lid` | `123456789@lid.0` |
+| `123456789:33@lid` | `123456789:33@lid` | `123456789:33@lid.0` |
+
+<Note>
+  The server `s.whatsapp.net` is mapped to `c.us` in address strings, matching WhatsApp Web's internal format. The trailing `.0` is the Signal device_id (always 0 in WhatsApp's usage).
+</Note>
+
+**Usage in message processing:**
+
+```rust
+// In message decryption (src/message.rs) — single lock per sender device
+let signal_addr_str = sender_encryption_jid.to_protocol_address_string();
+let session_mutex = self.session_locks
+    .get_with(signal_addr_str.clone(), async {
+        Arc::new(async_lock::Mutex::new(()))
+    }).await;
+let _session_guard = session_mutex.lock().await;
+
+// In peer message encryption (src/send.rs) — single lock
+let signal_addr_str = encryption_jid.to_protocol_address_string();
+
+// In DM message encryption (src/send.rs) — per-device locks for all devices
+let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
+let session_guards = self.session_guards_for(&lock_jids).await;
+// Each lock taken as its mutex is resolved, in sorted order, to prevent deadlocks
+```
+
+**DM multi-device fanout:**
+
+The DM send path resolves all known recipient devices and own companion devices, encrypting per-device for each. This matches WA Web's `WAWebSendUserMsgJob` behavior where the local device table is read on the send path, and `WAWebDBDeviceListFanout` filters out hosted devices. The client checks the local device registry first (via `get_devices_from_registry()`); a network fetch is only triggered on a cache miss to avoid unnecessary LID-migration side effects from `get_user_devices`. The sender device is excluded (matching WA Web's `isMeDevice` in `getFanOutList`), and for self-DMs, overlapping device lists are deduplicated using a `HashSet` (matching WA Web's `Map` keyed by `toString`).
+
+**Own-device namespace alignment (v0.6):** When the recipient is addressed in the LID namespace (`@lid`), the client converts its own companion devices from the PN namespace to LID before fanning out. Without this alignment, a `<to>` mix of `@lid` and `@s.whatsapp.net` participants caused the server to reject the stanza for LID-addressed DMs. Outgoing messages to PN-addressed recipients are unaffected.
+
+<Note>
+  The recipient's namespace here is decided by [`resolve_dm_wire_jid()`](#dm-wire-namespace-vs-signal-session-addressing), not a raw mapping lookup — on an account that isn't 1:1-LID-migrated, the recipient (and therefore the whole fanout) stays PN even when a LID mapping is cached.
+</Note>
+
+Own companion devices (your other linked devices) receive per-device encryption for multi-device self-sync via `DeviceSentMessage`.
+
+<Note>
+WA Web has a bare-`<enc>` fast path for single primary device (`WAWebSendMsgCreateFanoutStanza`). This is not implemented in whatsapp-rust because `encrypt_for_devices` always wraps in `<to jid=...>` nodes. The `<participants>` form is accepted by the server regardless.
+</Note>
+
+<Note>
+**Fail-fast on total encrypt failure (v0.6).** If per-device encryption fails for *every* recipient device, the DM send now returns an error instead of emitting a stanza with an empty participant list (which the server would silently swallow, making the message look sent when it wasn't). A partial failure — some devices encrypt, some don't — still sends to the devices that succeeded.
+</Note>
+
+**DM per-device locking:**
+
+To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires session locks for all devices involved — the bare recipient plus own companion devices. The `build_session_lock_keys()` helper resolves encryption JIDs and sorts them for deadlock-free lock acquisition:
+
+1. Resolves the recipient to its bare encryption JID via `resolve_encryption_jid().to_non_ad()` (stripping device component)
+2. Resolves own companion device JIDs
+3. Sorts by `(server, user, device)` using `cmp_for_lock_order()` and deduplicates
+4. Returns sorted `Vec<Jid>` — no intermediate `String` allocations needed for sorting
+
+The `session_guards_for()` helper (PR [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131)) then takes each device's lock as its mutex is resolved from the sorted JIDs, reusing a single `ProtocolAddress` via `reset_protocol_address()` to name each lock key without a formatting buffer:
+
+```rust
+// In DM message encryption (src/send.rs)
+let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
+let session_guards = self.session_guards_for(&lock_jids).await;
+// Each lock taken as its mutex is resolved, in sorted order, to prevent deadlocks
+```
+
+<Note>
+  Resolving every mutex first and then locking each in a second pass (the previous implementation) is still available as `session_mutexes_for()`, but only under `#[cfg(test)]` — production code no longer builds the intermediate `Vec` of mutex handles.
+</Note>
+
+The recipient lock key is always the bare form (e.g., `100000012345678@lid.0`), matching the decrypt path's lock format. This ensures send and receive paths serialize on the exact same lock key.
+
+Location: `wacore/src/types/jid.rs:4-51`, `src/send.rs:1481-1507`
+
+### Single-buffer ProtocolAddress
+
+The `ProtocolAddress` struct stores the full address string `"{name}.{device_id}"` in a single `AddressBuf` buffer, with a `name_len` marker to split name from suffix. Since [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131), `AddressBuf` is inline-first: addresses up to 47 bytes (`INLINE_CAPACITY`) live inside the value itself with no heap allocation at all — every real WhatsApp address fits, e.g. `"5511987650001:5@c.us.0"` is 22 bytes. A longer address spills to a `String`.
+
+Which arm holds the bytes is not part of the value: `Eq`, `Ord`, and `Hash` all read the rendered string via `as_str()`, so an inline-built key finds a heap-spilled entry (and vice versa) in the session cache. That equivalence is what makes the optimization safe rather than a silent cache-miss generator.
+
+```rust
+// wacore/libsignal/src/core/address.rs
+const INLINE_CAPACITY: usize = 47;
+
+pub struct ProtocolAddress {
+    buf: AddressBuf,   // inline up to 47 bytes, spills to a `String` beyond that
+    name_len: usize,   // marks where the name ends
+    device_id: DeviceId,
+}
+
+impl ProtocolAddress {
+    /// One-shot construction: writes `name` into the buffer and appends the suffix.
+    pub fn new(name: &str, device_id: DeviceId) -> Self;
+
+    /// An address with no name yet, ready for `reset_with()`. No capacity argument —
+    /// the buffer starts inline and only allocates if an address ever exceeds it.
+    pub fn empty(device_id: DeviceId) -> Self;
+
+    /// Rewrite the address in place via closure. Single write pass — no intermediate copy.
+    pub fn reset_with(&mut self, write_name: impl FnOnce(&mut AddressBuf));
+
+    /// Zero-cost slice of the name portion.
+    pub fn name(&self) -> &str;
+
+    /// Zero-cost slice of the full buffer ("{name}.{device_id}").
+    pub fn as_str(&self) -> &str;
+}
+```
+
+Both `name()` and `as_str()` are zero-cost slices into the same buffer — no allocations on access, whether inline or spilled.
+
+<Note>
+**API change (PR [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131)):** `ProtocolAddress::new` now takes `name: &str` instead of an owned `String`. `with_capacity(capacity, device_id)` was removed in favor of `empty(device_id)` — the buffer no longer needs a capacity hint, since it starts inline and only allocates on overflow. `reset_with()`'s closure now receives `&mut AddressBuf` instead of `&mut String`; `AddressBuf` implements `push_str`, `push`, and `std::fmt::Write`, which covers existing call sites.
+</Note>
+
+<Warning>
+`Debug` on `AddressBuf` (and `ProtocolAddress`) must format `as_str()`, never the backing byte array: clearing an inline buffer only rewinds its length, so the unused tail still holds whichever address occupied it before. A derived `Debug` would print the whole array and could leak an unrelated peer's JID into a log line or error that formats a reused address.
+</Warning>
+
+### Reusable hot-loop address construction
+
+When iterating over many devices (e.g., during group stanza preparation or session resolution), allocating a fresh `ProtocolAddress` per device is wasteful. The `JidExt` trait provides `reset_protocol_address()` to rewrite a pre-allocated address in place, and `make_reusable_protocol_address()` creates the initial buffer:
+
+```rust
+// wacore/src/types/jid.rs
+pub fn make_reusable_protocol_address() -> ProtocolAddress {
+    ProtocolAddress::empty(SIGNAL_DEVICE_ID)
+}
+
+pub trait JidExt {
+    /// Rewrite a reusable ProtocolAddress in place for this JID.
+    fn reset_protocol_address(&self, addr: &mut ProtocolAddress);
+}
+```
+
+**Usage in group stanza preparation:**
+
+```rust
+// wacore/src/send.rs — session resolution loop
+let mut reusable_addr = make_reusable_protocol_address();
+
+for device_jid in devices {
+    // Rewrite the same buffer — no new allocation per device
+    device_jid.reset_protocol_address(&mut reusable_addr);
+
+    if stores.session_store.load_session(&reusable_addr).await?.is_some() {
+        // Session exists — use it
+    }
+}
+```
+
+Since [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131), a fresh `ProtocolAddress` for a typical WhatsApp address (up to 47 bytes) is already allocation-free — inline storage covers it. Reuse still matters for addresses that spill to the heap: the first spill on a reused buffer still allocates its backing `String`, but every reset after that keeps the existing allocation instead of dropping and reallocating one per device — for a group with 100 participant devices past the inline limit sharing a reused buffer, that saves up to 99 heap allocations on the send path.
+
+<Note>
+  Use `to_protocol_address()` for one-shot address construction (e.g., cache keys, single lookups). Use `make_reusable_protocol_address()` + `reset_protocol_address()` when iterating over multiple JIDs in a tight loop.
+</Note>
+
+Location: `wacore/libsignal/src/core/address.rs`, `wacore/src/types/jid.rs`, `wacore/src/send.rs`
+
+### Zero-Allocation JID Deduplication
+
+Group stanza preparation needs to deduplicate participant JIDs at two stages: before device resolution (by user identity) and after LID conversion (by device identity). Two utility functions in `wacore/src/types/jid.rs` handle this with in-place sorted dedup instead of `HashSet` allocations:
+
+```rust
+/// Sort and deduplicate by user identity (user + server).
+pub fn sort_dedup_by_user(jids: &mut Vec<Jid>);
+
+/// Sort and deduplicate by device identity (user + server + device + integrator + identity_agent).
+pub fn sort_dedup_by_device(jids: &mut Vec<Jid>);
+```
+
+`sort_dedup_by_device` keys on `Jid::identity_agent()` rather than the raw `agent` field, so its notion of "same device" matches exactly what `Jid`'s `PartialEq`/`Hash` already treat as equal (see [Binary Protocol](/advanced/binary-protocol#jid-encoding) for why the two fields differ). That has to hold in both directions: keying on the raw `agent` would let two JIDs that are actually one device — an inert agent byte on `Pn`/`Lid`/`Hosted`/`HostedLid`, same AD-JID, same Signal address — both survive the dedup and pick up two concurrent encryption jobs against one session; dropping `agent` from the key entirely would go too far the other way and silently collapse two genuinely distinct `@bot`/`@interop` devices, which *do* render it, losing a fan-out destination.
+
+Both use `sort_unstable_by` followed by `dedup_by`, comparing JID fields directly without allocating intermediate strings or hash sets. This is more efficient than the `HashSet<(String, String)>` approach because:
+
+- No per-JID `String::clone()` for hash keys
+- No `HashSet` allocation or hashing overhead
+- Stable dedup order (sorted) instead of hash-dependent iteration
+
+**Usage in group sends (`wacore/src/send.rs`):**
+
+```rust
+// Before device resolution — dedup participants by user identity
+sort_dedup_by_user(&mut jids_to_resolve);
+
+// After LID conversion — dedup devices by full device identity
+// Catches duplicates where both phone and LID queries resolve
+// to the same device (e.g., 559980000003:33 and 100000037037034:33@lid)
+sort_dedup_by_device(&mut resolved_list);
+```
+
+Location: `wacore/src/types/jid.rs:33-51`
+
+### Take/Restore Pattern
+
+Avoids cloning session states during decryption attempts:
+
+```rust
+// Take ownership instead of cloning
+if let Some(mut current_state) = record.take_session_state() {
+    let result = decrypt_message_with_state(&mut current_state, ...);
+    match result {
+        Ok(ptext) => {
+            record.set_session_state(current_state);
+            return Ok(ptext);
+        }
+        Err(e) => {
+            record.set_session_state(current_state);  // Restore
+        }
+    }
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:495-564`
+
+### Buffer Reuse
+
+Thread-local buffers eliminate per-message allocations:
+
+```rust
+struct EncryptionBuffer {
+    buffer: Vec<u8>,
+    usage_count: usize,
+}
+
+const INITIAL_CAPACITY: usize = 1024;
+const MAX_CAPACITY: usize = 16 * 1024;
+const SHRINK_THRESHOLD: usize = 100;
+
+fn get_buffer(&mut self) -> &mut Vec<u8> {
+    self.usage_count += 1;
+    if self.usage_count.is_multiple_of(SHRINK_THRESHOLD) {
+        if self.buffer.capacity() > MAX_CAPACITY {
+            self.buffer = Vec::with_capacity(INITIAL_CAPACITY);
+        }
+    }
+    &mut self.buffer
+}
+```
+
+Location: `wacore/libsignal/src/protocol/session_cipher.rs:20-54`
+
+### Prewarming sender-key derivations
+
+`SenderKeyState` memoizes two curve derivations behind `OnceLock`s: the signing key's Edwards conversion (`PrivateKey::precompute_signing_cache`) and the verifier's Edwards entries (`PreparedVerifyingKey::precompute`). Both are expensive relative to the rest of an encrypt/decrypt. Both are cheap to reuse, as long as something keeps the memo warm across operations. If you keep the loaded `SenderKeyRecord` between operations, you get that for free. If you discard it instead — for example, if you persist through [`into_components()`](#record-components) and reconstruct the record on every load — you previously had no way to keep the warm derivation either. The memo lives on the record, and the `OnceLock`s only fill from inside.
+
+As of [#1213](https://github.com/oxidezap/whatsapp-rust/pull/1213), `SenderKeyState` exposes two setters. Use them to hand back a derivation you already computed, instead of letting the state re-derive it:
+
+```rust
+impl SenderKeyState {
+    pub fn prewarm_signing_key(&self, key: PrivateKey) -> Result<(), InvalidSenderKeySessionError>;
+    pub fn prewarm_verifying_key(
+        &self,
+        verifier: PreparedVerifyingKey,
+    ) -> Result<(), InvalidSenderKeySessionError>;
+}
+```
+
+Both take `&self` — `OnceLock::set` doesn't need `&mut`. Reach them through `SenderKeyRecord::sender_key_state()` right after a fresh load:
+
+```rust
+let record = SenderKeyRecord::from_components(components)?;
+let state = record.sender_key_state()?;
+state.prewarm_signing_key(cached_signing_key.clone())?;   // send side
+state.prewarm_verifying_key(cached_verifier.clone())?;    // receive side
+```
+
+- **Correspondence is checked, not assumed.** If you pass a key or verifier that doesn't belong to this state's signing key, it's rejected with `InvalidSenderKeySessionError`, and the state is left free to derive for itself. Accepting foreign material without checking would sign or verify under the wrong key. The check is cheap on both sides: `PreparedVerifyingKey` already holds the Montgomery bytes, so `PreparedVerifyingKey::is_for(&PublicKey)` is a 32-byte comparison. A private key compares by its clamped serialized form. Neither redoes the derivation you're trying to skip.
+- **Already-warm is a no-op, not an error.** If you prewarm a memo that's already populated — by a prior prewarm, or by lazy use — it's left alone. The value in place is the same derivation, so surfacing an error would force you to track state that changes nothing.
+- **Hold the key warm before caching it, or you lose the payoff.** Every read of the signing-key memo hands out a clone, and `PrivateKey`'s Edwards cache is a per-instance `OnceLock` — a clone of a cold key re-derives on its own. `prewarm_signing_key` warms whatever you give it before storing it, so a single cold call still leaves the memo warm. But if you repeatedly hand over cold clones, you pay the derivation every time. Call `PrivateKey::precompute_signing_cache()` once when the key first enters your own cache, then clone the warm copy into each `prewarm_signing_key` call. You don't need that care on the verifying-key side: `PreparedVerifyingKey`'s entries sit behind a shared handle, so warming one instance warms every clone of it, including the copy in your cache.
+- **You take on the cache's lifetime.** Injecting a derivation makes you responsible for how long it — and any private material in it — lives, which the state would otherwise own only for its own lifetime. If you call neither setter, you're unaffected: the lazy derivation behaves exactly as before.
+
+Benchmarked in `wacore/benches/sender_key_derivation_benchmark.rs` against a record kept warm the whole time and one rebuilt from components with no prewarming. CI reads these benchmarks by instruction count rather than wall-clock time — the figures below are simulated microseconds modeled from that count, stable across runs, and comparable to each other but not to a real-time measurement:
+
+| | rebuilt, no prewarm | prewarmed | kept warm |
+| --- | --- | --- | --- |
+| group encrypt | 239.6 simulated us | 158.7 simulated us | 149.6 simulated us |
+| group decrypt | 230.6 simulated us | 189.6 simulated us | 180.9 simulated us |
+
+Prewarming recovers roughly 90% of the gap between rebuilding cold and keeping the record warm for group encrypt, and 82% for group decrypt; what's left is the correspondence check plus the caller-side cache lookup — real work a record that's never discarded doesn't pay.
+
+Location: `wacore/libsignal/src/protocol/sender_keys.rs`, `wacore/libsignal/src/core/curve.rs`
+
+## Public API
+
+The `client.signal()` accessor exposes low-level Signal protocol operations for direct use. This includes 1:1 and group encryption/decryption, session validation, session deletion, participant node creation, and device resolution.
+
+See [Signal API reference](/api/signal) for full method documentation and examples.
+
+## Related Components
+
+- [Binary Protocol](/advanced/binary-protocol) - How encrypted messages are serialized
+- [State Management](/advanced/state-management) - How session state is persisted
+- [WebSocket Handling](/advanced/websocket-handling) - Transport layer for encrypted messages
+- [Signal API](/api/signal) - Public API for Signal protocol operations
+
+## References
+
+- [Signal Protocol Specification](https://signal.org/docs/)
+- [libsignal Repository](https://github.com/signalapp/libsignal)
+- Source: `wacore/libsignal/src/protocol/`
+- Storage: `src/store/signal.rs`, `src/store/signal_adapter.rs`, `wacore/src/store/signal_cache.rs`

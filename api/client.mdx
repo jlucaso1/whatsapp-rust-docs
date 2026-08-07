@@ -1808,13 +1808,14 @@ See [ChannelEventHandler](/concepts/events#channeleventhandler) for details.
 ### register_chatstate_handler
 
 ```rust
-pub async fn register_chatstate_handler(
-    &self,
-    handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>,
-)
+pub fn register_chatstate_handler(&self, handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>)
 ```
 
-Registers a handler for chat state events (typing indicators). The handler is wrapped in `Arc` for thread-safe sharing across the event dispatching system.
+Registers a handler for chat state events (typing indicators). The handler is wrapped in `Arc` for thread-safe sharing across the event dispatching system. Registration is copy-on-write, so dispatch never blocks a concurrent registration and the zero-handler default path takes no lock at all.
+
+<Warning>
+**Breaking change (as of PR #1227):** `register_chatstate_handler` is no longer `async`. Drop the `.await` at call sites: `client.register_chatstate_handler(handler)`.
+</Warning>
 
 ### set_raw_node_forwarding
 

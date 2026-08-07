@@ -1,1 +1,752 @@
-PLACEHOLDER_WILL_REPLACE
+---
+title: 'Signal Protocol Implementation'
+description: 'Deep dive into end-to-end encryption, Double Ratchet algorithm, and Signal Protocol in whatsapp-rust'
+---
+
+## Overview
+
+whatsapp-rust implements the Signal Protocol for end-to-end encryption of both one-on-one and group messages. The implementation is based on Signal's libsignal library, adapted for WhatsApp's specific protocol requirements.
+
+<Warning>
+  The Signal Protocol implementation handles cryptographic primitives. Any modifications to this code require expert-level understanding of cryptographic protocols to avoid security vulnerabilities.
+</Warning>
+
+## Architecture
+
+The Signal Protocol implementation is split across two main locations:
+
+- **`wacore/libsignal/`** - Platform-agnostic Signal Protocol core (Rust port of libsignal)
+- **`src/store/signal*.rs`** - WhatsApp-specific storage integration with Diesel/SQLite
+
+### Key Components
+
+```
+wacore/libsignal/src/
+├── protocol/
+│   ├── session_cipher.rs      # Encryption/decryption for 1:1 messages
+│   ├── group_cipher.rs        # Encryption/decryption for group messages
+│   ├── ratchet.rs            # Double Ratchet implementation
+│   ├── sender_keys.rs        # Sender Key protocol for groups
+│   └── state/                # Session state management
+└── crypto/
+    ├── aes_cbc.rs            # AES-256-CBC for message content
+    ├── aes_gcm.rs            # AES-GCM for media encryption
+    └── hash.rs               # HKDF and HMAC primitives
+```
+
+## Double ratchet protocol
+
+The Double Ratchet algorithm provides forward secrecy and post-compromise security for 1:1 messages.
+
+### Session Initialization
+
+Two participants initialize a session using Diffie-Hellman key exchange:
+
+```rust
+// Alice initiates the session (sender)
+pub fn initialize_alice_session<R: Rng + CryptoRng>(
+    parameters: &AliceSignalProtocolParameters,
+    csprng: &mut R,
+) -> Result<SessionState>
+
+// Bob receives the session (recipient)
+pub fn initialize_bob_session(
+    parameters: &BobSignalProtocolParameters
+) -> Result<SessionState>
+```
+
+**Key Derivation:**
+
+1. Compute shared secrets from ephemeral key exchanges
+2. Derive root key and chain key using HKDF-SHA256:
+   ```
+   HKDF(discontinuity_bytes || DH1 || DH2 || DH3 [|| DH4])
+   → (RootKey[32], ChainKey[32], PQRKey[32])
+   ```
+3. Initialize sender and receiver chains
+
+Location: `wacore/libsignal/src/protocol/ratchet.rs:41-172`
+
+### Message Encryption
+
+Each message advances the sender chain and derives ephemeral message keys:
+
+```rust
+// From wacore/libsignal/src/protocol/session_cipher.rs:65-183
+pub async fn message_encrypt(
+    ptext: &[u8],
+    remote_address: &ProtocolAddress,
+    session_store: &mut dyn SessionStore,
+    identity_store: &mut dyn IdentityKeyStore,
+) -> Result<CiphertextMessage>
+```
+
+**Process:**
+
+1. Load current session state
+2. Get sender chain key and derive message keys:
+   ```rust
+   let (message_keys_gen, next_chain_key) = chain_key.step_with_message_keys();
+   let message_keys = message_keys_gen.generate_keys();
+   // message_keys contains: cipher_key, mac_key, iv
+   ```
+3. Encrypt plaintext with AES-256-CBC:
+   ```rust
+   aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(), 
+                            message_keys.iv(), &mut buf)
+   ```
+4. Create SignalMessage with MAC for authentication
+5. Advance chain key and save session state
+
+**Message Format:**
+
+- **SignalMessage**: Standard encrypted message
+- **PreKeySignalMessage**: Includes prekey bundle for session establishment
+
+<Note>
+**Plaintext padding.** Before encryption, the serialized `wa::Message` is padded with a uniform-random number of bytes in `1..=16` (the pad length is repeated as the byte value, matching WA Web's `rand % 16 + 1` and whatsmeow). v0.6 fixed a prior scheme that masked the length with `& 0x0F`, which skewed the distribution toward 15 and could never emit 16 — a subtle fingerprinting divergence from the official client. The receiver strips the padding by reading the final byte as the length.
+</Note>
+
+### Message Decryption
+
+Decryption handles out-of-order delivery and tries multiple session states:
+
+```rust
+// From wacore/libsignal/src/protocol/session_cipher.rs:292-363
+pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
+    ciphertext: &SignalMessage,
+    remote_address: &ProtocolAddress,
+    session_store: &mut dyn SessionStore,
+    identity_store: &mut dyn IdentityKeyStore,
+    csprng: &mut R,
+) -> Result<Vec<u8>>
+```
+
+**Process:**
+
+1. Try current session state first
+2. If MAC verification fails, try previous (archived) sessions
+3. Derive/retrieve message keys for the counter
+4. Verify MAC:
+   ```rust
+   ciphertext.verify_mac(&their_identity_key, &local_identity_key, 
+                         message_keys.mac_key())
+   ```
+5. Decrypt with AES-256-CBC
+6. Promote successful session to current if needed
+
+<Note>
+  The implementation optimizes memory by using take/restore patterns to avoid cloning session states during decryption attempts (see `session_cipher.rs:495-619`).
+</Note>
+
+### Chain key ratcheting
+
+Message keys are derived from chain keys, which advance with each message:
+
+```rust
+pub struct ChainKey {
+    key: [u8; 32],
+    index: u32,
+}
+
+impl ChainKey {
+    pub fn step_with_message_keys(self) -> Result<(MessageKeyGenerator, ChainKey)> {
+        let message_key_gen = MessageKeyGenerator::new(self.key, self.index);
+        let next_chain_key = self.next_chain_key()?;
+        Ok((message_key_gen, next_chain_key))
+    }
+}
+```
+
+Location: `wacore/libsignal/src/protocol/ratchet/keys.rs`
+
+### Chain key overflow protection
+
+The chain key index is a `u32` that increments with each message. Without overflow protection, the index could silently wrap past `u32::MAX` (4,294,967,295) back to 0, creating a counter reuse vulnerability that breaks cryptographic guarantees (nonce reuse in message key derivation).
+
+Both 1:1 and group chain keys use `checked_add()` to return a typed error instead of wrapping:
+
+```rust
+// 1:1 chain keys (ratchet/keys.rs)
+pub fn next_chain_key(&self) -> crate::protocol::Result<Self> {
+    Ok(Self {
+        key: self.calculate_base_material(Self::CHAIN_KEY_SEED),
+        index: self.index.checked_add(1).ok_or_else(|| {
+            SignalProtocolError::InvalidState(
+                "next_chain_key",
+                "chain key index overflow (u32::MAX)".to_string(),
+            )
+        })?,
+    })
+}
+
+// Group sender chain keys (sender_keys.rs)
+let new_iteration = self.iteration.checked_add(1).ok_or_else(|| {
+    SignalProtocolError::InvalidState(
+        "sender_chain_key_next",
+        "Sender chain is too long".into(),
+    )
+})?;
+```
+
+<Warning>
+  A chain key reaching `u32::MAX` iterations indicates an abnormally long-lived session. In practice this should never occur — ratchet key rotations reset the chain counter with each new Diffie-Hellman exchange.
+</Warning>
+
+Location: `wacore/libsignal/src/protocol/ratchet/keys.rs`, `wacore/libsignal/src/protocol/sender_keys.rs`
+
+### Forward Jumps
+
+The protocol tolerates out-of-order messages up to a limit. Peer sessions and group sender-key chains match WhatsApp Web's `signalFutureMessagesMax`; a pairwise session with one of your **own** other devices gets a wider (but still bounded) ceiling, since multi-device app-sync legitimately jumps far ahead and the peer is trusted:
+
+```rust
+// wacore/libsignal/src/protocol/consts.rs
+pub const MAX_FORWARD_JUMPS: usize = 2_000;       // peer sessions + group sender keys
+pub const MAX_FORWARD_JUMPS_SELF: usize = 25_000; // sessions with your own other devices
+
+// wacore/libsignal/src/protocol/session_cipher.rs
+const fn forward_jump_limit(is_self: bool) -> usize {
+    if is_self { MAX_FORWARD_JUMPS_SELF } else { MAX_FORWARD_JUMPS }
+}
+
+if jump > forward_jump_limit(state.session_with_self()?) {
+    return Err(SignalProtocolError::InvalidMessage(
+        original_message_type,
+        "message from too far into the future",
+    ));
+}
+```
+
+<Note>
+Before this change, self-device sessions were exempt from the limit entirely (jumps beyond `MAX_FORWARD_JUMPS` were logged and allowed through). `MAX_FORWARD_JUMPS_SELF` (25,000) now bounds that path too — still wide enough for legitimate app-sync catch-up, but no longer unbounded. Peer sessions and group sender-key chains dropped from 25,000 to 2,000, matching WA Web's `signalFutureMessagesMax`; a message whose counter is more than 2,000 steps ahead is rejected (driving the retry-receipt path) instead of forcing thousands of KDF derivations per message.
+</Note>
+
+Location: `wacore/libsignal/src/protocol/consts.rs`, `wacore/libsignal/src/protocol/session_cipher.rs`
+
+## DM device fanout
+
+When sending a direct message, the library resolves all known devices for both the recipient and your own account, then encrypts two different plaintexts for two categories of devices:
+
+- **Recipient devices** receive the actual message content
+- **Own other devices** (your other linked devices) receive a `DeviceSentMessage` wrapper containing the message plus the destination JID, so your other devices can display the sent message in the correct chat
+
+<Note>
+**Destination JID encoding via `DsmDestination` ([#1137](https://github.com/oxidezap/whatsapp-rust/pull/1137)).** The `DeviceSentMessage` wrapper writes its destination JID as a length-prefixed protobuf field, which needs the encoded length before the bytes. `wacore::messages::MessageUtils::encode_dm_plaintexts` and `dm_plaintexts_from_encoded` used to take `destination_jid: &str`, so the caller rendered the `Jid` into a `String` purely to measure and copy it. Both now take `impl DsmDestination` instead. `DsmDestination` is implemented directly on `Jid`, so it can measure and write its own wire form without an intermediate `String`. It's also implemented on `str` and the standard string wrappers (`String`, `Box<str>`, `Rc<str>`, `Arc<str>`, `Cow<str>`), carried through references of any depth via two blanket impls. The DM send path now passes `to_jid: &Jid` directly instead of `&to_jid.to_string()`.
+</Note>
+
+### Device resolution
+
+The DM send path builds the full device list in a WA Web-compliant manner (matching `WAWebSendUserMsgJob` and `WAWebDBDeviceListFanout`):
+
+1. **Local registry first** — the client checks the local device registry via `get_devices_from_registry()` for both the recipient and own account. A network fetch (`get_user_devices`) is only triggered on a cache miss, avoiding unnecessary LID-migration side effects.
+2. **Hosted device filtering** — devices flagged as hosted (via `is_hosted()`) are filtered out, matching WA Web's `DBDeviceListFanout` exclusion.
+3. **Sender device exclusion** — the exact sender device is removed from the list so `ensure_e2e_sessions` never creates a self-session. This matches WA Web's `isMeDevice` check in `getFanOutList`.
+4. **Self-DM deduplication** — when sending to your own account, the recipient and own device lists overlap. A `HashSet`-based dedup pass (matching WA Web's `Map` keyed by `toString`) removes duplicates.
+
+```rust
+// Build device list — local registry first, network on miss
+let mut recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
+if recipient_cached.is_none() {
+    let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+    recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
+}
+
+// Filter hosted devices, exclude sender, dedup for self-DMs
+all_dm_jids.retain(|j| !j.is_hosted());
+all_dm_jids.retain(|j| !is_sender);
+// HashSet dedup for self-DM overlap
+```
+
+<Note>
+**Per-recipient memoization ([#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118)).** The steps above — the registry lookups, the list rebuild, the partition, and the phash — are memoized per recipient in `dm_devices_memo`, keyed by the resolved wire JID and validated against the device-topology generation and the sending identity (own PN/LID). A warm repeat send to the same chat reuses the stored `ResolvedDmDevices` (an `Arc`, so a hit is a refcount bump — nothing is cloned) instead of redoing this resolution. Any device add/remove/replace, registry invalidation, PN↔LID mapping change, or re-pair invalidates the entry through the same topology tracker the existing `group_devices_memo` already uses; a resolution that had to fall back (e.g. a registry lookup miss) is never memoized. Explicitly requesting network-fresh data bypasses the memo entirely. See `dm_devices_memo` and `group_devices_memo` in [`memory_report()`](/api/client#memory_report).
+</Note>
+
+### Device partitioning
+
+The `partition_dm_devices` function classifies all resolved devices into recipient and own groups, and excludes the exact sender device (the current device) entirely. It partitions `all_devices` in place — swapping recipient devices to the front of the passed-in `Vec` — instead of allocating two new device vectors per send:
+
+```rust
+pub(crate) fn partition_dm_devices(
+    all_devices: Vec<Jid>,
+    own_jid: &Jid,
+    own_lid: Option<&Jid>,
+) -> PartitionedDmDevices
+
+pub(crate) struct PartitionedDmDevices {
+    devices: Vec<Jid>,
+    recipient_count: usize,
+}
+
+impl PartitionedDmDevices {
+    // recipient + own, sender excluded
+    pub(crate) fn valid_devices(&self) -> &[Jid] {
+        &self.devices
+    }
+
+    // recipient devices only
+    pub(crate) fn recipient_devices(&self) -> &[Jid] {
+        &self.devices[..self.recipient_count]
+    }
+
+    // own non-sender devices only
+    pub(crate) fn own_other_devices(&self) -> &[Jid] {
+        &self.devices[self.recipient_count..]
+    }
+}
+```
+
+Since [#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118), `partition_dm_devices` runs once per `dm_devices_memo` entry — wrapped by `ResolvedDmDevices::new(all_devices, own_jid, own_lid)` — rather than on every send; see [`DmStanzaRequest` and `ResolvedDmDevices`](#dmstanzarequest-and-resolveddmdevices) below.
+
+### Sender device exclusion
+
+The exact sender device is identified by matching both the user **and** device ID against your phone number JID (PN) or your Linked Identity JID (LID):
+
+```rust
+fn is_exact_dm_sender_device(device_jid: &Jid, own_jid: &Jid, own_lid: Option<&Jid>) -> bool {
+    (device_jid.is_same_user_as(own_jid) && device_jid.device == own_jid.device)
+        || own_lid.is_some_and(|lid|
+            device_jid.is_same_user_as(lid) && device_jid.device == lid.device
+        )
+}
+```
+
+### Own device recognition
+
+After excluding the sender device, the remaining devices are classified using `matches_user_or_lid`, which checks if a device JID belongs to the same user as either your PN or LID:
+
+```rust
+pub fn matches_user_or_lid(&self, user: &Jid, lid: Option<&Jid>) -> bool {
+    self.is_same_user_as(user) || lid.is_some_and(|l| self.is_same_user_as(l))
+}
+```
+
+This ensures that your own devices registered under your LID (common in multi-device setups) are correctly classified as "own" devices and receive the `DeviceSentMessage` plaintext — not the recipient plaintext. Without LID matching, your own LID-based devices would be misclassified as recipient devices, causing them to receive the wrong message format.
+
+<Note>
+  Both PN-based and LID-based devices must be checked because WhatsApp's multi-device architecture uses both addressing schemes. A user's devices may appear under either their phone number JID (`@s.whatsapp.net`) or their Linked Identity JID (`@lid`), depending on the device type and registration path.
+</Note>
+
+### DmStanzaRequest and ResolvedDmDevices
+
+`prepare_dm_stanza` takes a `DmStanzaRequest` whose `devices` field is the already-resolved, already-partitioned fan-out for the recipient — a borrowed `&ResolvedDmDevices` — rather than a raw device list:
+
+```rust
+pub struct DmStanzaRequest<'a> {
+    pub own_jid: &'a Jid,
+    pub account: Option<&'a wa::ADVSignedDeviceIdentity>,
+    pub to: &'a Jid,
+    pub message: &'a wa::Message,
+    pub message_id: &'a str,
+    pub edit: Option<&'a crate::types::message::EditAttribute>,
+    pub extra_nodes: &'a [Node],
+    /// The already-partitioned fan-out. Borrowed, not owned: the caller's
+    /// per-recipient memo hands out the same `Arc` on every repeat send, so
+    /// neither the device list nor its phash is rebuilt here.
+    pub devices: &'a ResolvedDmDevices,
+    pub pre_encoded: Option<&'a [u8]>,
+}
+```
+
+`ResolvedDmDevices` (`wacore::send::ResolvedDmDevices`) wraps the partitioned device set from `partition_dm_devices` together with a lazily memoized phash — the type that `dm_devices_memo` caches per recipient:
+
+```rust
+pub struct ResolvedDmDevices { /* partitioned devices + OnceLock<CompactString> phash */ }
+
+impl ResolvedDmDevices {
+    /// Partitions `all_devices` into recipient devices and own companions,
+    /// dropping the sending device itself.
+    pub fn new(all_devices: Vec<Jid>, own_jid: &Jid, own_lid: Option<&Jid>) -> Self;
+
+    /// Every device the stanza encrypts for, in partition order.
+    pub fn devices(&self) -> &[Jid];
+
+    /// The DM phash over the sent device set: a memo hit is an inline copy.
+    pub fn phash(&self) -> Option<CompactString>;
+}
+```
+
+<Warning>
+  **Breaking change ([#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118)):** `DmStanzaRequest::own_lid` was removed — the sending identity's LID is now baked into the `ResolvedDmDevices` passed via `devices` at construction time (`ResolvedDmDevices::new`) — and `DmStanzaRequest::devices` changed from `Vec<Jid>` to `&ResolvedDmDevices`. An out-of-tree caller constructing `DmStanzaRequest` directly needs to build a `ResolvedDmDevices` first (via `ResolvedDmDevices::new(all_devices, own_jid, own_lid)`) and pass it by reference.
+</Warning>
+
+### Session preflight and the 406 case
+
+Before `prepare_dm_stanza` builds the stanza, `ensure_e2e_sessions` runs as a preflight that fetches prekeys for any resolved device without an established Signal session — one IQ covering up to `SESSION_CHECK_BATCH_SIZE` (50) devices. The server can reject devices two ways: **by name**, returning a `<user>` node whose bundle is replaced with an `<error code="406">` for that one device, or **batch-wide**, failing the IQ itself with a `406` that names nobody.
+
+<Note>
+**A named `406` rejection now refreshes only that device's user, not the whole batch ([#1153](https://github.com/oxidezap/whatsapp-rust/pull/1153), closes [#1143](https://github.com/oxidezap/whatsapp-rust/issues/1143)).** `PreKeyUtils::parse_prekeys_response` returns a `PreKeyFetchOutcome { bundles, rejected }` instead of a bare bundle map. `rejected` carries the devices the server named directly in the response body, each with the `<error>` code it was rejected with. When one of those codes is `406`, the preflight calls `invalidate_device_caches_for` with the named device JIDs. That call dedupes the JIDs to their distinct users and refreshes each user's whole device-list cache entry, since the cache is keyed per user rather than per individual device. The send proceeds afterward, and every device that did return a bundle is unaffected — so one rejected device no longer costs the rest of the batch.
+
+This corrects the premise of [#1139](https://github.com/oxidezap/whatsapp-rust/pull/1139) (closed [#1135](https://github.com/oxidezap/whatsapp-rust/issues/1135)). #1139 assumed the response "doesn't say which one" and so invalidated every distinct user in the batch on any `406`. WA Web's own parser (`FetchKeyBundlesUserError` in `WAWeb/Fetch/PrekeysJob`) already reads this per-device error. whatsapp-rust's parser fed the same node to the bundle parser instead: it failed on the missing fields, logged the failure as a malformed bundle, and discarded the code. The device was skipped, but its stale entry was never refreshed, so the next send resolved the same absent device again. #1139's whole-batch invalidation and propagated `?` error still apply to the one case a named rejection cannot cover: a `406` on the IQ itself.
+
+The asymmetry #1139 described between the DM and group paths is gone — DM handled at the preflight, group already covered by the per-device fan-out (`stale_device_users`). `SendContextResolver::fetch_prekeys_for_identity_check` now returns `wacore::prekeys::PreKeyFetchOutcome` instead of `HashMap<Jid, PreKeyBundle>`. If you implement a custom `SendContextResolver`, update this method's return type to match. The new type carries a named rejection into the group fan-out's `EncryptResult::rejected_devices`, so `stale_users_for` refreshes exactly those users instead of inferring staleness from whichever targets went unencrypted for unrelated reasons (missing bundle, malformed bundle, failed session setup). Both paths now act on the same named-device signal when the server provides it.
+</Note>
+
+### PreparedDmStanza
+
+`prepare_dm_stanza` returns a `PreparedDmStanza` struct containing the stanza node and the locally computed phash for server ACK validation:
+
+```rust
+pub struct PreparedDmStanza {
+    pub node: Node,
+    /// Locally computed phash from the sent device set. Not sent on the
+    /// wire (WA Web only sends phash for groups). Used by the caller to
+    /// compare against the server's ACK phash for device-list drift detection.
+    pub phash: Option<CompactString>,
+}
+```
+
+<Note>
+  `phash` changed from `Option<String>` to `Option<CompactString>` (`wacore_binary::CompactString`) in [#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118), matching the type `ResolvedDmDevices::phash()` returns: a warm memo hit clones the cached `CompactString` inline instead of allocating a new `String`.
+</Note>
+
+The phash is computed from the actual sent device set (after partitioning, with the sender excluded) using `MessageUtils::participant_list_hash()`. Unlike group messages, the DM phash is **not** sent on the wire — WA Web only includes `phash` in the `DeviceSentMessage` for groups. The DM phash is used purely for local validation against the server's ACK to detect device-list drift.
+
+<Note>
+  The `DeviceSentMessage.phash` field is set to `None` for DMs, matching WA Web's behavior where only group `DeviceSentMessage` wrappers include a phash. The DM phash is computed and tracked separately by the caller.
+</Note>
+
+Location: `wacore/src/send.rs:675-820`, `src/send.rs`
+
+## PN→LID session migration
+
+WhatsApp's multi-device architecture uses two addressing schemes: phone number JIDs (PN, `@s.whatsapp.net`) and Linked Identity JIDs (LID, `@lid`). WhatsApp Web always resolves PN→LID before any session operation via `createSignalAddress()`. whatsapp-rust mirrors this behavior — when a LID mapping is discovered for a phone number, any Signal sessions stored under the PN address are automatically migrated to the corresponding LID address.
+
+<Note>
+  The automatic migration described below is also exposed for manual invocation: [`Signal::migrate_sessions(from, to)`](/api/signal#migrate_sessions) runs the same move for a caller-chosen JID pair, and [`Signal::session_info(jid)`](/api/signal#session_info) inspects a session (migrating a legacy PN-addressed one first if needed) without mutating it further. See the [Signal API reference](/api/signal) for both.
+</Note>
+
+### Signal address resolution
+
+`Client::resolve_encryption_jid()` mirrors WA Web's `SignalAddress.toString()` (`WAWeb/Signal/Address.js`). It upgrades the JID's `server` to its LID counterpart when a mapping is known, and otherwise returns the input unchanged:
+
+| Input `Server` | Resolved `Server` (mapping known) | No mapping |
+|----------------|------------------------------------|------------|
+| `Pn` | `Lid` | `Pn` (preserved) |
+| `Hosted` | `HostedLid` | `Hosted` (preserved) |
+| Any other | unchanged | unchanged |
+
+The `device`, `agent`, and `integrator` fields always round-trip — only the `user` (replaced with the LID user) and `server` change. This keeps Cloud API / Meta Business hosted devices on a hosted-flavored LID address rather than collapsing them into the standard `@lid` server, matching WA Web's per-device session keying.
+
+<Note>
+  `resolve_encryption_jid()` upgrades PN → LID unconditionally whenever a mapping is known — it governs Signal **session** addressing only, matching WA Web's `SignalAddress.toString()`. The outbound DM **wire** namespace (the stanza `to`, `<participants>`, and `DeviceSentMessage` destination) is a separate, account-level decision — see [DM wire namespace vs. Signal session addressing](#dm-wire-namespace-vs-signal-session-addressing) below.
+</Note>
+
+### DM wire namespace vs. Signal session addressing
+
+Since v0.6.x (fix for [#941](https://github.com/oxidezap/whatsapp-rust/issues/941)), a DM's outer `<message to>` / `<participants>` addressing is no longer derived directly from `resolve_encryption_jid()`. Some accounts are not yet **1:1-LID-migrated** on WhatsApp's servers, and those accounts get every LID-addressed DM rejected with `ack error="400"` even though the underlying Signal session is correctly LID-keyed.
+
+`Client::resolve_dm_wire_jid()` (`src/client/lid_pn.rs`) makes this account-level decision, mirroring WA Web's `Lid1X1MigrationUtils.isLidMigrated()` / `WAWebMessageDestinationChat`:
+
+```rust
+pub(crate) async fn resolve_dm_wire_jid(&self, to: &Jid) -> Jid {
+    if self.is_lid_migrated().await {
+        return self.resolve_encryption_jid(to).await.into_non_ad();
+    }
+    let bare = to.to_non_ad();
+    if bare.is_lid() {
+        self.swap_pn_lid_namespace(&bare).await.unwrap_or(bare)
+    } else {
+        bare
+    }
+}
+```
+
+- **Migrated account** (`Client::is_lid_migrated()` is `true`): behaves exactly like before — the wire namespace upgrades PN → LID whenever a mapping is known.
+- **Unmigrated account**: DMs stay on PN even with a cached LID mapping. A caller-supplied LID with a known PN mapping is mapped back to the PN chat; a LID with no cached mapping is sent as-is (there is no reverse LID→PN network resolution, matching WA Web).
+
+`Client::is_lid_migrated()` is `true` when either is true:
+
+1. The persisted `Device.lid_migrated` flag (see [Storage — DeviceStore](/concepts/storage#devicestore)), set once from the primary's `pair-success` `<client-props>` (`isChatDbLidMigrated`) or from a `lid_migration_mapping_sync_message` protocol message pushed to the primary's own companions (self-only — see [Authentication — one-to-one LID migration state](/concepts/authentication#one-to-one-lid-migration-state)).
+2. The `lid_one_on_one_migration_enabled` ab prop, as a fallback for sessions paired before the flag existed. The first observation of this prop being on also latches the persisted flag, so the account doesn't flap back to PN addressing before the next props fetch.
+
+Once set, `lid_migrated` never reverts for the same account — only pairing a *different* account onto the same store resets it. Signal session addressing (`resolve_encryption_jid`) and inbound decrypt are unaffected by any of this; only the outbound DM wire namespace is gated.
+
+<Warning>
+  This gate applies to 1:1 DMs only. Group sends, which already address everything by the group's own `AddressingMode`, are untouched.
+</Warning>
+
+### Why migration is needed
+
+After pairing, the primary phone may initially establish sessions under a PN address. Once the LID mapping becomes known (from usync, incoming messages, or device notifications), the phone begins sending from the LID address. Without migration, the client holds a session under the PN address but receives messages addressed to the LID — causing `SessionNotFound` decryption failures.
+
+### Proactive migration at LID discovery
+
+When a new LID-PN mapping is learned (via `add_lid_pn_mapping`), the client scans devices 0–99 for PN-keyed sessions and migrates them. All reads and writes go through the `SignalStoreCache` rather than the backend directly — this prevents reading stale data when the cache has unflushed mutations (e.g., after SKDM encryption ratcheted the session). The migrated state is flushed to the backend at the end so it survives restarts.
+
+```rust
+// src/client/lid_pn.rs
+pub(crate) async fn migrate_signal_sessions_on_lid_discovery(&self, pn: &str, lid: &str) {
+    for device_id in 0..=99u16 {
+        // Read from signal_cache (authoritative over backend)
+        // If PN session exists and no LID session → move session to LID via cache
+        // If both exist → delete the stale PN session from cache
+        // Identity keys are migrated independently of sessions
+    }
+    // Flush migrated state to backend so it survives restarts
+    self.signal_cache.flush(backend.as_ref()).await;
+}
+```
+
+**Migration rules per device:**
+
+| PN session | LID session | Action |
+|-----------|-------------|--------|
+| Exists | Does not exist | Move session and identity from PN→LID address |
+| Exists | Exists | Delete stale PN session (LID takes precedence) |
+| Does not exist | Any | No action |
+
+Identity keys are migrated independently of sessions — they can outlive deleted sessions and survive session re-establishment.
+
+<Warning>
+  The migration reads through the cache because the backend may contain stale session data when unflushed cache mutations exist. Reading directly from the backend could skip in-flight ratchet advances, causing the migrated session to decrypt with an outdated chain key.
+</Warning>
+
+<Note>
+  `add_lid_pn_mapping` also has a batch form, `Client::add_lid_pn_mappings(mappings, source)`, which durably records many LID↔PN pairs in one call and runs the same per-mapping migration as the single-entry path. It returns how many mappings were actually written, deduplicated against existing records.
+</Note>
+
+### On-the-fly migration during decryption
+
+If a message arrives from a LID address and decryption fails with `SessionNotFound` or `InvalidPreKeyId`, the client attempts PN→LID migration as a fallback before requesting a retry:
+
+1. Look up the PN for the sender's LID
+2. Attempt to migrate PN sessions to LID via the signal cache (same cache-first logic as proactive migration)
+3. Retry decryption with the migrated session (already in the cache — no reload needed)
+4. If `DuplicateMessage` occurs during post-migration retry, it is silently ignored
+5. Fall back to retry receipt only if migration does not resolve the issue
+
+The `InvalidPreKeyId` case occurs when a `PreKeyMessage` references a consumed one-time prekey, but the session actually exists under a PN address (legacy migration). Migrating the session lets Signal use the existing ratchet state instead of looking up the consumed prekey. This migration is attempted in both the identity-change retry path and the initial decryption path.
+
+This ensures existing databases are fixed without requiring re-pairing.
+
+### Login-time session check
+
+At login, the client checks the session state of own device 0 (primary phone):
+
+- **LID session exists** — no action needed
+- **PN session only** — logged; migration deferred to first message via on-the-fly path
+- **No session** — will be established on first message exchange
+
+```rust
+// src/client/sessions.rs
+pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<()> {
+    // Checks LID session → logs PN-only state → defers migration to message path
+}
+```
+
+<Note>
+  Both migration paths route through the `SignalStoreCache`, ensuring they see the latest in-memory state. The proactive migration runs when a LID mapping is first discovered and flushes to the backend afterward. The on-the-fly migration handles the case where the database already contains stale PN sessions from before the mapping was known.
+</Note>
+
+Location: `src/client/lid_pn.rs`, `src/client/sessions.rs`, `src/message.rs`
+
+## Sender keys (group encryption)
+
+Groups use the Sender Key protocol for efficient multi-recipient encryption.
+
+### Sender key address normalization
+
+Sender key records are keyed by a composite `SenderKeyName` containing the group JID and a sender protocol address string. WhatsApp delivers group stanzas with **inconsistent sender addressing** — the `pkmsg` (which carries the SKDM) arrives with a device-qualified participant JID (e.g., `100000000000001.1:75@lid`), while the `skmsg` (the actual encrypted group message) arrives with a bare participant JID (e.g., `100000000000001.1@lid`).
+
+Without normalization, the sender key would be stored under the device-qualified address during SKDM processing but looked up under the bare address during `skmsg` decryption, causing `NoSenderKeyState` failures.
+
+The client normalizes the sender JID to its bare form using `to_non_ad()` (which strips the device component, setting `device = 0, agent = 0`) at every point where a `SenderKeyName` is constructed. The `SenderKeyName::from_jid()` convenience method handles the `to_string()` conversion automatically:
+
+```rust
+// Decryption path (src/message.rs) — normalize before group_decrypt
+let sender_for_sk = info.source.sender.to_non_ad();
+let sender_address = sender_for_sk.to_protocol_address();
+let sender_key_name = SenderKeyName::from_jid(&info.source.chat, &sender_address);
+
+// SKDM storage path (src/message.rs) — normalize before process_sender_key_distribution_message
+let sender_bare = sender_jid.to_non_ad();
+let sender_address = sender_bare.to_protocol_address();
+let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_address);
+```
+
+`SenderKeyName::from_jid()` is equivalent to `SenderKeyName::new(group_jid.to_string(), sender_address.to_string())` but avoids the manual `to_string()` calls and is the preferred constructor.
+
+This ensures the cache key is always in the form `"{group}:{bare_user}@{server}.0"`, regardless of whether the original stanza used a device-qualified or bare JID.
+
+<Warning>
+  Custom implementations that construct `SenderKeyName` directly must also normalize the sender JID to its bare form. Failing to do so will cause sender key lookup mismatches and decryption failures for group messages.
+</Warning>
+
+Location: `src/message.rs`, `wacore/libsignal/src/store/sender_key_name.rs`, `wacore/binary/src/jid.rs` (`to_non_ad()`)
+
+### Sender key distribution
+
+Each participant generates and distributes a sender key:
+
+```rust
+// From wacore/libsignal/src/protocol/group_cipher.rs:283-336
+pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
+    sender_key_name: &SenderKeyName,
+    sender_key_store: &mut dyn SenderKeyStore,
+    csprng: &mut R,
+) -> Result<SenderKeyDistributionMessage>
+```
+
+**Structure:**
+
+- **Chain ID**: Random 31-bit identifier for this sender key session
+- **Iteration**: Message counter (starts at 0)
+- **Chain Key**: 32-byte seed for deriving message keys
+- **Signing Key**: Ed25519 public key for message authentication
+
+### Group Encryption
+
+Messages are encrypted with the sender's current chain key:
+
+```rust
+// From wacore/libsignal/src/protocol/group_cipher.rs:53-116
+pub async fn group_encrypt<R: Rng + CryptoRng>(
+    sender_key_store: &mut dyn SenderKeyStore,
+    sender_key_name: &SenderKeyName,
+    plaintext: &[u8],
+    csprng: &mut R,
+) -> Result<SenderKeyMessage>
+```
+
+**Process:**
+
+1. Load sender key state for the group
+2. Derive message keys from current chain key
+3. Encrypt with AES-256-CBC
+4. Sign message with Ed25519 private key
+5. Advance chain key
+
+### Group Decryption
+
+Recipients decrypt using the sender's distributed key:
+
+```rust
+// From wacore/libsignal/src/protocol/group_cipher.rs:162-250
+pub async fn group_decrypt(
+    skm_bytes: &[u8],
+    sender_key_store: &dyn SenderKeyStore,
+    sender_key_name: &SenderKeyName,
+) -> Result<Vec<u8>>
+```
+
+**Process:**
+
+1. Parse SenderKeyMessage
+2. Look up sender key state by chain ID
+3. Verify Ed25519 signature
+4. Derive message keys for iteration (handling out-of-order)
+5. Decrypt with AES-256-CBC
+
+<Warning>
+  Group decryption maintains up to MAX_FORWARD_JUMPS (2,000) cached message keys per sender. This prevents resource exhaustion attacks but limits tolerance for extreme out-of-order delivery.
+</Warning>
+
+### Unknown device detection
+
+During group message decryption, the client checks whether the sender's device is present in the local device registry via `is_from_known_device()`. This detection triggers in two places within the group message processing path:
+
+1. **After successful `skmsg` decrypt** — if the sender device is not in the registry, the decrypted message is still **processed and delivered normally**. Signal decryption success already proves the sender holds a valid session key, so discarding the message would only add latency via an unnecessary retry round-trip. A background device sync is triggered to update the local device registry.
+2. **After a `NoSenderKeyState` error** — if the sender device is unknown, the retry reason is upgraded from `NoSession` to `UnknownCompanionNoPrekey`
+
+In both cases, the client queues a device list synchronization for the sender's user JID. The behavior depends on the connection state:
+
+- **Online**: the client immediately invalidates the cached device registry for the user and fires a background usync request to refresh the device list
+- **Offline** (during offline sync): the unknown device's user JID is batched into a `PendingDeviceSync` set, which is flushed after offline sync completes (see [Deferred device sync](/concepts/architecture#deferred-device-sync))
+
+Primary devices (device ID 0) are always treated as known — the check only applies to companion devices.
+
+This mechanism ensures that group messages from newly-paired companion devices are delivered immediately without waiting for a retry round-trip. The background device sync updates the local registry so future messages from the same device are recognized directly.
+
+```rust
+// src/message.rs — simplified flow
+async fn handle_unknown_device_sync(&self, info: &Arc<MessageInfo>) {
+    let user_jid = info.source.sender.to_non_ad();
+    if !self.pending_device_sync.add(&user_jid) {
+        return; // already queued, dedup
+    }
+    if info.is_offline {
+        return; // batched for deferred flush
+    }
+    // Online: immediate sync
+    self.invalidate_device_cache(&user_jid.user).await;
+    self.get_user_devices(&[user_jid]).await.ok();
+}
+```
+
+Location: `src/message.rs`, `src/client/device_registry.rs`, `src/pending_device_sync.rs`
+
+### Retry receipt from unknown group device
+
+When the client receives a retry receipt, `handle_retry_receipt` checks whether the requesting device is present in the local device registry. Previously the handler dropped all retries from unregistered devices — this was safe for WA Web because WA Web keeps participant device lists fresh via a pre-send sync, so any legitimate requester is already known before the send.
+
+For a library client, a participant device can legitimately be absent from the local registry: if the device joined between the last device-list sync and the group send, it will have received the `skmsg` from the server but never obtained a sender key, causing it to retry indefinitely. The retry receipt may carry a `<keys>` bundle — the ADV-signed `device-identity`, the identity key, a one-time prekey, and the signed prekey — which is everything needed to establish a Signal session and resend. But a newly-linked device that has no bundle still retries forever if the client only drops it: the reconciliation that fires when a prekey fetch returns 406 never triggers for that device because it was never in the send set.
+
+Whenever a retry arrives from an unknown device, `handle_retry_receipt` now calls `schedule_unknown_device_sync` **before** consulting `should_drop_unknown_device_retry`. This treats the retry as a staleness signal: the requester's user JID is enqueued for a device-list resync (deduplicated via `PendingDeviceSync`, so a retry storm from a single device cannot fan out into a usync storm). Once the resync completes, the device appears in the registry and future sends include it in the sender-key distribution — the retries stop. This mirrors WA Web's `syncDeviceListJob` trigger on the retry path.
+
+The drop predicate still controls whether the *current* retry is recovered or dropped:
+
+```rust
+// wacore/src/protocol/retry.rs
+pub fn should_drop_unknown_device_retry(keys_present: bool, device_known: bool) -> bool {
+    !keys_present && !device_known
+}
+```
+
+| `keys_present` | `device_known` | Result |
+|---|---|---|
+| `true` | `false` | **Recover** — build a session from the embedded bundle and resend; resync also triggered |
+| `false` | `false` | **Drop** — no bundle to recover this message; device-list resync triggered so device is learned for the next send |
+| any | `true` | **Resend** — device is in registry, proceed normally |
+
+When the bundle includes a `<device-identity>`, `process_retry_key_bundle` validates the ADV chain against the requester's account key (using the stored primary identity as a fallback when the server omits `account_signature_key`). A present-but-invalid ADV result is a hard error; the session is not built. If `<device-identity>` is absent from the bundle, or if no account key can be found, the check is skipped with a warning and the session is built anyway — matching the behaviour of the regular prekey-fetch path. The drop predicate only gates on syntactic `<keys>` presence, so the ADV guarantee is conditional on the bundle including a well-formed `<device-identity>`. This mirrors whatsmeow's approach of building the prekey session directly from the receipt bundle without a device-registry gate.
+
+Location: `src/retry.rs`, `wacore/src/protocol/retry.rs`, `src/pending_device_sync.rs`
+
+### Immutable sender key loading
+
+The `SenderKeyStore` trait's `load_sender_key` method takes `&self` (not `&mut self`), allowing sender key lookups to proceed under a **read lock**. This is safe because loading a sender key is a pure read operation — no state is mutated. The `store_sender_key` method still requires `&mut self` since it modifies state.
+
+This means concurrent group decryptions for different senders can load sender keys in parallel without contention, while writes (SKDM processing) still serialize correctly.
+
+<Note>
+If you implement `SenderKeyStore` for a custom backend, `load_sender_key` must use `&self` (immutable reference). Implementations that previously required `&mut self` for internal caching should use interior mutability (e.g., `Mutex` or `RwLock`) instead.
+</Note>
+
+### Sender key existence check
+
+Before distributing sender keys, the group message path checks whether the local sender key already exists. This check uses the `SignalStoreCache` with a **read lock** (`get_sender_key()`), matching the status broadcast path. This avoids acquiring a write lock and prevents unnecessary SKDM re-distribution on every group send.
+
+### Per-device sender key tracking
+
+To avoid resending Sender Key Distribution Messages on every group message, the client tracks sender key distribution status **per device** for each group. This uses a unified `sender_key_devices` table (see [Storage - ProtocolStore](/concepts/storage#protocolstore)) that matches WhatsApp Web's `participant.senderKey Map<deviceJid, boolean>` model — a single boolean per device per group indicating whether that device has a valid sender key (`true`) or needs fresh SKDM distribution (`false`).
+
+The tracking update is **deferred until after the server acknowledges** the message stanza. This matches WhatsApp Web's behavior where `markHasSenderKey()` is only called after the server confirms receipt.
+
+**Why deferred?** If the tracking were updated immediately after building the stanza (but before sending), a network failure between stanza build and send would leave stale entries — devices would be marked as having the sender key when they never actually received it. Subsequent messages would skip SKDM for those devices, causing decryption failures.
+
+**`PreparedGroupStanza` return value:**
+
+`prepare_group_stanza` returns a `PreparedGroupStanza` struct containing the stanza `node` and a `skdm_devices: Vec<Jid>` field listing exactly which devices received SKDM in this stanza. This eliminates the need for callers to re-resolve devices after sending, closing a race window where the device list could change between stanza preparation and post-ACK tracking update.
+
+```rust
+pub struct PreparedGroupStanza {
+    pub node: Node,
+    /// Devices that received SKDM in this stanza. Empty when no SKDM was distributed.
+    pub skdm_devices: Vec<Jid>,
+}
+```
+
+**Implementation:**
+
+- **Group path:** After `send_node()` succeeds, the caller uses the `skdm_devices` list from `PreparedGroupStanza` to call `set_sender_key_status(group, devices, true)`. No re-resolution needed.
+- **Status path:** A late-init boolean tracks whether full distribution occurred. The sender key tracking is only updated after the status stanza is successfully sent.
+- **Error recovery:** If `prepare_group_stanza` fails with `NoSenderKeyState`, all sender key device tracking for that group is cleared and the send is retried with full distribution.
+- **Sender key rotation:** On `rotateKey`, the Signal sender key is also deleted for forward secrecy (matching WhatsApp Web's `deleteGroupSenderKeyInfo`), and all device tracking is cleared via `reset_sender_key_device_tracking` — a DB-first clear with a cold-mark fallback (see below).
+- **Group `<modify>` notification (number/LID migration):** A `w:gp2` `<modify>` notification (a participant's number or LID changed) unconditionally force-rotates the own group sender key and invalidates both the persisted and in-memory group metadata cache, matching WhatsApp Web's `modifyParticipantInfo` (`rotateKey: true`). The next send regenerates and redistributes a fresh sender key against the current participant list instead of risking a stale entry for the migrated device. See `Client::force_rotate_own_sender_key`, `src/handlers/notification/groups.rs`.
+
+**Incremental targeting:**
+
+Rather than distributing the sender key to all group devices on every message, the client:
+1. Loads the per-device sender key map — first checking the in-memory cache, falling back to the database via `get_sender_key_devices`
+2. Resolves all current group participant devices
+3. Computes the diff — only devices with `has_key=false` or not yet tracked receive the SKDM

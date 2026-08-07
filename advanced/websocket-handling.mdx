@@ -777,7 +777,7 @@ impl Client {
         ).await?;
         
         // Store socket and start receivers
-        self.noise_socket.store(Some(Arc::clone(&noise_socket)));
+        *self.noise_socket.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::clone(&noise_socket));
         self.start_frame_receiver(events, noise_socket).await;
         
         Ok(())
@@ -795,7 +795,7 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
         .ok_or_else(|| anyhow!("Cannot start message loop: not connected"))?;
     // Noise socket is stable for the lifetime of this loop; resolve once
     // instead of locking the mutex on every inbound frame.
-    let noise_socket = self.get_noise_socket().await
+    let noise_socket = self.get_noise_socket()
         .map_err(|_| anyhow!("Cannot start message loop: no noise socket"))?;
     let mut frame_decoder = FrameDecoder::new();
 
@@ -874,8 +874,7 @@ Frame decryption is always sequential (noise protocol counter ordering), but nod
 ```rust
 impl Client {
     pub async fn send_node(&self, node: &Node) -> Result<()> {
-        let noise_socket = self.noise_socket.load()
-            .ok_or_else(|| anyhow!("not connected"))?;
+        let noise_socket = self.get_noise_socket()?;
         
         // Marshal node to binary with auto-sized buffer
         let plaintext_buf = marshal_auto(node)?;
@@ -898,7 +897,7 @@ impl Client {
     async fn cleanup_connection_state(&self) {
         self.shutdown_notifier.notify(usize::MAX);
         *self.transport.lock().await = None;
-        *self.noise_socket.lock().await = None;
+        *self.noise_socket.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.is_connected.store(false, Ordering::Release);
 
         // Drop per-chat lane senders so workers exit via channel close.

@@ -661,7 +661,7 @@ This mechanism ensures that group messages from newly-paired companion devices a
 // src/message.rs — simplified flow
 async fn handle_unknown_device_sync(&self, info: &Arc<MessageInfo>) {
     let user_jid = info.source.sender.to_non_ad();
-    if !self.pending_device_sync.add(user_jid.clone()).await {
+    if !self.pending_device_sync.add(&user_jid) {
         return; // already queued, dedup
     }
     if info.is_offline {

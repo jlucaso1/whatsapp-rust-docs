@@ -148,7 +148,7 @@ loop {
     for collection in &collections.collections {
         println!("{:?}: {} products", collection.name, collection.products.len());
         if collection.products.len() as u32 == options.item_limit {
-            println!("  (may be truncated — this collection has more products)");
+            println!("  (may be truncated — this collection may have more products)");
         }
     }
 
@@ -160,7 +160,7 @@ loop {
 ```
 
 <Note>
-`Collection::products` is a possibly-truncated prefix — the collections query returns no per-collection cursor, so `products.len() == item_limit` is the only signal that more products exist in that collection.
+`Collection::products` is a possibly-truncated prefix — the collections query returns no per-collection cursor, so `products.len() == item_limit` is the only signal that more products *may* exist in that collection. Equality doesn't prove it: a collection with exactly `item_limit` products and no more looks identical.
 </Note>
 
 ### get_order
@@ -178,7 +178,7 @@ pub async fn get_order(
 
 **Parameters:**
 - `jid` - the business the order was placed with
-- `order_id` / `token` - taken from the order message itself (`OrderMessage.orderId` / `OrderMessage.token`); the token is a per-order capability, so an order cannot be read without the message that announced it
+- `order_id` / `token` - taken from the order message itself (`OrderMessage.order_id` / `OrderMessage.token` on the Rust struct — `orderId`/`token` on the wire); the token is a per-order capability, so an order cannot be read without the message that announced it
 
 **Example:**
 ```rust
@@ -334,8 +334,12 @@ pub struct BusinessHoursConfig {
 `BusinessHoursConfig` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
 
 **Constructors:**
-- `BusinessHoursConfig::new(day_of_week, mode)` — a day whose mode carries no explicit range (`Open24H`, `AppointmentOnly`, or a closed day)
+- `BusinessHoursConfig::new(day_of_week, mode)` — a day whose mode carries no explicit range (`Open24H` or `AppointmentOnly`)
 - `BusinessHoursConfig::with_hours(day_of_week, mode, open_time, close_time)` — a single opening range, in minutes past local midnight. A day with two ranges is two entries sharing a `day_of_week`.
+
+<Note>
+There's no "closed" mode or constructor. `config` holds one entry per day that *has* hours to report; a day closed every week is represented by leaving it out of `config` entirely, not by constructing an entry for it.
+</Note>
 
 ### DayOfWeek
 
@@ -381,7 +385,7 @@ pub struct BusinessHoursUpdate {
 
 ### BusinessProfileUpdate
 
-A delta mutation of the business profile, passed to [`update_profile`](#update_profile). Every field is `None` by default and a `None` field is left untouched — this is a delta, not a replacement. The distinction that matters is between "leave alone" and "clear": clearing is `Some` of an empty value (`Some(String::new())` for text, `Some(Vec::new())` for `websites`).
+A delta mutation of the business profile, passed to [`update_profile`](#update_profile). This is a delta, not a replacement: every field defaults to `None`, and a `None` field is left untouched on the server. To clear a field instead of leaving it alone, set it to `Some` of an empty value — `Some(String::new())` for text fields, `Some(Vec::new())` for `websites`. `None` and an empty `Some` are not interchangeable: only the latter clears anything.
 
 ```rust
 pub struct BusinessProfileUpdate {
@@ -517,7 +521,7 @@ pub struct Collection {
 ```
 
 <Warning>
-`Collection::products` can be truncated, and says so only by its length: the collections query returns a prefix with no per-collection cursor, so `products.len() == item_limit` is the only signal more products exist. Reading a collection to the end would need a different, not-yet-wired-up operation.
+`Collection::products` can be truncated, and says so only by its length: the collections query returns a prefix with no per-collection cursor, so `products.len() == item_limit` is the only signal more products *may* exist — it isn't conclusive, since a collection with exactly that many products and no more reads the same way. Reading a collection to the end would need a different, not-yet-wired-up operation.
 </Warning>
 
 ### Product

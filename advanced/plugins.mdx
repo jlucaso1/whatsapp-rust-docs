@@ -10,7 +10,7 @@ whatsapp-rust supports **native plugins**: build-time, type-safe extensions that
 This is a low-level extension seam. If you're writing an application that just sends and receives messages, use [`Bot`](/api/bot) directly — you don't need this page. Reach for native plugins when you're building a **reusable component** (metrics, a search index, a moderation layer) that should install once, observe events non-blockingly, own its own background tasks across reconnects, and expose a typed API to the rest of your application.
 
 <Note>
-The plugin host is intentionally native-only today: it is trusted in-process Rust code, not a sandboxed or dynamically-loaded extension model. There is no dynamic (`.so`/`.wasm`) loading and no pre-ack decision hook. Ingress interception — claiming a stanza before the built-in pipeline — is supported as of the `stanza.intercept` capability below.
+The plugin host is intentionally native-only today: it is trusted in-process Rust code, not a sandboxed or dynamically-loaded extension model. There is no dynamic (`.so`/`.wasm`) loading and no pre-ack decision hook. Ingress interception — claiming a stanza before the built-in pipeline — is supported via the `PluginCapability::StanzaInterception` capability below.
 </Note>
 
 ## Enabling the feature
@@ -181,7 +181,7 @@ Each delivered envelope carries six fields: the plugin ID, the topic, a schema v
 
 ## Stanza interception
 
-`PluginCapability::CoreEvents` lets a plugin *watch* the stream via `events.core.observe`. `PluginCapability::StanzaInterception` lets it *act*: a plugin that models a stanza this client does not can claim it before the built-in pipeline sees it, instead of watching it get nacked. The underlying seam — `Client::add_stanza_interceptor`, the `StanzaInterceptor` trait, what is never offered, and the ack a claim still owes the server — is documented on [`add_stanza_interceptor`](/api/client#add_stanza_interceptor); this section covers what the plugin host adds on top of it.
+`PluginCapability::CoreEvents` lets a plugin *watch* the stream. `PluginCapability::StanzaInterception` lets it *act*: a plugin that models a stanza this client does not can claim it before the built-in pipeline sees it, instead of watching it get nacked. The underlying seam — `Client::add_stanza_interceptor`, the `StanzaInterceptor` trait, what is never offered, and the ack a claim still owes the server — is documented on [`add_stanza_interceptor`](/api/client#add_stanza_interceptor); this section covers what the plugin host adds on top of it.
 
 ```rust
 use std::sync::Arc;

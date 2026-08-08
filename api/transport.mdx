@@ -243,7 +243,7 @@ The default transport implementation using `tokio-websockets` for async WebSocke
 
 The default factory handles DNS resolution, TCP connection, and TLS. For custom connection logic, use [`from_websocket`](#from_websocket) directly.
 
-When no custom connector is supplied via [`with_connector`](#with_connector), the factory builds [`default_tls_connector()`](#default_tls_connector) once, on the first call to `create_transport`, and retains it in a `OnceLock` for every subsequent dial on that factory — a reconnect no longer pays for a fresh TLS config. Retaining the connector is also what lets its TLS session-resumption store actually get hit; rebuilding a fresh config per dial (the pre-#1245 behavior) left that store permanently empty. A connector supplied explicitly via `with_connector` is used as-is and never touches this cache.
+When no custom connector is supplied via [`with_connector`](#with_connector), the factory builds [`default_tls_connector()`](#default_tls_connector) once, on the first call to `create_transport`, and retains it in a `OnceLock` for every subsequent dial on that factory — a reconnect no longer pays for a fresh TLS config. Retaining the connector also lets a later dial reuse resumption tickets an earlier handshake received: previously (the pre-#1245 behavior), rebuilding the config per dial discarded the resumption store — tickets and all — before the next dial could ever use it. A connector supplied explicitly via `with_connector` is used as-is and never touches this cache.
 
 ```rust
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;

@@ -811,11 +811,14 @@ impl Client {
         ).await??;
         
         // Perform Noise handshake
-        let device = self.persistence_manager.get_device_snapshot();
         let noise_socket = do_handshake(
-            &device,
+            self.runtime.clone(),
+            &self.persistence_manager,
+            &self.ik_handshake_failures,
             transport,
-            &mut events
+            &mut events,
+            SendObservers::with_stats(self.stats.clone())
+                .with_sent_frames(self.sent_frame_tap.clone()),
         ).await?;
         
         // Store socket and start receivers

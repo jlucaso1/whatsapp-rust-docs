@@ -1570,7 +1570,7 @@ A stanza that came off the wire isn't already in that shape: `OwnedNodeRef::back
 - `ClientError::EncryptSend` - Encryption/send failure
 
 <Note>
-As of PR #1259, the shape of `plaintext` is checked before it reaches the socket, so a malformed payload now fails locally with a typed error instead of being written to the wire and having the server close the connection.
+As of PR #1259, `plaintext`'s shape — leading byte plus at least one more — is checked before it reaches the socket. That catches an empty buffer, a lone format byte, or node bytes handed in directly (wrong leading byte); it does not decode the node bytes, so a payload with the right shape but a malformed node inside it still reaches the socket, same as before.
 </Note>
 
 <Warning>

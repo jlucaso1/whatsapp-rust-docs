@@ -430,7 +430,7 @@ pub fn check_plain_payload(data: &[u8]) -> Result<()>;
 
 `unmarshal_packed_ref(data: &[u8]) -> Result<NodeRef<'_>>` (in `marshal.rs`) decodes a packed payload directly — format byte plus node bytes, exactly what `marshal` produces — sharing `check_plain_payload` with the send-side check. It only accepts the uncompressed form, since the returned `NodeRef` borrows from `data` and decompressed bytes would have nowhere to live; `unmarshal_ref` is still the function for node bytes alone (post-`unpack`, or what `OwnedNodeRef::backing_bytes()` holds).
 
-Forwarding or replaying a received stanza therefore goes through `pack(node_ref.backing_bytes())`, not `backing_bytes()` alone — see [`OwnedNodeRef::backing_bytes`](#ownednoderef-yoke-zero-copy) below and [`Client::send_raw_bytes`](/api/client#send_raw_bytes).
+Forwarding or replaying a received stanza therefore goes through `pack(&node_ref.backing_bytes())`, not `backing_bytes()` alone — see [`OwnedNodeRef::backing_bytes`](#ownednoderef-yoke-zero-copy) below and [`Client::send_raw_bytes`](/api/client#send_raw_bytes).
 
 Location: `wacore/binary/src/util.rs`, `wacore/binary/src/marshal.rs`
 

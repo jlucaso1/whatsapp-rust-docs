@@ -165,7 +165,7 @@ Both calls send one mutation per message. There is no batch form on the wire, ma
 
 ## Inbound label events
 
-Label changes made on a linked device are delivered through the event bus. Both events carry the underlying app state action so you can read the new name, color, deleted flag, or labeled state directly.
+Label changes made on a linked device are delivered through the event bus. All three events carry the underlying app state action so you can read the new name, color, deleted flag, or labeled state directly.
 
 ```rust
 use wacore::types::events::Event;

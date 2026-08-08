@@ -114,7 +114,7 @@ let response = client.mex().mutate(request).await?;
 
 ### fetch_new_chat_message_capping_info
 
-Fetch the cap on how many new one-on-one conversations this account may start in the current cycle.
+Fetch the cap on how many new one-on-one conversations you can start in the current cycle.
 
 ```rust
 pub async fn fetch_new_chat_message_capping_info(
@@ -122,12 +122,12 @@ pub async fn fetch_new_chat_message_capping_info(
 ) -> Result<NewChatMessageCapping, MexError>
 ```
 
-WhatsApp Web issues this at app launch and refreshes it on a TTL (`wa_individual_new_chat_msg_capping_fetch_ttl_seconds`, 1 hour), gated on `wa_individual_new_chat_msg_capping_enabled`. Accounts the cap does not apply to still get an answer — the status just reports `NONE`.
+WhatsApp Web issues this request at app launch. It refreshes the cap on a TTL (`wa_individual_new_chat_msg_capping_fetch_ttl_seconds`, 1 hour), gated on `wa_individual_new_chat_msg_capping_enabled`. If the cap doesn't apply to your account, you still get an answer — the status just reports `NONE`.
 
 **Example:**
 
 ```rust
-use whatsapp_rust::features::mex::CappingStatus;
+use whatsapp_rust::features::CappingStatus;
 
 let capping = client.mex().fetch_new_chat_message_capping_info().await?;
 
@@ -229,7 +229,7 @@ pub struct MexErrorExtensions {
 
 ### NewChatMessageCapping
 
-How many new one-on-one conversations the account may still start in the current cycle, and why. Every field is optional because the server omits the ones that don't apply to an account's tier.
+How many new one-on-one conversations you can still start in the current cycle, and why. Every field is optional — the server omits any that don't apply to your account's tier.
 
 ```rust
 #[non_exhaustive]
@@ -246,14 +246,14 @@ pub struct NewChatMessageCapping {
 ```
 
 - `total_quota` / `used_quota` — new chats allowed / already started this cycle
-- `cycle_start_timestamp` / `cycle_end_timestamp` / `server_sent_timestamp` — Unix seconds. WhatsApp Web treats the cap as lifted once `cycle_end_timestamp` passes.
+- `cycle_start_timestamp` / `cycle_end_timestamp` / `server_sent_timestamp` — Unix seconds. The cap lifts once `cycle_end_timestamp` passes.
 
 **Methods:**
-- `remaining_quota() -> Option<u64>` — `total_quota` minus `used_quota`, when both are present
+- `remaining_quota() -> Option<u64>` — saturating subtraction of `used_quota` from `total_quota`, when both are present; returns `Some(0)` when `used_quota` exceeds `total_quota`
 
 ### CappingStatus
 
-Where the account stands against the cap.
+Where you stand against the cap.
 
 ```rust
 pub enum CappingStatus {
@@ -267,7 +267,7 @@ pub enum CappingStatus {
 
 ### CappingOteStatus
 
-Eligibility for the one-time extension that lifts the cap for a cycle.
+Whether you're eligible for the one-time extension that lifts the cap for a cycle.
 
 ```rust
 pub enum CappingOteStatus {
@@ -281,7 +281,7 @@ pub enum CappingOteStatus {
 
 ### CappingMvStatus
 
-Meta Verified subscription state, which is what lifts the cap permanently.
+Your Meta Verified subscription state, which lifts the cap permanently.
 
 ```rust
 pub enum CappingMvStatus {

@@ -405,7 +405,7 @@ pub enum PresenceError {
 
 ### ConnectError
 
-Returned by [`Client::connect`](/api/client#connect), [`Client::wait_for_socket`](/api/client#wait_for_socket), and [`Client::wait_for_connected`](/api/client#wait_for_connected). Added in PR #1090, replacing bare `anyhow::Error` on all three methods.
+Returned by [`Client::connect`](/api/client#connect), [`Client::wait_for_socket`](/api/client#wait_for_socket), and [`Client::wait_for_connected`](/api/client#wait_for_connected). Added in PR #1090, replacing bare `anyhow::Error` on all three methods. As of PR #1258, `connect()`'s success case changed too — it resolves to `Result<Connection<'_>, ConnectError>` rather than `Result<(), ConnectError>`; see [`Connection`](/api/client#connection).
 
 ```rust
 #[non_exhaustive]
@@ -414,6 +414,8 @@ pub enum ConnectError {
     AlreadyConnected,
     #[error("client construction did not activate")]
     NotActivated,
+    #[error("client has been shut down")]
+    Shutdown,
     #[error("{stage} timed out after {timeout:?}")]
     Timeout {
         stage: ConnectStage,
@@ -431,6 +433,7 @@ pub enum ConnectError {
 **Variants:**
 - `AlreadyConnected` — a connection is already up, or another `connect()` attempt is already in flight. This is the old `ClientError::AlreadyConnected` case, moved here.
 - `NotActivated` — construction never completed (only reachable with the `client-lifecycle` feature), so the attempt was rejected before any I/O.
+- `Shutdown` — added in PR #1258. The client was already shut down (`disconnect()`, `logout()`, or `signal_shutdown_sync()`) before or during this `connect()` attempt. Shutdown is final and non-reversible, so this is refused rather than reviving a client the application was already told is gone — build a new client instead of reconnecting this one.
 - `Timeout` — a step of the connect flow ran out of time. `stage` says which one (see [`ConnectStage`](#connectstage) below); `wait_for_socket`/`wait_for_connected` always report `Socket`/`Ready` respectively.
 - `Version` / `Transport` — the app-version resolution or transport factory failed outright (not a timeout). As of PR #1195, if `Version` was caused by a non-2xx response fetching the app version (`sw.js`), the status is recoverable via `err.http_status()` ([`ErrorChainExt`](#error-chain-recovery)) instead of only appearing in the message.
 - `Handshake` — the Noise handshake failed after the transport was up. Wraps `HandshakeError` (see [WebSocket & Noise Protocol](/advanced/websocket-handling#handshake-errors)) via `#[from]`, so `?` still works and `matches!(err, ConnectError::Handshake(e) if e.is_transient())` replaces the old `err.downcast_ref::<HandshakeError>()` pattern for deciding whether a failed reconnect attempt is worth retrying.

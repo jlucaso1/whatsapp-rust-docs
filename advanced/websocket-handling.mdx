@@ -1087,8 +1087,16 @@ The `run()` method handles reconnection automatically:
 ```rust
 // Simplified reconnection logic in run()
 loop {
-    self.connect().await;
-    self.read_messages_loop().await;
+    match self.connect().await {
+        Ok(connection) => {
+            // read_until_disconnected() drives the same connection lifecycle
+            // (read loop, teardown, Disconnected dispatch) that run() has
+            // always used — see the `Connection` type below.
+            connection.read_until_disconnected().await;
+        }
+        Err(ConnectError::Shutdown) => {} // the loop is about to exit below
+        Err(e) => { /* log and fall through to the retry delay */ }
+    }
 
     if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
         break; // 401, 409, 516 — stop permanently
@@ -1111,6 +1119,10 @@ loop {
     }
 }
 ```
+
+<Note>
+As of PR #1258, `run()`'s per-connection work (read loop, teardown, `Disconnected` dispatch) is shared with a directly-driven [`Connection::read_until_disconnected()`](/api/client#connection) via an internal `drive_connection()` helper, so the two paths cannot drift on what a connection ending means.
+</Note>
 
 <Note>
 `self.shutdown_signal()` above is `Client::shutdown_signal()`, the client's own terminal-shutdown listener — not the crate-level [`whatsapp_rust::shutdown_signal()`](/installation#graceful-shutdown) helper that waits for SIGINT/SIGTERM.

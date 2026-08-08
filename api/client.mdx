@@ -115,25 +115,56 @@ tokio::spawn(async move {
 ### connect
 
 ```rust
-pub async fn connect(self: &Arc<Self>) -> Result<(), ConnectError>
+pub async fn connect(self: &Arc<Self>) -> Result<Connection<'_>, ConnectError>
 ```
 
 Establishes WebSocket connection and performs Noise Protocol handshake. Both the transport connection and the version fetch run in parallel under a **20-second timeout** (`TRANSPORT_CONNECT_TIMEOUT`), matching WhatsApp Web's MQTT and DGW connect timeout defaults. Without this, a dead network would block on the OS TCP SYN timeout (~60-75s).
 
 The Noise handshake response also has a separate **20-second timeout** (`NOISE_HANDSHAKE_RESPONSE_TIMEOUT`).
 
-<Note>
-As of PR #1090, `connect()` returns [`ConnectError`](/api/errors#connecterror) instead of `anyhow::Error`. `ClientError::AlreadyConnected` was removed — that case is now `ConnectError::AlreadyConnected`.
-</Note>
+<Warning>
+**Breaking change in PR #1258:** `connect()` now resolves to `Result<Connection<'_>, ConnectError>` instead of `Result<(), ConnectError>`. Establishing the socket is all `connect()` does — the server's frames queue in the transport channel until the returned [`Connection`](#connection) is driven with [`read_until_disconnected()`](#connection). `Connection` is `#[must_use]`, so the old `client.connect().await?;` now reports an `unused_must_use` warning instead of silently doing nothing (a client that connects and then just waits for events used to wait forever, with no timeout, error, or log to explain why).
+
+Migration:
+```rust
+// Before
+client.connect().await?;
+
+// After: drive this one connection directly...
+client.connect().await?.read_until_disconnected().await;
+// ...or, for a session that reconnects, use run() instead of connect()
+client.run().await;
+```
+</Warning>
 
 **Errors (`ConnectError`):**
 - `AlreadyConnected` - a connection is already up, or another `connect()` attempt is already in flight
 - `NotActivated` - construction never activated (only reachable with the `client-lifecycle` feature)
+- `Shutdown` - added in PR #1258. The client has already been shut down (`disconnect()`, `logout()`, or `signal_shutdown_sync()`); shutdown is final, so build a new client rather than reconnecting this one
 - `Timeout { stage, timeout }` - the version fetch or the transport open ran out of time, independently, each under the same 20s budget (`ConnectStage::VersionFetch`/`Transport`). `connect()` itself never reports `ConnectStage::Socket` or `Ready` — those are only produced by `wait_for_socket()`/`wait_for_connected()` below.
 - `Version(anyhow::Error)` / `Transport(anyhow::Error)` - app version resolution or transport open failed outright
 - `Handshake(HandshakeError)` - the Noise handshake failed after the transport was up; check `HandshakeError::is_transient()` to decide whether a retry is worthwhile
 
 See [`ConnectError`](/api/errors#connecterror) for the full variant reference.
+
+### Connection
+
+```rust
+#[must_use]
+pub struct Connection<'a> { /* ... */ }
+
+impl Connection<'_> {
+    pub async fn read_until_disconnected(self) -> Option<DisconnectReason>
+}
+```
+
+Added in PR #1258. An established connection that nothing is reading yet — `connect()` stops right after the handshake, so the frames the server sends next just sit in the transport channel until something drives them. `read_until_disconnected()` is that read: it decodes frames into nodes and events until the connection ends, tears the connection down, and returns the reason an unexpected end carried (the same reason dispatched as `Event::Disconnected` just before returning), or `None` when the end was not one to report — a requested disconnect, or a protocol step like the 515 that follows pairing.
+
+[`run()`](#run) performs the same read inside its reconnect loop; reach for `Connection` directly only when a session must not outlive its first connection.
+
+<Warning>
+Dropping a `Connection` without reading it logs a warning and leaves it unread — the socket stays open and the client keeps reporting itself connected, so the next `connect()` is refused until `disconnect()` releases it. Dropping the `read_until_disconnected()` future mid-read (e.g. a wrapping timeout) stops reading without tearing the connection down either, matching what dropping `run()`'s future has always done.
+</Warning>
 
 ### logout
 
@@ -1057,7 +1088,7 @@ use whatsapp_rust::ClientProfile;
 
 // Present as Android 13 on the next connect
 client.set_client_profile(ClientProfile::android("13")).await;
-client.connect().await?;
+client.connect().await?.read_until_disconnected().await;
 ```
 
 <Note>
@@ -1275,7 +1306,7 @@ Intended for consumers that construct `Client` directly (rather than via `Bot::b
 ```rust
 // On a memory-constrained host, upload smaller batches
 client.set_wanted_pre_key_count(256);
-client.connect().await?;
+client.connect().await?.read_until_disconnected().await;
 ```
 
 <Warning>

@@ -910,7 +910,7 @@ The `web()` profile reproduces the legacy desktop-web payload (`os_version` and 
 use whatsapp_rust::ClientProfile;
 
 client.set_client_profile(ClientProfile::android("13")).await;
-client.connect().await?;
+client.connect().await?.read_until_disconnected().await;
 ```
 
 Internally this dispatches `DeviceCommand::SetClientProfile(profile)` through the persistence manager (see [State Management](/advanced/state-management#deviceCommand-pattern)).

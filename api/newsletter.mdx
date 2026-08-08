@@ -1,9 +1,9 @@
 ---
 title: Newsletter
-description: Newsletter (channel) operations — create, manage, subscribe, and send messages to WhatsApp channels
+description: Newsletter (channel) operations — create, manage, administer, subscribe, and send messages to WhatsApp channels
 ---
 
-The `Newsletter` feature provides methods for managing WhatsApp newsletter channels, including creation, subscription management, reactions, and live updates. Newsletter operations use MEX (GraphQL) for metadata/management and IQ stanzas for message operations.
+The `Newsletter` feature provides methods for managing WhatsApp newsletter channels, including creation, subscription management, admin operations, reactions, and live updates. Newsletter operations use MEX (GraphQL) for metadata/management and IQ stanzas for message operations.
 
 Newsletter message sending is handled by the unified `client.send_message()` method — see the [Send API](/api/send#send_message). Reactions remain on the `Newsletter` struct because they use a different stanza format.
 
@@ -183,6 +183,164 @@ let updated = client.newsletter()
     .await?;
 
 println!("Updated: {}", updated.name);
+```
+
+### set_picture
+
+Replace a newsletter's picture. Carried by the same mutation as [`update`](#update) — WhatsApp Web edits the picture as base64-encoded JPEG bytes — so the response is the newsletter's refreshed metadata.
+
+```rust
+pub async fn set_picture(
+    &self,
+    jid: &Jid,
+    jpeg: &[u8],
+) -> Result<NewsletterMetadata, NewsletterError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `jpeg` — JPEG-encoded image bytes
+
+**Returns:**
+- `NewsletterMetadata` — Updated metadata
+
+**Example:**
+```rust
+let updated = client.newsletter()
+    .set_picture(&newsletter_jid, &jpeg_bytes)
+    .await?;
+```
+
+### remove_picture
+
+Remove a newsletter's picture.
+
+```rust
+pub async fn remove_picture(&self, jid: &Jid) -> Result<NewsletterMetadata, NewsletterError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+
+**Returns:**
+- `NewsletterMetadata` — Updated metadata
+
+**Example:**
+```rust
+client.newsletter().remove_picture(&newsletter_jid).await?;
+```
+
+### delete
+
+Delete a newsletter. Owner-only.
+
+```rust
+pub async fn delete(&self, jid: &Jid) -> Result<(), NewsletterError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+
+**Example:**
+```rust
+client.newsletter().delete(&newsletter_jid).await?;
+```
+
+### change_owner
+
+Transfer a newsletter's ownership to another user. Owner-only.
+
+```rust
+pub async fn change_owner(&self, jid: &Jid, user: &Jid) -> Result<(), NewsletterError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `user` — The new owner. May be a LID or a phone-number JID — a phone-number JID is resolved to its LID before the request. If no LID is known for the target, the call fails with `NewsletterError::InvalidRequest` rather than sending an address the server can't route.
+
+**Example:**
+```rust
+client.newsletter()
+    .change_owner(&newsletter_jid, &new_owner_jid)
+    .await?;
+```
+
+### demote_admin
+
+Demote an admin of a newsletter back to subscriber. Owner-only.
+
+```rust
+pub async fn demote_admin(&self, jid: &Jid, user: &Jid) -> Result<(), NewsletterError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `user` — The admin to demote. Same LID resolution as [`change_owner`](#change_owner).
+
+**Example:**
+```rust
+client.newsletter()
+    .demote_admin(&newsletter_jid, &admin_jid)
+    .await?;
+```
+
+### get_admin_info
+
+Fetch a newsletter's admin-side information, including its admin count.
+
+```rust
+pub async fn get_admin_info(&self, jid: &Jid) -> Result<NewsletterAdminInfo, NewsletterError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+
+**Returns:**
+- `NewsletterAdminInfo` — Admin count, the viewer's own admin profile, and the admin-profiles setting
+
+<Note>
+The admin count has no query of its own — it rides along with the admin profile and the admin-profiles setting in this one response. The server only answers it for admins and owners, so `admin_count` is `None` for everyone else.
+</Note>
+
+**Example:**
+```rust
+let info = client.newsletter().get_admin_info(&newsletter_jid).await?;
+
+println!("Admins: {:?}", info.admin_count);
+```
+
+### get_followers
+
+List up to `count` of a newsletter's followers (subscribers).
+
+```rust
+pub async fn get_followers(
+    &self,
+    jid: &Jid,
+    count: u32,
+) -> Result<Vec<NewsletterFollower>, NewsletterError>
+```
+
+**Parameters:**
+- `jid` — Newsletter JID
+- `count` — Maximum number of followers to return
+
+<Note>
+This operation takes no cursor — WhatsApp Web asks for a single page clamped to its subscriber-list limit, so `count` is the whole request. There is no built-in pagination.
+</Note>
+
+**Returns:**
+- `Vec<NewsletterFollower>` — One page of followers
+
+**Example:**
+```rust
+let followers = client.newsletter()
+    .get_followers(&newsletter_jid, 100)
+    .await?;
+
+for f in &followers {
+    println!("{}: {:?}", f.jid, f.role);
+}
 ```
 
 ### set_follower_mute
@@ -465,6 +623,64 @@ pub enum NewsletterRole {
 ```
 
 All newsletter enums are `#[non_exhaustive]`, so match statements should include a wildcard arm to handle future variants.
+
+### NewsletterAdminProfile
+
+An admin's public profile within a newsletter, carried on [`NewsletterAdminInfo`](#newsletteradmininfo) and on a [`NewsletterFollower`](#newsletterfollower) who is an admin.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsletterAdminProfile {
+    pub id: Option<String>,
+    pub name: String,
+    pub picture_id: Option<String>,
+    pub picture_direct_path: Option<String>,
+}
+```
+
+<Note>
+`id` is the profile's own identifier, not a JID — the server hands it back as an opaque string and WhatsApp Web never parses it.
+</Note>
+
+### NewsletterAdminInfo
+
+Admin-side information about a newsletter, returned by [`get_admin_info`](#get_admin_info).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsletterAdminInfo {
+    pub admin_count: Option<u32>,
+    pub admin_profile: Option<NewsletterAdminProfile>,
+    pub admin_profiles_enabled: Option<bool>,
+}
+```
+
+- `admin_count` — How many admins the newsletter has. The server only answers this for admins and owners, so it's `None` for everyone else — never a `0` that would misleadingly read as "no admins".
+- `admin_profile` — The viewer's own admin profile, present once they've set one up.
+- `admin_profiles_enabled` — Whether admin profiles are enabled for this newsletter.
+
+### NewsletterFollower
+
+A follower (subscriber) of a newsletter, returned by [`get_followers`](#get_followers).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsletterFollower {
+    pub jid: Jid,
+    pub phone_jid: Option<Jid>,
+    pub display_name: Option<String>,
+    pub username: Option<String>,
+    pub role: Option<NewsletterRole>,
+    pub follow_time: Option<u64>,
+    pub admin_profile: Option<NewsletterAdminProfile>,
+}
+```
+
+- `jid` — The follower's identity JID — a LID on accounts that have migrated.
+- `phone_jid` — The follower's phone-number JID, withheld by the server when the follower's privacy settings hide it.
+- `role` — The follower's role in the newsletter.
+- `follow_time` — When the follower subscribed (Unix seconds).
+- `admin_profile` — Set when the follower is an admin who has published a profile.
 
 ### NewsletterMessage
 

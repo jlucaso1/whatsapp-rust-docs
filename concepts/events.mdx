@@ -1529,7 +1529,7 @@ A single group notification from the server can contain multiple actions. The li
 
 ## Contact notification events
 
-These events are emitted from `<notification type="contacts">` stanzas sent by the server. They are distinct from `ContactUpdate`, which comes from app-state sync mutations.
+Most events in this section are emitted from `<notification type="contacts">` stanzas sent by the server. Two are not: `ContactUpdate` and `ContactRemoved` come from app-state sync mutations instead, grouped here with their notification-based siblings because they are all contact-related — each one's own description below states its actual source.
 
 ### ContactUpdated
 

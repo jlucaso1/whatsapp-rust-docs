@@ -501,7 +501,7 @@ pub fn message_key(
 
 ### send_app_state_action
 
-Send any syncd (app state) `Set` action, driven by a generated schema from the `whatsapp_rust::schemas` registry. Use this as the escape hatch when there isn't a dedicated helper yet (for example, `clear_chat`, `favorites`). The typed methods on `ChatActions`, `Labels`, `QuickReplies`, and `AppStateSettings` are thin wrappers over this same call.
+Send any syncd (app state) `Set` action, driven by a generated schema from the `whatsapp_rust::schemas` registry. Use this as the escape hatch when there isn't a dedicated helper yet (for example, `clear_chat`, `favorites`). Most typed methods on `ChatActions`, `Labels`, `QuickReplies`, and `AppStateSettings` are thin wrappers over this same call. The one exception is [`ChatActions::remove_contact`](#save-and-remove-contacts), which wraps [`remove_app_state_action`](#remove_app_state_action) below instead, since contact removal needs a `Remove` rather than a `Set`.
 
 ```rust
 pub async fn send_app_state_action(

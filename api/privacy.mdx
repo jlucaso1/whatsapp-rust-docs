@@ -177,7 +177,7 @@ This sets the default for **new** chats only. Existing chats keep their current 
 
 ## App-state settings (syncd)
 
-`set_link_previews_disabled` is a distinct privacy control from everything above. You call every method in [Methods](#methods) through the `set_privacy` IQ namespace and get a synchronous response. You call this method through app state sync instead — the same mutation mechanism used by [chat actions](/api/chat-actions#app-state-sync) and [labels](/api/labels) — and it has no query/fetch IQ counterpart at all.
+`set_link_previews_disabled` is a distinct privacy control from everything above. You call `fetch_privacy_settings`, `set_privacy_setting`, and `set_privacy_disallowed_list` through the `set_privacy` IQ namespace and get a synchronous response (`set_default_disappearing_mode` above is the odd one out — it uses a separate `disappearing_mode` IQ namespace, not `set_privacy`). You call `set_link_previews_disabled` through app state sync instead — the same mutation mechanism used by [chat actions](/api/chat-actions#app-state-sync) and [labels](/api/labels) — and it has no query/fetch IQ counterpart at all.
 
 ### set_link_previews_disabled
 

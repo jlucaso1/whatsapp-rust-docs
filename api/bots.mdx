@@ -1,0 +1,212 @@
+---
+title: Bots
+description: Fetch WhatsApp's directory of first-party AI bots
+---
+
+The `Bots` feature fetches the server's directory of first-party AI bots offered to this account: a default bot plus display sections of `(jid, persona_id)` pairs.
+
+<Note>
+Not to be confused with [`Bot`](/api/bot), the client-side framework for building a program that answers messages. `Bots` reads the server's bot *directory*; `Bot` is a different domain that happens to share the word.
+</Note>
+
+## Access
+
+```rust
+let bots = client.bots();
+```
+
+## Methods
+
+### list
+
+Fetch the bot directory.
+
+```rust
+pub async fn list(&self) -> Result<BotList, IqError>
+```
+
+WhatsApp Web issues this once per session at startup, then refreshes it on a `bonsai_update_interval` (24h) timer. There is no server push for updates, so call this again when you want fresh data.
+
+Every section is returned, not just ones typed `all`. WhatsApp Web itself reads bots out of every section and only uses `type`/`display_type` for presentation, so a bot whose sole carrier is a `category` or `featured` section stays reachable.
+
+The persona ids in the response are the input to WhatsApp's `WAWebFetchBotProfilesGQLQuery` MEX operation (not wrapped by this crate), which hydrates them into displayable profiles — name, description, creator, icebreakers.
+
+**Example:**
+
+```rust
+let bot_list = client.bots().list().await?;
+
+if let Some(default_jid) = bot_list.default_jid() {
+    println!("Default bot: {}", default_jid);
+}
+
+for section in &bot_list.sections {
+    println!("Section {:?} ({} bots)", section.name, section.bots.len());
+    for bot in &section.bots {
+        println!("  {} (persona {})", bot.jid, bot.persona_id);
+    }
+}
+```
+
+**Flattened list:**
+
+```rust
+// All bots in section order, with the default bot prepended if no
+// section already carries it — mirrors WhatsApp Web's own flattening.
+for bot in bot_list.flatten() {
+    println!("{} -> {}", bot.jid, bot.persona_id);
+}
+```
+
+## Types
+
+### BotList
+
+The whole bot directory as the server returned it.
+
+```rust
+pub struct BotList {
+    pub version: BotListVersion,
+    pub bhash: Option<String>,
+    pub default_bot: Option<BotDefault>,
+    pub sections: Vec<BotListSection>,
+}
+```
+
+- `version` — which response shape the server sent
+- `bhash` — cache handle for the directory (`v="3"` only)
+- `default_bot` — the bot the client should offer by default; mandatory in `v="2"` responses, optional in `v="3"`, and not necessarily repeated inside a section
+- `sections` — display groups, kept exactly as the server sent them (not filtered by type)
+
+**Methods:**
+- `flatten() -> Vec<BotListEntry>` — every bot across all sections, in order, with the default bot prepended if no section already carries it
+- `default_jid() -> Option<&Jid>` — the default bot's JID, if the server named one
+
+### BotListSection
+
+A display group of bots.
+
+```rust
+pub struct BotListSection {
+    pub name: Option<String>,
+    pub section_type: BotSectionType,
+    pub display_type: Option<BotSectionDisplayType>,
+    pub bots: Vec<BotListEntry>,
+}
+```
+
+`display_type` is present only in `v="3"` responses.
+
+### BotListEntry
+
+One bot in the directory.
+
+```rust
+pub struct BotListEntry {
+    pub jid: Jid,
+    pub persona_id: String,
+    pub card_title: Option<String>,
+    pub count: Option<u64>,
+    pub themes: Vec<BotTheme>,
+}
+```
+
+- `persona_id` — identifier to hand to the bot-profile MEX operation
+- `card_title` — `v="3"` only
+- `themes` — `v="2"` only; empty in `v="3"` responses
+
+### BotDefault
+
+The bot the client offers by default.
+
+```rust
+pub struct BotDefault {
+    pub jid: Jid,
+    pub persona_id: String,
+}
+```
+
+A distinct type from `BotListEntry`: `<default>` carries exactly these two attributes on the wire in both response versions, so it has no `card_title`, `count`, or themes to lose.
+
+### BotTheme
+
+Per-mode colours for a bot's card.
+
+```rust
+pub struct BotTheme {
+    pub mode: BotThemeMode,
+    pub background: Option<String>,
+    pub primary_text: Option<String>,
+    pub secondary_text: Option<String>,
+}
+```
+
+### Enums
+
+```rust
+pub enum BotListVersion { V2, V3, Other(String) }
+pub enum BotSectionType { All, Category, Featured, Other(String) }
+pub enum BotSectionDisplayType {
+    Hidden, Hscroll, HscrollIcebreakers, HscrollLarge, HscrollSmall, Listview, Other(String)
+}
+pub enum BotThemeMode { Dark, Light, Other(String) }
+```
+
+Each carries an `Other(String)` fallback variant, so a value the server introduces later round-trips instead of being dropped.
+
+<Note>
+`Bots`, `BotList`, `BotListEntry`, `BotListSection`, `BotDefault`, `BotTheme`, and their enums are re-exported from the crate root (`whatsapp_rust::Bots`, `whatsapp_rust::BotList`, ...).
+</Note>
+
+## Wire Format
+
+### Request
+
+```xml
+<iq type="get" xmlns="bot" to="s.whatsapp.net" id="...">
+  <bot v="2"/>
+</iq>
+```
+
+The request always pins `v="2"`, even though the parser accepts either response shape. WhatsApp Web's only call site never sends `bhash` or per-JID filter children, so this crate doesn't either.
+
+### Response (`v="2"`)
+
+```xml
+<iq from="s.whatsapp.net" id="..." type="result">
+  <bot v="2">
+    <default jid="10000000000000@bot" persona_id="default"/>
+    <section type="all" name="All bots">
+      <bot jid="10000000000000@bot" persona_id="default" count="1">
+        <theme mode="light">
+          <background>#FFFFFF</background>
+          <primary_text>#000000</primary_text>
+        </theme>
+      </bot>
+    </section>
+  </bot>
+</iq>
+```
+
+### Response (`v="3"`)
+
+```xml
+<iq from="s.whatsapp.net" id="..." type="result">
+  <bot v="3" bhash="...">
+    <section type="featured" display_type="hscroll" name="Featured">
+      <bot jid="20000000000000@bot" persona_id="creative" card_title="Creative writer"/>
+    </section>
+  </bot>
+</iq>
+```
+
+Each version has one field the other does not require, enforced only for its own version: `<default>` in `v="2"`, `bhash` in `v="3"`.
+
+## Error Handling
+
+`list()` returns `Result<BotList, IqError>` — see [Errors](/api/errors) for `IqError`'s variants.
+
+## See Also
+
+- [Bot](/api/bot) - Client-side framework for building a bot that answers messages
+- [MEX (GraphQL)](/api/mex) - GraphQL operations, including bot-profile hydration

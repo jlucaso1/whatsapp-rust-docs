@@ -1897,7 +1897,7 @@ A handful of connection-critical stanzas — `success`, `failure`, `stream:error
 </Note>
 
 <Note>
-This is a library extension with no WhatsApp Web equivalent, for a stanza this build does not model that your application can act on instead of watching it get nacked. It is not a filter for outbound stanzas, and not a decryption hook: a claimed `<message>` has already been decrypted or not by the time an interceptor sees it, exactly as the built-in handler would have found it.
+This is a library extension with no WhatsApp Web equivalent, for a stanza this build does not model that your application can act on instead of watching it get nacked. It is not a filter for outbound stanzas, and not a decryption hook: interception runs *before* the built-in pipeline, so a claimed `<message>` is one the client did no Signal work on at all — nothing decrypted, no session mutated, no prekey consumed. Claiming a `<message>` takes over responsibility for whatever Signal state it carries; see [Native plugins — Interaction with Signal durability](/advanced/plugins#interaction-with-signal-durability) for what that means.
 </Note>
 
 ### acquire_decrypted_payload_forwarding

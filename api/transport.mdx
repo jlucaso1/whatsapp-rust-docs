@@ -300,7 +300,7 @@ let factory = TokioWebSocketTransportFactory::new()
 ```
 
 <Note>
-Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point before customizing. Note that a connector built this way does not get the single-host resumption sizing described [below](#default_tls_connector) unless you apply it yourself — that sizing is applied internally by `default_tls_connector()`, not by `Connector::Rustls`.
+Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point before customizing. A connector returned by that function already carries the single-host resumption sizing described [below](#default_tls_connector), even when supplied via `with_connector`. A connector built independently with `Connector::Rustls` — as in the example above — does not get that sizing unless you apply it yourself.
 </Note>
 
 #### with_origin

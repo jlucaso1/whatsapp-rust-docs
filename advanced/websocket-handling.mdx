@@ -1175,15 +1175,15 @@ Approximately every 12 keepalive ticks (~5 minutes), the keepalive loop runs bac
 
 ### Buffer Sizing
 
-Optimal buffer capacity based on payload characteristics:
+The sender task's outbound batch buffer (`out_buf`) starts at `BytesMut::with_capacity(OUT_BUF_IDLE_CAPACITY)` — 4096 bytes — and grows to whatever a batch needs to hold. Because `out_buf.split()` hands the written bytes to the transport without copying, that growth used to be permanent: once a single large stanza (a media-sized frame, say) pushed the buffer past its idle size, the allocation never shrank back down, so any socket that had ever sent one large frame carried the high-water-mark capacity — measured at 60 KiB resident per socket, against 8 KiB for a socket that only ever sent small frames — for the rest of the connection.
 
-```rust
-// Encrypted size = plaintext + 16 (AES-GCM tag) + 3 (frame header)
-let buffer_capacity = plaintext.len() + 32;  // Extra headroom
-let out_buf = Vec::with_capacity(buffer_capacity);
-```
+<Note>
+**The batch buffer now shrinks back after a burst ends ([#1246](https://github.com/oxidezap/whatsapp-rust/pull/1246)).** After `SMALL_BATCHES_BEFORE_SHRINK` (32) consecutive small batches following a large one, the sender task replaces `out_buf` with a fresh `BytesMut::with_capacity(OUT_BUF_IDLE_CAPACITY)`, freeing the grown allocation. The counter only advances on a *small* batch and resets to zero on every large one, so a burst spread across many batches is never interrupted mid-flight to reallocate — only a connection that sends enough small batches after a burst pays the (one-time) regrowth cost the next time it sends something large.
+</Note>
 
-Location: `src/socket/noise_socket.rs:373-407` (tests verify this formula)
+This buffer isn't a dedicated line item in either report. `memory_report()`'s named collections don't include it — it's local to the spawned sender task, with no handle anything outside that task can read. `resource_report()` is less absolute: the sender task is spawned through `runtime.spawn()`, so if the host wires up [`BotBuilder::with_alloc_meter`](/api/bot#with_alloc_meter), this buffer's growth and shrink allocations are folded into the client's aggregate `alloc` churn like any other task allocation — just not attributed to this buffer by name, and not as a live retained-capacity figure.
+
+Location: `src/socket/noise_socket.rs` (`OUT_BUF_IDLE_CAPACITY`, `SMALL_BATCHES_BEFORE_SHRINK`, `should_release_batch_buffer`)
 
 ### Write batching
 

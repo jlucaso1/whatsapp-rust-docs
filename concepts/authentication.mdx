@@ -207,7 +207,7 @@ A [pair code](#pair-code-phone-number-linking) flow has an unrelated lifetime �
 <Note>
 `disconnected: true` means the client is about to tear down its own socket, not that it already has: as the snippet above shows, the event dispatches *before* `disconnect().await` is called. A handler registered as a plain `EventHandler` runs inline during `dispatch`, ahead of the disconnect; a `Bot`/`on_event` closure runs off a channel on its own task and can race it either way.
 
-Note that no [`Event::Disconnected`](/concepts/events#disconnected) follows this particular teardown: `Client::disconnect()` sets the `expected_disconnect` flag, and `Disconnected` is scoped to disconnects the client did *not* intend — so waiting on it here would hang forever. `disconnect()` also disables auto-reconnect. To resume, call [`connect()`](/api/client#connect) yourself once you're ready to retry (it returns `ConnectError::AlreadyConnected` if the previous teardown is still finishing — back off briefly and retry rather than treating that as fatal).
+Note that no [`Event::Disconnected`](/concepts/events#disconnected) follows this particular teardown: `Client::disconnect()` sets the `expected_disconnect` flag, and `Disconnected` is scoped to disconnects the client did *not* intend — so waiting on it here would hang forever. `disconnect()` also disables auto-reconnect and, as of PR #1258, is final for this `Client` instance: it fires the same sticky shutdown signal that [`connect()`](/api/client#connect) now checks on entry, so every later `connect()` call on *this* client returns `ConnectError::Shutdown`, not `AlreadyConnected` — retrying with backoff never succeeds. To resume, construct a fresh [`Client`](/api/client#creating-a-client) against the same `persistence_manager` (the not-yet-paired device state lives there) and call `connect()` on that new instance instead.
 </Note>
 
 <Note>
@@ -910,7 +910,7 @@ The `web()` profile reproduces the legacy desktop-web payload (`os_version` and 
 use whatsapp_rust::ClientProfile;
 
 client.set_client_profile(ClientProfile::android("13")).await;
-client.connect().await?;
+client.connect().await?.read_until_disconnected().await;
 ```
 
 Internally this dispatches `DeviceCommand::SetClientProfile(profile)` through the persistence manager (see [State Management](/advanced/state-management#deviceCommand-pattern)).

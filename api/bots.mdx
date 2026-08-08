@@ -6,7 +6,7 @@ description: Fetch WhatsApp's directory of first-party AI bots
 The `Bots` feature fetches the server's directory of first-party AI bots offered to your account: a default bot plus display sections of `(jid, persona_id)` pairs.
 
 <Note>
-Not to be confused with [`Bot`](/api/bot), the client-side framework for building a program that answers messages. `Bots` reads the server's bot *directory*; `Bot` is a different domain that happens to share the word.
+Don't confuse this with [`Bot`](/api/bot), the client-side framework for building a program that answers messages. `Bots` reads the server's bot *directory*; `Bot` is a different domain that happens to share the word.
 </Note>
 
 ## Access
@@ -25,7 +25,7 @@ Fetch the bot directory.
 pub async fn list(&self) -> Result<BotList, IqError>
 ```
 
-WhatsApp Web issues this once per session at startup, then refreshes it on a `bonsai_update_interval` (24h) timer. There is no server push for updates, so call this again when you want fresh data.
+WhatsApp Web issues this once per session at startup. It refreshes the directory on a `bonsai_update_interval` (24h) timer. There's no server push for updates — call this again when you want fresh data.
 
 `list()` returns every section, not just ones typed `all`. WhatsApp Web itself reads bots out of every section and only uses `type`/`display_type` for presentation, so a bot whose sole carrier is a `category` or `featured` section stays reachable.
 

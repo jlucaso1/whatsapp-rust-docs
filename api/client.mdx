@@ -1556,15 +1556,22 @@ Sends a raw protocol node (advanced usage).
 pub async fn send_raw_bytes(&self, plaintext: Vec<u8>) -> Result<(), ClientError>
 ```
 
-Send pre-marshaled plaintext bytes through the noise socket. The bytes must be a valid WABinary-marshaled stanza (as produced by `wacore_binary::marshal::marshal_to`). Sending malformed data will cause the server to close the connection.
+Send a pre-marshaled stanza through the noise socket. The bytes must be a **packed payload** — the format byte followed by the node bytes — which is what every `wacore_binary::marshal::marshal*` function (`marshal`, `marshal_to_vec`, `marshal_exact`, `marshal_auto`) writes.
+
+A stanza that came off the wire is one byte short of that: `OwnedNodeRef::backing_bytes()` returns node bytes only, since the receive path already stripped the format byte on the way in. Forward it through `wacore_binary::util::pack` first — see [Binary Protocol: the format byte](/advanced/binary-protocol#the-format-byte).
 
 <ParamField path="plaintext" type="Vec<u8>" required>
-  WABinary-marshaled stanza bytes
+  A packed payload (format byte + node bytes) as produced by marshal
 </ParamField>
 
 **Errors:**
 - `ClientError::NotConnected` - Not connected
+- `ClientError::Socket` - `plaintext` is not a packed payload, wrapping `SocketError::Marshal`: `BinaryError::UnexpectedFormatByte` for a compressed or otherwise unrecognized leading byte (most often node bytes handed in directly instead of packed ones), or `BinaryError::EmptyData` for an empty buffer or a lone format byte with nothing behind it
 - `ClientError::EncryptSend` - Encryption/send failure
+
+<Note>
+As of PR #1259, the shape of `plaintext` is checked before it reaches the socket, so a malformed payload now fails locally with a typed error instead of being written to the wire and having the server close the connection.
+</Note>
 
 <Warning>
 This bypasses node logging and `wait_for_sent_node` waiter resolution. Use [`send_node`](#send_node) for normal stanza sending. This method is intended for performance-critical paths where you already have marshaled bytes.

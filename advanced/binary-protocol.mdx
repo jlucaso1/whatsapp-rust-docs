@@ -409,6 +409,31 @@ pub fn marshal_auto(node: &Node) -> Result<Vec<u8>>
 
 Location: `wacore/binary/src/marshal.rs:31-76`
 
+### The format byte
+
+Every `marshal*` function above writes one byte before the node bytes: a format byte. It's a flag with a single defined bit, and it's the whole reason a decoded buffer is one byte shorter than the marshal output it came from.
+
+```rust
+// wacore/binary/src/util.rs
+pub const FORMAT_PLAIN: u8 = 0;       // uncompressed — the only value marshal* writes
+pub const FORMAT_COMPRESSED: u8 = 2;  // node bytes that follow are zlib-compressed — inbound only
+
+pub fn unpack(data: &[u8]) -> Result<Cow<'_, [u8]>>;
+pub fn unpack_bytes(data: BytesMut) -> Result<Bytes>;
+pub fn pack(node_bytes: &[u8]) -> Vec<u8>;
+pub fn check_plain_payload(data: &[u8]) -> Result<()>;
+```
+
+`unpack`/`unpack_bytes` strip the format byte from a received frame — decompressing the node bytes behind it when `FORMAT_COMPRESSED` is set — before the decoder ever sees them; this is what the receive path calls ahead of `OwnedNodeRef::new`. `pack` is the inverse: given node bytes, such as [`OwnedNodeRef::backing_bytes()`](#ownednoderef-yoke-zero-copy), it prefixes `FORMAT_PLAIN` and returns a buffer shaped like marshal output — the form a send path such as [`Client::send_raw_bytes`](/api/client#send_raw_bytes) accepts.
+
+`check_plain_payload` is the shape check a send path runs before touching a caller-supplied buffer: it accepts only `FORMAT_PLAIN` followed by at least one node byte, and rejects anything else with a named reason rather than forwarding it to the socket for the peer to reject by hanging up. `FORMAT_COMPRESSED` is refused here too — it's a legitimate inbound frame, but nothing any `marshal*` function writes, so a caller that only ever handles our own output holds a buffer it did not build if it sees one.
+
+`unmarshal_packed_ref(data: &[u8]) -> Result<NodeRef<'_>>` (in `marshal.rs`) decodes a packed payload directly — format byte plus node bytes, exactly what `marshal` produces — sharing `check_plain_payload` with the send-side check. It only accepts the uncompressed form, since the returned `NodeRef` borrows from `data` and decompressed bytes would have nowhere to live; `unmarshal_ref` is still the function for node bytes alone (post-`unpack`, or what `OwnedNodeRef::backing_bytes()` holds).
+
+Forwarding or replaying a received stanza therefore goes through `pack(node_ref.backing_bytes())`, not `backing_bytes()` alone — see [`OwnedNodeRef::backing_bytes`](#ownednoderef-yoke-zero-copy) below and [`Client::send_raw_bytes`](/api/client#send_raw_bytes).
+
+Location: `wacore/binary/src/util.rs`, `wacore/binary/src/marshal.rs`
+
 ### Encoding Strategy
 
 The encoder uses multiple strategies based on data characteristics:
@@ -720,6 +745,8 @@ impl OwnedNodeRef {
 Received stanzas flow through the system as `Arc<OwnedNodeRef>`, giving handlers cheap shared access to the zero-copy decoded node. The `to_owned_node()` method is available as an escape hatch when you need a fully owned `Node`, but it allocates all strings and bytes — defeating the zero-copy benefit.
 
 `backing_bytes()` goes the other direction: it hands back the entire decoded buffer as a `Bytes` — a refcount bump into the same allocation `slice_bytes()` already views into, not a copy. It returns exactly what was passed to `new()` — the buffer after decompression, past the leading format byte `unpack` already strips. That's not necessarily the raw bytes as they arrived on the wire. Use it when you need to forward that buffer onward — to another process, a recording, a replay harness — instead of reading it. Re-encoding via `marshal_ref` is the alternative, and a worse one here: it costs a second pass over the tree, and it's only byte-faithful while the token dictionaries match the ones that decoded the node. `backing_bytes()` has no such dependency; it stays true regardless of what the dictionaries do.
+
+These are node bytes, though, not a sendable frame: a send path like [`Client::send_raw_bytes`](/api/client#send_raw_bytes) expects a packed payload — the format byte in front of the node bytes — not node bytes alone. Put the byte back with `pack` before forwarding `backing_bytes()` anywhere that expects marshal output; see [The format byte](#the-format-byte) above. Passing node bytes directly is exactly the shape `check_plain_payload` now rejects with [`BinaryError::UnexpectedFormatByte`](#error-handling), where it used to reach the socket and get the connection closed by the peer instead.
 
 Location: `wacore/binary/src/node.rs:594-693`
 
@@ -1161,10 +1188,13 @@ pub enum BinaryError {
     LeftoverData(usize),
     Io(std::io::Error),
     MaxDepthExceeded,        // Node nesting exceeded MAX_NODE_DEPTH (128)
+    UnexpectedFormatByte(u8), // Packed payload's leading byte wasn't FORMAT_PLAIN
 }
 ```
 
 The `Jid` variant is emitted by `AttrParser::optional_jid` when a string attribute fails to parse as a JID. This ensures malformed JIDs in protocol messages are surfaced as typed errors rather than silently ignored.
+
+The `UnexpectedFormatByte(u8)` variant is emitted by `check_plain_payload` — and, through it, by `unmarshal_packed_ref` and [`Client::send_raw_bytes`](/api/client#send_raw_bytes) — when a buffer that should be a packed payload doesn't start with `FORMAT_PLAIN`. The typical cause is passing node bytes (e.g. `OwnedNodeRef::backing_bytes()`) where a packed payload is expected, instead of packing them first; see [The format byte](#the-format-byte).
 
 The `MaxDepthExceeded` variant is emitted by `read_node_ref` when a decoded frame nests `LIST` nodes past `MAX_NODE_DEPTH` (128 levels) — see [Node nesting depth cap](#node-nesting-depth-cap). Since real stanza trees never approach this depth, callers can treat it the same as any other malformed-frame error (drop the connection / reject the frame).
 

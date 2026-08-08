@@ -1181,7 +1181,7 @@ The sender task's outbound batch buffer (`out_buf`) starts at `BytesMut::with_ca
 **The batch buffer now shrinks back after a burst ends ([#1246](https://github.com/oxidezap/whatsapp-rust/pull/1246)).** After `SMALL_BATCHES_BEFORE_SHRINK` (32) consecutive small batches following a large one, the sender task replaces `out_buf` with a fresh `BytesMut::with_capacity(OUT_BUF_IDLE_CAPACITY)`, freeing the grown allocation. The counter only advances on a *small* batch and resets to zero on every large one, so a burst spread across many batches is never interrupted mid-flight to reallocate — only a connection that sends enough small batches after a burst pays the (one-time) regrowth cost the next time it sends something large.
 </Note>
 
-This buffer lives inside the spawned sender task and is not reachable from outside it, so neither the grown state nor the shrink is reflected in `resource_report()` / `memory_report()`.
+This buffer isn't a dedicated line item in either report. `memory_report()`'s named collections don't include it — it's local to the spawned sender task, with no handle anything outside that task can read. `resource_report()` is less absolute: the sender task is spawned through `runtime.spawn()`, so if the host wires up [`BotBuilder::with_alloc_meter`](/api/bot#with_alloc_meter), this buffer's growth and shrink allocations are folded into the client's aggregate `alloc` churn like any other task allocation — just not attributed to this buffer by name, and not as a live retained-capacity figure.
 
 Location: `src/socket/noise_socket.rs` (`OUT_BUF_IDLE_CAPACITY`, `SMALL_BATCHES_BEFORE_SHRINK`, `should_release_batch_buffer`)
 

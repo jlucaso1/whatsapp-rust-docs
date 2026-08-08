@@ -174,6 +174,7 @@ Rendering changed alongside the `source()` fix: a wrapping variant's `Display` s
 | `SendError` | `send_message`, `revoke_message`, `edit_message`, `pin_message`, `send_reaction`, and all other send-path methods | `whatsapp_rust` |
 | `GroupError` | All `Groups::*` methods | `whatsapp_rust` |
 | `BlockingError` | All `Blocking::*` methods | `whatsapp_rust` |
+| `BusinessError` | `Business::{get_catalog, get_collections, get_order, update_profile, set_cover_photo, remove_cover_photo}` | `whatsapp_rust` |
 | `AppStateError` | All `ChatActions::*` and `Labels::*` methods | `whatsapp_rust` |
 | `ChatStateError` | All `Chatstate::send*` methods | `whatsapp_rust` |
 | `CommunityError` | All `Community::*` methods | `whatsapp_rust` |
@@ -242,6 +243,27 @@ pub enum BlockingError {
     Internal(#[from] anyhow::Error),
 }
 ```
+
+### BusinessError
+
+```rust
+#[non_exhaustive]
+pub enum BusinessError {
+    #[error("MEX request failed")]
+    Mex(#[from] MexError),
+    #[error("IQ request failed")]
+    Request(#[from] IqError),
+    #[error("invalid business profile update")]
+    InvalidUpdate(#[from] BusinessProfileUpdateError),
+    #[error("malformed {operation} response: {detail}")]
+    MalformedResponse {
+        operation: &'static str,
+        detail: String,
+    },
+}
+```
+
+`get_catalog`, `get_collections`, and `get_order` go over MEX; `update_profile`, `set_cover_photo`, and `remove_cover_photo` go over IQ. `InvalidUpdate` is client-side validation on `update_profile` — see [`BusinessProfileUpdateError` in the business reference](/api/business#validation) for every rejection reason.
 
 ### AppStateError
 

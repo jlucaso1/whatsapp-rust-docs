@@ -645,6 +645,24 @@ if let Err(e) = client.connect().await {
 client.logout().await; // infallible — no `?` needed anymore
 ```
 
+<Note>
+As of PR #1258, `connect()`'s `Ok` case changed too — this snippet only shows the error-matching migration, so it still discards a successful connection. See the [`connect()` migration](/api/client#connect) for the full picture:
+
+```rust
+use whatsapp_rust::ConnectError;
+match client.connect().await {
+    Ok(connection) => {
+        connection.read_until_disconnected().await;
+    }
+    Err(ConnectError::AlreadyConnected) => {
+        // ...
+    }
+    Err(e) => { /* ... */ }
+}
+client.logout().await;
+```
+</Note>
+
 ### From PR #1100: error chain recovery
 
 If you were walking `source()` by hand to recover a server rejection or classify a failure, switch to [`ErrorChainExt`](#error-chain-recovery). This is the shape the crate's own internal helper had before PR #1100 (`ClientError::is_transport_unavailable` is public; the `IqError` half required a call this crate could make on its own type but a downstream consumer could not, since it wasn't exposed):

@@ -785,7 +785,7 @@ IqError::ServerError {
 A fixture with no real wire response can build one directly, but `OwnedNodeRef::new` expects node bytes with the format byte already stripped, not the raw output of `marshal` — the same [`unpack`](/advanced/binary-protocol#the-format-byte) step the receive path runs ahead of every `OwnedNodeRef::new` call:
 
 ```rust
-let node = NodeBuilder::new("iq")
+let node = wacore_binary::builder::NodeBuilder::new("iq")
     .attr("type", "error")
     .children([/* ... */])
     .build();

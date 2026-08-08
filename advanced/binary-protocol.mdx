@@ -1181,6 +1181,7 @@ use wacore_binary::builder::NodeBuilder;
 ```rust
 pub enum BinaryError {
     UnexpectedEof,
+    EmptyData,               // Payload was empty where one was required
     InvalidToken(u8),
     InvalidListSize,
     AttrParse(String),
@@ -1193,6 +1194,8 @@ pub enum BinaryError {
 ```
 
 The `Jid` variant is emitted by `AttrParser::optional_jid` when a string attribute fails to parse as a JID. This ensures malformed JIDs in protocol messages are surfaced as typed errors rather than silently ignored.
+
+The `EmptyData` variant is emitted by `check_plain_payload` (and `unpack`/`unpack_bytes`) for a buffer with nothing in it, or — for `check_plain_payload` specifically — a format byte with no node bytes behind it.
 
 The `UnexpectedFormatByte(u8)` variant is emitted by `check_plain_payload` — and, through it, by `unmarshal_packed_ref` and [`Client::send_raw_bytes`](/api/client#send_raw_bytes) — when a buffer that should be a packed payload doesn't start with `FORMAT_PLAIN`. The typical cause is passing node bytes (e.g. `OwnedNodeRef::backing_bytes()`) where a packed payload is expected, instead of packing them first; see [The format byte](#the-format-byte).
 

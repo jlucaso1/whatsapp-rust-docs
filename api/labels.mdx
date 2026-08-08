@@ -113,7 +113,7 @@ client.labels().remove_chat_label("5", &chat).await?;
 
 ### add_message_label
 
-Associate a label with a single message, distinct from [`add_chat_label`](#add_chat_label) above — the association is keyed by the message as well as the chat, under the `label_message` action.
+Use this to associate a label with a single message. Unlike [`add_chat_label`](#add_chat_label) above, this association is keyed by the message as well as the chat, under the `label_message` action.
 
 ```rust
 pub async fn add_message_label(
@@ -157,10 +157,10 @@ pub async fn remove_message_label(
 client.labels().remove_message_label("5", &chat, "MESSAGE_ID").await?;
 ```
 
-Both calls send one mutation per message — there is no batch form on the wire, matching WhatsApp Web's own builder.
+Both calls send one mutation per message. There is no batch form on the wire, matching WhatsApp Web's own builder.
 
 <Note>
-`label_message` is not in the generated app-state schema registry, because WhatsApp Web's current live action table no longer builds this mutation (only `label_edit` and `label_jid` remain there). It is still a first-class protocol action — the protobuf action registry declares it, and both whatsmeow and Baileys build the identical index — so the schema is hand-maintained separately from the generated set. The wire index is `["label_message", labelId, chatJid, messageId, "0", "0"]` on the `regular` collection at action version 3; the trailing `"0", "0"` pair is the message-key `fromMe`/`participant` tail every message-scoped action carries, and no observed source shows it holding anything but its defaults.
+`label_message` is not in the generated app-state schema registry, because WhatsApp Web's current live action table no longer builds this mutation (only `label_edit` and `label_jid` remain there). It is still a first-class protocol action: the protobuf action registry declares it, and both whatsmeow and Baileys build the identical index. For that reason the schema is hand-maintained separately from the generated set. The wire index is `["label_message", labelId, chatJid, messageId, "0", "0"]` on the `regular` collection at action version 3. The trailing `"0", "0"` pair is the message-key `fromMe`/`participant` tail every message-scoped action carries, and no observed source shows it holding anything but its defaults.
 </Note>
 
 ## Inbound label events

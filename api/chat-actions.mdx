@@ -391,7 +391,7 @@ client.chat_actions().remove_contact(&jid).await?;
 ```
 
 <Note>
-Unlike `save_contact`, which writes a `Set`, `remove_contact` sends a syncd **`Remove`** for the same `["contact", jid]` index. This distinction matters: WhatsApp Web picks the operation from an `isDelete` flag when building this mutation, and its receiving side branches on the operation to decide what to do — a `Set` with an empty `ContactAction` would be applied as a rename to the empty string, not a deletion. The action value is still sent (WhatsApp Web builds it before choosing the operation), so a removal carries an all-default `ContactAction` alongside the `Remove` operation.
+Unlike `save_contact`, which writes a `Set`, `remove_contact` sends a syncd **`Remove`** for the same `["contact", jid]` index. WhatsApp Web picks the operation from an `isDelete` flag when building this mutation. Its receiving side then branches on the operation: a `Set` with an empty `ContactAction` gets applied as a rename to the empty string, not a deletion, so only a genuine `Remove` deletes the contact. WhatsApp Web still builds the action value before choosing the operation, so `remove_contact` sends an all-default `ContactAction` alongside the `Remove` operation.
 </Note>
 
 ## Status mute
@@ -518,7 +518,7 @@ pub async fn send_app_state_action(
 - `value` — A `wa::SyncActionValue` with the matching action sub-field set and a `timestamp` in epoch milliseconds.
 
 **When to use it:**
-- The action you need does not have a typed helper on `ChatActions` or `Labels`.
+- The action you need does not have a typed helper on `ChatActions`, `Labels`, `QuickReplies`, or `AppStateSettings`.
 - You need to interoperate with a schema added to the registry without waiting for a new helper to land.
 
 Prefer the typed wrappers (`pin_chat`, `mute_chat`, `archive_chat`, label methods, etc.) whenever they exist — they handle the timestamp, conflict-resolution fields, and index args for you.
@@ -564,7 +564,7 @@ pub async fn remove_app_state_action(
 **Parameters:** same as [`send_app_state_action`](#send_app_state_action) — `schema`, `index_args`, and `value` are used identically. Only the wire operation differs.
 
 <Warning>
-Most delete-like actions — labels, quick replies — use a `deleted` flag inside a `Set` value, not a syncd `Remove`. Check the action's WhatsApp Web builder before reaching for this method: sending a `Remove` for one of those actions drops the record from the collection locally without the linked devices ever seeing the deletion, since they're only watching for the `deleted` flag on a `Set`. [`ChatActions::remove_contact`](#save-and-remove-contacts) is the one action in this codebase that genuinely needs `Remove`, and is already wrapped for you — reach for `remove_app_state_action` directly only when adding support for a new action of this shape.
+Most delete-like actions — labels, quick replies — use a `deleted` flag inside a `Set` value, not a syncd `Remove`. Check the action's WhatsApp Web builder before reaching for this method. Sending a `Remove` for one of those actions drops the record from the collection locally, but the linked devices never see the deletion, since they only watch for the `deleted` flag on a `Set`. [`ChatActions::remove_contact`](#save-and-remove-contacts) is the one action in this codebase that genuinely needs `Remove`, and it is already wrapped for you. Reach for `remove_app_state_action` directly only when adding support for a new action of this shape.
 </Warning>
 
 **Example:**

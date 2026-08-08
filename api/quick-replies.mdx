@@ -3,7 +3,7 @@ title: Quick Replies
 description: Create, edit, and delete WhatsApp Business quick replies, and react to changes from linked devices
 ---
 
-The `QuickReplies` feature manages WhatsApp Business quick replies — saved `/`-triggered shortcuts that expand to a full message. Outbound calls create, edit, or delete a quick reply. Inbound changes made on a linked device (such as WhatsApp Web or the phone) are delivered as events.
+Use `QuickReplies` to manage WhatsApp Business quick replies — saved `/`-triggered shortcuts that expand to a full message. You create, edit, or delete a quick reply with outbound calls. You receive changes made on a linked device (such as WhatsApp Web or the phone) as inbound events.
 
 Quick replies sync across all linked devices via WhatsApp's app state sync mechanism (the `regular` collection, action version 2).
 
@@ -36,7 +36,7 @@ pub async fn set_quick_reply(
 - `id` — Stable identifier for the quick reply. Must be non-empty. Reuse the same `id` to edit it later.
 - `shortcut` — The `/`-typed trigger text. Must be non-empty.
 - `message` — The expanded message text. Must be non-empty.
-- `keywords` — Extra search terms WhatsApp indexes the reply under. May be empty.
+- `keywords` — Extra search terms WhatsApp indexes the reply under. You can pass an empty vector.
 - `count` — Usage counter. Pass `0` for a new quick reply.
 
 **Example:**
@@ -53,7 +53,7 @@ client.quick_replies()
 ```
 
 <Note>
-`associatedLabelIds` is always sent empty, matching WhatsApp Web's own builder — there is no way to associate a quick reply with a label through this call.
+This call always sends `associatedLabelIds` empty, matching WhatsApp Web's own builder. You cannot associate a quick reply with a label through this call.
 </Note>
 
 ## Delete a quick reply
@@ -82,7 +82,7 @@ Deletion sends the same `Set` mutation as `set_quick_reply`, with `deleted = tru
 
 ### QuickReplyUpdate
 
-A quick reply change made on a linked device is delivered through the event bus. The event carries the underlying app state action, so read `action.deleted` first to tell a deletion apart from a create or edit.
+You receive a quick reply change made on a linked device through the event bus. The event carries the underlying app state action, so read `action.deleted` first to tell a deletion apart from a create or edit.
 
 ```rust
 use wacore::types::events::Event;

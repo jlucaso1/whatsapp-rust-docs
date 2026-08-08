@@ -1688,7 +1688,7 @@ Event::ContactRemoved(update) => {
 ```
 
 <Note>
-`ContactRemoved` is distinct from `ContactUpdate`. The underlying mutation is a syncd `Remove`, and carries no action payload — WhatsApp Web ignores the value on that branch and simply drops the contact from the address book. See [Chat actions — Save and remove contacts](/api/chat-actions#save-and-remove-contacts) for the outbound API (`remove_contact`) that emits this event on other devices.
+`ContactRemoved` is distinct from `ContactUpdate`, and the event itself carries no action payload. The underlying wire mutation is different: it is a syncd `Remove` with an all-default `ContactAction` value, since WhatsApp Web builds that value before choosing the operation. WhatsApp Web ignores the value on the `Remove` branch and simply drops the contact from the address book — but if you call [`remove_app_state_action`](/api/chat-actions#remove_app_state_action) directly for an action like this one, you still need to pass a `value`. See [Chat actions — Save and remove contacts](/api/chat-actions#save-and-remove-contacts) for the outbound API (`remove_contact`) that emits this event on other devices.
 </Note>
 
 ## Chat state events
@@ -2013,6 +2013,7 @@ pub struct MessageLabelAssociationUpdate {
 - `label_id` — Identifier of the label being attached or detached
 - `chat_jid` — Chat containing the labeled message
 - `message_id` — Message whose label set changed
+- `timestamp` — When the association change occurred
 - `action.labeled` — `Some(true)` when the label was added, `Some(false)` when removed
 - `from_full_sync` — `true` while replaying the initial app state full sync
 
@@ -2051,6 +2052,7 @@ pub struct QuickReplyUpdate {
 
 **Fields:**
 - `id` — Stable quick reply identifier
+- `timestamp` — When the change occurred
 - `action.shortcut` — The `/`-typed trigger text
 - `action.message` — The expanded message text
 - `action.deleted` — `Some(true)` when the quick reply was deleted
@@ -2759,7 +2761,7 @@ pub struct DisableLinkPreviewsUpdate {
 ```
 
 **Fields:**
-- `previews_disabled` - `true` when link previews are now disabled. Only emitted when the wire carried the flag; WhatsApp Web treats an absent one as a malformed mutation, so no event fires for that case rather than one carrying a default `false`.
+- `previews_disabled` - `true` when link previews are now disabled. This event only fires when the wire carried the flag. WhatsApp Web treats a mutation with an absent flag as malformed, so no event fires for that case, rather than one carrying a default `false`.
 - `timestamp` - When the change occurred
 - `action` - The underlying app-state action
 - `from_full_sync` - Whether this came from a full app-state sync (initial load) or an incremental update
@@ -2772,7 +2774,7 @@ Event::DisableLinkPreviewsUpdate(update) => {
 ```
 
 <Note>
-Unlike `DisappearingModeChanged` above — a server-push notification about *another contact's* setting — this event is app-state sync about *your own account's* setting, changed from one of your own linked devices. See [Privacy — App-state settings](/api/privacy#app-state-settings-syncd) for the outbound API (`set_link_previews_disabled`) that emits this event on other devices.
+`DisappearingModeChanged` above is a server-push notification about *another contact's* setting. `DisableLinkPreviewsUpdate` is different: it is app-state sync about *your own account's* setting, changed from one of your own linked devices. See [Privacy — App-state settings](/api/privacy#app-state-settings-syncd) for the outbound API (`set_link_previews_disabled`) that emits this event on other devices.
 </Note>
 
 ## Raw stanza events

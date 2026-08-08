@@ -177,11 +177,11 @@ This sets the default for **new** chats only. Existing chats keep their current 
 
 ## App-state settings (syncd)
 
-`set_link_previews_disabled` is a distinct privacy control from everything above. Every method in [Methods](#methods) goes through the `set_privacy` IQ namespace and is answered synchronously. This one instead rides app state sync — the same mutation mechanism used by [chat actions](/api/chat-actions#app-state-sync) and [labels](/api/labels) — and has no query/fetch IQ counterpart at all.
+`set_link_previews_disabled` is a distinct privacy control from everything above. You call every method in [Methods](#methods) through the `set_privacy` IQ namespace and get a synchronous response. You call this method through app state sync instead — the same mutation mechanism used by [chat actions](/api/chat-actions#app-state-sync) and [labels](/api/labels) — and it has no query/fetch IQ counterpart at all.
 
 ### set_link_previews_disabled
 
-Turn outgoing link previews off or on for the whole account. Access it through `client.app_state_settings()`, not directly on `Client`.
+Use this method to turn outgoing link previews off or on for the whole account. Call it through `client.app_state_settings()`, not directly on `Client`.
 
 ```rust
 pub async fn set_link_previews_disabled(&self, disabled: bool) -> Result<(), AppStateError>

@@ -10,7 +10,7 @@ whatsapp-rust supports **native plugins**: build-time, type-safe extensions that
 This is a low-level extension seam. If you're writing an application that just sends and receives messages, use [`Bot`](/api/bot) directly — you don't need this page. Reach for native plugins when you're building a **reusable component** (metrics, a search index, a moderation layer) that should install once, observe events non-blockingly, own its own background tasks across reconnects, and expose a typed API to the rest of your application.
 
 <Note>
-The plugin host is intentionally native-only today: it is trusted in-process Rust code, not a sandboxed or dynamically-loaded extension model. There is no dynamic (`.so`/`.wasm`) loading, no ingress interception of inbound stanzas, and no pre-ack decision hook.
+The plugin host is intentionally native-only today: it is trusted in-process Rust code, not a sandboxed or dynamically-loaded extension model. There is no dynamic (`.so`/`.wasm`) loading and no pre-ack decision hook.
 </Note>
 
 ## Enabling the feature
@@ -107,6 +107,7 @@ A plugin's manifest requests capabilities, and `PluginContext` only exposes the 
 | `PluginCapability::Messaging` | `PluginMessaging` | High-level message sends |
 | `PluginCapability::Iq` | `PluginIq` | Typed `IqSpec` execution |
 | `PluginCapability::PluginEvents` | `PluginEvents` | Publishing custom events, scoped to the plugin's own namespace |
+| `PluginCapability::StanzaInterception` | `PluginStanzaInterception` | Claiming a decoded stanza before the built-in pipeline handles it |
 
 <Note>
 This is API shaping, not a sandbox: a native plugin is trusted in-process Rust code and can use any dependency available to your build. It exists so a plugin's `install` signature documents what it actually touches, and so `PluginContext` never hands out the raw backend or Signal stores.
@@ -141,7 +142,7 @@ impl ClientPlugin for SearchPlugin {
 }
 ```
 
-The other capabilities follow the same pattern: `context.tasks()`, `context.messaging()`, `context.iq()`, and `context.plugin_events()` each return `Option<&Plugin*>`, populated only when the matching `PluginCapability` was requested in `manifest()`.
+The other capabilities follow the same pattern: `context.tasks()`, `context.messaging()`, `context.iq()`, `context.plugin_events()`, and `context.stanza_interception()` each return `Option<&Plugin*>`, populated only when the matching `PluginCapability` was requested in `manifest()`.
 
 Capability handles hold a weak reference to the client internally and reject calls once the client has shut down, so a plugin API that outlives the client (for example, one your application keeps an `Arc` to) fails safely instead of resurrecting it.
 
@@ -178,9 +179,45 @@ Each delivered envelope carries six fields: the plugin ID, the topic, a schema v
 
 `PluginEventSubscription` is an RAII endpoint — dropping it removes all of that subscriber's selectors from the router at once.
 
+## Stanza interception
+
+`PluginCapability::CoreEvents` lets a plugin *watch* the stream. `PluginCapability::StanzaInterception` lets it *act*: a plugin that models a stanza this client does not can claim it before the built-in pipeline runs, instead of watching the client nack it.
+
+```rust
+use whatsapp_rust::client::interceptor::{Interception, StanzaInterceptor};
+use wacore_binary::node::OwnedNodeRef;
+
+struct VendorInterceptor;
+
+impl StanzaInterceptor for VendorInterceptor {
+    fn intercept(&self, node: &OwnedNodeRef) -> Interception {
+        if node.tag() == "vendor:thing" {
+            // … act on it …
+            Interception::Handled
+        } else {
+            Interception::Pass
+        }
+    }
+}
+
+// Inside `install`, given a `PluginContext` that requested `StanzaInterception`:
+let registration = context
+    .stanza_interception()
+    .expect("StanzaInterception capability was requested in the manifest above")
+    .register(Arc::new(VendorInterceptor))?;
+```
+
+`register()` returns a `PluginInterceptorRegistration` — the same shape of RAII token `PluginCoreEvents::subscribe` returns: dropping it unregisters, `unregister()` is the explicit form, and the host indexes it weakly so terminal shutdown invalidates a token a plugin API retained without extending the life of one the plugin already released.
+
+**Panic isolation.** A directly registered `StanzaInterceptor` (via `Client::add_stanza_interceptor`) is trusted not to panic — the read loop calls it inline, and an unwind there takes the connection with it. A plugin is not trusted with that: one faulty plugin must not kill the connection. A panicking plugin interceptor is counted in `PluginStats::stanza_interception_panics`, logged, and read as `Interception::Pass` — the stanza is left with the client, the same outcome as the plugin not being there. This also degrades the plugin's `PluginHealth`.
+
+**Signal durability.** Interception runs *before* the built-in pipeline, so a claimed stanza is one the client did no Signal work on at all: nothing decrypted, no session mutated, no prekey consumed. There is no half-advanced state to reconcile — but the claim is final. The ack that follows tells the server not to redeliver, so a claimed `<message>` stays undecrypted forever and a claimed `<notification type="encrypt">` is a prekey top-up that never happens. A plugin claiming those takes that on whole — match narrowly.
+
+See [`Client::add_stanza_interceptor`](/api/client#add_stanza_interceptor) for what may be claimed at all (connection-critical stanzas like `success`/`failure`/`ack`/`stream:error` and server pings are never offered) and what the server is owed once a stanza is claimed.
+
 ## Diagnostics
 
-`Client::plugin_stats()` returns a `PluginStats` snapshot per installed plugin: lifecycle state (`PluginState`), sticky health (`PluginHealth`), callback failures, spawned-task panics, drain timeouts, active task scopes, and subscription/publisher counters. `PluginEventRouter::stats()` and `PluginEvents::stats()` report queue depth and backpressure totals for custom events. `Client::memory_report()` folds in plugin resource accounting.
+`Client::plugin_stats()` returns a `PluginStats` snapshot per installed plugin: lifecycle state (`PluginState`), sticky health (`PluginHealth`), callback failures, spawned-task panics, drain timeouts, active task scopes, and subscription/publisher counters — including `stanza_interceptors` (active registrations) and `stanza_interception_panics` (isolated before they could unwind through the read loop; any non-zero count degrades `PluginHealth`). `PluginEventRouter::stats()` and `PluginEvents::stats()` report queue depth and backpressure totals for custom events. `Client::memory_report()` folds in plugin resource accounting, including a `plugin_stanza_interceptors` total across every installed plugin.
 
 These snapshots are on-demand and approximate under concurrency, and — matching the rest of the client's [observability](/advanced/observability) surface — never include JIDs, phone numbers, or message bodies.
 
@@ -190,9 +227,10 @@ The workspace ships `plugins/metrics` as a public-API conformance example: a met
 
 ## What's not supported yet
 
-The current host deliberately does not support dynamic plugin loading, ingress interception or pre-ack decisions on inbound stanzas, a foreign (non-Rust) wire protocol, or process isolation/sandboxing. These are real design commitments, not just missing features, and would only be added behind a concrete consumer need.
+The current host deliberately does not support dynamic plugin loading, pre-ack decisions on inbound stanzas (a stanza is claimed only after it is fully decoded — see [Stanza interception](#stanza-interception)), a foreign (non-Rust) wire protocol, or process isolation/sandboxing. These are real design commitments, not just missing features, and would only be added behind a concrete consumer need.
 
 ## See also
 
+- [Events](/concepts/events#decryptedpayload) — `Event::DecryptedPayload`, the lower-level, always-available seam for observing a plaintext payload before it is decoded, independent of the plugin host.
 - [Observability](/advanced/observability) — the `tracing` instrumentation that plugin diagnostics complement.
 - [Custom backends](/guides/custom-backends) — the other `ClientBuilder` seam, for swapping storage/transport/runtime instead of adding behavior.

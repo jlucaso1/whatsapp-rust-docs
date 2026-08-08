@@ -612,7 +612,7 @@ pub enum IqError {
 
 Added in PR #1100: `wacore::request::IqError` gained public `is_timeout()` (`true` only for `Timeout`) and `is_transport_unavailable()` (`true` for `NotConnected`, `Disconnected`, and `InternalChannelClosed`) methods, each an exhaustive match so a future variant has to be classified rather than silently defaulting to `false`. `whatsapp_rust::request::IqError` (the crate-level type shown above, with the extra `Socket`/`EncryptSend`/`ClientState`/`EncodeError`/`ParseError` variants) makes the same judgement internally but does not expose it publicly — go through [`ErrorChainExt`](#error-chain-recovery) instead, which handles both types.
 
-Added in PR #1257: `ServerError` carries `response: RejectionStanza` — see [`RejectionStanza`](#rejectionstanza) above and the [migration note](#from-pr-1257-servererror-carries-the-rejection-stanza) below. Matching with `..` is unaffected by this field; only hand-constructing the variant (mainly test fixtures) needs updating.
+Added in PR #1257: `ServerError` carries `response: RejectionStanza` — see [`RejectionStanza`](#rejectionstanza) above and the [migration note](#from-pr-1257-servererror-carries-the-rejection-stanza) below. Matching with `..` is unaffected by this field. A match that already names all four former fields without `..` needs `..` added (or `response` bound too) — Rust rejects a struct pattern missing a field with `E0027`. Constructing the variant by hand (mainly test fixtures) needs updating the same way.
 
 ## Migration guide
 
@@ -751,6 +751,16 @@ match err {
 }
 ```
 
+If you matched all four former fields by name without `..`, the pattern now fails to compile with `E0027` ("pattern does not mention field `response`") — add `..`, or bind `response` too:
+
+```rust
+// Before — breaks with E0027 once `response` is added
+IqError::ServerError { code, text, error_type, backoff } => { /* ... */ }
+
+// After
+IqError::ServerError { code, text, error_type, backoff, .. } => { /* ... */ }
+```
+
 Constructing the variant by hand — mainly test fixtures — now needs the stanza it was rejected with:
 
 ```rust
@@ -772,7 +782,17 @@ IqError::ServerError {
 }
 ```
 
-A fixture with no real wire response can build one directly: decode a hand-built `<iq type="error">` through `OwnedNodeRef::new`, wrap it in `Arc`, and convert.
+A fixture with no real wire response can build one directly, but `OwnedNodeRef::new` expects node bytes with the format byte already stripped, not the raw output of `marshal` — the same [`unpack`](/advanced/binary-protocol#the-format-byte) step the receive path runs ahead of every `OwnedNodeRef::new` call:
+
+```rust
+let node = NodeBuilder::new("iq")
+    .attr("type", "error")
+    .children([/* ... */])
+    .build();
+let packed = wacore_binary::marshal::marshal(&node).expect("marshals");
+let node_bytes = wacore_binary::util::unpack(&packed).expect("unpacks").into_owned();
+let response: Arc<OwnedNodeRef> = Arc::new(OwnedNodeRef::new(node_bytes).expect("decodes"));
+```
 
 `From<wacore::request::IqError> for whatsapp_rust::request::IqError` is also removed — a bare `From` conversion has no response available to attach, which is exactly the material this change stops discarding. Replace it with `IqError::from_response`:
 

@@ -3,7 +3,7 @@ title: Bots
 description: Fetch WhatsApp's directory of first-party AI bots
 ---
 
-The `Bots` feature fetches the server's directory of first-party AI bots offered to this account: a default bot plus display sections of `(jid, persona_id)` pairs.
+The `Bots` feature fetches the server's directory of first-party AI bots offered to your account: a default bot plus display sections of `(jid, persona_id)` pairs.
 
 <Note>
 Not to be confused with [`Bot`](/api/bot), the client-side framework for building a program that answers messages. `Bots` reads the server's bot *directory*; `Bot` is a different domain that happens to share the word.
@@ -27,7 +27,7 @@ pub async fn list(&self) -> Result<BotList, IqError>
 
 WhatsApp Web issues this once per session at startup, then refreshes it on a `bonsai_update_interval` (24h) timer. There is no server push for updates, so call this again when you want fresh data.
 
-Every section is returned, not just ones typed `all`. WhatsApp Web itself reads bots out of every section and only uses `type`/`display_type` for presentation, so a bot whose sole carrier is a `category` or `featured` section stays reachable.
+`list()` returns every section, not just ones typed `all`. WhatsApp Web itself reads bots out of every section and only uses `type`/`display_type` for presentation, so a bot whose sole carrier is a `category` or `featured` section stays reachable.
 
 The persona ids in the response are the input to WhatsApp's `WAWebFetchBotProfilesGQLQuery` MEX operation (not wrapped by this crate), which hydrates them into displayable profiles — name, description, creator, icebreakers.
 
@@ -95,7 +95,7 @@ pub struct BotListSection {
 }
 ```
 
-`display_type` is present only in `v="3"` responses.
+`section_type` parses the `type` attribute on `<section>`. `display_type` is present only in `v="3"` responses.
 
 ### BotListEntry
 
@@ -113,6 +113,7 @@ pub struct BotListEntry {
 
 - `persona_id` — identifier to hand to the bot-profile MEX operation
 - `card_title` — `v="3"` only
+- `count` — a numeric counter on the bot card; either response version may include it, but WhatsApp Web's own client doesn't document what it counts
 - `themes` — `v="2"` only; empty in `v="3"` responses
 
 ### BotDefault
@@ -158,7 +159,7 @@ Each carries an `Other(String)` fallback variant, so a value the server introduc
 `Bots`, `BotList`, `BotListEntry`, `BotListSection`, `BotDefault`, `BotTheme`, and their enums are re-exported from the crate root (`whatsapp_rust::Bots`, `whatsapp_rust::BotList`, ...).
 </Note>
 
-## Wire Format
+## Wire format
 
 ### Request
 
@@ -202,11 +203,11 @@ The request always pins `v="2"`, even though the parser accepts either response 
 
 Each version has one field the other does not require, enforced only for its own version: `<default>` in `v="2"`, `bhash` in `v="3"`.
 
-## Error Handling
+## Error handling
 
 `list()` returns `Result<BotList, IqError>` — see [Errors](/api/errors) for `IqError`'s variants.
 
-## See Also
+## See also
 
 - [Bot](/api/bot) - Client-side framework for building a bot that answers messages
-- [MEX (GraphQL)](/api/mex) - GraphQL operations, including bot-profile hydration
+- [MEX (GraphQL)](/api/mex) - Generic GraphQL query/mutate access, which can also carry the bot-profile hydration operation (not separately wrapped by this crate)

@@ -243,6 +243,8 @@ The default transport implementation using `tokio-websockets` for async WebSocke
 
 The default factory handles DNS resolution, TCP connection, and TLS. For custom connection logic, use [`from_websocket`](#from_websocket) directly.
 
+When no custom connector is supplied via [`with_connector`](#with_connector), the factory builds [`default_tls_connector()`](#default_tls_connector) once, on the first call to `create_transport`, and retains it in a `OnceLock` for every subsequent dial on that factory — a reconnect no longer pays for a fresh TLS config. Retaining the connector is also what lets its TLS session-resumption store actually get hit; rebuilding a fresh config per dial (the pre-#1245 behavior) left that store permanently empty. A connector supplied explicitly via `with_connector` is used as-is and never touches this cache.
+
 ```rust
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
@@ -298,7 +300,7 @@ let factory = TokioWebSocketTransportFactory::new()
 ```
 
 <Note>
-Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point before customizing.
+Use `default_tls_connector()` to inspect or replicate the default TLS configuration as a starting point before customizing. Note that a connector built this way does not get the single-host resumption sizing described [below](#default_tls_connector) unless you apply it yourself — that sizing is applied internally by `default_tls_connector()`, not by `Connector::Rustls`.
 </Note>
 
 #### with_origin
@@ -329,6 +331,8 @@ pub fn default_tls_connector() -> Connector
 Returns the default TLS connector used by `TokioWebSocketTransportFactory`. Uses rustls with `webpki_roots` for certificate validation and `ring` as the crypto provider.
 
 This is useful as a starting point when you need to inspect or replicate the default TLS configuration before customizing it via `with_connector`.
+
+Its session-resumption store is sized for the one host a factory dials: 8 tickets, rustls's per-server maximum, rather than the ~32-server table (`⌈256/8⌉` slots) rustls's `Resumption::default()` provisions for. A connector reused across several hosts (for example, shared deliberately across factories) still works, but only the most recently dialled hosts keep their tickets; build a larger `rustls::client::Resumption` store yourself if that's the shape you need. `TokioWebSocketTransportFactory` itself only ever dials the one URL it was built with, so the default sizing is a straight win there — see [`TokioWebSocketTransportFactory`](#tokiowebsockettransportfactory) above for how the resulting connector is cached and reused across reconnects.
 
 ### Usage with Bot builder
 
@@ -479,6 +483,8 @@ let config = rustls::ClientConfig::builder()
     .with_root_certificates(root_store)
     .with_no_client_auth();
 ```
+
+The config's session-resumption store is then resized down from rustls's default (provisioned for ~32 distinct server names) to 8 tickets — a single server's worth — since a `TokioWebSocketTransportFactory` only ever dials the one host it was built with. See [`default_tls_connector`](#default_tls_connector) for the sizing rationale.
 
 ### Development mode (skip TLS verification)
 

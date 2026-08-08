@@ -343,7 +343,7 @@ client.chat_actions().clear_chat(&jid, false, false, None).await?;
 
 A clear performed on another linked device arrives as an [`Event::ClearChatUpdate`](/concepts/events#clearchatupdate).
 
-## Save contact
+## Save and remove contacts
 
 ### save_contact
 
@@ -373,6 +373,26 @@ client.chat_actions()
     .save_contact(&jid, Some("Jane Doe".into()), Some("Jane".into()), true)
     .await?;
 ```
+
+### remove_contact
+
+Delete a saved contact, syncing the removal to your other linked devices.
+
+```rust
+pub async fn remove_contact(&self, jid: &Jid) -> Result<(), AppStateError>
+```
+
+**Parameters:**
+- `jid` - The contact's JID. **Must be a bare phone-number JID**, the same rule as `save_contact`.
+
+**Example:**
+```rust
+client.chat_actions().remove_contact(&jid).await?;
+```
+
+<Note>
+Unlike `save_contact`, which writes a `Set`, `remove_contact` sends a syncd **`Remove`** for the same `["contact", jid]` index. WhatsApp Web picks the operation from an `isDelete` flag when building this mutation. Its receiving side then branches on the operation: a `Set` with an empty `ContactAction` gets applied as a rename to the empty string, not a deletion, so only a genuine `Remove` deletes the contact. WhatsApp Web still builds the action value before choosing the operation, so `remove_contact` sends an all-default `ContactAction` alongside the `Remove` operation.
+</Note>
 
 ## Status mute
 
@@ -481,7 +501,7 @@ pub fn message_key(
 
 ### send_app_state_action
 
-Send any syncd (app state) `Set` action, driven by a generated schema from the `whatsapp_rust::schemas` registry. Use this as the escape hatch when there isn't a dedicated helper yet (for example, `clear_chat`, `favorites`, `quick_reply`). The typed methods on `ChatActions` and `Labels` are thin wrappers over this same call.
+Send any syncd (app state) `Set` action, driven by a generated schema from the `whatsapp_rust::schemas` registry. Use this as the escape hatch when there isn't a dedicated helper yet (for example, `clear_chat`, `favorites`). Most typed methods on `ChatActions`, `Labels`, `QuickReplies`, and `AppStateSettings` are thin wrappers over this same call. The one exception is [`ChatActions::remove_contact`](#save-and-remove-contacts), which wraps [`remove_app_state_action`](#remove_app_state_action) below instead, since contact removal needs a `Remove` rather than a `Set`.
 
 ```rust
 pub async fn send_app_state_action(
@@ -498,7 +518,7 @@ pub async fn send_app_state_action(
 - `value` — A `wa::SyncActionValue` with the matching action sub-field set and a `timestamp` in epoch milliseconds.
 
 **When to use it:**
-- The action you need does not have a typed helper on `ChatActions` or `Labels`.
+- The action you need does not have a typed helper on `ChatActions`, `Labels`, `QuickReplies`, or `AppStateSettings`.
 - You need to interoperate with a schema added to the registry without waiting for a new helper to land.
 
 Prefer the typed wrappers (`pin_chat`, `mute_chat`, `archive_chat`, label methods, etc.) whenever they exist — they handle the timestamp, conflict-resolution fields, and index args for you.
@@ -528,6 +548,41 @@ client
 Index arguments are positional and must match `schema.index_parts` length and order, excluding `IndexPart::Literal` slots. Mismatched arity returns an error before any patch is sent.
 </Note>
 
+### remove_app_state_action
+
+Send an app-state action as a syncd `Remove` rather than a `Set`. Sibling of `send_app_state_action` above, for the small set of actions that model deletion as their own operation instead of a `deleted` flag inside a `Set` value.
+
+```rust
+pub async fn remove_app_state_action(
+    &self,
+    schema: &Schema,
+    index_args: &[&str],
+    value: &wa::SyncActionValue,
+) -> Result<(), AppStateError>
+```
+
+**Parameters:** same as [`send_app_state_action`](#send_app_state_action) — `schema`, `index_args`, and `value` are used identically. Only the wire operation differs.
+
+<Warning>
+Most delete-like actions — labels, quick replies — use a `deleted` flag inside a `Set` value, not a syncd `Remove`. Check the action's WhatsApp Web builder before reaching for this method. Sending a `Remove` for one of those actions drops the record from the collection locally, but the linked devices never see the deletion, since they only watch for the `deleted` flag on a `Set`. [`ChatActions::remove_contact`](#save-and-remove-contacts) is the one action in this codebase that genuinely needs `Remove`, and it is already wrapped for you. Reach for `remove_app_state_action` directly only when adding support for a new action of this shape.
+</Warning>
+
+**Example:**
+```rust
+use whatsapp_rust::schemas;
+use whatsapp_rust::waproto::whatsapp as wa;
+
+let value = wa::SyncActionValue {
+    contact_action: Some(Default::default()),
+    timestamp: Some(1_700_000_000_000),
+    ..Default::default()
+};
+
+client
+    .remove_app_state_action(&schemas::CONTACT, &["15551234567@s.whatsapp.net"], &value)
+    .await?;
+```
+
 ## App state sync
 
 All chat actions are synced across devices using WhatsApp's app state synchronization:
@@ -544,6 +599,7 @@ All chat actions are synced across devices using WhatsApp's app state synchroniz
 | Clear chat | `regular_high` |
 | Status mute | `regular_high` |
 | Save contact | `critical_unblock_low` |
+| Remove contact | `critical_unblock_low` |
 
 <Note>
 App state sync requires encryption keys to be available. These are typically obtained during initial sync after authentication. Actions may fail if called immediately after pairing before sync completes.
@@ -589,10 +645,15 @@ use wacore::types::events::Event;
         Event::DeleteMessageForMeUpdate(update) => {
             println!("Message {} in {} deleted for me", update.message_id, update.chat_jid);
         }
+        Event::ContactRemoved(update) => {
+            println!("Contact {} removed", update.jid);
+        }
         _ => {}
     }
 })
 ```
+
+`Event::ContactRemoved` is distinct from `Event::ContactUpdate` — see [ContactRemoved](/concepts/events#contactremoved).
 
 ## Error handling
 
@@ -675,3 +736,5 @@ async fn organize_chats(client: &Arc<Client>) -> anyhow::Result<()> {
 - [Events](/concepts/events) - Handle chat action update events
 - [Groups](/api/groups) - Group management operations
 - [Client](/api/client) - Core client API
+- [Labels](/api/labels) - Chat and message label operations built on the same app-state send path
+- [Quick Replies](/api/quick-replies) - Saved reply shortcuts built on the same app-state send path

@@ -108,6 +108,7 @@
                   "api/profile",
                   "api/chat-actions",
                   "api/labels",
+                  "api/quick-replies",
                   "api/privacy",
                   "api/business",
                   "api/mex",

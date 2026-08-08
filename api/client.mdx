@@ -830,6 +830,33 @@ Access chat management actions. Operations sync across all linked devices via ap
 - `delete_chat(jid: &Jid, delete_media: bool, message_range: Option<SyncActionMessageRange>)` - Delete a chat from all linked devices
 - `delete_message_for_me(chat_jid: &Jid, participant_jid: Option<&Jid>, message_id: &str, from_me: bool, delete_media: bool, message_timestamp: Option<i64>)` - Delete a message locally (not for the other party)
 
+### quick_replies
+
+```rust
+pub fn quick_replies(&self) -> QuickReplies<'_>
+```
+
+Access WhatsApp Business quick reply operations. Operations sync across all linked devices via app state sync.
+
+**Methods:**
+- `set_quick_reply(id: &str, shortcut: &str, message: &str, keywords: Vec<String>, count: i32)` - Create or update a quick reply
+- `delete_quick_reply(id: &str)` - Delete a quick reply
+
+See [Quick Replies API](/api/quick-replies) for full documentation.
+
+### app_state_settings
+
+```rust
+pub fn app_state_settings(&self) -> AppStateSettings<'_>
+```
+
+Access account-wide settings synced via app state rather than the `set_privacy` IQ namespace.
+
+**Methods:**
+- `set_link_previews_disabled(disabled: bool)` - Turn outgoing link previews off or on for the whole account
+
+See [Privacy API — App-state settings](/api/privacy#app-state-settings-syncd) for full documentation.
+
 ### status
 
 ```rust

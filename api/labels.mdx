@@ -109,9 +109,63 @@ pub async fn remove_chat_label(
 client.labels().remove_chat_label("5", &chat).await?;
 ```
 
+## Associate a label with a message
+
+### add_message_label
+
+Use this to associate a label with a single message. Unlike [`add_chat_label`](#add_chat_label) above, this association is keyed by the message as well as the chat, under the `label_message` action.
+
+```rust
+pub async fn add_message_label(
+    &self,
+    label_id: &str,
+    chat_jid: &Jid,
+    message_id: &str,
+) -> Result<(), AppStateError>
+```
+
+**Parameters:**
+- `label_id` — The label to apply. Must be non-empty.
+- `chat_jid` — The chat containing the message.
+- `message_id` — The message to label. Must be non-empty.
+
+**Example:**
+```rust
+client.labels().add_message_label("5", &chat, "MESSAGE_ID").await?;
+```
+
+### remove_message_label
+
+Remove a label association from a single message.
+
+```rust
+pub async fn remove_message_label(
+    &self,
+    label_id: &str,
+    chat_jid: &Jid,
+    message_id: &str,
+) -> Result<(), AppStateError>
+```
+
+**Parameters:**
+- `label_id` — The label to remove. Must be non-empty.
+- `chat_jid` — The chat containing the message.
+- `message_id` — The message to unlabel. Must be non-empty.
+
+**Example:**
+```rust
+client.labels().remove_message_label("5", &chat, "MESSAGE_ID").await?;
+```
+
+Both calls send one mutation per message. There is no batch form on the wire, matching WhatsApp Web's own builder.
+
+<Note>
+`label_message` is not in the generated app-state schema registry, because WhatsApp Web's current live action table no longer builds this mutation (only `label_edit` and `label_jid` remain there). It is still a first-class protocol action: the protobuf action registry declares it, and both whatsmeow and Baileys build the identical index. For that reason the schema is hand-maintained separately from the generated set. The wire index is `["label_message", labelId, chatJid, messageId, "0", "0"]` on the `regular` collection at action version 3. The trailing `"0", "0"` pair is the message-key `fromMe`/`participant` tail every message-scoped action carries, and no observed source shows it holding anything but its defaults.
+</Note>
+
 ## Inbound label events
 
-Label changes made on a linked device are delivered through the event bus. Both events carry the underlying app state action so you can read the new name, color, deleted flag, or labeled state directly.
+Label changes made on a linked device are delivered through the event bus. All three events carry the underlying app state action so you can read the new name, color, deleted flag, or labeled state directly.
 
 ```rust
 use wacore::types::events::Event;
@@ -139,6 +193,16 @@ use wacore::types::events::Event;
                 update.chat_jid,
             );
         }
+        Event::MessageLabelAssociationUpdate(update) => {
+            let attached = update.action.labeled == Some(true);
+            println!(
+                "Label {} {} message {} in chat {}",
+                update.label_id,
+                if attached { "added to" } else { "removed from" },
+                update.message_id,
+                update.chat_jid,
+            );
+        }
         _ => {}
     }
 })
@@ -151,7 +215,8 @@ use wacore::types::events::Event;
 | Action | Collection | Action version |
 |--------|------------|----------------|
 | Create / update / delete label | `regular` | 3 |
-| Add / remove label association | `regular` | 3 |
+| Add / remove chat label association | `regular` | 3 |
+| Add / remove message label association | `regular` | 3 |
 
 <Note>
 App state sync requires the relevant encryption keys, which arrive during initial sync after pairing. Outbound label calls may fail if invoked immediately after pairing before sync completes.
@@ -202,6 +267,6 @@ async fn tag_vip_chats(client: &Arc<Client>) -> anyhow::Result<()> {
 
 ## See also
 
-- [Events](/concepts/events) — Handle `LabelEditUpdate` and `LabelAssociationUpdate`
+- [Events](/concepts/events) — Handle `LabelEditUpdate`, `LabelAssociationUpdate`, and `MessageLabelAssociationUpdate`
 - [Chat actions](/api/chat-actions) — Archive, pin, mute, star, and other app-state-synced chat operations
 - [State management](/advanced/state-management) — How app state sync works under the hood

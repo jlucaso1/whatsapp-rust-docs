@@ -91,8 +91,13 @@ pub async fn do_handshake(
     ik_handshake_failures: &AtomicU32,
     transport: Arc<dyn Transport>,
     transport_events: &mut async_channel::Receiver<TransportEvent>,
+    observers: SendObservers,
 ) -> Result<Arc<NoiseSocket>>
 ```
+
+<Note>
+**Breaking change:** `do_handshake`'s last parameter used to be `stats: Option<Arc<wacore::stats::SessionStats>>`. It is now `observers: SendObservers`, the same struct [`NoiseSocket::with_observers`](#dedicated-sender-task) takes — see below. A caller that only wants wire-byte accounting passes `SendObservers::with_stats(stats)`; a caller that wants neither observer passes `SendObservers::default()`.
+</Note>
 
 **Step-by-step process for XX:**
 
@@ -329,13 +334,31 @@ Location: `src/socket/noise_socket.rs:50-66`
 The socket uses a dedicated task for sending to ensure frame ordering:
 
 ```rust
+/// What a socket reports its sends to. Both halves belong to the `Client`; a
+/// VoIP relay socket and most tests pass `Default`, reporting to neither.
+#[derive(Default, Clone)]
+pub struct SendObservers {
+    /// Wire-byte accounting, recorded after the transport write.
+    stats: Option<Arc<wacore::stats::SessionStats>>,
+    /// Publisher for the plaintext of each frame that reached the transport.
+    sent_frames: Option<Arc<SentFrameTap>>,
+}
+
+impl SendObservers {
+    /// Report wire bytes into `stats` and nothing else.
+    pub fn with_stats(stats: Arc<wacore::stats::SessionStats>) -> Self { /* ... */ }
+
+    /// Also publish each sent frame's plaintext through `tap`.
+    pub(crate) fn with_sent_frames(mut self, tap: Arc<SentFrameTap>) -> Self { /* ... */ }
+}
+
 impl NoiseSocket {
-    pub fn with_stats(
+    pub fn with_observers(
         runtime: Arc<dyn Runtime>,
         transport: Arc<dyn Transport>,
         write_key: NoiseCipher,
         read_key: NoiseCipher,
-        stats: Option<Arc<wacore::stats::SessionStats>>,
+        observers: SendObservers,
     ) -> Self {
         let write_key = Arc::new(write_key);
         let read_key = Arc::new(read_key);
@@ -350,7 +373,7 @@ impl NoiseSocket {
             transport.clone(),
             write_key.clone(),
             send_job_rx,
-            stats,
+            observers,
         )));
 
         Self {
@@ -362,6 +385,12 @@ impl NoiseSocket {
     }
 }
 ```
+
+`NoiseSocket::new` (used by the illustrative handshake walkthrough above) is unchanged: it's a thin wrapper that calls `with_observers` with `SendObservers::default()`, for the callers — mainly tests — that want neither observer.
+
+<Note>
+**Breaking change:** `with_stats(..., stats: Option<Arc<SessionStats>>)` is now `with_observers(..., observers: SendObservers)`. `SendObservers` is one struct rather than one parameter per observer, so the next thing that wants to watch sends — [`SentFrame`](/concepts/events#sentframe) was the first — plugs in there instead of widening this constructor (and `do_handshake`'s) again. A caller that only wants what `with_stats` gave it passes `SendObservers::with_stats(stats)`, which is `pub` and usable from any crate. `with_sent_frames` and the client's `sent_frame_tap` field, by contrast, are `pub(crate)` — internal wiring the client itself uses to chain `.with_sent_frames(client.sent_frame_tap.clone())` when it builds its own socket, not something callable from outside `whatsapp-rust`. An embedder enables sent-frame forwarding the same way any consumer does: through [`Client::acquire_sent_frame_forwarding()`](/api/client#acquire_sent_frame_forwarding), which wires the tap internally. VoIP relay sockets and most tests pass `SendObservers::default()`, reporting to neither — same as passing `None` before.
+</Note>
 
 **Why a dedicated task?**
 
@@ -382,14 +411,19 @@ async fn sender_task(
     transport: Arc<dyn Transport>,
     write_key: Arc<NoiseCipher>,
     send_job_rx: async_channel::Receiver<SendJob>,
-    stats: Option<Arc<wacore::stats::SessionStats>>,
+    observers: SendObservers,
 ) {
+    let SendObservers { stats, sent_frames } = observers;
     let mut write_counter: u32 = 0;
     let mut enc_buf = Vec::with_capacity(4096);
     let mut out_buf = BytesMut::with_capacity(4096);
     let mut poisoned = false;
     let mut waiters: Vec<(oneshot::Sender<SendResult>, usize)> = Vec::new();
     let mut carry_over: Option<SendJob> = None;
+    // Plaintexts of this batch's frames, held only while a consumer is
+    // watching; empty (unallocated) otherwise. Kept until after the write so
+    // what is published is what the transport actually accepted.
+    let mut observed: Vec<bytes::Bytes> = Vec::new();
 
     loop {
         let job = match carry_over.take() {
@@ -404,10 +438,18 @@ async fn sender_task(
             continue;
         }
 
-        // Encrypt everything already queued into out_buf. Stop at the
-        // MAX_BATCH_FRAMES / MAX_BATCH_WIRE_BYTES ceiling, or when try_recv
-        // finds nothing more waiting.
+        // Encrypt everything already queued into out_buf, cloning each
+        // plaintext into `observed` first when `sent_frames` is enabled. Stop
+        // at the MAX_BATCH_FRAMES / MAX_BATCH_WIRE_BYTES ceiling, or when
+        // try_recv finds nothing more waiting.
         // ... encrypt_frame_into loop, then a single transport.send(out_buf) ...
+
+        // After the write succeeds: stats.record_frame_sent for each wire
+        // frame, then — re-checking sent_frames.enabled() rather than trusting
+        // the read at capture time, so a batch that outlived its last lease
+        // stays quiet — tap.publish(plaintext) for each entry in `observed`.
+        // A write that fails clears `observed` instead: a frame the transport
+        // refused is not reported as sent.
     }
 }
 ```
@@ -769,11 +811,14 @@ impl Client {
         ).await??;
         
         // Perform Noise handshake
-        let device = self.persistence_manager.get_device_snapshot();
         let noise_socket = do_handshake(
-            &device,
+            self.runtime.clone(),
+            &self.persistence_manager,
+            &self.ik_handshake_failures,
             transport,
-            &mut events
+            &mut events,
+            SendObservers::with_stats(self.stats.clone())
+                .with_sent_frames(self.sent_frame_tap.clone()),
         ).await?;
         
         // Store socket and start receivers

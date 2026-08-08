@@ -1817,22 +1817,23 @@ Register a handler for chat state events (typing indicators). Pass the handler i
 **Breaking change (as of PR #1227):** `register_chatstate_handler` is no longer `async`. Drop the `.await` at call sites: `client.register_chatstate_handler(handler)`.
 </Warning>
 
-### set_raw_node_forwarding
+### acquire_raw_node_forwarding
 
 ```rust
-pub fn set_raw_node_forwarding(&self, enabled: bool)
+pub fn acquire_raw_node_forwarding(self: &Arc<Self>) -> RawNodeLease
 ```
 
-Enable or disable raw node forwarding. When enabled, `Event::RawNode` is emitted for every decoded stanza before the stanza router dispatches it. Disabled by default to avoid overhead.
+Acquire raw decoded stanza forwarding for one consumer. `Event::RawNode` is emitted for every decoded stanza, before the stanza router dispatches it, for as long as **any** acquired `RawNodeLease` is alive — dropping the last one turns it back off. Disabled by default to avoid overhead.
 
-<ParamField path="enabled" type="bool" required>
-  Whether to emit `Event::RawNode` for every incoming stanza
-</ParamField>
+<Warning>
+**Breaking change (as of PR #1061):** the boolean `set_raw_node_forwarding(bool)` was replaced by this lease-based method. A single caller flipping the flag off could previously disable forwarding out from under another consumer that still wanted it; a lease can't be revoked by anyone but its owner. Replace `client.set_raw_node_forwarding(true)` / `(false)` with holding (or dropping) the `RawNodeLease` returned here.
+</Warning>
 
 **Example:**
 ```rust
-// Enable raw protocol access (e.g. for voice call stanzas)
-client.set_raw_node_forwarding(true);
+// Enable raw protocol access (e.g. for voice call stanzas) for as long as
+// `_raw_node_lease` stays in scope.
+let _raw_node_lease = client.acquire_raw_node_forwarding();
 
 // Handle raw nodes in your event handler
 bot.on_event(|event, _client| async move {
@@ -1843,8 +1844,85 @@ bot.on_event(|event, _client| async move {
 ```
 
 <Warning>
-Only enable this when you need raw protocol access. Every decoded stanza triggers the event, which adds overhead to the message processing pipeline.
+Only acquire this when you need raw protocol access. Every decoded stanza triggers the event while any lease is held, which adds overhead to the message processing pipeline.
 </Warning>
+
+### acquire_decrypted_payload_forwarding
+
+```rust
+pub fn acquire_decrypted_payload_forwarding(self: &Arc<Self>) -> DecryptedPayloadLease
+```
+
+Acquire decrypted-payload forwarding for one consumer, following the same lease shape as [`acquire_raw_node_forwarding`](#acquire_raw_node_forwarding). [`Event::DecryptedPayload`](/concepts/events#decryptedpayload) stays enabled — emitted after Signal decryption and unpadding, but before the plaintext is decoded into a `wa::Message` — for as long as any acquired `DecryptedPayloadLease` is alive. While none is held, the path costs one relaxed atomic load and nothing is cloned; under a lease, the forwarded payload is the same `bytes::Bytes` the decoder receives, so forwarding it is a refcount bump rather than a copy.
+
+This exists for the case a decoded `Event::Messages` can't cover: a plaintext that decrypts but fails to decode — a field this build predates, a message type it does not model — is otherwise lost, since the Signal ratchet has already advanced by the time decoding runs and the same ciphertext will never decrypt again.
+
+**Example:**
+```rust
+let _payload_lease = client.acquire_decrypted_payload_forwarding();
+
+bot.on_event(|event, _client| async move {
+    if let Event::DecryptedPayload(payload) = &*event {
+        // `payload.payload` is unpadded, exactly as decoding receives it —
+        // fires whether or not decoding it into `wa::Message` goes on to
+        // succeed.
+        println!(
+            "enc_type={} enc_index={} bytes={}",
+            payload.enc_type,
+            payload.enc_index,
+            payload.payload.len(),
+        );
+    }
+});
+```
+
+### add_stanza_interceptor
+
+```rust
+pub fn add_stanza_interceptor(
+    self: &Arc<Self>,
+    interceptor: Arc<dyn StanzaInterceptor>,
+) -> InterceptorHandle
+```
+
+Register an interceptor that sees each decoded stanza *before* the built-in pipeline dispatches it, and may claim it — skipping the built-in handler entirely. Interceptors run in registration order; the first to return `Interception::Handled` wins and the rest are skipped. Dropping the returned `InterceptorHandle` unregisters immediately; the handle holds only a weak client reference, so a forgotten one cannot keep the client alive.
+
+This is the extension seam behind the plugin host's [`PluginCapability::StanzaInterception`](/advanced/plugins#stanza-interception) — register directly here when you aren't going through the plugin host.
+
+<ParamField path="interceptor" type="Arc<dyn StanzaInterceptor>" required>
+  Called synchronously on the read loop for every eligible decoded stanza; must not panic and must return quickly.
+</ParamField>
+
+**What an interceptor never sees:** `success`, `failure`, `stream:error`, `ack`, and a server-initiated `<iq>` ping — claiming any of those would leave the client authenticated-but-unaware, never reconnecting, waiting forever on a completed send, or unable to pong a keepalive. Housekeeping (offline-sync tracking, response-waiter resolution) also keeps running whether or not a stanza is claimed.
+
+**What claiming owes the server:** a claim doesn't change what the server is owed. Where the client would have acked a tag, it still acks; claiming a tag the client does not model turns the nack it would have drawn into an ack instead, since somebody did handle it. A tag the client *does* model but answers some other way — a delivery `<receipt>` for a `<message>`, an `<iq type="result">` — gets no invented reply once claimed; the claimant owes it.
+
+**Example:**
+```rust
+use std::sync::Arc;
+use whatsapp_rust::client::interceptor::{Interception, StanzaInterceptor};
+use wacore_binary::node::OwnedNodeRef;
+
+struct Vendor;
+
+impl StanzaInterceptor for Vendor {
+    fn intercept(&self, node: &OwnedNodeRef) -> Interception {
+        if node.tag() == "vendor:thing" {
+            // … act on it …
+            Interception::Handled
+        } else {
+            Interception::Pass
+        }
+    }
+}
+
+let handle = client.add_stanza_interceptor(Arc::new(Vendor));
+// Dropping `handle` removes it.
+```
+
+<Note>
+A plain closure `Fn(&OwnedNodeRef) -> Interception` also implements `StanzaInterceptor`, so `client.add_stanza_interceptor(Arc::new(|node: &OwnedNodeRef| { ... }))` works without a named type.
+</Note>
 
 ---
 
@@ -2104,6 +2182,7 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `history_sync_payload_bytes_peak` | `u64` | Lifetime high-water mark of logical compressed-payload bytes |
 | `chatstate_handlers` | `usize` | Registered chat state handlers |
 | `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
+| `stanza_interceptors` | `usize` | Registered stanza interceptors — direct ([`add_stanza_interceptor`](#add_stanza_interceptor)) and plugin-registered together ([#1239](https://github.com/oxidezap/whatsapp-rust/pull/1239)) |
 
 `CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field. `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown. This output includes an `--- In-flight history sync ---` section with the two peak fields above.
 

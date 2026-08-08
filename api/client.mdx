@@ -1846,6 +1846,123 @@ bot.on_event(|event, _client| async move {
 Only enable this when you need raw protocol access. Every decoded stanza triggers the event, which adds overhead to the message processing pipeline.
 </Warning>
 
+### add_stanza_interceptor
+
+```rust
+pub fn add_stanza_interceptor(
+    self: &Arc<Self>,
+    interceptor: Arc<dyn StanzaInterceptor>,
+) -> InterceptorHandle
+```
+
+Register an interceptor that sees each decoded stanza before the built-in pipeline, and may take it. This is the seam for acting on a stanza this client does not model — `StanzaRouter::register` panics on a duplicate tag, so even an existing tag can't be handled differently any other way — instead of watching it get nacked.
+
+<ParamField path="interceptor" type="Arc<dyn StanzaInterceptor>" required>
+  The interceptor to register. A plain closure of type `Fn(&OwnedNodeRef) -> Interception` implements `StanzaInterceptor` too, so `client.add_stanza_interceptor(Arc::new(|node: &OwnedNodeRef| { .. }))` works without a named type.
+</ParamField>
+
+<ResponseField name="InterceptorHandle" type="InterceptorHandle">
+  RAII token for the registration. Dropping it removes the interceptor. The handle holds only a weak client reference, so a forgotten handle cannot keep the client alive, and dropping one after its client is already gone is a no-op rather than a panic.
+</ResponseField>
+
+```rust
+use wacore::sync_marker::MaybeSendSync;
+
+pub trait StanzaInterceptor: MaybeSendSync + 'static {
+    fn intercept(&self, node: &OwnedNodeRef) -> Interception;
+}
+
+pub enum Interception {
+    /// Leave the stanza to the client. The default.
+    Pass,
+    /// The interceptor took the stanza; the built-in pipeline is skipped.
+    Handled,
+}
+```
+
+`MaybeSendSync` is `Send + Sync` on native targets and carries no bounds on `wasm32`, matching the convention used by `EventHandler`, `Transport`, and `HttpClient`.
+
+Interceptors run in registration order; the first one to return `Interception::Handled` wins and the rest — including the built-in pipeline — are skipped. Registration order is therefore priority order: an earlier registration can shadow a later one.
+
+**What an interceptor never sees:** `success`, `failure`, `stream:error`, and `ack` settle connection state (authentication, shutdown/reconnection, and the waiters a send blocks on), and a server-initiated `<iq>` ping is withheld for the same reason — a claimed ping is a pong never sent, and the server drops the connection over it. Offline-sync tracking and response-waiter resolution run before dispatch and keep running whether or not a stanza is claimed. Every other stanza, including `<iq>` traffic the client already answers on its own, is offered.
+
+**What claiming owes the server:** a claim doesn't change what the server is owed. Where the client would have acked a stanza, it still acks; where it would have nacked a tag it doesn't model, the claim turns that into an ack instead, since something did handle it — answering nothing would leave the stanza in the offline queue. A tag the client models but answers some other way (a delivery `<receipt>` for a direct `<message>`, an `<iq type="result">`) gets nothing from the claimed-stanza path — the claimant owes that reply itself.
+
+<Note>
+Cost while unused: one relaxed atomic load on the read loop, checked before any lock. Registering is what turns the check into a walk over the registered interceptors.
+</Note>
+
+**Example:**
+```rust
+use whatsapp_rust::client::interceptor::{Interception, StanzaInterceptor};
+use wacore_binary::node::OwnedNodeRef;
+use std::sync::Arc;
+
+struct Vendor;
+
+impl StanzaInterceptor for Vendor {
+    fn intercept(&self, node: &OwnedNodeRef) -> Interception {
+        if node.tag() == "vendor:thing" {
+            // ... act on it ...
+            Interception::Handled
+        } else {
+            Interception::Pass
+        }
+    }
+}
+
+let handle = client.add_stanza_interceptor(Arc::new(Vendor));
+// Dropping `handle` removes it.
+```
+
+<Warning>
+Interception runs before the built-in pipeline — including Signal decryption — so a claimed `<message>` was never decrypted and a claimed prekey-bearing `<notification>` never tops up prekeys. The ack that follows tells the server not to redeliver, so that work never happens again. Match narrowly.
+</Warning>
+
+See the `whatsapp_rust::client::interceptor` module for the full contract, and [Native plugins](/advanced/plugins#stanza-interception) for the capability-gated version available to plugins.
+
+### acquire_decrypted_payload_forwarding
+
+```rust
+pub fn acquire_decrypted_payload_forwarding(self: &Arc<Self>) -> DecryptedPayloadLease
+```
+
+Acquire a lease that keeps [`Event::DecryptedPayload`](/concepts/events#decryptedpayload) enabled for one consumer. The lease is necessary but not sufficient: a handler that has narrowed its `interest()` away from the default `EventInterest::ALL` also needs `EventKind::DecryptedPayload` added back in, or it won't see the event even while a lease is held. The event carries a message's plaintext *before* it is decoded into a `wa::Message` — the only way to recover a payload that decrypts successfully but fails to decode (a field a build predates, a message type it doesn't model). Nothing can ask for those bytes again: opening them already consumed state that won't recur — the Signal ratchet advances, or (for a bot's `message_secret` payload) the single-use secret is spent — so the same ciphertext will never open a second time.
+
+<ResponseField name="DecryptedPayloadLease" type="DecryptedPayloadLease">
+  RAII lease. `Event::DecryptedPayload` stays enabled until every acquired lease is dropped — hold it for as long as you want the event forwarded. The lease holds only a weak client reference, so it cannot keep the client alive.
+</ResponseField>
+
+<Note>
+While no lease is held, nothing is emitted and nothing is cloned — the path costs one relaxed atomic load. Under a lease, the forwarded payload is the same `bytes::Bytes` the decoder receives, so forwarding it is a refcount bump rather than a copy.
+</Note>
+
+**Example:**
+```rust
+use wacore::types::events::{ChannelEventHandler, Event};
+
+let _lease = client.acquire_decrypted_payload_forwarding();
+
+let (handler, event_rx) = ChannelEventHandler::new();
+client.register_handler(handler);
+
+while let Ok(event) = event_rx.recv().await {
+    if let Event::DecryptedPayload(payload) = &*event {
+        // `payload.payload` is the unpadded plaintext, exactly as decoding
+        // will receive it — record it, or inspect it when decoding later
+        // fails for this message.
+        println!(
+            "enc #{} ({}) for {}: {} bytes",
+            payload.enc_index,
+            payload.enc_type,
+            payload.info.id,
+            payload.payload.len(),
+        );
+    }
+}
+// Drop `_lease` to stop forwarding.
+```
+
 ---
 
 ## Call management
@@ -2104,6 +2221,8 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `history_sync_payload_bytes_peak` | `u64` | Lifetime high-water mark of logical compressed-payload bytes |
 | `chatstate_handlers` | `usize` | Registered chat state handlers |
 | `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
+| `stanza_interceptors` | `usize` | Registered stanza interceptors ([`add_stanza_interceptor`](#add_stanza_interceptor)). A handle that outlives its interest leaves one registered, and a leak here costs a walk on every stanza — which this count is what makes visible ([#1239](https://github.com/oxidezap/whatsapp-rust/pull/1239)) |
+| `plugin_stanza_interceptors` | `u64` | Behind the `plugins` feature: sum of every installed plugin's active [stanza interceptors](/advanced/plugins#stanza-interception) ([#1241](https://github.com/oxidezap/whatsapp-rust/pull/1241)) |
 
 `CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field. `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown. This output includes an `--- In-flight history sync ---` section with the two peak fields above.
 

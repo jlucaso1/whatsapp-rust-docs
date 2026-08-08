@@ -1558,7 +1558,7 @@ pub async fn send_raw_bytes(&self, plaintext: Vec<u8>) -> Result<(), ClientError
 
 Send a pre-marshaled stanza through the noise socket. The bytes must be a **packed payload** — the format byte followed by the node bytes — which is what every `wacore_binary::marshal::marshal*` function (`marshal`, `marshal_to_vec`, `marshal_exact`, `marshal_auto`) writes.
 
-A stanza that came off the wire is one byte short of that: `OwnedNodeRef::backing_bytes()` returns node bytes only, since the receive path already stripped the format byte on the way in. Forward it through `wacore_binary::util::pack` first — see [Binary Protocol: the format byte](/advanced/binary-protocol#the-format-byte).
+A stanza that came off the wire isn't already in that shape: `OwnedNodeRef::backing_bytes()` returns node bytes only — the format byte is gone, and if the frame arrived `FORMAT_COMPRESSED` those are the decompressed bytes, not a fixed number of bytes shorter than what was on the wire. Forward it through `wacore_binary::util::pack` first — see [Binary Protocol: the format byte](/advanced/binary-protocol#the-format-byte).
 
 <ParamField path="plaintext" type="Vec<u8>" required>
   A packed payload (format byte + node bytes) as produced by marshal

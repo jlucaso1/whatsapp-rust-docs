@@ -2058,10 +2058,13 @@ While no lease is held, nothing is emitted and nothing is cloned — the path co
 ```rust
 use wacore::types::events::{ChannelEventHandler, Event};
 
-let _lease = client.acquire_sent_frame_forwarding();
-
 let (handler, event_rx) = ChannelEventHandler::new();
 client.register_handler(handler);
+
+// Register the handler before acquiring the lease: forwarding activates
+// immediately, so a frame sent between the two calls would otherwise dispatch
+// to no one.
+let _lease = client.acquire_sent_frame_forwarding();
 
 while let Ok(event) = event_rx.recv().await {
     if let Event::SentFrame(frame) = &*event {

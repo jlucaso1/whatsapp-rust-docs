@@ -205,8 +205,9 @@ pub enum Event {
     // Notification Updates
     DisappearingModeChanged(DisappearingModeChanged),
 
-    // Raw stanza (opt-in)
+    // Raw stanza / decrypted payload (opt-in, lease-gated)
     RawNode(Arc<OwnedNodeRef>),
+    DecryptedPayload(DecryptedPayload),
 
     // Passkey linking (SHORTCAKE_PASSKEY)
     PairPasskeyRequest(PairPasskeyRequest),
@@ -2618,11 +2619,11 @@ Event::DisappearingModeChanged(change) => {
 }
 ```
 
-## Raw stanza events
+## Raw stanza and payload events
 
 ### `RawNode`
 
-**Emitted:** The raw stanza received from the server. To receive this event, call `client.set_raw_node_forwarding(true)` to enable dispatch and include `EventKind::RawNode` in your handler's `interest()`. When forwarding is disabled or no handler wants `RawNode`, the bus skips this dispatch entirely (zero overhead on the hot path).
+**Emitted:** The raw stanza received from the server. To receive this event, call `client.acquire_raw_node_forwarding()` and hold the returned `RawNodeLease` to enable dispatch, and include `EventKind::RawNode` in your handler's `interest()`. While no lease is held, or no handler wants `RawNode`, the bus skips this dispatch entirely (zero overhead on the hot path).
 
 ```rust
 Event::RawNode(Arc<OwnedNodeRef>)
@@ -2632,7 +2633,7 @@ This is a library extension with no WhatsApp Web equivalent. It gives you access
 
 **Example:**
 ```rust
-client.set_raw_node_forwarding(true);
+let _raw_node_lease = client.acquire_raw_node_forwarding();
 
 // In your event handler:
 Event::RawNode(node) => {
@@ -2642,7 +2643,51 @@ Event::RawNode(node) => {
 ```
 
 <Note>
-`RawNode` is skipped during serialization (`#[serde(skip)]`). Enable it only when debugging or building protocol-level tooling, as it dispatches for every incoming stanza.
+`RawNode` is skipped during serialization (`#[serde(skip)]`). Enable it only when debugging or building protocol-level tooling, as it dispatches for every incoming stanza while a lease is held.
+</Note>
+
+<Warning>
+**Breaking change (as of PR #1061):** the boolean `set_raw_node_forwarding(bool)` was replaced by the lease-based [`acquire_raw_node_forwarding()`](/api/client#acquire_raw_node_forwarding). A single caller flipping the flag off could previously disable forwarding out from under another consumer that still wanted it; a lease can't be revoked by anyone but its owner. Hold (or drop) the returned `RawNodeLease` in place of `set_raw_node_forwarding(true)` / `(false)`.
+</Warning>
+
+### `DecryptedPayload`
+
+**Emitted:** The plaintext of a decrypted message, after Signal decryption and unpadding but *before* it is decoded into a `wa::Message` — whether or not that decode goes on to succeed. To receive this event, call `client.acquire_decrypted_payload_forwarding()` and hold the returned `DecryptedPayloadLease`, and include `EventKind::DecryptedPayload` in your handler's `interest()`. Gated the same way as `RawNode`: while no lease is held, nothing is emitted and nothing is cloned.
+
+```rust
+Event::DecryptedPayload(DecryptedPayload)
+
+pub struct DecryptedPayload {
+    pub info: Arc<MessageInfo>,
+    pub enc_index: usize,
+    pub enc_type: &'static str,
+    pub payload: Bytes,
+}
+```
+
+**Fields:**
+- `info` — the `MessageInfo` the message was parsed into.
+- `enc_index` — which `<enc>` of the stanza produced this payload, since a message addressed to several devices carries several. Counts from zero across the stanza's direct `<enc>` children first, then the ones nested under `<participants><to>` for this device — not a raw child index.
+- `enc_type` — the `type` attribute the `<enc>` carried: `msg`, `pkmsg`, `skmsg`, …
+- `payload` — the plaintext, unpadded, exactly as decoding receives it. A `Bytes`, so holding onto it is a refcount bump, not a copy. Not serialized (`#[serde(skip)]`) — no text format carries raw bytes without a framing choice this type has no business making.
+
+This closes a real gap: a plaintext that decrypts but fails to decode (a field this build predates, a message type it doesn't model) previously vanished without a trace. The bytes cost a real decryption, and by the time decoding runs the Signal ratchet has already advanced, so the same ciphertext never decrypts again — there is no way to get it back except through this event. It's also useful for recording traffic for faithful replay (re-encoding a decoded `Message` doesn't reproduce the original bytes) or decoding with a newer protobuf than the build carries.
+
+**Example:**
+```rust
+let _payload_lease = client.acquire_decrypted_payload_forwarding();
+
+// In your event handler:
+Event::DecryptedPayload(payload) => {
+    println!(
+        "enc_type={} enc_index={} {} bytes",
+        payload.enc_type, payload.enc_index, payload.payload.len(),
+    );
+}
+```
+
+<Note>
+This is a lower-level, always-available counterpart to the plugin host's `stanza.intercept` capability (see [Plugins — stanza interception](/advanced/plugins#stanza-interception)): the two act at different points. A stanza interceptor decides *before* Signal decryption runs, so a `<message>` it claims never reaches decryption at all, and `DecryptedPayload` never fires for it. This event only sees stanzas nothing claimed.
 </Note>
 
 ## Event handler patterns

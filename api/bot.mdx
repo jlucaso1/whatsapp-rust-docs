@@ -5,6 +5,10 @@ description: "High-level builder for creating WhatsApp bots with event handlers"
 
 The `Bot` provides a simplified, ergonomic API for building WhatsApp bots. It handles client setup, event routing, and background sync tasks automatically.
 
+<Note>
+Don't confuse this with [`client.bots()`](/api/bots), which fetches WhatsApp's server-side directory of first-party AI bots. `Bot` here is the client-side framework for building a program that answers messages — a different domain that happens to share the word.
+</Note>
+
 ## Overview
 
 Use the Bot builder pattern to:
@@ -1342,6 +1346,7 @@ let config = CacheConfig {
 ## See Also
 
 - [Client](/api/client) - Lower-level client API
+- [Bots](/api/bots) - Server-side directory of first-party AI bots
 - [Events](/concepts/events) - All event types
 - [Sending Messages](/guides/sending-messages) - Sending messages
 - [Storage](/concepts/storage) - Storage and multi-account patterns

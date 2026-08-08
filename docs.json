@@ -103,6 +103,7 @@
                   "api/presence",
                   "api/chatstate",
                   "api/blocking",
+                  "api/bots",
                   "api/status",
                   "api/profile",
                   "api/chat-actions",

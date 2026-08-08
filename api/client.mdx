@@ -630,6 +630,19 @@ client.blocking().block(&jid).await?;
 let blocked = client.blocking().get_blocklist().await?;
 ```
 
+### bots
+
+```rust
+pub fn bots(&self) -> Bots<'_>
+```
+
+Access the server's directory of first-party AI bots.
+
+**Methods:**
+- `list()` - Fetch the bot directory
+
+See [Bots API](/api/bots) for full documentation.
+
 ### groups
 
 ```rust
@@ -815,6 +828,7 @@ Access Meta Exchange (GraphQL) operations.
 **Methods:**
 - `query(request: MexRequest)` - Execute a GraphQL query
 - `mutate(request: MexRequest)` - Execute a GraphQL mutation
+- `fetch_new_chat_message_capping_info()` - Fetch the new-chat message cap for the current cycle
 
 See [MEX API](/api/mex) for full documentation.
 

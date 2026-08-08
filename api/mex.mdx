@@ -112,6 +112,36 @@ let request = MexRequest {
 let response = client.mex().mutate(request).await?;
 ```
 
+### fetch_new_chat_message_capping_info
+
+Fetch the cap on how many new one-on-one conversations you can start in the current cycle.
+
+```rust
+pub async fn fetch_new_chat_message_capping_info(
+    &self,
+) -> Result<NewChatMessageCapping, MexError>
+```
+
+WhatsApp Web issues this request at app launch. It refreshes the cap on a TTL (`wa_individual_new_chat_msg_capping_fetch_ttl_seconds`, 1 hour), gated on `wa_individual_new_chat_msg_capping_enabled`. If the cap doesn't apply to your account, you still get an answer — the status just reports `NONE`.
+
+**Example:**
+
+```rust
+use whatsapp_rust::CappingStatus;
+
+let capping = client.mex().fetch_new_chat_message_capping_info().await?;
+
+match &capping.capping_status {
+    Some(CappingStatus::Capped) => println!("New-chat cap reached for this cycle"),
+    Some(status) => println!("Capping status: {:?}", status),
+    None => {}
+}
+
+if let Some(remaining) = capping.remaining_quota() {
+    println!("{} new chats left this cycle", remaining);
+}
+```
+
 ## Types
 
 ### MexDoc
@@ -196,6 +226,76 @@ pub struct MexErrorExtensions {
     pub severity: Option<String>,
 }
 ```
+
+### NewChatMessageCapping
+
+How many new one-on-one conversations you can still start in the current cycle, and why. Every field is optional — the server omits any that don't apply to your account's tier.
+
+```rust
+#[non_exhaustive]
+pub struct NewChatMessageCapping {
+    pub capping_status: Option<CappingStatus>,
+    pub ote_status: Option<CappingOteStatus>,
+    pub mv_status: Option<CappingMvStatus>,
+    pub total_quota: Option<u64>,
+    pub used_quota: Option<u64>,
+    pub cycle_start_timestamp: Option<i64>,
+    pub cycle_end_timestamp: Option<i64>,
+    pub server_sent_timestamp: Option<i64>,
+}
+```
+
+- `total_quota` / `used_quota` — new chats allowed / already started this cycle
+- `cycle_start_timestamp` / `cycle_end_timestamp` / `server_sent_timestamp` — Unix seconds. The cap lifts once `cycle_end_timestamp` passes.
+
+**Methods:**
+- `remaining_quota() -> Option<u64>` — saturating subtraction of `used_quota` from `total_quota`, when both are present; returns `Some(0)` when `used_quota` exceeds `total_quota`
+
+### CappingStatus
+
+Where you stand against the cap.
+
+```rust
+pub enum CappingStatus {
+    None,
+    FirstWarning,
+    SecondWarning,
+    Capped,
+    Other(String),
+}
+```
+
+### CappingOteStatus
+
+Whether you're eligible for the one-time extension that lifts the cap for a cycle.
+
+```rust
+pub enum CappingOteStatus {
+    NotEligible,
+    Eligible,
+    ActiveInCurrentCycle,
+    Exhausted,
+    Other(String),
+}
+```
+
+### CappingMvStatus
+
+Your Meta Verified subscription state, which lifts the cap permanently.
+
+```rust
+pub enum CappingMvStatus {
+    NotEligible,
+    NotActive,
+    Active,
+    ActiveUpgradeAvailable,
+    Other(String),
+}
+```
+
+<Note>
+`NewChatMessageCapping`, `CappingStatus`, `CappingOteStatus`, and `CappingMvStatus` are re-exported from the crate root, alongside the other `Mex` types.
+</Note>
 
 ## Error handling
 

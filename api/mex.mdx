@@ -127,7 +127,7 @@ WhatsApp Web issues this request at app launch. It refreshes the cap on a TTL (`
 **Example:**
 
 ```rust
-use whatsapp_rust::features::CappingStatus;
+use whatsapp_rust::CappingStatus;
 
 let capping = client.mex().fetch_new_chat_message_capping_info().await?;
 

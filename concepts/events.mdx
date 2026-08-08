@@ -208,6 +208,9 @@ pub enum Event {
     // Raw stanza (opt-in)
     RawNode(Arc<OwnedNodeRef>),
 
+    // Decrypted payload, before decoding (opt-in)
+    DecryptedPayload(DecryptedPayload),
+
     // Passkey linking (SHORTCAKE_PASSKEY)
     PairPasskeyRequest(PairPasskeyRequest),
     PairPasskeyConfirmation(PairPasskeyConfirmation),
@@ -2643,6 +2646,49 @@ Event::RawNode(node) => {
 
 <Note>
 `RawNode` is skipped during serialization (`#[serde(skip)]`). Enable it only when debugging or building protocol-level tooling, as it dispatches for every incoming stanza.
+</Note>
+
+## Decrypted payload events
+
+### `DecryptedPayload`
+
+**Emitted:** Once per decrypted `<enc>` payload, right after unpadding and before the client tries to decode it into a `wa::Message` — whether or not that decode goes on to succeed. To receive it, hold a lease from `client.acquire_decrypted_payload_forwarding()` and include `EventKind::DecryptedPayload` in your handler's `interest()`. While no lease is held, nothing is emitted and nothing is cloned.
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct DecryptedPayload {
+    pub info: Arc<MessageInfo>,
+    pub enc_index: usize,
+    pub enc_type: &'static str,
+    #[serde(skip)]
+    pub payload: Bytes,
+}
+```
+
+**Fields:**
+- `info` - The [`MessageInfo`](#messages) this `<enc>` belongs to (sender, chat, message ID, timestamp)
+- `enc_index` - Which `<enc>` of the stanza produced this payload, counting from zero across the stanza's direct `<enc>` children first, then the ones under `<participants><to>` addressed to this device. A message fanned out to several devices carries several `<enc>` nodes; this is not a child index, so mapping it back to a node means walking the same two groups in the same order.
+- `enc_type` - The `type` attribute the `<enc>` carried: `"msg"`, `"pkmsg"`, `"skmsg"`, …
+- `payload` - The plaintext, unpadded, exactly as decoding receives it. A `Bytes`, so a consumer holding a lease gets a refcount bump rather than a copy. Skipped during serialization (`#[serde(skip)]`) — there's no text encoding for raw bytes this type should be choosing on a consumer's behalf.
+
+This is a library extension with no WhatsApp Web equivalent. The bytes it carries cost a real decryption and are the only copy that will ever exist: decrypting already advanced the Signal ratchet, so a payload that fails to decode — a field this build predates, a message type it doesn't model — is otherwise gone for good, with only a warning log to show for it. Reasons to want it: recording traffic for faithful replay (re-encoding a decoded `Message` doesn't reproduce the original bytes), decoding with a newer protobuf than this build carries, or inspecting a payload that failed to decode instead of only reading that it did.
+
+**Example:**
+```rust
+let _lease = client.acquire_decrypted_payload_forwarding();
+
+// In your event handler:
+Event::DecryptedPayload(payload) => {
+    println!(
+        "enc[{}] type={} {} bytes for message {}",
+        payload.enc_index, payload.enc_type, payload.payload.len(), payload.info.id
+    );
+}
+```
+
+<Note>
+Gated by `client.acquire_decrypted_payload_forwarding()`: while no consumer holds a lease, nothing is emitted and the path costs one relaxed atomic load. Every `<enc>` payload is forwarded here regardless of decode outcome, so treat it like `RawNode` — enable it for tooling, diagnostics, or replay, not as a default-on handler.
 </Note>
 
 ## Event handler patterns

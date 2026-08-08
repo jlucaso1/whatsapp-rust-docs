@@ -1556,15 +1556,22 @@ Sends a raw protocol node (advanced usage).
 pub async fn send_raw_bytes(&self, plaintext: Vec<u8>) -> Result<(), ClientError>
 ```
 
-Send pre-marshaled plaintext bytes through the noise socket. The bytes must be a valid WABinary-marshaled stanza (as produced by `wacore_binary::marshal::marshal_to`). Sending malformed data will cause the server to close the connection.
+Send a pre-marshaled stanza through the noise socket. The bytes must be a **packed payload** — the format byte followed by the node bytes — which is what every `wacore_binary::marshal::marshal*` function (`marshal`, `marshal_to_vec`, `marshal_exact`, `marshal_auto`) writes.
+
+A stanza that came off the wire isn't already in that shape: `OwnedNodeRef::backing_bytes()` returns node bytes only — the format byte is gone, and if the frame arrived `FORMAT_COMPRESSED` those are the decompressed bytes, not a fixed number of bytes shorter than what was on the wire. Forward it through `wacore_binary::util::pack` first — see [Binary Protocol: the format byte](/advanced/binary-protocol#the-format-byte).
 
 <ParamField path="plaintext" type="Vec<u8>" required>
-  WABinary-marshaled stanza bytes
+  A packed payload (format byte + node bytes) as produced by marshal
 </ParamField>
 
 **Errors:**
 - `ClientError::NotConnected` - Not connected
+- `ClientError::Socket` - `plaintext` is not a packed payload, wrapping `SocketError::Marshal`: `BinaryError::UnexpectedFormatByte` for a compressed or otherwise unrecognized leading byte (most often node bytes handed in directly instead of packed ones), or `BinaryError::EmptyData` for an empty buffer or a lone format byte with nothing behind it
 - `ClientError::EncryptSend` - Encryption/send failure
+
+<Note>
+As of PR #1259, `plaintext`'s shape — leading byte plus at least one more — is checked before it reaches the socket. That catches an empty buffer, a lone format byte, or node bytes handed in directly (wrong leading byte); it does not decode the node bytes, so a payload with the right shape but a malformed node inside it still reaches the socket, same as before.
+</Note>
 
 <Warning>
 This bypasses node logging and `wait_for_sent_node` waiter resolution. Use [`send_node`](#send_node) for normal stanza sending. This method is intended for performance-critical paths where you already have marshaled bytes.

@@ -170,6 +170,7 @@ pub enum Event {
     ContactNumberChanged(ContactNumberChanged),
     ContactSyncRequested(ContactSyncRequested),
     ContactUpdate(ContactUpdate),
+    ContactRemoved(ContactRemoved),
 
     // Chat State
     PinUpdate(PinUpdate),
@@ -183,6 +184,8 @@ pub enum Event {
     DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
     LabelEditUpdate(LabelEditUpdate),
     LabelAssociationUpdate(LabelAssociationUpdate),
+    MessageLabelAssociationUpdate(MessageLabelAssociationUpdate),
+    QuickReplyUpdate(QuickReplyUpdate),
 
     // History Sync
     HistorySync(Box<LazyHistorySync>),
@@ -204,6 +207,9 @@ pub enum Event {
 
     // Notification Updates
     DisappearingModeChanged(DisappearingModeChanged),
+
+    // Privacy
+    DisableLinkPreviewsUpdate(DisableLinkPreviewsUpdate),
 
     // Raw stanza (opt-in)
     RawNode(Arc<OwnedNodeRef>),
@@ -1655,6 +1661,36 @@ Event::ContactUpdate(update) => {
 The server may also send `<add/>` and `<remove/>` child actions in contacts notifications for lightweight roster changes. These are acknowledged automatically and do not emit events.
 </Note>
 
+### ContactRemoved
+
+**Emitted:** When a saved contact is deleted via app-state sync on a linked device
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct ContactRemoved {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `jid` - The contact that was removed
+- `timestamp` - When the removal occurred
+- `from_full_sync` - Whether this came from a full app-state sync (initial load) or an incremental update
+
+**Example:**
+```rust
+Event::ContactRemoved(update) => {
+    println!("Contact {} removed", update.jid);
+}
+```
+
+<Note>
+`ContactRemoved` is distinct from `ContactUpdate`. The underlying mutation is a syncd `Remove`, and carries no action payload — WhatsApp Web ignores the value on that branch and simply drops the contact from the address book. See [Chat actions — Save and remove contacts](/api/chat-actions#save-and-remove-contacts) for the outbound API (`remove_contact`) that emits this event on other devices.
+</Note>
+
 ## Chat state events
 
 ### PinUpdate
@@ -1955,6 +1991,85 @@ Event::LabelAssociationUpdate(update) => {
 ```
 
 See [Labels](/api/labels) for the outbound API that emits these events on other devices.
+
+### MessageLabelAssociationUpdate
+
+**Emitted:** When a label is added to or removed from a single message on a linked device
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct MessageLabelAssociationUpdate {
+    pub label_id: String,
+    pub chat_jid: Jid,
+    pub message_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::LabelAssociationAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `label_id` — Identifier of the label being attached or detached
+- `chat_jid` — Chat containing the labeled message
+- `message_id` — Message whose label set changed
+- `action.labeled` — `Some(true)` when the label was added, `Some(false)` when removed
+- `from_full_sync` — `true` while replaying the initial app state full sync
+
+**Example:**
+```rust
+Event::MessageLabelAssociationUpdate(update) => {
+    let attached = update.action.labeled == Some(true);
+    println!(
+        "Label {} {} message {} in chat {}",
+        update.label_id,
+        if attached { "added to" } else { "removed from" },
+        update.message_id,
+        update.chat_jid,
+    );
+}
+```
+
+<Note>
+Distinct from `LabelAssociationUpdate` above — that event is a whole-chat association, this one is scoped to a single message. See [Labels — Associate a label with a message](/api/labels#associate-a-label-with-a-message) for the outbound API.
+</Note>
+
+### QuickReplyUpdate
+
+**Emitted:** When a quick reply is created, edited, or deleted on a linked device
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct QuickReplyUpdate {
+    pub id: String,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::QuickReplyAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `id` — Stable quick reply identifier
+- `action.shortcut` — The `/`-typed trigger text
+- `action.message` — The expanded message text
+- `action.deleted` — `Some(true)` when the quick reply was deleted
+- `from_full_sync` — `true` while replaying the initial app state full sync
+
+**Example:**
+```rust
+Event::QuickReplyUpdate(update) => {
+    if update.action.deleted == Some(true) {
+        println!("Quick reply {} deleted", update.id);
+    } else {
+        println!("Quick reply {} = {:?}", update.id, update.action.shortcut);
+    }
+}
+```
+
+<Note>
+Deletion is the same mutation with `action.deleted == Some(true)`, not a syncd `Remove` — check that flag rather than assume the event always describes a live quick reply. See [Quick Replies](/api/quick-replies) for the outbound API that emits this event on other devices.
+</Note>
 
 ## History sync events
 
@@ -2625,6 +2740,40 @@ Event::DisappearingModeChanged(change) => {
     println!("Contact {} changed disappearing messages: {}", change.from, status);
 }
 ```
+
+## Privacy events
+
+### DisableLinkPreviewsUpdate
+
+**Emitted:** When the account-wide "disable link previews" setting changes via app-state sync on a linked device (`setting_disableLinkPreviews`)
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct DisableLinkPreviewsUpdate {
+    pub previews_disabled: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::PrivacySettingDisableLinkPreviewsAction>,
+    pub from_full_sync: bool,
+}
+```
+
+**Fields:**
+- `previews_disabled` - `true` when link previews are now disabled. Only emitted when the wire carried the flag; WhatsApp Web treats an absent one as a malformed mutation, so no event fires for that case rather than one carrying a default `false`.
+- `timestamp` - When the change occurred
+- `action` - The underlying app-state action
+- `from_full_sync` - Whether this came from a full app-state sync (initial load) or an incremental update
+
+**Example:**
+```rust
+Event::DisableLinkPreviewsUpdate(update) => {
+    println!("Link previews disabled: {}", update.previews_disabled);
+}
+```
+
+<Note>
+Unlike `DisappearingModeChanged` above — a server-push notification about *another contact's* setting — this event is app-state sync about *your own account's* setting, changed from one of your own linked devices. See [Privacy — App-state settings](/api/privacy#app-state-settings-syncd) for the outbound API (`set_link_previews_disabled`) that emits this event on other devices.
+</Note>
 
 ## Raw stanza events
 

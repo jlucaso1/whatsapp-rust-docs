@@ -175,6 +175,47 @@ client.set_default_disappearing_mode(0).await?;
 This sets the default for **new** chats only. Existing chats keep their current setting. To change disappearing messages for a specific group, use [`set_ephemeral`](/api/groups#set_ephemeral).
 </Note>
 
+## App-state settings (syncd)
+
+`set_link_previews_disabled` is a distinct privacy control from everything above. Every method in [Methods](#methods) goes through the `set_privacy` IQ namespace and is answered synchronously. This one instead rides app state sync — the same mutation mechanism used by [chat actions](/api/chat-actions#app-state-sync) and [labels](/api/labels) — and has no query/fetch IQ counterpart at all.
+
+### set_link_previews_disabled
+
+Turn outgoing link previews off or on for the whole account. Access it through `client.app_state_settings()`, not directly on `Client`.
+
+```rust
+pub async fn set_link_previews_disabled(&self, disabled: bool) -> Result<(), AppStateError>
+```
+
+**Parameters:**
+- `disabled` — `true` disables link previews account-wide, `false` re-enables them.
+
+**Example:**
+```rust
+client.app_state_settings().set_link_previews_disabled(true).await?;
+```
+
+<Note>
+This sets the account's stored preference, replicated to your other linked devices. It does **not** stop this client from attaching a preview it was explicitly asked to send — it only governs the default WhatsApp Web / mobile compose behavior.
+</Note>
+
+**App state sync:** `regular` collection, action version 8, no index arguments (`setting_disableLinkPreviews`). Subject to the same [conflict-retry behavior](/api/chat-actions#app-state-sync) as chat actions and labels.
+
+A change made on a linked device arrives as [`Event::DisableLinkPreviewsUpdate`](/concepts/events#disablelinkpreviewsupdate):
+
+```rust
+use wacore::types::events::Event;
+
+.on_event(|event, _client| async move {
+    match &*event {
+        Event::DisableLinkPreviewsUpdate(update) => {
+            println!("Link previews disabled: {}", update.previews_disabled);
+        }
+        _ => {}
+    }
+})
+```
+
 ## Types
 
 ### PrivacyCategory
@@ -356,3 +397,4 @@ if category.is_valid_value(&value) {
 - [Receipt API](/api/receipt#read-receipt-privacy-gating) - How `ReadReceipts` gates DM read/played receipts
 - [TC Token API](/api/tctoken) - Trusted contact tokens used for privacy-gated operations
 - [Blocking API](/api/blocking) - Block and unblock contacts
+- [Events](/concepts/events#disablelinkpreviewsupdate) - Handle `DisableLinkPreviewsUpdate`

@@ -329,6 +329,10 @@ Event::ContactSyncRequested(sync) => {
 
 See the [events reference](/concepts/events#contact-notification-events) for full struct definitions and wire format details.
 
+<Note>
+These are server-push notifications, distinct from `ContactUpdate` and `ContactRemoved`, which come from app-state sync mutations made on a linked device. See [Chat actions — Save and remove contacts](/api/chat-actions#save-and-remove-contacts) for `save_contact`/`remove_contact` and their events.
+</Note>
+
 ## Empty input handling
 
 Passing empty arrays returns empty results without making network requests:

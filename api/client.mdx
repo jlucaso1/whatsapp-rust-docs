@@ -1533,6 +1533,29 @@ if let Some(profile) = client.get_business_profile(&jid).await? {
 
 See [Business API](/api/business) for full type details.
 
+### business
+
+```rust
+pub fn business(&self) -> Business<'_>
+```
+
+Access business catalog, collections, order lookup, and business-profile writes. Reading a business's profile stays on `get_business_profile` above — `business()` covers everything else.
+
+**Methods:**
+- `get_catalog(jid: &Jid, options: &CatalogOptions)` - Fetch one page of a business's product catalog (MEX)
+- `get_collections(jid: &Jid, options: &CollectionOptions)` - Fetch one page of a business's collections, products inline (MEX)
+- `get_order(jid: &Jid, order_id: &str, token: &str)` - Look up an order's line items and totals (MEX)
+- `update_profile(update: &BusinessProfileUpdate)` - Apply a delta to your own business profile (IQ)
+- `set_cover_photo(upload: CoverPhotoUpload)` - Point the profile at an already-uploaded cover photo (IQ)
+- `remove_cover_photo(id: &str)` - Remove the profile's cover photo (IQ)
+
+**Example:**
+```rust
+let catalog = client.business().get_catalog(&jid, &CatalogOptions::default()).await?;
+```
+
+See [Business API](/api/business) for full documentation.
+
 ### clean_dirty_bits
 
 ```rust

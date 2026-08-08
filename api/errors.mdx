@@ -11,6 +11,8 @@ As of PR #1100, every wrapping variant that used to be `#[error(transparent)]` i
 
 As of PR #1195, `ErrorChainExt` also answers `http_status()` — the HTTP status code behind a refused download, upload, sticker-pack fetch, or app-version fetch, recovered from a [`HttpStatusError`](#httpstatuserror) node the same way `server_rejection()` recovers an IQ rejection. This is the one place the "lower-level APIs … may still surface `anyhow::Error` directly" caveat above gets a typed escape hatch: `download`/`upload` still return `anyhow::Error`, but the status inside that error is now recoverable by type instead of by parsing `Display` text. See [Error chain recovery](#error-chain-recovery) below.
 
+As of PR #1257, `IqError::ServerError` also carries `response: RejectionStanza` — the `type="error"` stanza itself, handed over whole the same way a `type="result"` response already was, alongside the four fields this crate parses off it (`code`, `text`, `error_type`, `backoff`). See [`RejectionStanza`](#rejectionstanza) below.
+
 ## Error hierarchy
 
 ```
@@ -146,6 +148,33 @@ pub struct ServerRejection<'a> {
 ```
 
 Borrowed from whichever error in the chain carried it, so recovering one costs no allocation.
+
+### RejectionStanza
+
+Added in PR #1257. `IqError::ServerError`'s `response` field: the `<iq type="error">` stanza the receive path decoded, kept as-is rather than reduced to the four fields [`ServerRejection`](#serverrejection) exposes above. It wraps the same `Arc<OwnedNodeRef>` the success path already hands back, so attaching it to the error costs one refcount bump, not a copy.
+
+```rust
+pub struct RejectionStanza(Arc<OwnedNodeRef>);
+
+impl RejectionStanza {
+    /// The preserved node behind its refcount, for a caller that wants to keep or share it.
+    pub fn as_arc(&self) -> &Arc<OwnedNodeRef>;
+    /// Takes the preserved node out, consuming the wrapper.
+    pub fn into_arc(self) -> Arc<OwnedNodeRef>;
+}
+
+impl From<Arc<OwnedNodeRef>> for RejectionStanza { /* ... */ }
+
+impl Deref for RejectionStanza {
+    type Target = OwnedNodeRef;
+}
+```
+
+`ServerRejection`'s four fields cover what WA Web's own `parseIqResponse` reads off an error; `RejectionStanza` is the escape hatch for everything that parser (and this crate's) leaves unread — further `<iq>`/`<error>` attributes, `<error>` children such as XMPP application-condition elements, and the raw bytes, which are the only faithful material for logging or replaying a rejection. `Deref<Target = OwnedNodeRef>` (see [`OwnedNodeRef`](/advanced/binary-protocol#ownednoderef-yoke-zero-copy)) keeps every node accessor reachable directly on the wrapper — `response.tag()`, `response.attrs()`, `response.get_optional_child(...)`, or `response.get()` for the underlying `NodeRef`.
+
+`Debug` is overridden to print only the tag (`<iq>`), not the stanza's contents. This matters because background IQ failures on the connect path (the post-connect active IQ, props, blocklist, privacy settings) are logged with `{e:?}` at warn level, and an error stanza's attributes or children can carry a JID — a straight derive would have written that into production logs where before only the four summarized fields went. Read the node explicitly (`response.get()`, `response.attrs()`, …) when you need its contents.
+
+Re-exported from the crate root as `whatsapp_rust::RejectionStanza`, and from `whatsapp_rust::prelude`.
 
 ### HttpStatusError
 
@@ -557,7 +586,13 @@ pub enum IqError {
     #[error("received disconnect node during IQ wait: {0:?}")]
     Disconnected(Box<Node>),
     #[error("received a server error response: code={code}, text='{text}'")]
-    ServerError { code: u16, text: String, error_type: Option<String>, backoff: Option<u32> },
+    ServerError {
+        code: u16,
+        text: String,
+        error_type: Option<String>,
+        backoff: Option<u32>,
+        response: RejectionStanza, // added in PR #1257
+    },
     #[error("received unexpected IQ response type: {got:?}")]
     UnexpectedResponseType { got: Option<String> },
     #[error("internal channel closed unexpectedly")]
@@ -576,6 +611,8 @@ pub enum IqError {
 </Note>
 
 Added in PR #1100: `wacore::request::IqError` gained public `is_timeout()` (`true` only for `Timeout`) and `is_transport_unavailable()` (`true` for `NotConnected`, `Disconnected`, and `InternalChannelClosed`) methods, each an exhaustive match so a future variant has to be classified rather than silently defaulting to `false`. `whatsapp_rust::request::IqError` (the crate-level type shown above, with the extra `Socket`/`EncryptSend`/`ClientState`/`EncodeError`/`ParseError` variants) makes the same judgement internally but does not expose it publicly — go through [`ErrorChainExt`](#error-chain-recovery) instead, which handles both types.
+
+Added in PR #1257: `ServerError` carries `response: RejectionStanza` — see [`RejectionStanza`](#rejectionstanza) above and the [migration note](#from-pr-1257-servererror-carries-the-rejection-stanza) below. Matching with `..` is unaffected by this field; only hand-constructing the variant (mainly test fixtures) needs updating.
 
 ## Migration guide
 
@@ -701,3 +738,48 @@ match client.download(downloadable).await {
 ```
 
 Messages are unchanged either way — `http_status()` is purely additive, recovering a fact that was already in the text but previously reachable only by parsing it.
+
+### From PR #1257: `ServerError` carries the rejection stanza
+
+`IqError::ServerError` gained a `response: RejectionStanza` field carrying the `type="error"` stanza verbatim, alongside the four fields it already parsed off it. Matching with `..` is unaffected — this is the common case, and nearly every match in the codebase already used it:
+
+```rust
+// Still works unchanged
+match err {
+    IqError::ServerError { code, text, .. } => { /* ... */ }
+    // ...
+}
+```
+
+Constructing the variant by hand — mainly test fixtures — now needs the stanza it was rejected with:
+
+```rust
+// Before
+IqError::ServerError {
+    code,
+    text,
+    error_type,
+    backoff,
+}
+
+// After — pass the response the rejection came with
+IqError::ServerError {
+    code,
+    text,
+    error_type,
+    backoff,
+    response: response.into(), // response: Arc<OwnedNodeRef>, RejectionStanza converts via `.into()`
+}
+```
+
+A fixture with no real wire response can build one directly: decode a hand-built `<iq type="error">` through `OwnedNodeRef::new`, wrap it in `Arc`, and convert.
+
+`From<wacore::request::IqError> for whatsapp_rust::request::IqError` is also removed — a bare `From` conversion has no response available to attach, which is exactly the material this change stops discarding. Replace it with `IqError::from_response`:
+
+```rust
+// Before
+let err: IqError = wacore_err.into();
+
+// After — pass the response the classification failure was read from
+let err = IqError::from_response(wacore_err, &response);
+```

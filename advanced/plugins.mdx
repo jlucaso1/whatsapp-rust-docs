@@ -184,6 +184,8 @@ Each delivered envelope carries six fields: the plugin ID, the topic, a schema v
 `PluginCapability::CoreEvents` lets a plugin *watch* the stream via `events.core.observe`. `PluginCapability::StanzaInterception` lets it *act*: a plugin that models a stanza this client does not can claim it before the built-in pipeline sees it, instead of watching it get nacked. The underlying seam — `Client::add_stanza_interceptor`, the `StanzaInterceptor` trait, what is never offered, and the ack a claim still owes the server — is documented on [`add_stanza_interceptor`](/api/client#add_stanza_interceptor); this section covers what the plugin host adds on top of it.
 
 ```rust
+use std::sync::Arc;
+
 use whatsapp_rust::{PluginCapability, PluginStanzaInterception};
 use whatsapp_rust::client::interceptor::{Interception, StanzaInterceptor};
 
@@ -219,7 +221,7 @@ The host adds two things a directly registered interceptor doesn't get:
 Interception runs before the built-in pipeline, so a claimed stanza is one the client did no Signal work on at all: nothing decrypted, no session mutated, no prekey consumed. There is no half-advanced state to reconcile — the property that makes claiming safe to reason about without a new durability contract. But it also means the claim is final: the ack that follows tells the server not to redeliver, so a claimed `<message>` stays undecrypted forever and a claimed prekey-bearing `<notification>` never tops up prekeys. A plugin claiming stanzas that carry Signal state takes over that responsibility whole — match narrowly, and see [Signal durability](/advanced/signal-protocol) for what the responsibility involves.
 </Warning>
 
-`Client::memory_report()`'s `plugin_stanza_interceptors` field folds in every plugin's active interceptor count, alongside `plugin_core_event_subscriptions`.
+`Client::memory_report()`'s [`plugin_stanza_interceptors`](/api/client#memory_report) field folds in every plugin's active interceptor count.
 
 ## Diagnostics
 

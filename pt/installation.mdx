@@ -132,7 +132,7 @@ Veja [Chat Store](/api/chat-store) para a API completa.
 whatsapp-rust usa a **edição Rust 2024** e declara um MSRV de **1.94**, ambos suportados pelo Rust stable, e o conjunto de features padrão não tem nenhuma dependência exclusiva do nightly — `cargo build`/`cargo add whatsapp-rust` funciona com **Rust stable** de fábrica, sem precisar desabilitar nenhuma feature.
 
 <Note>
-  O `rust-toolchain.toml` do próprio projeto ainda fixa um compilador nightly (`nightly-2026-06-16`), mas apenas para duas flags de build usadas pelo CI e pelas imagens Docker do próprio workspace — `-Zshare-generics` e linking lld/ICF em `.cargo/config.toml` — não para nenhuma feature de linguagem que os crates publicados precisem. Essa fixação rege a compilação do workspace whatsapp-rust em si; ela não afeta seu projeto quando você depende de whatsapp-rust via crates.io ou git.
+  O `rust-toolchain.toml` do próprio projeto ainda fixa um compilador nightly (`nightly-2026-06-16`), mas apenas para flags de build internas focadas em tamanho de binário — `-Zshare-generics` e linking lld/ICF, definidas para todo o workspace em `.cargo/config.toml`, mais `-Zbuild-std` somente para o build da imagem Docker (veja a seção de implantação com Docker abaixo) — não para nenhuma feature de linguagem que os crates publicados precisem. Essa fixação rege a compilação do workspace whatsapp-rust em si; ela não afeta seu projeto quando você depende de whatsapp-rust via crates.io ou git.
 </Note>
 
 ## Suporte a alvos de 32 bits

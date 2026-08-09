@@ -472,7 +472,11 @@ pub const PACKED_MAX: u8 = 127;  // Max length for packed/token strings
 /// a phone number can carry.
 static NIBBLE_ENC: [u8; 256] = {
     let mut table = [PACK_INVALID; 256];
-    // '0'..='9' → 0..=9
+    let mut c = b'0';
+    while c <= b'9' {
+        table[c as usize] = c - b'0';
+        c += 1;
+    }
     table[b'-' as usize] = 10;
     table[b'.' as usize] = 11;
     table[0] = 15; // padding for an odd-length string
@@ -482,7 +486,7 @@ static NIBBLE_ENC: [u8; 256] = {
 
 Location: `wacore/binary/src/encoder.rs:32-43`
 
-#### Hex Packing
+#### Hex packing
 
 Uppercase hex strings (0-9, A-F) are packed into 4 bits per character, against `HEX_ENC` instead of `NIBBLE_ENC`:
 
@@ -493,7 +497,16 @@ Uppercase hex strings (0-9, A-F) are packed into 4 bits per character, against `
 /// ASCII to nibble, the inverse of the decoder's `HEX_PAIRS`.
 static HEX_ENC: [u8; 256] = {
     let mut table = [PACK_INVALID; 256];
-    // '0'..='9' → 0..=9, 'A'..='F' → 10..=15
+    let mut c = b'0';
+    while c <= b'9' {
+        table[c as usize] = c - b'0';
+        c += 1;
+    }
+    let mut c = b'A';
+    while c <= b'F' {
+        table[c as usize] = 10 + (c - b'A');
+        c += 1;
+    }
     table[0] = 15; // padding for an odd-length string
     table
 };

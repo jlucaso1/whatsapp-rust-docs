@@ -2043,10 +2043,13 @@ While no lease is held, nothing is emitted and nothing is cloned — the path co
 ```rust
 use wacore::types::events::{ChannelEventHandler, Event};
 
-let _lease = client.acquire_decrypted_payload_forwarding();
-
 let (handler, event_rx) = ChannelEventHandler::new();
 client.register_handler(handler);
+
+// Register the handler before acquiring the lease: forwarding activates
+// immediately, so a payload decrypted between the two calls would otherwise
+// dispatch to no one.
+let _lease = client.acquire_decrypted_payload_forwarding();
 
 while let Ok(event) = event_rx.recv().await {
     if let Event::DecryptedPayload(payload) = &*event {
@@ -2059,6 +2062,48 @@ while let Ok(event) = event_rx.recv().await {
             payload.enc_type,
             payload.info.id,
             payload.payload.len(),
+        );
+    }
+}
+// Drop `_lease` to stop forwarding.
+```
+
+### acquire_enc_decrypt_failed_forwarding
+
+```rust
+pub fn acquire_enc_decrypt_failed_forwarding(self: &Arc<Self>) -> EncDecryptFailedLease
+```
+
+Acquire a lease that keeps [`Event::EncDecryptFailed`](/concepts/events#encdecryptfailed) enabled for one consumer. The lease is necessary but not sufficient: a handler that has narrowed its `interest()` away from the default `EventInterest::ALL` also needs `EventKind::EncDecryptFailed` added back in, or it won't see the event even while a lease is held. This is the failing counterpart of [`acquire_decrypted_payload_forwarding`](#acquire_decrypted_payload_forwarding) — same per-`<enc>` granularity, same `enc_index` numbering — but tracked by a separate counter on purpose: a consumer that wants both halves of a stanza's decryption holds both leases, one that wants only failures does not make the success path clone plaintext, and one that wants only successes pays nothing extra on the failure paths.
+
+<ResponseField name="EncDecryptFailedLease" type="EncDecryptFailedLease">
+  RAII lease. `Event::EncDecryptFailed` stays enabled until every acquired lease is dropped — hold it for as long as you want the event forwarded. The lease holds only a weak client reference, so it cannot keep the client alive.
+</ResponseField>
+
+<Note>
+While no lease is held, nothing is emitted and nothing is built — each failure branch costs one relaxed atomic load.
+</Note>
+
+**Example:**
+```rust
+use wacore::types::events::{ChannelEventHandler, Event};
+
+let (handler, event_rx) = ChannelEventHandler::new();
+client.register_handler(handler);
+
+// Register the handler before acquiring the lease: forwarding activates
+// immediately, so a failure between the two calls would otherwise dispatch
+// to no one.
+let _lease = client.acquire_enc_decrypt_failed_forwarding();
+
+while let Ok(event) = event_rx.recv().await {
+    if let Event::EncDecryptFailed(failed) = &*event {
+        // Not a display signal and not a loss report — see the caveats on
+        // `Event::EncDecryptFailed` — but useful for attributing a failure
+        // inside a fan-out or measuring session health per peer.
+        println!(
+            "enc #{} ({:?}) for {} failed: {:?}",
+            failed.enc_index, failed.enc_type, failed.info.id, failed.reason,
         );
     }
 }

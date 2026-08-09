@@ -13,6 +13,8 @@ As of PR #1195, `ErrorChainExt` also answers `http_status()` — the HTTP status
 
 As of PR #1257, `IqError::ServerError` also carries `response: RejectionStanza` — the `type="error"` stanza itself, handed over whole the same way a `type="result"` response already was, alongside the four fields this crate parses off it (`code`, `text`, `error_type`, `backoff`). See [`RejectionStanza`](#rejectionstanza) below.
 
+As of PR #1261, `wacore::bot_message::decrypt_bot_message` (and its private decryption helper) return `Result<T, BotMessageError>` instead of `anyhow::Result<T>`. Unlike the entries above, this is **a breaking change to `wacore`'s public API**, not an additive one — a caller matching on the previous `anyhow::Error` needs to switch to the typed enum. See [`BotMessageError`](#botmessageerror) below.
+
 ## Error hierarchy
 
 ```
@@ -57,6 +59,13 @@ IqError              (IQ request failures — embedded by most domain errors)
   ├── DuplicateRequestId(String)
   ├── EncodeError
   └── ParseError
+
+BotMessageError      (wacore::bot_message::decrypt_bot_message — wacore crate, not whatsapp_rust)
+  ├── InvalidSecretLength
+  ├── InvalidIvLength
+  ├── PayloadTooShort
+  ├── KeyDerivation
+  └── AuthenticationFailed
 ```
 
 Domain errors that embed `IqError` or `ClientError` via `#[from]` propagate those failures automatically via `?`. Some errors (e.g. `AppStateError`, `SignalError`) use internal `anyhow::Error` wrapping instead and do not have `Iq` or `Client` variants.
@@ -218,6 +227,7 @@ Rendering changed alongside the `source()` fix: a wrapping variant's `Display` s
 | `ConnectError` | `Client::connect`, `Client::wait_for_socket`, `Client::wait_for_connected` | `whatsapp_rust` |
 | `SignalMaintenanceError` | `Client::rotate_signed_pre_key`, `Client::flush_pending_signal_state` | `whatsapp_rust` |
 | `MessageEditError` | `EncryptedEdit::original_sender_jid`, `SecretEncrypted::original_sender_jid`, `SecretEncrypted::original_sender_for_dispatch` | `whatsapp_rust` |
+| `BotMessageError` | `wacore::bot_message::decrypt_bot_message` | `wacore` |
 
 ## Type definitions
 
@@ -569,6 +579,44 @@ pub enum MessageEditError {
 
 Both variants mean the peer sent a target message key that cannot be attributed — retrying the same envelope yields the same result. `MessageEditError` is re-exported from the crate root as `whatsapp_rust::MessageEditError`.
 
+### BotMessageError
+
+Returned by `wacore::bot_message::decrypt_bot_message` and its private decryption helper. Added in PR #1261, replacing bare `anyhow::Result`.
+
+<Note>
+Unlike every other error type on this page, `BotMessageError` lives in the `wacore` crate, not `whatsapp_rust` — and its introduction is **a breaking change to `wacore`'s public API**: `decrypt_bot_message`'s return type changed from `anyhow::Result<T>` to `Result<T, BotMessageError>`, so a caller matching on the previous `anyhow::Error` needs to switch to this typed enum.
+</Note>
+
+```rust
+#[non_exhaustive]
+pub enum BotMessageError {
+    InvalidSecretLength,
+    InvalidIvLength,
+    PayloadTooShort,
+    KeyDerivation,
+    AuthenticationFailed,
+}
+```
+
+**Variants:**
+- `InvalidSecretLength` — the bot message secret is not the expected size.
+- `InvalidIvLength` — the IV carried by the payload is not the expected size.
+- `PayloadTooShort` — the payload is too short to contain what it claims to.
+- `KeyDerivation` — deriving the decryption key from the secret failed.
+- `AuthenticationFailed` — the ciphertext did not verify (AES-GCM tag mismatch).
+
+`BotMessageError::stage(&self) -> BotMessageFailure` classifies which stage of decryption a failure belongs to, without matching every variant by name:
+
+```rust
+pub enum BotMessageFailure {
+    Envelope,
+    Secret,
+    Authentication,
+}
+```
+
+Use `stage()` when you only care whether the envelope, the secret, or the authentication step failed — for metrics or a coarse retry policy — rather than the specific `BotMessageError` variant.
+
 ### ClientError (base type)
 
 ```rust
@@ -845,4 +893,29 @@ let err: IqError = wacore_err.into();
 
 // After — pass the response the classification failure was read from
 let err = IqError::from_response(wacore_err, &response);
+```
+
+### From PR #1261: `decrypt_bot_message` returns a typed error
+
+If you were matching on `anyhow::Error` from `wacore::bot_message::decrypt_bot_message`, switch to [`BotMessageError`](#botmessageerror):
+
+```rust
+// Before
+match decrypt_bot_message(message_secret, enc_iv, enc_payload, &ctx) {
+    Ok(plaintext) => { /* ... */ }
+    Err(e) => eprintln!("bot message decrypt failed: {e}"),
+}
+
+// After — match specific variants, or classify by stage
+use wacore::bot_message::{BotMessageError, BotMessageFailure};
+
+match decrypt_bot_message(message_secret, enc_iv, enc_payload, &ctx) {
+    Ok(plaintext) => { /* ... */ }
+    Err(e @ BotMessageError::AuthenticationFailed) => eprintln!("tampered or wrong secret: {e}"),
+    Err(e) => match e.stage() {
+        BotMessageFailure::Envelope => eprintln!("malformed envelope: {e}"),
+        BotMessageFailure::Secret => eprintln!("bad secret: {e}"),
+        BotMessageFailure::Authentication => eprintln!("authentication failed: {e}"),
+    },
+}
 ```

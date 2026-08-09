@@ -224,6 +224,9 @@ pub enum Event {
 
     // Sent frame (opt-in)
     SentFrame(SentFrame),
+
+    // Enc decrypt failure (opt-in)
+    EncDecryptFailed(EncDecryptFailed),
 }
 ```
 
@@ -2894,6 +2897,106 @@ Event::SentFrame(frame) => {
 </Note>
 
 See [`acquire_sent_frame_forwarding`](/api/client#acquire_sent_frame_forwarding) for the lease API, and [WebSocket & Noise Protocol Handling](/advanced/websocket-handling#noisesocket) for how `SendObservers` wires it into the noise sender.
+
+## Enc decrypt failure events
+
+### `EncDecryptFailed`
+
+**Emitted:** One `<enc>` that did not produce a usable message, and why — the failing half of what [`DecryptedPayload`](#decryptedpayload) reports for the succeeding half, at the same granularity (per `<enc>`, not per message) and under the same numbering (`enc_index` comes from the same enumeration as `DecryptedPayload::enc_index`, so the two events index one stanza and not two). To receive this event, hold a lease from `client.acquire_enc_decrypt_failed_forwarding()` and include `EventKind::EncDecryptFailed` in your handler's `interest()`. While no lease is held, nothing is emitted and nothing is built.
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct EncDecryptFailed {
+    pub info: Arc<MessageInfo>,
+    pub enc_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enc_type: Option<Cow<'static, str>>,
+    pub reason: EncDecryptFailureReason,
+}
+
+Event::EncDecryptFailed(EncDecryptFailed)
+```
+
+**Fields:**
+- `info` — Which message this `<enc>` belongs to.
+- `enc_index` — Which `<enc>` of the stanza this was, counting from zero in the order the client enumerates them — the stanza's direct `<enc>` children first, then the ones under `<participants><to>` addressed to this device. Not a child index.
+- `enc_type` — The `type` attribute the `<enc>` carried: `msg`, `pkmsg`, `skmsg`, … `None` only when the node carried no `type` attribute at all — the one thing `MalformedNode` can mean here that a present type does not.
+- `reason` — Where the client stopped. See [`EncDecryptFailureReason`](#encdecryptfailurereason) below.
+
+This is a library extension with no WhatsApp Web equivalent — WhatsApp's own client does not surface this. Reasons to want it: attributing a failure inside a fan-out (a stanza can carry one `<enc>` per device), driving a retry or resync policy off the specific reason, and measuring session health per peer rather than per message.
+
+#### EncDecryptFailureReason
+
+Why one `<enc>` produced no plaintext. This is the client's own classification of where *it* stopped, not something the server sends and not a statement about the sender's copy. It is `#[non_exhaustive]` — a `match` needs a `_` arm, since new branches append new variants as the receive path is refined.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub enum EncDecryptFailureReason {
+    MalformedNode,
+    UnsupportedEncType,
+    MalformedCiphertext,
+    NoSession,
+    NoSenderKey,
+    UnknownPreKey,
+    UntrustedIdentity,
+    BadMac,
+    InvalidMessage,
+    NoMessageSecret,
+    LocalCryptoFailure,
+    SignalError,
+    StorageFailure,
+    PlaintextUnusable,
+    NotAttempted,
+}
+```
+
+| Variant | Meaning |
+|---|---|
+| `MalformedNode` | No `type` attribute, or no content to decrypt — nothing about the node named a decryption to attempt. |
+| `UnsupportedEncType` | Recognized as an `<enc>`, but the `type` is one this build does not implement. |
+| `MalformedCiphertext` | A `type` this build handles, whose body is not a well-formed envelope for it — never reached a cipher. Distinct from `InvalidMessage`, which is the cryptographic layer rejecting an envelope it did parse. |
+| `NoSession` | No Signal session for the sender's address. Usually recoverable — the client asks the sender to re-establish one. |
+| `NoSenderKey` | No sender-key state for this `(group, sender)` chain — typically an `skmsg` whose distribution message was never received or was lost. |
+| `UnknownPreKey` | The sender encrypted to a one-time or signed pre-key of ours that this device no longer holds. |
+| `UntrustedIdentity` | The sender's identity key is not the one this device trusts for them. Usually reported after a stored-identity retry still didn't produce plaintext; also reported where libsignal raises it directly, as with a PN→LID session migration. |
+| `BadMac` | The ciphertext did not verify under the key the client derived for it — covers both the Signal MAC and the AES-GCM tag of a bot (`msmsg`) payload. |
+| `InvalidMessage` | The envelope parsed and the cryptographic layer rejected its contents: a version mismatch, a bad signature, or a body the cipher would not accept under sound keys. Not the same as state that was never sound — that's `StorageFailure`. |
+| `NoMessageSecret` | A bot (`msmsg`) payload whose `messageSecret` this device does not hold, or whose `<meta>` doesn't say which secret to look up. Expected on a companion for a group bot invocation the primary device sent. |
+| `LocalCryptoFailure` | The local cryptographic provider failed a key agreement. Ours — like `StorageFailure`, the peer's ciphertext was never judged. |
+| `SignalError` | The cryptographic layer failed for a reason this build does not classify further. |
+| `StorageFailure` | Local state was the problem, not the ciphertext — a store that wouldn't answer, a corrupt pre-key/identity/session/sender-key record, or a durability failure. Says nothing about the peer, and nothing about recovery (some branches leave the stanza queued for redelivery, others nack it). |
+| `PlaintextUnusable` | The `<enc>` decrypted, but the bytes couldn't be turned into a message (padding it couldn't strip, or an undecodable payload). The one reason that can accompany a `DecryptedPayload` for the same `<enc>` — when the bytes existed but were unusable, both are emitted. |
+| `NotAttempted` | Never attempted: an `skmsg` whose stanza's session `<enc>` failed first (the sender key it needed came in that one), a session `<enc>` on a stanza addressed from a group, or a stanza abandoned when the connection tore down before its turn. Says nothing about the ciphertext, which was never read. |
+
+`EncDecryptFailureReason::decryption_was_attempted(self) -> bool` reports whether the client entered its decryption path at all — `false` for `MalformedNode`, `UnsupportedEncType`, and `NotAttempted`; `true` for every other variant, spanning everything from an envelope that wouldn't parse to a MAC that wouldn't verify.
+
+#### What it does not say
+
+<Note>
+- **Not a display signal.** Whether to show the user a placeholder is [`UndecryptableMessage`](#undecryptablemessage), which is per *message*, deduplicated by `(chat, id)`, and carries the server's `decrypt-fail` hint. `EncDecryptFailed` is per `<enc>`, is not deduplicated, and answers a different question.
+- **Not a loss report.** Most reasons are recoverable — the client may already have asked the sender to resend — and this event says nothing about whether a retry went out or succeeded later.
+- **Repeats.** A redelivered stanza that fails again emits it again, once per `<enc>` per delivery. Correlate on `(info.source.chat, info.source.sender, info.id, enc_index)` if you want at-most-once per `<enc>` — `info.id` alone is not globally unique, only within a `(chat, sender)` pair (see [Idempotency Requirement](/advanced/inbound-durability#idempotency-requirement)).
+- **A duplicate is not a failure.** An `<enc>` the server redelivered that this device already processed emits neither this event nor [`DecryptedPayload`](#decryptedpayload) — its plaintext was reported the first time round. A stanza whose only duplicate `<enc>` sits beside one that genuinely fails still reports that other `<enc>` as `NotAttempted`, on every delivery, since no delivery ever produced its plaintext.
+- **Order is `enc_index`, not arrival.** The client decrypts a stanza's `<enc>` nodes in per-kind passes (session, then group, then bot), so neither these events nor `DecryptedPayload`s arrive in stanza order, and a failure for a later `<enc>` can precede a success for an earlier one.
+</Note>
+
+**Example:**
+```rust
+let _lease = client.acquire_enc_decrypt_failed_forwarding();
+
+// In your event handler:
+Event::EncDecryptFailed(failed) => {
+    println!(
+        "enc #{} ({:?}) for {} failed: {:?}",
+        failed.enc_index, failed.enc_type, failed.info.id, failed.reason,
+    );
+}
+// Drop `_lease` to stop forwarding.
+```
+
+See [`acquire_enc_decrypt_failed_forwarding`](/api/client#acquire_enc_decrypt_failed_forwarding) for the lease API.
 
 ## Event handler patterns
 

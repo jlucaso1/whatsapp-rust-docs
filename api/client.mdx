@@ -2085,10 +2085,10 @@ While no lease is held, nothing is emitted and nothing is built — each failure
 ```rust
 use wacore::types::events::{ChannelEventHandler, Event};
 
-let _lease = client.acquire_enc_decrypt_failed_forwarding();
-
 let (handler, event_rx) = ChannelEventHandler::new();
 client.register_handler(handler);
+
+let _lease = client.acquire_enc_decrypt_failed_forwarding();
 
 while let Ok(event) = event_rx.recv().await {
     if let Event::EncDecryptFailed(failed) = &*event {

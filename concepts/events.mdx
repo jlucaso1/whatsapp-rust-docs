@@ -2902,7 +2902,7 @@ See [`acquire_sent_frame_forwarding`](/api/client#acquire_sent_frame_forwarding)
 
 ### `EncDecryptFailed`
 
-**Emitted:** One `<enc>` that produced no plaintext, and why — the failing half of what [`DecryptedPayload`](#decryptedpayload) reports for the succeeding half, at the same granularity (per `<enc>`, not per message) and under the same numbering (`enc_index` comes from the same enumeration as `DecryptedPayload::enc_index`, so the two events index one stanza and not two). To receive this event, hold a lease from `client.acquire_enc_decrypt_failed_forwarding()` and include `EventKind::EncDecryptFailed` in your handler's `interest()`. While no lease is held, nothing is emitted and nothing is built.
+**Emitted:** One `<enc>` that did not produce a usable message, and why — the failing half of what [`DecryptedPayload`](#decryptedpayload) reports for the succeeding half, at the same granularity (per `<enc>`, not per message) and under the same numbering (`enc_index` comes from the same enumeration as `DecryptedPayload::enc_index`, so the two events index one stanza and not two). To receive this event, hold a lease from `client.acquire_enc_decrypt_failed_forwarding()` and include `EventKind::EncDecryptFailed` in your handler's `interest()`. While no lease is held, nothing is emitted and nothing is built.
 
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
@@ -2977,7 +2977,7 @@ pub enum EncDecryptFailureReason {
 <Note>
 - **Not a display signal.** Whether to show the user a placeholder is [`UndecryptableMessage`](#undecryptablemessage), which is per *message*, deduplicated by `(chat, id)`, and carries the server's `decrypt-fail` hint. `EncDecryptFailed` is per `<enc>`, is not deduplicated, and answers a different question.
 - **Not a loss report.** Most reasons are recoverable — the client may already have asked the sender to resend — and this event says nothing about whether a retry went out or succeeded later.
-- **Repeats.** A redelivered stanza that fails again emits it again, once per `<enc>` per delivery. Correlate on `info.id` if you want at-most-once.
+- **Repeats.** A redelivered stanza that fails again emits it again, once per `<enc>` per delivery. Correlate on `info.id` and `enc_index` if you want at-most-once per `<enc>`.
 - **A duplicate is not a failure.** An `<enc>` the server redelivered that this device already processed emits neither this event nor [`DecryptedPayload`](#decryptedpayload) — its plaintext was reported the first time round. A stanza whose only duplicate `<enc>` sits beside one that genuinely fails still reports that other `<enc>` as `NotAttempted`, on every delivery, since no delivery ever produced its plaintext.
 - **Order is `enc_index`, not arrival.** The client decrypts a stanza's `<enc>` nodes in per-kind passes (session, then group, then bot), so neither these events nor `DecryptedPayload`s arrive in stanza order, and a failure for a later `<enc>` can precede a success for an earlier one.
 </Note>

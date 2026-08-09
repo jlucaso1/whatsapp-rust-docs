@@ -901,7 +901,7 @@ If you were matching on `anyhow::Error` from `wacore::bot_message::decrypt_bot_m
 
 ```rust
 // Before
-match decrypt_bot_message(&payload, &secret) {
+match decrypt_bot_message(message_secret, enc_iv, enc_payload, &ctx) {
     Ok(plaintext) => { /* ... */ }
     Err(e) => eprintln!("bot message decrypt failed: {e}"),
 }
@@ -909,7 +909,7 @@ match decrypt_bot_message(&payload, &secret) {
 // After — match specific variants, or classify by stage
 use wacore::bot_message::{BotMessageError, BotMessageFailure};
 
-match decrypt_bot_message(&payload, &secret) {
+match decrypt_bot_message(message_secret, enc_iv, enc_payload, &ctx) {
     Ok(plaintext) => { /* ... */ }
     Err(e @ BotMessageError::AuthenticationFailed) => eprintln!("tampered or wrong secret: {e}"),
     Err(e) => match e.stage() {

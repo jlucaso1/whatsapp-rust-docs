@@ -105,7 +105,7 @@ If you call `disconnect()`, `logout()`, or `signal_shutdown_sync()` while `run()
 </Note>
 
 <Note>
-Added in PR #1265: [`pause()`](#pause) does **not** end `run()` — the loop parks instead of connecting, and this call keeps running until [`resume()`](#resume) or one of the terminal calls above.
+Added in PR #1265: [`pause()`](#pause) does **not** end `run()` by itself — the loop parks instead of connecting, and this call keeps running until [`resume()`](#resume) or one of the terminal calls above. That's conditional on auto-reconnect: `pause()` does not touch `enable_auto_reconnect`, and the loop checks that flag the same way it does after every other connection end, pause-induced or not — see the `pause()`/`resume()` rows in [General reconnection behavior](#general-reconnection-behavior). With auto-reconnect disabled, the connection `pause()` tore down still ends `run()`, the same as any other disconnect.
 </Note>
 
 **Example:**
@@ -289,7 +289,7 @@ One qualification on "the socket is closed on return": an attempt still inside i
 ```rust
 // Go offline until the application decides to come back
 client.pause().await;
-assert!(!client.is_terminal()); // still between connections, not finished
+assert!(client.is_paused()); // still between connections, not finished
 
 // ... later ...
 client.resume();
@@ -591,7 +591,7 @@ As of [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client a
 | `logout()` called | No reconnect attempt, device deregistered |
 | Auto-reconnect disabled | No reconnect attempt |
 | You call `disconnect()` / `logout()` / `signal_shutdown_sync()` during a backoff wait | The client interrupts the wait immediately; `run()` returns without waiting out the remaining delay |
-| `pause()` called (added in PR #1265) | Connection dropped; the run loop parks and opens nothing until `resume()` — no backoff owed |
+| `pause()` called (added in PR #1265) | Connection dropped; if auto-reconnect is enabled, the run loop parks and opens nothing until `resume()` — no backoff owed. If auto-reconnect is disabled, the loop still ends `run()`, same as any other disconnect |
 | `resume()` called (added in PR #1265) | Immediate reconnect, no backoff owed for the paused window |
 
 ---

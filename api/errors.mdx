@@ -15,6 +15,8 @@ As of PR #1257, `IqError::ServerError` also carries `response: RejectionStanza` 
 
 As of PR #1261, `wacore::bot_message::decrypt_bot_message` (and its private decryption helper) return `Result<T, BotMessageError>` instead of `anyhow::Result<T>`. Unlike the entries above, this is **a breaking change to `wacore`'s public API**, not an additive one — a caller matching on the previous `anyhow::Error` needs to switch to the typed enum. See [`BotMessageError`](#botmessageerror) below.
 
+As of PR #1265, `ConnectError` gained a `Paused` variant, returned by [`Client::connect`](/api/client#connect) while [`pause()`](/api/client#pause) is in effect — see [`ConnectError`](#connecterror) below. Purely additive: existing exhaustive matches already need a `_` arm since the enum is `#[non_exhaustive]`.
+
 ## Error hierarchy
 
 ```
@@ -29,6 +31,8 @@ ClientError          (transport/connection base — embedded by select domain er
 ConnectError          (Client::connect, wait_for_socket, wait_for_connected)
   ├── AlreadyConnected
   ├── NotActivated
+  ├── Shutdown
+  ├── Paused
   ├── Timeout { stage: ConnectStage, timeout: Duration }
   ├── Version(anyhow::Error)
   ├── Transport(anyhow::Error)
@@ -477,6 +481,8 @@ pub enum ConnectError {
     NotActivated,
     #[error("client has been shut down")]
     Shutdown,
+    #[error("client is paused")]
+    Paused,
     #[error("{stage} timed out after {timeout:?}")]
     Timeout {
         stage: ConnectStage,
@@ -495,6 +501,7 @@ pub enum ConnectError {
 - `AlreadyConnected` — a connection is already up, or another `connect()` attempt is already in flight. This is the old `ClientError::AlreadyConnected` case, moved here.
 - `NotActivated` — construction never completed (only reachable with the `client-lifecycle` feature), so the attempt was rejected before any I/O.
 - `Shutdown` — added in PR #1258. The client was already shut down (`disconnect()`, `logout()`, or `signal_shutdown_sync()`) before or during this `connect()` attempt. Shutdown is final and non-reversible, so this is refused rather than reviving a client the application was already told is gone — build a new client instead of reconnecting this one.
+- `Paused` — added in PR #1265. [`Client::pause()`](/api/client#pause) is in effect, so `connect()` is refused — including an attempt already in flight when `pause()` was called, which is retracted rather than published. Unlike `Shutdown`, this is not final: [`Client::resume()`](/api/client#resume) lifts it and connecting works again.
 - `Timeout` — a step of the connect flow ran out of time. `stage` says which one (see [`ConnectStage`](#connectstage) below); `wait_for_socket`/`wait_for_connected` always report `Socket`/`Ready` respectively.
 - `Version` / `Transport` — the app-version resolution or transport factory failed outright (not a timeout). As of PR #1195, if `Version` was caused by a non-2xx response fetching the app version (`sw.js`), the status is recoverable via `err.http_status()` ([`ErrorChainExt`](#error-chain-recovery)) instead of only appearing in the message.
 - `Handshake` — the Noise handshake failed after the transport was up. Wraps `HandshakeError` (see [WebSocket & Noise Protocol](/advanced/websocket-handling#handshake-errors)) via `#[from]`, so `?` still works and `matches!(err, ConnectError::Handshake(e) if e.is_transient())` replaces the old `err.downcast_ref::<HandshakeError>()` pattern for deciding whether a failed reconnect attempt is worth retrying.

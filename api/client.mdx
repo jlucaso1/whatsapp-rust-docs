@@ -104,6 +104,10 @@ Runs indefinitely until:
 If you call `disconnect()`, `logout()`, or `signal_shutdown_sync()` while `run()` is waiting out its reconnect backoff, the client interrupts the wait immediately. The backoff can otherwise run up to the 900s cap (see [Auto-Reconnection](#auto-reconnection)). So without this, awaiting `run()` right after requesting a stop could look like a 15-minute hang. For example, [`bot.run().await?`](/api/bot#run) returns a `BotHandle` immediately — awaiting that handle waits on this same `run()`. A per-connection shutdown does not cut the backoff short; that's the kind `run()` itself reconnects from. Only the three terminal calls above interrupt the wait.
 </Note>
 
+<Note>
+Added in PR #1265: [`pause()`](#pause) does **not** end `run()` — the loop parks instead of connecting, and this call keeps running until [`resume()`](#resume) or one of the terminal calls above.
+</Note>
+
 **Example:**
 ```rust
 let client_clone = client.clone();
@@ -141,6 +145,7 @@ client.run().await;
 - `AlreadyConnected` - a connection is already up, or another `connect()` attempt is already in flight
 - `NotActivated` - construction never activated (only reachable with the `client-lifecycle` feature)
 - `Shutdown` - added in PR #1258. The client has already been shut down (`disconnect()`, `logout()`, or `signal_shutdown_sync()`); shutdown is final, so build a new client rather than reconnecting this one
+- `Paused` - added in PR #1265. [`pause()`](#pause) is in effect, so no connection is opened — including an attempt already in flight when `pause()` was called, which is retracted rather than published. Unlike `Shutdown` this is not final: [`resume()`](#resume) lifts it and the next `connect()` proceeds normally
 - `Timeout { stage, timeout }` - the version fetch or the transport open ran out of time, independently, each under the same 20s budget (`ConnectStage::VersionFetch`/`Transport`). `connect()` itself never reports `ConnectStage::Socket` or `Ready` — those are only produced by `wait_for_socket()`/`wait_for_connected()` below.
 - `Version(anyhow::Error)` / `Transport(anyhow::Error)` - app version resolution or transport open failed outright
 - `Handshake(HandshakeError)` - the Noise handshake failed after the transport was up; check `HandshakeError::is_transient()` to decide whether a retry is worthwhile
@@ -248,6 +253,69 @@ Drops the current connection and reconnects immediately with no delay. Unlike `r
 // Force immediate reconnection (no backoff)
 client.reconnect_immediately().await;
 ```
+
+### pause
+
+```rust
+pub async fn pause(self: &Arc<Self>)
+```
+
+Added in PR #1265. Drops the current connection and stays offline until [`resume()`](#resume) — the middle of the range between `reconnect()`, which comes back on the library's schedule, and `disconnect()`, which does not come back at all:
+
+| | drops the connection | comes back | on whose schedule |
+|---|---|---|---|
+| `disconnect()` / `logout()` | yes | never — a new `Client` is required | — |
+| `reconnect()` / `reconnect_immediately()` | yes | immediately | the library's |
+| `pause()` / `resume()` | yes | when asked | the caller's |
+
+The supervision loop started by [`run()`](#run) stays alive and parked, so the future a caller is awaiting keeps running, and the client is **not** terminal — it is between connections, on purpose, for as long as the application wants.
+
+**What it guarantees:**
+- Once this returns, the socket is closed and pending receipts and Signal state have been flushed on the same terms as `disconnect()`.
+- **No connection will be opened by anyone** until resumed — `connect()` is refused with [`ConnectError::Paused`](/api/errors#connecterror) for as long as it holds, including an attempt already in flight when `pause()` was called, which is retracted rather than published.
+- Idempotent — pausing a paused client just tears down again.
+
+**What it deliberately does not do:**
+- Dispatches no `Event::Disconnected` — the application ended this connection, so the teardown is not news, the same reasoning `reconnect()` applies.
+- Not a protocol-level presence change — the account stays registered, and other devices see nothing.
+- Does not override `enable_auto_reconnect: false` — a client whose application already asked it not to come back still stops when its connection ends, pause or no pause.
+
+<Note>
+One qualification on "the socket is closed on return": an attempt still inside its handshake holds its transport out of `pause()`'s reach and closes it at its own next refusal check, which can land just after `pause()` returns. What holds unconditionally is the part a caller can act on — no such attempt ever becomes a published, readable connection.
+</Note>
+
+**Example:**
+```rust
+// Go offline until the application decides to come back
+client.pause().await;
+assert!(!client.is_terminal()); // still between connections, not finished
+
+// ... later ...
+client.resume();
+client.wait_for_connected(Duration::from_secs(30)).await?;
+```
+
+### resume
+
+```rust
+pub fn resume(&self)
+```
+
+Added in PR #1265. Releases a [`pause()`](#pause): the run loop reconnects at once, with no backoff owed for the offline window the application chose.
+
+Returns once the loop has been told, not once it is connected — wait for that with [`wait_for_connected`](#wait_for_connected). A no-op on a client that is not paused, and on one that has since been disconnected: `resume()` clears the pause, it does not undo a shutdown.
+
+<Note>
+Safe to call while a `pause()` is still tearing down, and deliberately does not wait for one — the teardown ends in an untimed socket close, and a `resume()` that queued behind it could be held off for as long as an unresponsive transport cared to take.
+</Note>
+
+### is_paused
+
+```rust
+pub fn is_paused(&self) -> bool
+```
+
+Added in PR #1265. Returns `true` while [`pause()`](#pause) is in effect and no connection will be opened by [`run()`](#run) until [`resume()`](#resume).
 
 ### wait_for_socket
 
@@ -522,6 +590,8 @@ As of [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client a
 | `logout()` called | No reconnect attempt, device deregistered |
 | Auto-reconnect disabled | No reconnect attempt |
 | You call `disconnect()` / `logout()` / `signal_shutdown_sync()` during a backoff wait | The client interrupts the wait immediately; `run()` returns without waiting out the remaining delay |
+| `pause()` called (added in PR #1265) | Connection dropped; the run loop parks and opens nothing until `resume()` — no backoff owed |
+| `resume()` called (added in PR #1265) | Immediate reconnect, no backoff owed for the paused window |
 
 ---
 

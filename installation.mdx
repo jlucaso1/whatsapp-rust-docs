@@ -7,8 +7,7 @@ description: Add whatsapp-rust to your Rust project
 
 Before installing whatsapp-rust, ensure you have:
 
-- **Rust nightly** (default) — required only by the default `simd` feature, which uses the unstable `portable_simd` API. The project pins `nightly-2026-06-16` via `rust-toolchain.toml`.
-- **Rust 1.94 or newer** — the workspace MSRV. Edition 2024 itself needs no nightly, so stable works once `simd` is off. See [Using stable Rust](#using-stable-rust).
+- **Rust 1.94 or newer** — the workspace MSRV, and all default features build on **stable Rust**. See [Using stable Rust](#using-stable-rust).
 - **Cargo** package manager
 
 <Note>
@@ -55,9 +54,7 @@ tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 
 If you need to declare a sibling crate explicitly (for example to enable a crate-specific feature flag), you can still add it individually. The full multi-crate form:
 
-<CodeGroup>
-
-```toml Nightly (default)
+```toml Cargo.toml
 [dependencies]
 whatsapp-rust = "0.7"
 # Only needed for crate-specific features not exposed through whatsapp-rust:
@@ -68,22 +65,6 @@ whatsapp-rust = "0.7"
 # waproto = "0.7"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 ```
-
-```toml Stable Rust
-[dependencies]
-whatsapp-rust = { version = "0.7", default-features = false, features = [
-    "sqlite-storage",
-    "tokio-transport",
-    "tokio-runtime",
-    "ureq-client",
-    "tokio-native",
-    "signal",
-] }
-wacore = { version = "0.7", default-features = false }
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
-```
-
-</CodeGroup>
 
 ## Feature flags
 
@@ -96,7 +77,6 @@ whatsapp-rust supports several optional features:
 | `tokio-transport` | Tokio WebSocket transport | ✅ Yes |
 | `ureq-client` | Ureq HTTP client | ✅ Yes |
 | `sqlite-storage` | SQLite storage backend | ✅ Yes |
-| `simd` | SIMD-optimized binary protocol encoding/decoding (**requires nightly Rust**) | ✅ Yes |
 | `signal` | Unix signal handling (graceful shutdown on SIGTERM/Ctrl+C) | ✅ Yes |
 | `tracing` | Emit `tracing` spans/events across connect, send, receive, IQ, app state, pairing, media, and session flows. See [Observability](/advanced/observability) | ❌ No |
 | `tracing-pii` | Render raw phone numbers in `tracing` fields instead of redacted `pn#<token>`. Local debugging only — never enable in production | ❌ No |
@@ -192,38 +172,11 @@ See [Chat Store](/api/chat-store) for the full API.
 
 ## Using stable Rust
 
-whatsapp-rust uses Rust **edition 2024** and declares an MSRV of **1.94**, both of which stable Rust supports. The one nightly-only piece is the default `simd` feature, which uses Rust's unstable `portable_simd` API for optimized binary protocol encoding/decoding. The project itself pins `nightly-2026-06-16` via `rust-toolchain.toml`.
+whatsapp-rust uses Rust **edition 2024** and declares an MSRV of **1.94**, both of which stable Rust supports, and the default feature set has no nightly-only dependency — `cargo build`/`cargo add whatsapp-rust` works with **stable Rust** out of the box, no feature flags to disable.
 
-To compile on **stable Rust**, disable the `simd` feature by setting `default-features = false`. You must do this on **both** `whatsapp-rust` and `wacore` — otherwise Cargo's [feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification) will re-enable SIMD through the `wacore` dependency:
-
-```toml Cargo.toml
-[dependencies]
-# Disable defaults (removes `simd`), then re-enable everything else
-whatsapp-rust = { version = "0.7", default-features = false, features = [
-    "sqlite-storage",
-    "tokio-transport",
-    "tokio-runtime",
-    "ureq-client",
-    "tokio-native",
-    "signal",
-] }
-# wacore also needs default-features = false to prevent feature unification
-# from re-enabling simd
-wacore = { version = "0.7", default-features = false }
-
-# These crates have no SIMD dependency — no changes needed
-whatsapp-rust-sqlite-storage = "0.7"
-whatsapp-rust-tokio-transport = "0.7"
-whatsapp-rust-ureq-http-client = "0.7"
-waproto = "0.7"
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
-```
-
-<Warning>
-  Setting `default-features = false` only on `whatsapp-rust` is **not enough** if you also depend on `wacore` directly. The direct `wacore` dependency enables `simd` by default, and Cargo merges features across all dependents. Both must opt out.
-</Warning>
-
-The encoder/decoder automatically falls back to scalar code paths when SIMD is disabled. There is no functional difference — only a minor performance difference in binary protocol operations.
+<Note>
+  The project's own `rust-toolchain.toml` still pins a nightly compiler (`nightly-2026-06-16`), but only for internal, binary-size-focused build flags — `-Zshare-generics` and lld/ICF linking, set workspace-wide in `.cargo/config.toml`, plus `-Zbuild-std` for the Docker image build only (see [Docker deployment](#docker-deployment) below) — not for any language feature the published crates need. That pin governs building the whatsapp-rust workspace itself; it has no effect on your project when you depend on whatsapp-rust from crates.io or git.
+</Note>
 
 ## 32-bit target support
 

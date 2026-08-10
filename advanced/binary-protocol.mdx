@@ -454,6 +454,8 @@ Location: `wacore/binary/src/encoder.rs:227-237`
 
 ### Packed Encoding
 
+Nibble and hex packing share one code path, `write_packed_bytes`: an ASCII→nibble lookup table (`NIBBLE_ENC` or `HEX_ENC`, picked by `data_type`) maps each input byte to its packed nibble, pairs are packed two at a time into a stack buffer, and validity is checked once via an OR accumulator (`seen`) instead of per pair — that is what lets the pair loop unroll.
+
 #### Nibble packing (numeric strings)
 
 Strings containing only digits, dash, and dot are packed into 4 bits per character:
@@ -466,58 +468,55 @@ Strings containing only digits, dash, and dot are packed into 4 bits per charact
 
 pub const PACKED_MAX: u8 = 127;  // Max length for packed/token strings
 
-fn pack_nibble(value: u8) -> u8 {
-    match value {
-        b'-' => 10,
-        b'.' => 11,
-        0 => 15,  // Padding
-        c if c.is_ascii_digit() => c - b'0',
-        _ => panic!("Invalid nibble"),
+/// ASCII to nibble for `NIBBLE_8`: digits plus the two punctuation characters
+/// a phone number can carry.
+static NIBBLE_ENC: [u8; 256] = {
+    let mut table = [PACK_INVALID; 256];
+    let mut c = b'0';
+    while c <= b'9' {
+        table[c as usize] = c - b'0';
+        c += 1;
     }
-}
+    table[b'-' as usize] = 10;
+    table[b'.' as usize] = 11;
+    table[0] = 15; // padding for an odd-length string
+    table
+};
 ```
 
-Location: `wacore/binary/src/encoder.rs:769-777`
+Location: `wacore/binary/src/encoder.rs:32-43`
 
-#### Hex Packing
+#### Hex packing
 
-Uppercase hex strings (0-9, A-F) are packed into 4 bits per character:
+Uppercase hex strings (0-9, A-F) are packed into 4 bits per character, against `HEX_ENC` instead of `NIBBLE_ENC`:
 
 ```rust
 // Input: "DEADBEEF"
 // Packed: 0xDE, 0xAD, 0xBE, 0xEF
 
-fn pack_hex(value: u8) -> u8 {
-    match value {
-        c if c.is_ascii_digit() => c - b'0',
-        c if (b'A'..=b'F').contains(&c) => 10 + (c - b'A'),
-        0 => 15,  // Padding
-        _ => panic!("Invalid hex"),
+/// ASCII to nibble, the inverse of the decoder's `HEX_PAIRS`.
+static HEX_ENC: [u8; 256] = {
+    let mut table = [PACK_INVALID; 256];
+    let mut c = b'0';
+    while c <= b'9' {
+        table[c as usize] = c - b'0';
+        c += 1;
     }
-}
+    let mut c = b'A';
+    while c <= b'F' {
+        table[c as usize] = 10 + (c - b'A');
+        c += 1;
+    }
+    table[0] = 15; // padding for an odd-length string
+    table
+};
 ```
 
-Location: `wacore/binary/src/encoder.rs:780-787`
+Location: `wacore/binary/src/encoder.rs:14-28`
 
-#### SIMD Optimization
-
-The encoder uses SIMD instructions for fast packing of long strings:
-
-```rust
-while input_bytes.len() >= 16 {
-    let input = u8x16::from_slice(chunk);
-    let indices = input.saturating_sub(nibble_base);
-    let nibbles = lookup.swizzle_dyn(indices);
-    
-    let (evens, odds) = nibbles.deinterleave(
-        nibbles.rotate_elements_left::<1>()
-    );
-    let packed = (evens << Simd::splat(4)) | odds;
-    self.write_raw_bytes(&packed.to_array()[..8])?;
-}
-```
-
-Location: `wacore/binary/src/encoder.rs:809-824`
+<Note>
+  Packing used to run through per-character `match` ladders (`pack_nibble`/`pack_hex`) reached via a `fn` pointer, and for a while carried a `portable_simd` fast path for long strings on top of that. Both are gone: measurement showed the vector path only ever beat the `match` ladders, not a lookup table, and lost to the table at every string length tested — `HEX_PAIRS[byte]` (the decoder's mirror-image table) is one 2-byte load, and a shuffle/interleave/store sequence doesn't beat that. The two lookup tables above replaced all three call paths; an exhaustive test (`encode_tables_match_the_ladders_they_replaced`) checks every one of the 256 byte values against the original `match` ladders so the tables can't silently drift from the encoding they replaced.
+</Note>
 
 ### JID Encoding
 
@@ -850,7 +849,7 @@ fn unpack_nibble(packed: u8, position: u8) -> u8 {
 }
 ```
 
-Unpacking a run of packed values dispatches through a 256-entry byte-pair table — one lookup and a 2-byte store per input byte, rather than the two-shift/two-lookup scalar walk this snippet shows. This is an implementation detail of `read_packed`; the value mapping above still describes what each nibble decodes to for `NIBBLE_8`. `HEX_8` unpacking is the mirror of [`pack_hex`](#hex-packing) shown earlier — 0–9 to digits, 10–15 to `A`–`F` — not the nibble table above.
+Unpacking a run of packed values dispatches through a 256-entry byte-pair table — one lookup and a 2-byte store per input byte, rather than the two-shift/two-lookup scalar walk this snippet shows. This is an implementation detail of `read_packed`; the value mapping above still describes what each nibble decodes to for `NIBBLE_8`. `HEX_8` unpacking is the mirror of [`HEX_ENC`](#hex-packing) shown earlier — 0–9 to digits, 10–15 to `A`–`F` — not the nibble table above.
 
 Location: `wacore/binary/src/decoder.rs:400-450`
 

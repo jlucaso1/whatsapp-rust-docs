@@ -527,7 +527,7 @@ impl SharedSqlite {
 pub fn share_for_device(&self, device_id: i32) -> Self;
 ```
 
-`SqliteStore::share_for_device()` returns a new `SqliteStore` for a *sibling device* in the same database file, cloning this store's pool, write-serialization semaphore, and reader pool instead of opening another connection. Every constructor builds its own r2d2 pool, so a process holding N sessions against one database file today opens N connections — and a connection costs memory before it reads a single row: a fixed ~46.9 KiB lookaside slab (`SQLITE_DEFAULT_LOOKASIDE`, not reducible via any pragma — `SQLITE_DBCONFIG_LOOKASIDE` is C-API only and unreachable through diesel) plus a page cache that grows to [`cache_size_kib`](#database-configuration). Since every query already carries a `device_id`, sibling sessions on one database only ever needed that field to differ.
+Call `SqliteStore::share_for_device()` to get a new `SqliteStore` for a *sibling device* in the same database file. It clones this store's pool, write-serialization semaphore, and reader pool instead of opening another connection. Without it, every constructor builds its own r2d2 pool, so a process holding N sessions against one database file opens N connections. A connection costs memory before it reads a single row: a fixed ~46.9 KiB lookaside slab (`SQLITE_DEFAULT_LOOKASIDE`), plus a page cache that grows to [`cache_size_kib`](#database-configuration). You can't reduce the lookaside slab with a pragma — `SQLITE_DBCONFIG_LOOKASIDE` is C-API only and diesel doesn't expose it. Since every query already carries a `device_id`, sibling sessions on one database only ever needed that field to differ.
 
 ```rust
 use whatsapp_rust_sqlite_storage::SqliteStore;
@@ -537,15 +537,15 @@ let device_1 = SqliteStore::new_for_device("whatsapp.db", 1).await?;
 let device_2 = device_1.share_for_device(2);
 ```
 
-The returned store owns clones of the pool handles, so it stays usable for as long as it lives — dropping the store it came from closes nothing.
+The returned store owns clones of the pool handles, so you can keep using it for as long as it lives — dropping the store it came from closes nothing.
 
 What it does **not** do:
 
-- **Create the device row.** It only stamps queries with `device_id`; the row still comes from the usual provisioning path (`create_new_device` or restore), same as a store built with `new_for_device`.
-- **Isolate writes.** Siblings share the write permits set by [`SqliteStoreConfig::pool_size`](#database-configuration) — at the default of `1`, their writes serialize against each other. Measured on a burst where every sibling writes continuously, sharing costs roughly 2.5x the aggregate write throughput of a pool per session, in exchange for FIFO-fair scheduling across siblings (a private connection per session instead leaves fairness to SQLite's busy handler, which backs off randomly — about 2x the spread between the fastest and slowest session).
-- **Split `resource_report()`.** Siblings share one pool, so every handle reports the same whole-pool estimate — when summing across a fleet of siblings, count it once per pool, not once per handle.
+- **Create the device row.** It only stamps queries with `device_id`. You still need to provision the row through the usual path — `create_new_device` or a restore — the same as with a store built from `new_for_device`.
+- **Isolate writes.** Siblings share the write permits set by [`SqliteStoreConfig::pool_size`](#database-configuration). At the default of `1`, their writes serialize against each other. On a burst where every sibling writes continuously, sharing costs roughly 2.5x the aggregate write throughput of a pool per session. In exchange you get FIFO-fair scheduling across siblings — a private connection per session instead leaves fairness to SQLite's busy handler, which backs off randomly and produces about 2x the spread between the fastest and slowest session.
+- **Split `resource_report()`.** Siblings share one pool, so every handle reports the same whole-pool estimate. When you sum across a fleet of siblings, count it once per pool, not once per handle.
 
-Because of the write-serialization trade, this is for **mostly-idle fleets** — sessions that are connected but not writing continuously, which is the common shape — rather than a default replacement for a store per session. See [Memory and Thread Tuning](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig) for measured numbers.
+Because of the write-serialization trade, reach for this with **mostly-idle fleets** — sessions that are connected but not writing continuously, which is the common shape — rather than as a default replacement for a store per session. See [Memory and Thread Tuning](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig) for measured numbers.
 
 ### Features
 

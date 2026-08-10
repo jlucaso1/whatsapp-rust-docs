@@ -344,6 +344,32 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 
 See [WebSocket & Noise Protocol - Fibonacci backoff](/advanced/websocket-handling#fibonacci-backoff) for the stability-reset and penalty-survival mechanics.
 
+### Pause / resume
+
+Added in PR #1265. `Client::pause()`/`resume()` fill the gap between `disconnect()` (terminal — no way back for that `Client`) and `reconnect()` (comes back on the library's own schedule): `pause()` drops the connection and parks the `run()` supervision loop until `resume()` releases it, on the caller's own timeline. The client is not terminal while paused — `is_terminal()` is untouched — it is between connections, on purpose.
+
+```rust
+// Client fields backing pause/resume
+pub(crate) paused: AtomicBool,                       // Set by pause(), cleared by resume()
+pub(crate) pause_state_notifier: Arc<event_listener::Event>, // Fired only by pause()/resume()
+pub(crate) pause_teardown_pending: AtomicBool,        // One-shot: the ending connection owes no backoff
+pub(crate) pause_generation: AtomicU64,               // Bumped by every pause(); attempts capture it once
+pub(crate) connection_publish: Mutex<()>,             // Serializes pause()'s teardown against connect's publish
+```
+
+**Mechanics:**
+1. `run()`'s loop checks `paused` at the top of every iteration — before each connect attempt, not only after one ends — because a `pause()` can land as easily during a reconnect backoff as during a live connection. Finding it set, the loop logs and parks on `wait_while_paused()`, which re-checks `paused`/`is_running` against `session_state_notifier` so a `disconnect()` mid-pause still ends the loop instead of waiting for a `resume()` that is never coming.
+2. `connect()` itself refuses with `ConnectError::Paused` up front, and the connect graph re-checks a `connect_refusal()` (shutdown-or-paused) at every checkpoint — before the transport opens, after the handshake, and at the final publish — comparing the connection attempt's captured `pause_generation` against the current one. That generation compare, not just the `paused` flag, is what catches an attempt that spanned a `pause()` **and** a `resume()` while it was mid-handshake: a level-triggered read of `paused` alone would see `false` and let it through.
+3. The final refusal-check-and-publish in the connect graph and `pause()`'s own capture of what it is tearing down share the `connection_publish` mutex, so a `pause()` can never read "no connection" from an attempt one statement away from publishing one.
+4. `pause_teardown_pending` is a one-shot fact, not a live re-read of `paused`: it's set by whichever path ends the connection (the run loop's `ConnectError::Paused` branch, or `pause()` itself) so a `resume()` landing in the gap between the teardown starting and the run loop noticing does not leave the loop believing the ending connection deserves the ordinary Fibonacci penalty.
+5. `resume()` is synchronous and deliberately does not wait on a `pause()` still in flight — that teardown ends in an untimed socket close, and queuing behind it would make "come back on my word" hostage to an unresponsive transport. It just clears `paused`, fires `pause_state_notifier`, and lets the run loop reconnect immediately.
+
+**What paused reachability means:** `pause()` publishes the `paused` flag *before* it flushes and closes the socket, so `can_reach_server()`, `wait_for_socket()`, and `wait_for_connected()`/`is_fully_ready()` all treat a paused client as unreachable for that whole teardown window, not just once the socket is actually down — otherwise a caller could be handed the very connection the application just asked to close. `await_connection` is the one place that deliberately keeps waiting through a pause rather than giving up, the same way it already waits out a 900s backoff, since nothing on the next connection re-issues a consumer's task.
+
+`pause()` does **not** dispatch `Event::Disconnected` (same reasoning as `reconnect()` — the application asked for this, so it isn't news), is not a protocol-level presence change, and does not override `enable_auto_reconnect`: a client already told not to come back still stops when its connection ends, pause or no pause, since that ordering is what lets `handle_stream_error` make a client terminal (409, 516) through the same flag without a pause racing ahead of it.
+
+See [pause() / resume() in the Client API reference](/api/client#pause) for the caller-facing contract.
+
 ### Disconnect cleanup
 
 When a connection is lost or `disconnect()` is called, `cleanup_connection_state()` resets all connection-scoped state to prevent stale data from leaking into the next connection. It runs from `run()` after the message loop exits (and `disconnect()` also invokes it directly); the function is idempotent and race-tolerant, so it is not duplicated inside the message loop on transport disconnect events and resetting twice is harmless:

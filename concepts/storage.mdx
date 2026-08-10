@@ -979,6 +979,18 @@ As of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222),
 
 At ~100 sessions the r2d2 thread count drops from ~300 to 2.
 
+### Sharing one pool across sibling devices
+
+The measurements above still assume one `SqliteStore` per session. If those sessions share the same database file, [`SqliteStore::share_for_device`](/api/store#sharing-the-pool-with-sibling-devices) removes the per-session connection entirely instead of just shrinking its cost: a sibling store clones the base store's pool, write semaphore, and reader pool rather than opening its own.
+
+Measured on an idle session (a couple of point reads, `cache_size_kib` at its 512 KiB default):
+
+| | pool per session (marginal) | shared pool (marginal) |
+|---|---|---|
+| RSS per additional session | ~122.6 KiB | ~0.0 KiB |
+
+The trade is on the write side: siblings share the write permit set by `pool_size`, so at the default of `1` their writes serialize against each other — roughly 2.5x slower aggregate write throughput on a continuous-write burst, in exchange for FIFO-fair scheduling across siblings instead of SQLite's busy-handler backoff. That makes it a fit for mostly-idle fleets rather than sessions that write continuously. See [Sharing the pool with sibling devices](/api/store#sharing-the-pool-with-sibling-devices) for the full trade-off and what the method does not do.
+
 ## DeviceCommand Pattern
 
 **Location:** `src/store/commands.rs`, `wacore/src/store/commands.rs`

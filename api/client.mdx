@@ -302,7 +302,9 @@ client.wait_for_connected(Duration::from_secs(30)).await?;
 pub fn resume(&self)
 ```
 
-Added in PR #1265. Releases a [`pause()`](#pause): the run loop reconnects at once, with no backoff owed for the offline window the application chose.
+Added in PR #1265. Releases a [`pause()`](#pause): if [`run()`](#run) is still active — the ordinary case, since `pause()` alone does not end it — the loop reconnects at once, with no backoff owed for the offline window the application chose.
+
+`resume()` itself is just the flag clear and notify; it does not restart a supervision loop that has already exited. If auto-reconnect was disabled, `pause()` already ended `run()` (see the [`run()`](#run) note above), and nothing is listening for this call's notify — call [`run()`](#run) (or [`connect()`](#connect)) again afterward to actually reconnect.
 
 Returns once the loop has been told, not once it is connected — wait for that with [`wait_for_connected`](#wait_for_connected). A no-op on a client that is not paused, and on one that has since been disconnected: `resume()` clears the pause, it does not undo a shutdown.
 

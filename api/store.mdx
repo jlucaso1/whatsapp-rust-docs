@@ -521,6 +521,32 @@ impl SharedSqlite {
 `read` takes a permit from a separate reader pool, sized by [`SqliteStoreConfig::read_pool_size`](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig). A burst of reads can then run alongside a pending write instead of queueing behind `run`'s write-path permits. If `read_pool_size` is `0` (the default) or the underlying connection isn't WAL, `read` falls back to queueing on the same permits as `run` — it's always safe to call. Wrapping the closure in a deferred transaction also means a `read` that issues more than one statement (e.g. resolve a chat's identity keys, then query by them) sees one consistent snapshot across all of them, rather than possibly straddling a write that commits in between. Prefer `read` over `run` for anything that only queries. [`whatsapp-rust-chat-store`](/api/chat-store)'s query paths do, and so does most of `SqliteStore`'s own `SignalStore`/`AppSyncStore`/`ProtocolStore`/`DeviceStore` surface as of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222) — session, identity, sender-key, and pre-key lookups among them. A handful of reads are deliberately kept on `run` instead: a stale answer for these would go out on the wire, fail an operation outright, or overwrite a cache unconditionally (app-state sync key lookups, `messageSecret` reads, `get_devices`).
 </Note>
 
+### Sharing the pool with sibling devices
+
+```rust
+pub fn share_for_device(&self, device_id: i32) -> Self;
+```
+
+Call `SqliteStore::share_for_device()` to get a new `SqliteStore` for a *sibling device* in the same database file. It clones this store's pool, write-serialization semaphore, and reader pool instead of opening its own. Without it, every constructor builds its own r2d2 pool, so a process holding N sessions against one database file opens N pools. At the default `pool_size` of `1` and `read_pool_size` of `0`, that means N connections; a store configured with a larger `pool_size` or `read_pool_size` opens more per session, and sharing removes that entire pool, not just one connection. A connection costs memory before it reads a single row. On the bundled SQLite build, that includes a fixed ~46.9 KiB lookaside slab (`SQLITE_DEFAULT_LOOKASIDE`) — a compile-time setting, so a system-linked or SQLCipher-enabled SQLite (see [Connection init hook](#connection-init-hook)) can size it differently, or not allocate it at all. It also includes a page cache that grows to [`cache_size_kib`](#database-configuration). You can't shrink the lookaside slab with a pragma — `SQLITE_DBCONFIG_LOOKASIDE` is C-API only and diesel doesn't expose it. Since every query already carries a `device_id`, sibling sessions on one database only ever needed that field to differ.
+
+```rust
+use whatsapp_rust_sqlite_storage::SqliteStore;
+
+let device_1 = SqliteStore::new_for_device("whatsapp.db", 1).await?;
+// One pool, one connection, two sessions.
+let device_2 = device_1.share_for_device(2);
+```
+
+The returned store owns clones of the pool handles, so you can keep using it for as long as it lives — dropping the store it came from closes nothing.
+
+What it does **not** do:
+
+- **Create the device row.** It only stamps queries with `device_id`. Wrap the returned store in [`PersistenceManager::new`](/concepts/storage#initialization) and it provisions the row for you automatically, the same as it would for a store built from `new_for_device` — you only need to provision the row yourself if you use the store directly, outside `PersistenceManager`.
+- **Isolate writes.** Siblings share the write permits set by [`SqliteStoreConfig::pool_size`](#database-configuration). At the default of `1`, their writes serialize against each other. On a burst where every sibling writes continuously, sharing costs roughly 2.5x the aggregate write throughput of a pool per session. In exchange you get FIFO-fair scheduling across siblings. A private connection per session instead leaves ordering to SQLite's busy-timeout handler, whose retries on each connection aren't coordinated with any other connection's — producing about 2x the spread between the fastest and slowest session.
+- **Split `resource_report()`.** Siblings share one pool, so every handle reports the same whole-pool estimate. When you sum across a fleet of siblings, count it once per pool, not once per handle.
+
+Because of the write-serialization trade, reach for this with **mostly-idle fleets** — sessions that are connected but not writing continuously, which is the common shape — rather than as a default replacement for a store per session. See [Memory and Thread Tuning](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig) for measured numbers.
+
 ### Features
 
 - **Connection pooling** - Uses Diesel r2d2 with pool size of 2

@@ -463,7 +463,7 @@ Event::LoggedOut(logout) => {
 
 ### StreamError
 
-**Emitted:** For unrecognized stream error codes (codes not matching 401, 409, 429, 503, 515, or 516)
+**Emitted:** For a `429` (rate-limited) stream error, and for unrecognized stream error codes (codes not matching 401, 409, 503, 515, or 516). Since [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), 429 is reported the same way as every other coded branch — WhatsApp Web's own handler has no arm for it either (only `500..600` is special-cased there), so this is an embedder-facing choice rather than a fidelity fix.
 
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
@@ -485,7 +485,7 @@ Event::StreamError(err) => {
 Recognized stream error codes emit specific events instead of `StreamError`:
 - **401** → `LoggedOut` (session invalidated)
 - **409** → `StreamReplaced` (another client connected)
-- **429** → No event emitted (reconnects with extended backoff)
+- **429** → `StreamError` (rate limited; also reconnects with extended backoff)
 - **503** → No event emitted (reconnects with normal backoff)
 - **515** → No event emitted (immediate reconnect, e.g., after pairing)
 - **516** → `LoggedOut` (device removed)
@@ -2298,8 +2298,6 @@ Event::OfflineSyncCompleted(sync) => {
 
 <Note>
 Offline sync happens automatically when the client reconnects after being disconnected. The client tracks progress internally and emits these events to notify your application of sync status.
-
-If the server does not complete offline sync within 60 seconds, the client forces completion via a timeout fallback — `OfflineSyncCompleted` is still emitted with the count of items processed so far. This prevents startup from blocking indefinitely.
 </Note>
 
 ### DirtyState

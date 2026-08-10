@@ -2445,6 +2445,7 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `pending_retries` | `usize` | Pending message retries |
 | `presence_subscriptions` | `usize` | Active presence subscriptions |
 | `app_state_key_requests` | `usize` | Pending app state key requests |
+| `app_state_key_cache` | `usize` | Expanded app-state keys the app-state processor holds in memory. No capacity cap and no TTL — one entry per distinct key id the server's patches reference, emptied only on reconnect. Zero until the first app-state sync builds the processor ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)) |
 | `app_state_syncing` | `usize` | Active app state sync operations |
 | `signal_sessions` | `CollectionStats` | Cached Signal sessions |
 | `signal_identities` | `CollectionStats` | Cached Signal identities |
@@ -2452,12 +2453,15 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `history_sync_tasks` | `CollectionStats` | Queued/running history-sync tasks and their logical compressed-payload byte sum. A shared `Bytes` slice may retain a larger backing allocation, whose capacity isn't exposed by the type |
 | `history_sync_tasks_peak` | `u64` | Lifetime high-water mark of queued/running history-sync tasks |
 | `history_sync_payload_bytes_peak` | `u64` | Lifetime high-water mark of logical compressed-payload bytes |
+| `inbound_commit_batch` | `CollectionStats` | Inbound messages accumulated for the next per-batch commit (400 messages / 4 MiB flush threshold), plus their encoded-byte sum — the largest per-client allocation this report names, by two orders of magnitude. "Accumulated", not "resident": a batch already handed to its commit is still in memory but no longer counted here. Live traffic commits immediately, so outside an offline drain this is normally zero ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)) |
+| `msg_secret_buffer` | `usize` | `messageSecret` captures buffered for write-behind persistence, from live receives and sends as well as an offline drain — a slow backend can saturate this with no drain in progress. The 4096-entry limit isn't a hard ceiling: a queueing future cancelled while backpressured force-buffers what it still holds, so this can read above the limit during teardown ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)) |
+| `pending_device_sync` | `usize` | Users awaiting a device-list refresh, deduped so one outstanding refresh suppresses a second request for the same user. Offline entries are drained at the end of the backlog; entries added by the *online* path are removed only by that same drain or by teardown, so on a connection with no offline drain this grows with the distinct users seen with an unknown device ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)) |
 | `chatstate_handlers` | `usize` | Registered chat state handlers |
 | `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
 | `stanza_interceptors` | `usize` | Registered stanza interceptors ([`add_stanza_interceptor`](#add_stanza_interceptor)). A handle that outlives its interest leaves one registered, and a leak here costs a walk on every stanza — which this count is what makes visible ([#1239](https://github.com/oxidezap/whatsapp-rust/pull/1239)) |
 | `plugin_stanza_interceptors` | `u64` | Behind the `plugins` feature: sum of every installed plugin's active [stanza interceptors](/advanced/plugins#stanza-interception) ([#1241](https://github.com/oxidezap/whatsapp-rust/pull/1241)) |
 
-`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field. `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown. This output includes an `--- In-flight history sync ---` section with the two peak fields above.
+`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field. `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown. This output includes an `--- In-flight history sync ---` section with the two peak fields above, followed by a `--- Transient retention ---` section for `inbound_commit_batch`, `msg_secret_buffer`, and `pending_device_sync` ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)).
 
 **Example:**
 

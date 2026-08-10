@@ -1047,7 +1047,7 @@ Each stream error sets `is_logged_in = false` and fires the `shutdown_notifier` 
 |------|--------|-------|-------------|
 | **401** | Disables auto-reconnect | `LoggedOut` | No — session invalid, must re-pair |
 | **409** | Disables auto-reconnect | `StreamReplaced` | No — prevents displacement loop |
-| **429** | Adds 5 to backoff counter | None | Yes — extended Fibonacci backoff |
+| **429** | Adds 5 to backoff counter | `StreamError` | Yes — extended Fibonacci backoff |
 | **503** | Normal handling | None | Yes — standard backoff |
 | **515** | Marks as expected disconnect | None | Yes — immediate, no backoff |
 | **516** | Disables auto-reconnect | `LoggedOut` | No — device removed |
@@ -1119,7 +1119,7 @@ Maximum:  900s (15 minutes)
 Jitter:   ±10%
 ```
 
-For rate-limited errors (429), the backoff counter is incremented by 5 before the normal increment, causing the delay to jump significantly on the next reconnection attempt.
+For rate-limited errors (429), the client increments the backoff counter by 5 before the normal increment, causing the delay to jump significantly on the next reconnection attempt. Since [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client also dispatches `Event::StreamError` for 429 — WA Web gives its UI no signal here at all (429 is outside the `500..600` range its handler special-cases), but an embedder has no UI to fall back on, so the rate limit is reported like every other coded stream error.
 
 **Stability-gated reset.** The backoff counter does not reset to its base immediately on a successful `<success>` authentication. Instead, `connected_at_ms` records the auth time, and the counter only resets when the *next* disconnect finds the connection was stable for at least `STABLE_CONNECTION_RESET_MS` (30s) — matching WA Web's `resetDelay`. A connection that authenticates and then immediately drops keeps escalating the backoff instead of resetting to 1s and retrying in a tight loop.
 

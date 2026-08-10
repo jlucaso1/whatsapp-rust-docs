@@ -495,7 +495,7 @@ The client handles specific `<stream:error>` codes from the WhatsApp server:
 |-------------------|---------|---------------|----------------|
 | **401** | Session invalidated (unauthorized) | `LoggedOut` | Disabled — must re-pair |
 | **409** | Another client connected (conflict) | `StreamReplaced` | Disabled — prevents displacement loop |
-| **429** | Rate limited (too many connections) | None (emits `Disconnected`) | Yes, with extended backoff (+5 steps) |
+| **429** | Rate limited (too many connections) | `StreamError` | Yes, with extended backoff (+5 steps) |
 | **503** | Service unavailable | None | Yes, normal backoff |
 | **515** | Expected disconnect (e.g., post-pairing) | None | Yes, immediate (no backoff) |
 | **516** | Device removed | `LoggedOut` | Disabled — must re-pair |
@@ -508,6 +508,8 @@ When you receive a `LoggedOut` or `StreamReplaced` event, auto-reconnect is perm
 ### Rate limiting (429)
 
 When the server returns a 429 stream error, the client bumps the internal backoff counter by 5 Fibonacci steps before reconnecting. This means the reconnection delay jumps significantly (e.g., from ~1s to ~13s on the first rate limit) to respect the server's throttling.
+
+As of [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client also dispatches an `Event::StreamError { code: "429", .. }` — WhatsApp Web itself gives no signal for this case (its handler only special-cases `500..600`), but an embedder has no UI to fall back on, so a rate-limited session is now observable the same way every other coded stream error is.
 
 ### General reconnection behavior
 

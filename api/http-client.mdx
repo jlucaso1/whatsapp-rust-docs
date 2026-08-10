@@ -319,22 +319,28 @@ See [custom backends — proxy and custom TLS](/guides/custom-backends#proxy-and
 
 ### Sharing one client across many sessions
 
-If your process runs many WhatsApp sessions, build **one** `UreqHttpClient` and hand a clone to each `BotBuilder::with_http_client` instead of constructing one per session. `UreqHttpClient` is `Clone`. Cloning it shares the underlying `ureq::Agent` — and therefore its connection pool — rather than copying it.
+If your process runs many WhatsApp sessions, build **one** `UreqHttpClient`, wrap it in an `Arc`, and give it to every builder with [`BotBuilder::with_http_client_arc`](/api/bot#with_http_client_arc) instead of constructing one per session. `UreqHttpClient` is also `Clone` — cloning it shares the underlying `ureq::Agent` and therefore its connection pool, so `with_http_client(shared_http_client.clone())` shares just as well — but `with_http_client_arc` hands every bot the exact same instance instead of a clone per builder, and it's the only route in once the client is already type-erased to `Arc<dyn HttpClient>`.
 
-This is worth doing for a process with pooled HTTP traffic — media, in practice. Media requests keep a CDN connection idle between downloads the same way the version fetch used to before it started sending `Connection: close` (see above), so sharing the agent pays that idle-connection cost once for the process instead of once per session.
+This is worth doing for a process with pooled HTTP traffic — media, in practice. Idle sessions pay nothing (the version fetch sends `Connection: close`, so it pools no connection either way), but a session that has transferred media retains its own connection-pool buffers — on the order of tens of KiB of live heap over plain HTTP, more over TLS — for as long as its `UreqHttpClient` lives. Building one per bot pays that cost once per session; sharing collapses the whole fleet onto one pool.
 
-You can share the connection with the same per-request auth guarantees as an unshared one. Media requests carry their own auth per request, and the client sends no cookies. A shared connection therefore doesn't leak anything between sessions beyond what the shared source IP already reveals — with two exceptions. A live pooled connection reused across sessions lets the CDN see both sessions' requests on the same TCP/TLS stream, a stronger correlation signal than a shared IP alone. TLS session resumption is the other: it lets a server correlate two sessions even across a source-IP change. Both are why sharing stays opt-in rather than the default. Sharing doesn't limit concurrency: ureq opens a new connection whenever no idle one matches the target host, so the pool only caps how many idle connections it retains, not how many requests can run at once.
+**Does sharing serialize requests? No.** `ureq::Agent` holds its pool lock only across checkout, never across the request itself, so concurrent requests through one shared client run concurrently — each still occupies its own `spawn_blocking` thread, exactly as it would with a client per bot.
+
+**What sharing does change: the idle pool is capped per agent, not per bot.** `UreqHttpClient::new()`'s default agent retains 3 idle connections and 2 per host — sized for one bot's traffic, not a fleet's. Share it across several concurrent workers and they now contend over that one small pool; measured at 8 concurrent workers, a shared default agent reused ~80% of connections versus ~95% with one client each. If you're sharing across meaningful concurrency, size a `ureq::Agent` for the fleet with [`with_agent`](#with_agent) before sharing it, raising **both** `max_idle_connections` and `max_idle_connections_per_host` — a fleet's media requests converge on the same CDN authority, so the per-host cap binds first and raising only the global one changes nothing. Sized for the fleet, reuse comes back in line with a client per bot while retention stays collapsed into one pool.
+
+You can share the connection with the same per-request auth guarantees as an unshared one. Media requests carry their own auth per request, and the client sends no cookies. A shared connection therefore doesn't leak anything between sessions beyond what the shared source IP already reveals — with two exceptions. A live pooled connection reused across sessions lets the CDN see both sessions' requests on the same TCP/TLS stream, a stronger correlation signal than a shared IP alone. TLS session resumption is the other: it lets a server correlate two sessions even across a source-IP change. Both are why sharing stays opt-in rather than the default.
 
 ```rust
+use std::sync::Arc;
+use whatsapp_rust::http::HttpClient;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
-let shared_http_client = UreqHttpClient::new();
+let shared_http_client: Arc<dyn HttpClient> = Arc::new(UreqHttpClient::new());
 let mut handles = Vec::new();
 
 for backend in session_backends {
     let bot = Bot::builder()
         .with_backend(backend)
-        .with_http_client(shared_http_client.clone())
+        .with_http_client_arc(shared_http_client.clone())
         // ...
         .build()
         .await?;

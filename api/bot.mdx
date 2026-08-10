@@ -125,7 +125,7 @@ where
     C: HttpClient + 'static
 ```
 
-Sets the HTTP client for media operations and version fetching (required).
+Sets the HTTP client for media operations and version fetching (required). The client is wrapped in its own `Arc` on each call, so that `Arc` isn't shared with any other builder — though the client value itself still can be: cloning a `Clone` client like `UreqHttpClient` shares its underlying `ureq::Agent` and connection pool, so `with_http_client(shared.clone())` already shares state today. Use [`with_http_client_arc`](#with_http_client_arc) to hand several bots the identical `Arc<dyn HttpClient>` instead of a clone apiece.
 
 <ParamField path="client" type="C: HttpClient" required>
   HTTP client implementation
@@ -139,6 +139,39 @@ let bot = Bot::builder()
     .with_http_client(UreqHttpClient::new())
     // ...
 ```
+
+### with_http_client_arc
+
+```rust
+pub fn with_http_client_arc(self, client: Arc<dyn HttpClient>) -> Self
+```
+
+Like [`with_http_client`](#with_http_client), but for a client that's already behind an `Arc<dyn HttpClient>`. Reach for this when a process runs several bots and you want them all pointing at one client — and one connection pool — instead of a clone apiece per builder.
+
+A single non-`Clone` client passed by value to one builder already works with `with_http_client`, since it carries no `Clone` bound. What `with_http_client` can't do is hand that same non-`Clone` client to a *second* builder — passed by value, it moves into the first one and no further. This setter covers that case, and it's also the only way in for a client that's already type-erased to `Arc<dyn HttpClient>` because the host chooses it at runtime.
+
+<ParamField path="client" type="Arc<dyn HttpClient>" required>
+  Already-shared HTTP client implementation
+</ParamField>
+
+**Example:**
+```rust
+use std::sync::Arc;
+use whatsapp_rust::http::{HttpClient, UreqHttpClient};
+
+let http_client: Arc<dyn HttpClient> = Arc::new(UreqHttpClient::new());
+
+for backend in session_backends {
+    let bot = Bot::builder()
+        .with_backend(backend)
+        .with_http_client_arc(http_client.clone())
+        // ...
+        .build()
+        .await?;
+}
+```
+
+See [sharing one client across many sessions](/api/http-client#sharing-one-client-across-many-sessions) for what a shared client costs and what it doesn't.
 
 ### with_runtime
 

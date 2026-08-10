@@ -265,13 +265,14 @@ Added in PR #1265. Drops the current connection and stays offline until [`resume
 | | drops the connection | comes back | on whose schedule |
 |---|---|---|---|
 | `disconnect()` / `logout()` | yes | never — a new `Client` is required | — |
-| `reconnect()` / `reconnect_immediately()` | yes | immediately | the library's |
+| `reconnect()` | yes | after a deliberate ~5s backoff | the library's |
+| `reconnect_immediately()` | yes | immediately | the library's |
 | `pause()` / `resume()` | yes | when asked | the caller's |
 
 The supervision loop started by [`run()`](#run) stays alive and parked, so the future a caller is awaiting keeps running, and the client is **not** terminal — it is between connections, on purpose, for as long as the application wants.
 
 **What it guarantees:**
-- Once this returns, the socket is closed and pending receipts and Signal state have been flushed on the same terms as `disconnect()`.
+- Once this returns, the published socket is closed and pending receipts and Signal state have been flushed on the same terms as `disconnect()`. An unpublished transport still completing its handshake closes at its next refusal check, as noted below.
 - **No connection will be opened by anyone** until resumed — `connect()` is refused with [`ConnectError::Paused`](/api/errors#connecterror) for as long as it holds, including an attempt already in flight when `pause()` was called, which is retracted rather than published.
 - Idempotent — pausing a paused client just tears down again.
 

@@ -849,7 +849,7 @@ fn unpack_nibble(packed: u8, position: u8) -> u8 {
 }
 ```
 
-Unpacking a run of packed values dispatches through a 256-entry byte-pair table — one lookup and a 2-byte store per input byte, rather than the two-shift/two-lookup scalar walk this snippet shows. This is an implementation detail of `read_packed`; the value mapping above still describes what each nibble decodes to for `NIBBLE_8`. `HEX_8` unpacking is the mirror of [`pack_hex`](#hex-packing) shown earlier — 0–9 to digits, 10–15 to `A`–`F` — not the nibble table above.
+Unpacking a run of packed values dispatches through a 256-entry byte-pair table — one lookup and a 2-byte store per input byte, rather than the two-shift/two-lookup scalar walk this snippet shows. This is an implementation detail of `read_packed`; the value mapping above still describes what each nibble decodes to for `NIBBLE_8`. `HEX_8` unpacking is the mirror of [`HEX_ENC`](#hex-packing) shown earlier — 0–9 to digits, 10–15 to `A`–`F` — not the nibble table above.
 
 Location: `wacore/binary/src/decoder.rs:400-450`
 

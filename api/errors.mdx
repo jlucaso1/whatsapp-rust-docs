@@ -29,6 +29,8 @@ ClientError          (transport/connection base — embedded by select domain er
 ConnectError          (Client::connect, wait_for_socket, wait_for_connected)
   ├── AlreadyConnected
   ├── NotActivated
+  ├── Shutdown
+  ├── Paused
   ├── Timeout { stage: ConnectStage, timeout: Duration }
   ├── Version(anyhow::Error)
   ├── Transport(anyhow::Error)

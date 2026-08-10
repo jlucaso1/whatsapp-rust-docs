@@ -319,9 +319,9 @@ See [custom backends — proxy and custom TLS](/guides/custom-backends#proxy-and
 
 ### Sharing one client across many sessions
 
-If your process runs many WhatsApp sessions, build **one** `UreqHttpClient`, wrap it in an `Arc`, and give it to every builder with [`BotBuilder::with_http_client_arc`](/api/bot#with_http_client_arc) instead of constructing one per session. `UreqHttpClient` is also `Clone` — cloning it shares the underlying `ureq::Agent` and therefore its connection pool, so `with_http_client(shared_http_client.clone())` shares just as well — but `with_http_client_arc` hands every bot the exact same instance instead of a clone per builder, and it's the only route in once the client is already type-erased to `Arc<dyn HttpClient>`.
+If your process runs many WhatsApp sessions, build **one** `UreqHttpClient`. Wrap it in an `Arc` and pass it to every builder with [`BotBuilder::with_http_client_arc`](/api/bot#with_http_client_arc) instead of constructing one per session. `UreqHttpClient` is also `Clone`, and cloning it shares the underlying `ureq::Agent` and therefore its connection pool — so `with_http_client(shared_http_client.clone())` shares just as well. Reach for `with_http_client_arc` instead once the client is already type-erased to `Arc<dyn HttpClient>`, since nothing lets that reach the by-value setter at all.
 
-This is worth doing for a process with pooled HTTP traffic — media, in practice. Idle sessions pay nothing (the version fetch sends `Connection: close`, so it pools no connection either way), but a session that has transferred media retains its own connection-pool buffers — on the order of tens of KiB of live heap over plain HTTP, more over TLS — for as long as its `UreqHttpClient` lives. Building one per bot pays that cost once per session; sharing collapses the whole fleet onto one pool.
+This is worth doing for a process with pooled HTTP traffic — media, in practice. An idle session retains no idle connection-pool buffers (the version fetch sends `Connection: close`, so it pools no connection either way — though a shared agent can still hold onto a small TLS session-resumption ticket, see [above](#the-version-fetch-does-not-pool-a-connection)), but a session that has transferred media retains its own connection-pool buffers — on the order of tens of KiB of live heap over plain HTTP, more over TLS — for as long as its `UreqHttpClient` lives. Building one per bot pays that cost once per session; sharing collapses the whole fleet onto one pool.
 
 **Does sharing serialize requests? No.** `ureq::Agent` holds its pool lock only across checkout, never across the request itself, so concurrent requests through one shared client run concurrently — each still occupies its own `spawn_blocking` thread, exactly as it would with a client per bot.
 
@@ -331,8 +331,7 @@ You can share the connection with the same per-request auth guarantees as an uns
 
 ```rust
 use std::sync::Arc;
-use whatsapp_rust::http::HttpClient;
-use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use whatsapp_rust::http::{HttpClient, UreqHttpClient};
 
 let shared_http_client: Arc<dyn HttpClient> = Arc::new(UreqHttpClient::new());
 let mut handles = Vec::new();

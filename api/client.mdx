@@ -509,7 +509,7 @@ When you receive a `LoggedOut` or `StreamReplaced` event, auto-reconnect is perm
 
 When the server returns a 429 stream error, the client bumps the internal backoff counter by 5 Fibonacci steps before reconnecting. This means the reconnection delay jumps significantly (e.g., from ~1s to ~13s on the first rate limit) to respect the server's throttling.
 
-As of [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client also dispatches an `Event::StreamError` (code `"429"`) — WhatsApp Web itself gives no signal for this case (its handler only special-cases `500..600`), but an embedder has no UI to fall back on, so a rate-limited session is now observable the same way every other coded stream error is. This is in addition to, not instead of, the `Event::Disconnected` the shared connection-loss path already dispatches once the socket actually closes — the 429 handler never marks the disconnect as expected, so it takes the same route every other unexpected drop does.
+As of [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client also dispatches an `Event::StreamError` for 429 (code `"429"`). WhatsApp Web's own handler gives no UI signal for this case — it only special-cases `500..600`. An embedder has no UI to fall back on, so 429 is now reported the same way every other coded stream error is. This event fires in addition to `Event::Disconnected`, not instead of it. The 429 handler never marks the disconnect as expected, so the shared connection-loss path still dispatches `Disconnected` once the socket closes, the same as every other unexpected drop.
 
 ### General reconnection behavior
 

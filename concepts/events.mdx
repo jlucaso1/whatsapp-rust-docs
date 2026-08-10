@@ -463,7 +463,7 @@ Event::LoggedOut(logout) => {
 
 ### StreamError
 
-**Emitted:** For a `429` (rate-limited) stream error, and for unrecognized stream error codes (codes not matching 401, 409, 503, 515, or 516). Since [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client reports 429 the same way as every other coded branch — WhatsApp Web's own handler has no arm for it either (only `500..600` is special-cased there), so this is an embedder-facing choice rather than a fidelity fix.
+**Emitted:** For unrecognized stream error codes (codes not matching 401, 409, 429, 503, 515, or 516). Since [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client also reports `429` (rate-limited) through this same event, even though 429 is itself a recognized, explicitly-handled code — WhatsApp Web's own handler has no arm for it either (only `500..600` is special-cased there), so this is an embedder-facing choice rather than a fidelity fix.
 
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
@@ -477,7 +477,7 @@ pub struct StreamError {
 **Usage:**
 ```rust
 Event::StreamError(err) => {
-    eprintln!("Unknown stream error: {} (raw: {:?})", err.code, err.raw);
+    eprintln!("Stream error: {} (raw: {:?})", err.code, err.raw);
 }
 ```
 

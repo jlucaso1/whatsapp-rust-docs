@@ -238,7 +238,7 @@ loop {
 }
 ```
 
-Stopping at a saved watermark instead skips messages, silently. SQLite hands out the rowid backing `seq` as `max(rowid) + 1`, so deleting the newest message gives its number to the next arrival, and clearing a chat entirely restarts at 1 — both routine, since delete-for-me and clear-chat go through this store. A message that lands at or below a remembered `seq` after either reads as already seen and never surfaces again under a watermark comparison.
+Stopping at a saved watermark instead skips messages, silently. SQLite hands out the rowid backing `seq` as `max(rowid) + 1`: deleting whichever row currently holds the table's highest rowid frees that number for the next arrival to reuse. `delete-for-me` and `clear-chat` — both routine, since they go through this store — delete rows scoped to one chat, not the whole per-device table, so a clear only resets the counter all the way to 1 when the chat it empties happened to hold every remaining row; with other chats still populated, it simply frees whatever rowids that chat held, which is already enough for a later insert to land at or below a remembered watermark. Either way, a message that does so reads as already seen and never surfaces again under a watermark comparison.
 
 Ordered by arrival rather than `timestamp_ms` for the same reason `MessageCursor` isn't reused here: history-sync backfill inserts old conversations at *new* arrival positions, so a poller keyed on `timestamp` files that backfill behind its watermark and never looks at it again, while an arrival-keyed one sees it at the head on its next pull.
 

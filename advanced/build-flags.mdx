@@ -17,9 +17,11 @@ This is opt-in for applications with a known deployment target, never a default.
 
 ```toml .cargo/config.toml
 [target.x86_64-unknown-linux-gnu]
-# Replace this triple with your actual compilation target — run `rustc -vV`
-# to find it. Keying this to the wrong triple (e.g. a musl, Windows, or
-# macOS target) is a silent no-op: Cargo simply won't read this section.
+# Replace this triple with whatever you pass to `cargo build --target` (or
+# set as `build.target`) — not your build host's triple, which is a
+# different thing when cross-compiling. Keying this to the wrong triple
+# (e.g. a musl, Windows, or macOS target) is a silent no-op: Cargo simply
+# won't read this section.
 rustflags = ["-Ctarget-feature=+bmi2,+avx2"]
 ```
 
@@ -27,13 +29,17 @@ If a `target.<triple>.rustflags` array for the same triple also exists in an anc
 
 ### Confirm every deployment target actually has both features
 
-Check by feature bit, not by the CPU's age or product name. Intel Silvermont and Goldmont, and AMD Jaguar and Puma, all lack one or both features — Goldmont and Puma despite being newer than Haswell — while other parts sold under the same Atom/Celeron/Pentium names do have both. Use an OS-filtered report, since a raw CPUID read can claim AVX2 is present when the OS hasn't enabled the YMM state it needs:
+Check by feature bit, not by the CPU's age or product name. Intel Silvermont and Goldmont, and AMD Jaguar and Puma, all lack one or both features — Goldmont and Puma despite being newer than Haswell — while other parts sold under the same Atom/Celeron/Pentium names do have both. Use an OS-filtered report, since a raw CPUID read can claim AVX2 is present when the OS hasn't enabled the YMM state it needs.
+
+On Linux, `/proc/cpuinfo` is already OS-filtered:
 
 ```bash
-# Nonzero exit if ANY logical CPU is missing either feature.
+# Linux only. Nonzero exit if ANY logical CPU is missing either feature.
 awk '/^flags/ { if (!/(^| )avx2( |$)/ || !/(^| )bmi2( |$)/) bad++ }
      END { exit bad > 0 }' /proc/cpuinfo
 ```
+
+On Windows or macOS, there's no equivalent file to grep — check from Rust itself with [`is_x86_feature_detected!`](https://doc.rust-lang.org/std/macro.is_x86_feature_detected.html), which queries the OS-filtered feature set on every platform stdlib supports.
 
 ### The build host needs the features too
 

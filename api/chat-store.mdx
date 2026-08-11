@@ -208,6 +208,45 @@ Newest-first, **keyset-paginated**: pass the [`MessageCursor`](#messagecursor) o
 `chat` accepts either of a 1:1 peer's identities (phone number or LID) — see [PN/LID identity aliasing](#pnlid-identity-aliasing).
 
 ```rust
+async fn messages_by_arrival(
+    &self,
+    after: Option<ArrivalCursor>,
+    limit: i64,
+) -> Result<Vec<StoredMessage>>;
+
+async fn messages_by_arrival_in_range(
+    &self,
+    after: Option<ArrivalCursor>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+    limit: i64,
+) -> Result<Vec<StoredMessage>>;
+```
+
+The session-wide feed: every chat interleaved, newest arrival first. This is the read a reconciliation consumer wants — "everything that landed since I last looked, across all chats" — which `chats` plus `messages` can otherwise only answer by paging every thread. `messages_by_arrival` is `messages_by_arrival_in_range` with no bounds; the ranged form additionally restricts the feed to a half-open wall-clock window, `since <= timestamp < until`, so adjacent windows tile without double-counting or dropping a row. Either bound may be `None`. A `limit` of zero, or negative (which SQLite reads as unbounded), returns nothing rather than the whole table.
+
+**Keyset-paginated by [`ArrivalCursor`](#arrivalcursor)**, not `MessageCursor` — the feed sorts by [`seq`](#storedmessage) alone rather than `(timestamp_ms, seq)`, so a cursor from `messages()` can't page it. The intended usage is a loop that re-enters at the head every pass (`after: None`) and walks down until it recognizes rows it already has, comparing by content — `(chat_jid, id)` — never by stopping at a remembered `seq`:
+
+```rust
+let mut after = None;
+loop {
+    let page = chat_store.messages_by_arrival(after, 100).await?;
+    let Some(oldest) = page.last() else { break };
+    after = Some(oldest.into());
+    if page.iter().all(|m| already_stored(&m.chat_jid, &m.id)) { break }
+    // ... take the ones that are new ...
+}
+```
+
+Stopping at a saved watermark instead skips messages, silently. SQLite hands out the rowid backing `seq` as `max(rowid) + 1`, so deleting the newest message gives its number to the next arrival, and clearing a chat entirely restarts at 1 — both routine, since delete-for-me and clear-chat go through this store. A message that lands at or below a remembered `seq` after either reads as already seen and never surfaces again under a watermark comparison.
+
+Ordered by arrival rather than `timestamp_ms` for the same reason `MessageCursor` isn't reused here: history-sync backfill inserts old conversations at *new* arrival positions, so a poller keyed on `timestamp` files that backfill behind its watermark and never looks at it again, while an arrival-keyed one sees it at the head on its next pull.
+
+A revoke, edit, star, or status change rewrites a row in place and leaves its `seq` untouched — `seq` is assigned once, by the insert — so a message this feed has already walked past never resurfaces no matter what happens to it afterward. A tombstone or an undecryptable placeholder is a row like any other and does appear, since it's inserted like one. A consumer that needs to react to mutations, not just arrivals, subscribes to [`StoreChange::Messages`](#storechange) instead.
+
+The wall-clock window is a filter over the arrival scan, not a seek, so cost tracks rows walked rather than rows returned — a narrow window over an old part of a large store still reads everything newer than it before yielding anything.
+
+```rust
 async fn message(&self, chat: &Jid, msg_id: &str) -> Result<Option<StoredMessage>>;
 async fn reactions(&self, chat: &Jid, msg_id: &str) -> Result<Vec<ReactionEntry>>;
 async fn receipts(&self, chat: &Jid, msg_id: &str) -> Result<Vec<ReceiptEntry>>;
@@ -331,7 +370,7 @@ pub struct StoredMessage {
     pub starred: bool,
     pub edited_at: Option<DateTime<Utc>>,
     pub revoked: bool,
-    pub seq: i64, // arrival order (SQLite rowid) — see MessageCursor
+    pub seq: i64, // arrival order (SQLite rowid) — see MessageCursor, ArrivalCursor
 }
 ```
 
@@ -351,6 +390,20 @@ The keyset-pagination cursor used by [`messages()`](#querying). `seq` is the row
 <Note>
 **Breaking change:** `MessageCursor.msg_id: String` is now `seq: i64`. The previous tiebreak sorted same-second messages (the server's timestamp is whole seconds, so a live back-and-forth often lands several on one value) by comparing message ids, which put a peer's message above a same-second reply most of the time — outgoing ids carry a fixed generated prefix that isn't comparable to a peer's. Same-second messages now resolve in arrival order instead. Always build a cursor with `MessageCursor::from(&stored_message)` rather than constructing the fields directly, and this change needs no code update on your side.
 </Note>
+
+### ArrivalCursor
+
+```rust
+pub struct ArrivalCursor {
+    pub seq: i64,
+}
+
+impl From<&StoredMessage> for ArrivalCursor { /* ... */ }
+```
+
+The keyset-pagination cursor used by [`messages_by_arrival()` and `messages_by_arrival_in_range()`](#querying). Separate from `MessageCursor` because the two feeds sort by different keys — a per-chat page orders by `(timestamp_ms, seq)`, the session-wide feed by `seq` alone — so a cursor from one cannot page the other; a type that silently ignored the timestamp half would be worse than a compile error. Build one with `ArrivalCursor::from(&stored_message)`.
+
+Same non-durability caveat as `MessageCursor.seq`, and one more besides: `seq` is good for a live paging session and must not be persisted across restarts, *and* must never be compared against a remembered value as a watermark — a new message can legitimately land at or below a `seq` you've already seen. See [Querying](#querying) for why.
 
 ### MessageKind
 
@@ -471,6 +524,7 @@ pub type Result<T> = std::result::Result<T, ChatStoreError>;
 - **Reaction removal is a tombstone, not a delete.** Removing a reaction (an empty-emoji event, or [`record_reaction`](#recording-local-amendments) with `emoji: ""`) keeps the row so a stale, older reaction arriving later — e.g. from a history chunk — can't resurrect it. [`reactions()`](#querying) hides tombstoned rows.
 - **PN/LID splits heal, they don't recur.** Once live traffic (or [`reconcile_chat`](#pnlid-identity-aliasing)) merges a peer's phone-number- and LID-keyed rows into one thread, later traffic under either identity keeps routing to that same thread — it can't re-split.
 - **Companion-device traffic never forks a thread.** A device-suffixed identity is normalized to the bare peer before it reaches routing, so a linked device can't materialize a chat, contact, or receipt row of its own — see [Companion-device identities](#companion-device-identities).
+- **The arrival feed tracks insertion, not mutation.** [`messages_by_arrival`/`messages_by_arrival_in_range`](#querying) order by `seq`, assigned once at insert and left untouched by any later edit, revoke, star, or status change — so a row the feed has already walked past never resurfaces there no matter what happens to it afterward. Subscribe to [`StoreChange::Messages`](#storechange) for that; the feed answers "what has arrived", not "what has changed".
 
 ## See also
 

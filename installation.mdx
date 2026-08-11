@@ -178,6 +178,30 @@ whatsapp-rust uses Rust **edition 2024** and declares an MSRV of **1.94**, both 
   The project's own `rust-toolchain.toml` still pins a nightly compiler (`nightly-2026-06-16`), but only for internal, binary-size-focused build flags — `-Zshare-generics` and lld/ICF linking, set workspace-wide in `.cargo/config.toml`, plus `-Zbuild-std` for the Docker image build only (see [Docker deployment](#docker-deployment) below) — not for any language feature the published crates need. That pin governs building the whatsapp-rust workspace itself; it has no effect on your project when you depend on whatsapp-rust from crates.io or git.
 </Note>
 
+## Performance: codegen flags
+
+whatsapp-rust sets no `-C target-feature` of its own. A published crate cannot know which CPU it will run on, and the flag has no runtime fallback — a binary built with a feature the CPU lacks doesn't refuse to start, it traps with `SIGILL` the first time execution reaches an instruction using it, which can be well after a clean startup and readiness probe.
+
+If you control your own deployment target, you can set the flag yourself. On the Signal (libsignal) paths, `+bmi2,+avx2` together are worth roughly **a fifth of the per-message instruction count** — `+bmi2` speeds up the field arithmetic (`mulx`), and `+avx2` vectorizes the constant-time table lookups used in fixed-base scalar multiplication; the two are additive because they touch disjoint code.
+
+```toml Cargo.toml
+# <your app>/.cargo/config.toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-Ctarget-feature=+bmi2,+avx2"]   # append to whatever this key already holds
+```
+
+<Warning>
+  Confirm every deployment CPU reports both features before setting this — by an OS-filtered check such as `/proc/cpuinfo`, not by the CPU's age or product name. Some cores sold under the same Atom/Celeron/Pentium or comparable AMD names lack one or both (e.g. Silvermont, Goldmont, Jaguar, Puma), while other parts under the same names have both. A raw CPUID bit isn't enough for `+avx2` either — the OS also needs YMM state enabled, which `/proc/cpuinfo` already accounts for on Linux.
+</Warning>
+
+<Note>
+  Cargo takes rustflags from exactly one source (`CARGO_ENCODED_RUSTFLAGS`, then `RUSTFLAGS`, then `target.<triple>.rustflags`, then `build.rustflags`) — they never merge, so setting `RUSTFLAGS` for any other reason silently discards this entry. Also, unless you pass an explicit `--target`, cargo applies `target.<triple>.rustflags` to build scripts and proc macros too, so the build host needs both features as well as the deployment host.
+</Note>
+
+Do not use `-Ctarget-cpu=native` as a shortcut: it's unmeasurable under Valgrind-based profilers (it emits instructions they can't decode on AVX-512 hosts) and was observed *slower* than the explicit flag list on real hardware, likely from the frequency cost of touching wide vector units.
+
+For `wasm32-unknown-unknown`, `-Ctarget-feature=+simd128` is safe to add if every runtime you deploy to supports the SIMD proposal — check the runtime, not the CPU, since an unsupporting engine rejects a module using `v128` at validation time rather than trapping at an instruction.
+
 ## 32-bit target support
 
 whatsapp-rust uses [`portable-atomic`](https://crates.io/crates/portable-atomic) instead of `std::sync::atomic` for 64-bit atomic operations. This means the library works on **32-bit targets** (ARM32, MIPS, RISC-V 32, etc.) where `AtomicU64` is not natively available — `portable-atomic` provides a software fallback automatically.

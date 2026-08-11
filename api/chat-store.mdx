@@ -223,7 +223,9 @@ async fn messages_by_arrival_in_range(
 ) -> Result<Vec<StoredMessage>>;
 ```
 
-The session-wide feed: every chat interleaved, newest arrival first. This is the read a reconciliation consumer wants — "everything that landed since I last looked, across all chats" — which `chats` plus `messages` can otherwise only answer by paging every thread. `messages_by_arrival` is `messages_by_arrival_in_range` with no bounds; the ranged form additionally restricts the feed to a half-open wall-clock window, `since <= timestamp < until`, so adjacent windows tile without double-counting or dropping a row. Either bound may be `None`. A `limit` of zero, or negative (which SQLite reads as unbounded), returns nothing rather than the whole table.
+The session-wide feed: every chat interleaved, newest arrival first. Use it when you want "everything that landed since I last looked, across all chats" — `chats` plus `messages` can otherwise only answer that by paging every thread. `messages_by_arrival` is `messages_by_arrival_in_range` with no bounds; the ranged form additionally restricts the feed to a half-open wall-clock window, `since <= timestamp < until`, so two windows queried at the same instant tile without double-counting or dropping a row. Either bound may be `None`. A `limit` of zero, or negative (which SQLite reads as unbounded), returns nothing rather than the whole table.
+
+That tiling guarantee holds for a single scan, not across two queries taken at different times: an outgoing row's `timestamp_ms` can be corrected after insert (see [Outgoing timestamp reconciliation](#outgoing-timestamp-reconciliation)), independently of `seq`, so a message can cross a window boundary between an earlier and a later query — missed by both queries, or counted by both, depending on which way it moved. Page by `seq` with `messages_by_arrival` instead of chaining wall-clock windows if you need a guarantee that survives a timestamp changing underneath you.
 
 **Keyset-paginated by [`ArrivalCursor`](#arrivalcursor)**, not `MessageCursor` — the feed sorts by [`seq`](#storedmessage) alone rather than `(timestamp_ms, seq)`, so a cursor from `messages()` can't page it. The intended usage is a loop that re-enters at the head every pass (`after: None`) and walks down until it recognizes rows it already has, comparing by content — `(chat_jid, id)` — never by stopping at a remembered `seq`:
 
@@ -237,6 +239,8 @@ loop {
     // ... take the ones that are new ...
 }
 ```
+
+Normalize `chat_jid` through the same PN/LID alias resolution `messages`/`message` use before comparing `(chat_jid, id)` — a stored row's `chat_jid` itself is not stable. [PN/LID reconciliation](#pnlid-identity-aliasing) merges a split pair by rewriting the losing side's rows onto the surviving key in place, and like every other mutation, that rewrite leaves `seq` untouched. A message you've already walked past can therefore reappear later under a different `chat_jid`; comparing the raw column reads that as a new message and reprocesses it.
 
 Stopping at a saved watermark instead skips messages, silently. SQLite hands out the rowid backing `seq` as `max(rowid) + 1`: deleting whichever row currently holds the table's highest rowid frees that number for the next arrival to reuse. `delete-for-me` and `clear-chat` — both routine, since they go through this store — delete rows scoped to one chat, not the whole per-device table, so a clear only resets the counter all the way to 1 when the chat it empties happened to hold every remaining row; with other chats still populated, it simply frees whatever rowids that chat held, which is already enough for a later insert to land at or below a remembered watermark. Either way, a message that does so reads as already seen and never surfaces again under a watermark comparison.
 

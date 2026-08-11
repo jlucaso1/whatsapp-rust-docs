@@ -1,16 +1,16 @@
 ---
 title: "Codegen flags for performance"
-description: "Optional target-feature flags a consumer application can set for roughly a fifth less per-message instruction count on the Signal paths — and why whatsapp-rust does not set them for you."
+description: "Optional target-feature flags you can set for roughly a fifth fewer instructions on the Signal encrypt paths — and why whatsapp-rust does not set them for you."
 ---
 
 ## Overview
 
-whatsapp-rust sets no `-C target-feature` in its own build. It is published to crates.io and cannot know what CPU it will run on, and the flag has no runtime fallback: a binary built with a feature the CPU lacks does not degrade, it crashes with `SIGILL`.
+whatsapp-rust sets no `-C target-feature` in its own build. The crate is published to crates.io and cannot know what CPU it will run on, and the flag has no runtime fallback: a binary built with a feature the CPU lacks does not degrade, it crashes with `SIGILL`.
 
-An application that *does* control its own deployment target can trade that safety for speed itself. Setting `+bmi2,+avx2` measures at roughly **a fifth of the per-message instruction count** on the Signal encrypt/decrypt paths.
+If you control your own deployment target, you can trade that safety for speed yourself. Setting `+bmi2,+avx2` measures at roughly **a fifth fewer instructions** on the measured Signal encrypt paths — group and DM encryption; decryption is not separately benchmarked here.
 
 <Warning>
-This is opt-in for applications with a known deployment target, never a default. Only set this if every machine that will run your binary — build host included, see below — reports both features.
+This is opt-in for applications with a known deployment target, never a default. If you build without an explicit `--target`, every machine that will build *or* run your binary needs both features — see [below](#the-build-host-needs-the-features-too).
 </Warning>
 
 ## Recommendation
@@ -36,13 +36,13 @@ awk '/^flags/ { if (!/(^| )avx2( |$)/ || !/(^| )bmi2( |$)/) bad++ }
 
 ### The build host needs the features too
 
-A `[target.x86_64-unknown-linux-gnu]` rustflags entry reaches build scripts and proc macros whenever cargo is invoked without an explicit `--target`, because that's when cargo unifies host and target compilation. Building on an older machine for a newer fleet then fails during the build itself. Either require both features on the builder, or pass `--target x86_64-unknown-linux-gnu` explicitly to split host tools from the target build.
+A `[target.x86_64-unknown-linux-gnu]` rustflags entry reaches your build scripts and proc macros too, but only when you invoke cargo without an explicit `--target` — that's when cargo unifies host and target compilation. If your builder is an older machine building for a newer fleet, that build then fails on itself. Either require both features on the builder, or pass `--target x86_64-unknown-linux-gnu` explicitly: that splits host tools from the target build, and the rustflags entry no longer reaches them.
 
 ## Why not a library default
 
 The failure mode is worse than a refusal to start. A load-time ISA check does exist in principle (glibc 2.33+'s `GNU_PROPERTY_X86_ISA_1_NEEDED`), but `-C target-feature` doesn't emit that property — so there's no guaranteed check at startup. The process starts normally, passes its readiness probe, and traps whenever execution first reaches an emitted instruction, which can be well after boot and into live traffic. A clean startup is not evidence of compatibility.
 
-That's an acceptable trade for an application with a known, homogeneous fleet. It's not one a published library can make on a consumer's behalf.
+That's an acceptable trade if you have a known, homogeneous fleet. It's not one a published library can make on your behalf.
 
 ## Measured impact
 

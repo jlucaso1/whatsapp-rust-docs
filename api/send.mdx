@@ -663,7 +663,7 @@ Since v0.6 admin revoke fan-outs are propagated correctly to every recipient dev
 </Note>
 
 <Note>
-An admin revoke (`RevokeType::Admin`) no longer forces a full sender-key redistribution. It now takes the same [per-device incremental targeting](/advanced/signal-protocol#per-device-sender-key-tracking) as every other group message: the sender key goes only to devices that don't already have it, and `<participants>`/`<device-identity>` are omitted entirely once the group is warm. Previously every admin revoke re-sent the sender key to the whole device list regardless of tracking state, which on a large warm group could turn a few-hundred-byte revoke into tens of kilobytes. A cold group (or one mid-rotation) still distributes to every device, same as any other cold send. No code changes are needed; this only affects stanza size on the wire.
+When you send an admin revoke (`RevokeType::Admin`), the client no longer forces a full sender-key redistribution to deliver it. It uses the same [per-device incremental targeting](/advanced/signal-protocol#per-device-sender-key-tracking) as any other group message: devices already tracked as holding the key are skipped, except your own companion devices, which are never marked `has_key=true` and so are always included. `<participants>`/`<device-identity>` are omitted entirely once the rest of the group is warm. Previously every admin revoke re-sent the sender key to the whole device list regardless of tracking state, which on a large warm group could turn a few-hundred-byte revoke into tens of kilobytes. A cold group (or one mid-rotation) still gets full distribution, same as any other cold send. No code changes are needed; this only affects stanza size on the wire.
 </Note>
 
 ---

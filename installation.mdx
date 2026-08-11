@@ -184,11 +184,15 @@ whatsapp-rust sets no `-C target-feature` of its own. A published crate cannot k
 
 If you control your own deployment target, you can set the flag yourself. On the Signal (libsignal) paths, `+bmi2,+avx2` together are worth roughly **a fifth of the per-message instruction count** — `+bmi2` speeds up the field arithmetic (`mulx`), and `+avx2` vectorizes the constant-time table lookups used in fixed-base scalar multiplication; the two are additive because they touch disjoint code.
 
-```toml Cargo.toml
-# <your app>/.cargo/config.toml
+```toml .cargo/config.toml
+# in <your app>'s own repo, not whatsapp-rust's
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-Ctarget-feature=+bmi2,+avx2"]   # append to whatever this key already holds
 ```
+
+<Warning>
+  The `[target.*]` key must match your actual build target, or it's silently ignored. `x86_64-unknown-linux-gnu` above covers a glibc host build; the Alpine-based [Docker build](#build-from-source) on this page compiles against musl, so that image needs `[target.x86_64-unknown-linux-musl]` (or `aarch64-unknown-linux-musl` on arm64) instead.
+</Warning>
 
 <Warning>
   Confirm every deployment CPU reports both features before setting this — by an OS-filtered check such as `/proc/cpuinfo`, not by the CPU's age or product name. Some cores sold under the same Atom/Celeron/Pentium or comparable AMD names lack one or both (e.g. Silvermont, Goldmont, Jaguar, Puma), while other parts under the same names have both. A raw CPUID bit isn't enough for `+avx2` either — the OS also needs YMM state enabled, which `/proc/cpuinfo` already accounts for on Linux.

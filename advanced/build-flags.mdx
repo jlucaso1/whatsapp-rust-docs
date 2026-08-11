@@ -5,7 +5,7 @@ description: "Optional target-feature flags you can set for roughly a fifth fewe
 
 ## Overview
 
-whatsapp-rust sets no `-C target-feature` in its own build. The crate is published to crates.io, so it cannot know what CPU it will run on. The flag has no runtime fallback: a binary built with a feature the CPU lacks does not degrade, it crashes with `SIGILL`.
+whatsapp-rust sets no `-C target-feature` in its own build. The crate is published to crates.io, so it cannot know what CPU it will run on. The flag has no runtime fallback: a binary built with a feature the CPU lacks does not degrade, it crashes on the first illegal instruction — `SIGILL` on Unix, `STATUS_ILLEGAL_INSTRUCTION` on Windows.
 
 If you control your own deployment target, you can trade that safety for fewer instructions executed yourself. Setting `+bmi2,+avx2` measures at roughly **a fifth fewer instructions** (via callgrind, not wall-clock time) on the measured Signal encrypt paths — group and DM encryption; decryption is not separately benchmarked here.
 
@@ -25,7 +25,7 @@ This is opt-in for applications with a known deployment target, never a default.
 rustflags = ["-Ctarget-feature=+bmi2,+avx2"]
 ```
 
-If a `target.<triple>.rustflags` array for the same triple also exists in an ancestor directory's config or in `$CARGO_HOME/config.toml`, Cargo joins the arrays across that hierarchy rather than replacing one with the other. What does *not* combine is the choice between rustflags *sources*: Cargo takes rustflags from exactly one of `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `target.<triple>.rustflags`, or `build.rustflags`, in that priority order, and an invocation that sets `RUSTFLAGS` for any other reason silently discards the config entry above — the feature flags need to be merged into that variable instead.
+If a `target.<triple>.rustflags` array for the same triple also exists in an ancestor directory's config or in `$CARGO_HOME/config.toml`, Cargo joins the arrays across that hierarchy rather than replacing one with the other. What does *not* combine is the choice between rustflags *sources*. Cargo takes rustflags from exactly one of `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `target.<triple>.rustflags`, or `build.rustflags`, in that priority order. So an invocation that sets `RUSTFLAGS` for any other reason silently discards the config entry above — merge the feature flags into that variable instead in that case.
 
 ### Confirm every deployment target actually has both features
 
@@ -43,7 +43,7 @@ On Windows or macOS, there's no equivalent file to grep — check from Rust itse
 
 ### The build host needs the features too
 
-A `[target.x86_64-unknown-linux-gnu]` rustflags entry reaches your build scripts and proc macros too, but only when you invoke cargo without an explicit `--target` — that's when cargo unifies host and target compilation. If your builder is an older machine building for a newer fleet, that build then fails on itself. Either require both features on the builder, or pass `--target x86_64-unknown-linux-gnu` explicitly: that splits host tools from the target build, and the rustflags entry no longer reaches them.
+A `[target.x86_64-unknown-linux-gnu]` rustflags entry reaches your build scripts and proc macros too, but only when you invoke cargo without an explicit `--target` — that's when cargo unifies host and target compilation. `-Ctarget-feature` only tells LLVM it's *allowed* to emit those instructions in code built for the host, not that any given build script or proc macro actually will — so if your builder is an older machine building for a newer fleet, the build itself may or may not fail, depending on what those host artifacts happen to contain. Either require both features on the builder, or pass `--target x86_64-unknown-linux-gnu` explicitly: that splits host tools from the target build, and the rustflags entry no longer reaches them.
 
 ## Why not a library default
 

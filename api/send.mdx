@@ -662,6 +662,10 @@ client.revoke_message(
 Since v0.6 admin revoke fan-outs are propagated correctly to every recipient device on retry: the original stanza carries `edit="8"` (`EditAttribute::AdminRevoke`), and `prepare_dm_retry_stanza` now accepts that attribute and re-emits it on each retry stanza. Previously the retry path stripped the edit attribute, so a single dropped device fan-out left the message un-deleted on that device. The library infers the right attribute from the protocol-message type via `EditAttribute::infer_from_message(...)`, so applications calling `revoke_message` need no code changes.
 </Note>
 
+<Note>
+An admin revoke (`RevokeType::Admin`) no longer forces a full sender-key redistribution. It now takes the same [per-device incremental targeting](/advanced/signal-protocol#per-device-sender-key-tracking) as every other group message: the sender key goes only to devices that don't already have it, and `<participants>`/`<device-identity>` are omitted entirely once the group is warm. Previously every admin revoke re-sent the sender key to the whole device list regardless of tracking state, which on a large warm group could turn a few-hundred-byte revoke into tens of kilobytes. A cold group (or one mid-rotation) still distributes to every device, same as any other cold send. No code changes are needed; this only affects stanza size on the wire.
+</Note>
+
 ---
 
 ## pin_message

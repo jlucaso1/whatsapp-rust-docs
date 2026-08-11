@@ -69,7 +69,8 @@
                   "advanced/metrics",
                   "advanced/inbound-durability",
                   "advanced/retry-admission",
-                  "advanced/plugins"
+                  "advanced/plugins",
+                  "advanced/build-flags"
                 ]
               }
             ]

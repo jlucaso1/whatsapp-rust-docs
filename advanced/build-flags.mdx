@@ -1,0 +1,77 @@
+---
+title: "Codegen flags for performance"
+description: "Optional target-feature flags you can set for roughly a fifth fewer instructions on the Signal encrypt paths — and why whatsapp-rust does not set them for you."
+---
+
+## Overview
+
+whatsapp-rust sets no `-C target-feature` in its own build. The crate is published to crates.io, so it cannot know what CPU it will run on. The flag has no runtime fallback: a binary built with a feature the CPU lacks does not degrade, it crashes on the first illegal instruction — `SIGILL` on Unix, `STATUS_ILLEGAL_INSTRUCTION` on Windows.
+
+If you control your own deployment target, you can trade that safety for fewer instructions executed yourself. Setting `+bmi2,+avx2` measures at roughly **a fifth fewer instructions** (via callgrind, not wall-clock time) on the measured Signal encrypt paths — group and DM encryption; decryption is not separately benchmarked here.
+
+<Warning>
+This is opt-in for applications with a known deployment target, never a default. If you build without an explicit `--target`, every machine that will build *or* run your binary needs both features — see [below](#the-build-host-needs-the-features-too).
+</Warning>
+
+## Recommendation
+
+```toml .cargo/config.toml
+[target.x86_64-unknown-linux-gnu]
+# Replace this triple with whatever you pass to `cargo build --target` (or
+# set as `build.target`) — not your build host's triple, which is a
+# different thing when cross-compiling. Keying this to the wrong triple
+# (e.g. a musl, Windows, or macOS target) is a silent no-op: Cargo simply
+# won't read this section.
+rustflags = ["-Ctarget-feature=+bmi2,+avx2"]
+```
+
+If a `target.<triple>.rustflags` array for the same triple also exists in an ancestor directory's config or in `$CARGO_HOME/config.toml`, Cargo joins the arrays across that hierarchy rather than replacing one with the other. What does *not* combine is the choice between rustflags *sources*. Cargo takes rustflags from exactly one of `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `target.<triple>.rustflags`, or `build.rustflags`, in that priority order. So an invocation that sets `RUSTFLAGS` for any other reason silently discards the config entry above — merge the feature flags into that variable instead in that case.
+
+### Confirm every deployment target actually has both features
+
+Check by feature bit, not by the CPU's age or product name. Intel Silvermont and Goldmont, and AMD Jaguar and Puma, all lack one or both features — Goldmont and Puma despite being newer than Haswell — while other parts sold under the same Atom/Celeron/Pentium names do have both. Use an OS-filtered report, since a raw CPUID read can claim AVX2 is present when the OS hasn't enabled the YMM state it needs.
+
+On Linux, `/proc/cpuinfo` is already OS-filtered:
+
+```bash
+# Linux only. Nonzero exit if ANY logical CPU is missing either feature.
+awk '/^flags/ { if (!/(^| )avx2( |$)/ || !/(^| )bmi2( |$)/) bad++ }
+     END { exit bad > 0 }' /proc/cpuinfo
+```
+
+On Windows or macOS, there's no equivalent file to grep — check from Rust itself with [`is_x86_feature_detected!`](https://doc.rust-lang.org/std/macro.is_x86_feature_detected.html), which queries the OS-filtered feature set on every platform stdlib supports.
+
+### The build host needs the features too
+
+A `[target.x86_64-unknown-linux-gnu]` rustflags entry reaches your build scripts and proc macros too, but only when you invoke cargo without an explicit `--target` — that's when cargo unifies host and target compilation. `-Ctarget-feature` only tells LLVM it's *allowed* to emit those instructions in code built for the host, not that any given build script or proc macro actually will — so if your builder is an older machine building for a newer fleet, the build itself may or may not fail, depending on what those host artifacts happen to contain. Either require both features on the builder, or pass `--target x86_64-unknown-linux-gnu` explicitly: that splits host tools from the target build, and the rustflags entry no longer reaches them.
+
+## Why not a library default
+
+The failure mode is worse than a refusal to start. A load-time ISA check does exist in principle (glibc 2.33+'s `GNU_PROPERTY_X86_ISA_1_NEEDED`), but `-C target-feature` doesn't emit that property — so there's no guaranteed check at startup. The process starts normally, passes its readiness probe, and traps whenever execution first reaches an emitted instruction, which can be well after boot and into live traffic. A clean startup is not evidence of compatibility.
+
+That's an acceptable trade if you have a known, homogeneous fleet. It's not one a published library can make on your behalf.
+
+## Measured impact
+
+Instruction counts (Ir, via callgrind) on this repository's own Signal benches, as a delta against a build with no `target-feature` set:
+
+| Flag | Key gen | Sig create | Sig verify | Group encrypt | DM encrypt | CPU floor (Intel / AMD) |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `+bmi2` | −11.2% | −11.1% | −6.6% | −11.6% | −12.3% | Haswell 2013 / Excavator 2015 |
+| `+avx2` | −13.5% | −12.4% | −1.7% | −11.9% | −8.0% | Haswell 2013 / Excavator 2015 |
+| **`+bmi2,+avx2`** | **−24.1%** | **−22.9%** | **−8.2%** | **−23.0%** | **−19.7%** | Haswell 2013 / Excavator 2015 |
+
+The two flags are additive because they touch disjoint code: `+bmi2` speeds up `FieldElement51` arithmetic (LLVM emits `mulx`), while `+avx2` vectorizes the constant-time fixed-base lookup table scan — a different function entirely.
+
+`+adx` was measured and rejected: it adds nothing over `+bmi2` alone (0.0004% apart on a full send benchmark) while raising the CPU floor a generation, because `FieldElement51`'s limbs never form the carry chain `adcx`/`adox` would pay for.
+
+`-Ctarget-cpu=native` was measured and rejected too — on the measurement host it emitted AVX-512 that made the binary die under Valgrind-based profiling (including CodSpeed CI), and prior wall-clock A/B testing found it slower than the explicit `+bmi2,+avx2` list on the same host family.
+
+## wasm32
+
+For `wasm32-unknown-unknown`, the equivalent is `-Ctarget-feature=+simd128`. Whether you can use it depends on the runtimes you deploy to, not on any CPU: a module using `v128` fails WebAssembly *validation* outright on an engine without the SIMD proposal. whatsapp-rust builds clean with the flag set. No wasm-side speed or size numbers are published here — this workspace declares no `cdylib` and has no wasm benchmark harness to measure one.
+
+## Related
+
+- [Signal protocol internals](/advanced/signal-protocol) — the code paths these flags affect.
+- Full measurement methodology (callgrind commands, per-function attribution, rejected alternatives) lives in [`agent_docs/build_flags.md`](https://github.com/oxidezap/whatsapp-rust/blob/main/agent_docs/build_flags.md) in the source repo.

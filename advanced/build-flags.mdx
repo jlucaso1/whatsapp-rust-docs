@@ -5,9 +5,9 @@ description: "Optional target-feature flags you can set for roughly a fifth fewe
 
 ## Overview
 
-whatsapp-rust sets no `-C target-feature` in its own build. The crate is published to crates.io and cannot know what CPU it will run on, and the flag has no runtime fallback: a binary built with a feature the CPU lacks does not degrade, it crashes with `SIGILL`.
+whatsapp-rust sets no `-C target-feature` in its own build. The crate is published to crates.io, so it cannot know what CPU it will run on. The flag has no runtime fallback: a binary built with a feature the CPU lacks does not degrade, it crashes with `SIGILL`.
 
-If you control your own deployment target, you can trade that safety for speed yourself. Setting `+bmi2,+avx2` measures at roughly **a fifth fewer instructions** on the measured Signal encrypt paths — group and DM encryption; decryption is not separately benchmarked here.
+If you control your own deployment target, you can trade that safety for fewer instructions executed yourself. Setting `+bmi2,+avx2` measures at roughly **a fifth fewer instructions** (via callgrind, not wall-clock time) on the measured Signal encrypt paths — group and DM encryption; decryption is not separately benchmarked here.
 
 <Warning>
 This is opt-in for applications with a known deployment target, never a default. If you build without an explicit `--target`, every machine that will build *or* run your binary needs both features — see [below](#the-build-host-needs-the-features-too).
@@ -17,12 +17,13 @@ This is opt-in for applications with a known deployment target, never a default.
 
 ```toml .cargo/config.toml
 [target.x86_64-unknown-linux-gnu]
-# Append to whatever this key already holds — the assignment replaces the
-# array, it does not merge with another [target.*] block or with build.rustflags.
+# Replace this triple with your actual compilation target — run `rustc -vV`
+# to find it. Keying this to the wrong triple (e.g. a musl, Windows, or
+# macOS target) is a silent no-op: Cargo simply won't read this section.
 rustflags = ["-Ctarget-feature=+bmi2,+avx2"]
 ```
 
-Cargo takes rustflags from exactly one source, in priority order: `CARGO_ENCODED_RUSTFLAGS`, then `RUSTFLAGS`, then `target.<triple>.rustflags`, then `build.rustflags`. They never combine — an invocation that sets `RUSTFLAGS` for any other reason silently discards the config entry above, and the feature flags need to be merged into that variable instead.
+If a `target.<triple>.rustflags` array for the same triple also exists in an ancestor directory's config or in `$CARGO_HOME/config.toml`, Cargo joins the arrays across that hierarchy rather than replacing one with the other. What does *not* combine is the choice between rustflags *sources*: Cargo takes rustflags from exactly one of `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `target.<triple>.rustflags`, or `build.rustflags`, in that priority order, and an invocation that sets `RUSTFLAGS` for any other reason silently discards the config entry above — the feature flags need to be merged into that variable instead.
 
 ### Confirm every deployment target actually has both features
 

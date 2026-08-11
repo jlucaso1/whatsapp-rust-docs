@@ -62,7 +62,7 @@ The two flags are additive because they touch disjoint code: `+bmi2` speeds up `
 
 ## wasm32
 
-For `wasm32-unknown-unknown`, the equivalent is `-Ctarget-feature=+simd128`, gated on the runtimes you deploy to accepting it — a module using `v128` fails WebAssembly *validation* outright on an engine without the SIMD proposal, which is a per-runtime decision rather than a per-CPU one. whatsapp-rust builds clean with the flag set; no wasm-side speed or size numbers are published, since this workspace declares no `cdylib` and has no wasm benchmark harness to measure one.
+For `wasm32-unknown-unknown`, the equivalent is `-Ctarget-feature=+simd128`. Whether you can use it depends on the runtimes you deploy to, not on any CPU: a module using `v128` fails WebAssembly *validation* outright on an engine without the SIMD proposal. whatsapp-rust builds clean with the flag set. No wasm-side speed or size numbers are published here — this workspace declares no `cdylib` and has no wasm benchmark harness to measure one.
 
 ## Related
 

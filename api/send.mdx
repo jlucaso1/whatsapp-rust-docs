@@ -276,7 +276,10 @@ pub struct SendOptions {
     /// Override the auto-generated message ID.
     /// Useful for resending a failed message with the same ID or idempotency.
     pub message_id: Option<String>,
-    /// Extra XML child nodes on the message stanza.
+    /// Extra XML child nodes on the message stanza. A node the send already
+    /// derives from the message content — `<biz>`, and `<bot>` on a DM — is
+    /// refused with [`SendError::InvalidRequest`] rather than stacked next to
+    /// the derived one, which the receiving client renders as nothing.
     pub extra_stanza_nodes: Vec<Node>,
     /// Ephemeral duration in seconds. Sets `contextInfo.expiration` on the
     /// message for disappearing messages support.
@@ -298,6 +301,10 @@ pub struct SendOptions {
 
 <ParamField path="extra_stanza_nodes" type="Vec<Node>" default="[]">
   Additional XML nodes to include in the message stanza. Used for advanced protocol features like quoted replies, mentions, or custom metadata.
+
+  <Note>
+    A node whose tag collides with one this send derives from the message content — `<biz>` for a native-flow interactive message, or `<bot>` for a business DM (see [Automatic business node detection](#automatic-business-node-detection)) — is refused with `SendError::InvalidRequest` instead of being appended alongside the derived node. Sending both used to produce a stanza with two `<biz>` (or `<bot>`) children that the recipient renders as an empty message, with no error on either end. A tag this send doesn't derive, and `<meta>` in particular, is unaffected and passes through unchanged.
+  </Note>
 </ParamField>
 
 <ParamField path="ephemeral_expiration" type="Option<u32>" default="None">
@@ -364,6 +371,10 @@ let result = client.send_message_with_options(
     options
 ).await?;
 ```
+
+<Note>
+This only applies to a tag the send already derives — a plain custom tag like `custom-tag` above never collides. Passing a caller-supplied `<biz>` alongside an interactive message that also derives one (see [Automatic business node detection](#automatic-business-node-detection)) returns `SendError::InvalidRequest` instead of sending a stanza with two.
+</Note>
 
 ---
 
@@ -1002,7 +1013,7 @@ When you call `send_message` or `send_message_with_options`, the library automat
 | view-once media (image/video/voice wrapped as view-once) | Adds the `<meta view_once="true"/>` attribute so recipients render the one-time bubble |
 | group send to tagged members (member labels) | Adds the `appdata` / `tag_reason` meta attributes |
 
-This means you can construct a raw `wa::Message` with any of these fields set and pass it directly to `send_message_with_options` — the correct protocol metadata is derived automatically. Any nodes you provide via `extra_stanza_nodes` in `SendOptions` are merged with the auto-inferred nodes.
+This means you can construct a raw `wa::Message` with any of these fields set and pass it directly to `send_message_with_options` — the correct protocol metadata is derived automatically. Any nodes you provide via `extra_stanza_nodes` in `SendOptions` are merged with the auto-inferred nodes — except a caller node repeating one of these tags (`<biz>`, and DM `<bot>`), which is refused instead; see [`extra_stanza_nodes`](#sendoptions) and [Automatic business node detection](#automatic-business-node-detection).
 
 <Note>
   The `pin_message()` and `unpin_message()` convenience methods already handle this internally. Auto-detection is most useful when you build a `wa::Message` manually and send it through `send_message` or `send_message_with_options`.
@@ -1067,6 +1078,10 @@ The `<biz>` node is emitted in one of three shapes depending on the button conte
 
 <Note>
   The `<biz>` node is merged with any other auto-inferred metadata (like `<meta>` nodes for polls or events) and any `extra_stanza_nodes` you provide in `SendOptions`. The library also checks inside `document_with_caption_message` wrappers for interactive messages.
+</Note>
+
+<Note>
+  On a DM (not a group), deriving a `<biz>` node also emits a `<bot biz_bot="1"/>` node immediately before it. If `extra_stanza_nodes` in `SendOptions` supplies its own `<biz>` — or, on a DM, its own `<bot>` — the send is refused with `SendError::InvalidRequest` naming the colliding tag, instead of sending a stanza with two. The two nodes can encode different intentions (e.g. a caller-supplied `native_flow_name` that disagrees with the one this button derives), and there's no way to know which one the server or recipient would honor, so neither side silently wins — see [`extra_stanza_nodes`](#sendoptions). A caller node on a tag this send doesn't derive, such as `<meta>`, is unaffected.
 </Note>
 
 ---

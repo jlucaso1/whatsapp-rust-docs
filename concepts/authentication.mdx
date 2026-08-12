@@ -421,7 +421,7 @@ The proto's `UNKNOWN` (wire `'0'`) is intentionally absent — WA Web never emit
 
 #### Mapping from `PlatformType`
 
-`companion_web_client_type_for_platform` maps each `wa::device_props::PlatformType` to a wire variant. Web platforms map to their browser variant (Chrome, Firefox, Edge, etc.). `Desktop` maps to `Electron`. The Android `PlatformType` variants (`AndroidPhone`, `AndroidTablet`, `AndroidAmbiguous`) map to **`Chrome`** — that's what real WA Web on Chrome-Android emits and what the server accepts without attestation. To request the Android letter codes (`'d'`/`'e'`/`'f'`) explicitly, set `PairCodeOptions::platform_id`. iOS, AR/VR, Wear OS, and the proto's `UNKNOWN` collapse to `OtherWebClient`.
+`companion_web_client_type_for_platform` maps each `wa::device_props::PlatformType` to a wire variant. Web platforms map to their browser variant (Chrome, Firefox, Edge, etc.). `Desktop` maps to `Electron`. The Android `PlatformType` variants (`AndroidPhone`, `AndroidTablet`, `AndroidAmbiguous`) map to **`Chrome`** — that's what real WA Web on Chrome-Android emits and what the server accepts without attestation. To request the Android letter codes (`'d'`/`'e'`/`'f'`) explicitly, set `PairCodeOptions::platform_id`. iOS, AR/VR, Wear OS, `WAIL`, and the proto's `UNKNOWN` collapse to `OtherWebClient` — the Android letters need attestation this crate cannot produce, and `'0'` is server-rejected.
 
 #### `companion_platform_display`
 

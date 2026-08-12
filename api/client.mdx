@@ -2529,7 +2529,7 @@ if let Some(alloc) = report.alloc {
 pub fn device_memo_stats(&self) -> DeviceMemoStats
 ```
 
-Per-term hit/miss counts for the two device-list memos the group-send path depends on — the group-devices memo and the SKDM-targets memo — cumulative since the client was built. Always on, no feature gate: recording is one indexed relaxed atomic add per resolver call, and the reporting types are dropped by LTO in a binary that never calls this method.
+Per-term hit/miss counts for the two device-list memos the group-send path depends on — the group-devices memo and the SKDM-targets memo — cumulative since the client was built. Always on, no feature gate. Recording is one indexed relaxed atomic add per resolver call. The reporting types are dropped by LTO in a binary that never calls this method.
 
 The two memos are chained: `resolve_skdm_targets_memoized` compares the `Arc` that `resolve_group_devices_memoized` returned, so a group-memo recompute forces `skdm_targets.miss_devices` regardless of the SKDM memo's own three miss terms. Read `group_devices` first — `skdm_targets` only carries independent information once the group half is hitting.
 

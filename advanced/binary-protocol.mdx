@@ -249,6 +249,12 @@ assert!(!jid.is_group());    // false — not a @g.us JID
 
 The trait also exposes basic accessor methods (`user() -> &str`, `server() -> Server`, `device() -> u16`, `integrator() -> u16`) that work uniformly across owned and borrowed JID types. Additional helper methods `is_pn()` and `is_lid()` are available directly on `Jid` for the most common server checks.
 
+<Warning>
+  `is_same_user_as` compares only the `user` part and ignores `server`. A LID and a PN can share the same digits by coincidence while addressing two different accounts, so `is_same_user_as` will report them equal. Don't use it to decide "is this JID mine" or "is this JID the same account as that other one" — a peer's LID whose digits happen to spell your own phone number is not you.
+
+  For that, use `Jid::is_same_chat_as(&self, other: &Jid) -> bool` (an inherent method on `Jid`, not part of `JidExt`): it additionally compares `server` and `integrator`, and `agent` where the server renders it, while staying insensitive to `device`. This is also what WA Web's own `isSameAccountAndAddressingMode` keys on.
+</Warning>
+
 Location: `wacore/binary/src/jid.rs:304-363`
 
 ### NodeBuilder API

@@ -1078,7 +1078,7 @@ The `<biz>` node is emitted in one of three shapes depending on the button conte
 `bot_invoke_message` continues to emit a `<bot>` stanza child instead of `<biz>` and is unaffected by the above shapes.
 
 <Note>
-  The `<biz>` node is merged with any other auto-inferred metadata (like `<meta>` nodes for polls or events) and any `extra_stanza_nodes` you provide in `SendOptions`. The library also checks inside `document_with_caption_message` wrappers for interactive messages.
+  The `<biz>` node is merged with any other auto-inferred metadata (like `<meta>` nodes for polls or events) and with any non-colliding `extra_stanza_nodes` you provide in `SendOptions` — see the next note for the `<biz>`/`<bot>` collision case. The library also checks inside `document_with_caption_message` wrappers for interactive messages.
 </Note>
 
 <Note>

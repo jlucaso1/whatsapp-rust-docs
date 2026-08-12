@@ -2365,6 +2365,8 @@ See [Signal Protocol - Signed pre-key rotation (RotateKeyJob)](/advanced/signal-
 
 Three on-`Client` surfaces answer "what does this session cost?" without any feature flag: always-on wire I/O counters via [`stats()`](#stats), an on-demand client-only memory breakdown via [`memory_report()`](#memory_report), and an on-demand unified estimate — client plus storage, transport, and HTTP — via [`resource_report()`](#resource_report). All three are dependency-free and safe to call once per client even when running many clients in one process. For CPU/custom attribution (e.g. per-session allocator tracking), see [`BotBuilder::with_task_instrument`](/api/bot#with_task_instrument) and [`BotBuilder::with_alloc_meter`](/api/bot#with_alloc_meter).
 
+A fourth, always-on surface answers a different question — "are the group-send device-list memos actually being hit?" — via [`device_memo_stats()`](#device_memo_stats).
+
 ### stats
 
 ```rust
@@ -2529,9 +2531,9 @@ if let Some(alloc) = report.alloc {
 pub fn device_memo_stats(&self) -> DeviceMemoStats
 ```
 
-Per-term hit/miss counts for the two device-list memos the group-send path depends on — the group-devices memo and the SKDM-targets memo — cumulative since the client was built. Always on, no feature gate. Recording is one indexed relaxed atomic add per resolver call. The reporting types are dropped by LTO in a binary that never calls this method.
+Per-term hit/miss counts for the two device-list memos the group-send path depends on — the group-devices memo and the SKDM-targets memo — cumulative since the client was built. Always on, no feature gate. Recording is one indexed relaxed atomic add per resolver call, with one exception: a call whose resolved SKDM target set can't be memoized also bumps the separate `not_stored` counter, so that call pays two adds (see `not_stored` below). The reporting types are dropped by LTO in a binary that never calls this method.
 
-The two memos are chained: `resolve_skdm_targets_memoized` compares the `Arc` that `resolve_group_devices_memoized` returned, so a group-memo recompute forces `skdm_targets.miss_devices` regardless of the SKDM memo's own three miss terms. Read `group_devices` first — `skdm_targets` only carries independent information once the group half is hitting.
+The two memos are chained: `resolve_skdm_targets_memoized` compares the `Arc` that `resolve_group_devices_memoized` returned, so a group-memo recompute forces `skdm_targets.miss_devices` — but only when an SKDM entry already exists for the group. If none does yet (first send, or an eviction), that call reports `miss_absent` instead, regardless of what the group memo just did. Read `group_devices` first — `skdm_targets` only carries independent information once the group half is hitting.
 
 **`GroupDevicesMemoStats` fields** (`#[non_exhaustive]`):
 
@@ -2560,7 +2562,7 @@ The two memos are chained: `resolve_skdm_targets_memoized` compares the `Arc` th
 | `bypassed` | `u64` | Call didn't consult the memo |
 | `resolve_failed` | `u64` | The device resolution this call depends on returned `Err`, so no memo term was evaluated |
 
-`calls()` sums every field except `not_stored` (which describes the store, not a lookup outcome). `hit_rate()` returns `hits / calls()`, `resolve_failed` included in the denominator on purpose — folding failed resolutions out would let a client whose group sends are failing upstream read a healthy rate — or `None` before the first call.
+`calls()` sums every field except `not_stored`, which describes the store rather than a lookup outcome. `hit_rate()` returns `hits / calls()`. `resolve_failed` is included in that denominator on purpose — folding failed resolutions out would let a client whose group sends are failing upstream read a healthy rate. `hit_rate()` returns `None` before the first call.
 
 `DeviceMemoStats` implements `Display` for a one-line-per-memo summary, and `since(&self, earlier: &Self) -> Self` saturating-subtracts an earlier snapshot to scope a window without resetting the counters (a reset would race a send in flight).
 

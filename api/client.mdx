@@ -2523,6 +2523,63 @@ if let Some(alloc) = report.alloc {
   Storage, transport, and HTTP reports are supplied by the trait implementations behind `Client` — see [`DeviceStore::resource_report`](/api/store#resource_report), [`Transport::resource_report`](/api/transport#resource_report), and [`HttpClient::resource_report`](/api/http-client#resource_report). `AllocSnapshot`, `StorageResourceReport`, `TransportResourceReport`, and `HttpResourceReport` are re-exported from `wacore::stats`; all four are also re-exported from the `whatsapp_rust` crate root.
 </Note>
 
+### device_memo_stats
+
+```rust
+pub fn device_memo_stats(&self) -> DeviceMemoStats
+```
+
+Per-term hit/miss counts for the two device-list memos the group-send path depends on — the group-devices memo and the SKDM-targets memo — cumulative since the client was built. Always on, no feature gate: recording is one indexed relaxed atomic add per resolver call, and the reporting types are dropped by LTO in a binary that never calls this method.
+
+The two memos are chained: `resolve_skdm_targets_memoized` compares the `Arc` that `resolve_group_devices_memoized` returned, so a group-memo recompute forces `skdm_targets.miss_devices` regardless of the SKDM memo's own three miss terms. Read `group_devices` first — `skdm_targets` only carries independent information once the group half is hitting.
+
+**`GroupDevicesMemoStats` fields** (`#[non_exhaustive]`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `hits` | `u64` | Entry present, `GroupInfo` identity matched, generation unchanged |
+| `restamps` | `u64` | Generation moved but every change since provably missed this group; served the same devices a hit would, at the cost of the `unchanged_for` scan |
+| `miss_absent` | `u64` | No entry for the group — first send, or a capacity/TTL eviction (the memo holds 64 groups) |
+| `miss_group_info` | `u64` | An entry existed but was built from a different `Arc<GroupInfo>` |
+| `miss_topology` | `u64` | The device topology changed in a way that could have touched this group |
+| `bypassed` | `u64` | Call didn't consult the memo at all (store-backed registry/mapping caches make its freshness contract unenforceable) |
+
+`calls()` sums all six fields; `served_rate()` returns `(hits + restamps) / calls()` — the share resolved without a per-member registry fan-out — or `None` before the first call.
+
+**`SkdmTargetsMemoStats` fields** (`#[non_exhaustive]`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `hits` | `u64` | Memo hit |
+| `miss_absent` | `u64` | No entry — first send for this group, or an eviction |
+| `miss_devices` | `u64` | The resolved device-set `Arc` differs from the memoized one — the cascade term a group-memo recompute always forces |
+| `miss_map` | `u64` | The sender-key device map was rebuilt (a warm-mark write invalidated it) |
+| `miss_map_generation` | `u64` | Same map `Arc`, advanced generation — an in-place cold flip, e.g. a retry receipt's `markForgetSenderKey` |
+| `miss_sender` | `u64` | A different sending identity (PN↔LID re-addressing, or a re-pair) |
+| `not_stored` | `u64` | A resolved target set that couldn't be memoized, so the *next* call can't hit — but doesn't guarantee that call reports `miss_absent`: a stale entry left in place can never become valid again (the map generation only moves forward) and is reported under whichever term still fails |
+| `bypassed` | `u64` | Call didn't consult the memo |
+| `resolve_failed` | `u64` | The device resolution this call depends on returned `Err`, so no memo term was evaluated |
+
+`calls()` sums every field except `not_stored` (which describes the store, not a lookup outcome). `hit_rate()` returns `hits / calls()`, `resolve_failed` included in the denominator on purpose — folding failed resolutions out would let a client whose group sends are failing upstream read a healthy rate — or `None` before the first call.
+
+`DeviceMemoStats` implements `Display` for a one-line-per-memo summary, and `since(&self, earlier: &Self) -> Self` saturating-subtracts an earlier snapshot to scope a window without resetting the counters (a reset would race a send in flight).
+
+**Example:**
+
+```rust
+let before = client.device_memo_stats();
+// ... send a batch of group messages ...
+let window = client.device_memo_stats().since(&before);
+println!("{window}");
+if let Some(rate) = window.skdm_targets.hit_rate() {
+    println!("SKDM memo hit rate: {:.1}%", rate * 100.0);
+}
+```
+
+<Note>
+  `DeviceMemoStats`, `GroupDevicesMemoStats`, and `SkdmTargetsMemoStats` are public in `whatsapp_rust::client` but, unlike `StatsSnapshot`/`MemoryReport`/`ResourceReport`, not re-exported from the crate root. Added in [#1292](https://github.com/oxidezap/whatsapp-rust/pull/1292) as a characterization tool: measured against that PR's fixtures, both memos hit on every warm send at group sizes 8–512, so the instrumentation shipped without a corresponding fix.
+</Note>
+
 ## Error Types
 
 ```rust

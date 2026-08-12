@@ -250,9 +250,11 @@ assert!(!jid.is_group());    // false — not a @g.us JID
 The trait also exposes basic accessor methods (`user() -> &str`, `server() -> Server`, `device() -> u16`, `integrator() -> u16`) that work uniformly across owned and borrowed JID types. Additional helper methods `is_pn()` and `is_lid()` are available directly on `Jid` for the most common server checks.
 
 <Warning>
-  `is_same_user_as` compares only the `user` part and ignores `server`. A LID and a PN can share the same digits by coincidence while addressing two different accounts, so `is_same_user_as` will report them equal. Don't use it to decide "is this JID mine" or "is this JID the same account as that other one" — a peer's LID whose digits happen to spell your own phone number is not you.
+  `is_same_user_as` compares only the `user` part. It ignores `server`. A LID and a PN can share the same digits by coincidence while addressing two different accounts. `is_same_user_as` reports such a pair as equal anyway. Don't use it to decide "is this JID mine" or "is this JID the same account as that other one" — a peer's LID whose digits happen to spell your own phone number is not you.
 
-  For that, use `Jid::is_same_chat_as(&self, other: &Jid) -> bool` (an inherent method on `Jid`, not part of `JidExt`): it additionally compares `server` and `integrator`, and `agent` where the server renders it, while staying insensitive to `device`. This is also what WA Web's own `isSameAccountAndAddressingMode` keys on.
+  For a same-namespace comparison, use `Jid::is_same_chat_as(&self, other: &Jid) -> bool` instead. It's an inherent method on `Jid`, not part of `JidExt`. It additionally compares `server` and `integrator`, and `agent` where the server renders it. It stays insensitive to `device`.
+
+  `is_same_chat_as` still compares `server`, so it does *not* treat an account's PN and its LID as the same chat — they're different namespaces for the same account. If your own account has both, "is this JID mine" means comparing the candidate against each known identity separately and combining the results with `||`, not a single `is_same_chat_as` call. This is the same rule WA Web's `isSameAccountAndAddressingMode` follows.
 </Warning>
 
 Location: `wacore/binary/src/jid.rs:304-363`

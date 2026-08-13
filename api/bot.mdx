@@ -1291,6 +1291,10 @@ It is consulted only after the in-core [`MsgSecretStore`](/api/store#msgsecretst
 `MsgSecretPolicy`, `MsgSecretRetention`, and `OriginalMessageResolver` are re-exported from the crate root (`whatsapp_rust::{MsgSecretPolicy, MsgSecretRetention, OriginalMessageResolver}`). The default `Managed` policy is bounded and needs no tuning for most apps.
 </Note>
 
+<Note>
+**`InMemoryBackend` only:** on top of the horizons above, the built-in `InMemoryBackend` caps retained secrets at 8,192 rows so wasm32 linear memory (whose allocator never returns freed pages) can't grow without bound. Once the cap is hit it evicts the soonest-to-expire rows first, always by whole message — a message's sender-alias rows are kept or dropped together — and never touches a permanent (`expires_at = 0`, i.e. `Full`-policy) row. A chat that receives more than 8,192 live secrets since process start can lose add-on decryption (edits, poll votes, bot replies) on its oldest messages. `SqliteStore`, the production backend, has no such cap and honors the full `msg_secret_retention` horizons unmodified. See [whatsapp-rust#1297](https://github.com/oxidezap/whatsapp-rust/pull/1297).
+</Note>
+
 #### Custom cache store overrides
 
 You can replace any of the pluggable caches with a custom `CacheStore` backend (e.g., Redis):

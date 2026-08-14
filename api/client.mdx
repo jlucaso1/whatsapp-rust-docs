@@ -2386,12 +2386,21 @@ Cumulative wire I/O and activity counters for this client session, always record
 | `messages_sent` | `u64` | Outgoing message send attempts (DM/group/status) |
 | `messages_received` | `u64` | Incoming messages successfully decrypted and dispatched |
 | `events_dropped` | `u64` | Inbound events shed because a consumer's bounded delivery mailbox was full (opt-in [`EventDelivery::Ordered`](/api/bot#with_event_delivery)) — a non-zero, growing value flags a consumer that can't keep up |
+| `devices_unkeyed_no_bundle` | `u64` | Keying attempts where the prekey fetch came back with no bundle for the device and named no reason ([#1304](https://github.com/oxidezap/whatsapp-rust/pull/1304)) |
+| `devices_unkeyed_session_setup` | `u64` | Keying attempts the session phase could not turn into a session: the local session store failed to answer, or a bundle arrived and building the Signal session from it failed ([#1304](https://github.com/oxidezap/whatsapp-rust/pull/1304)) |
+| `devices_unkeyed_rejected` | `u64` | Keying attempts the server refused, by name or as part of a batch-wide refusal — the per-code and named-vs-batch split is on the `metrics` facade ([#1304](https://github.com/oxidezap/whatsapp-rust/pull/1304)) |
+| `devices_unkeyed_fetch_failed` | `u64` | Keying attempts whose prekey fetch never produced an answer at all — timeout, dropped socket, 429/5xx. The counter to watch during an outage ([#1304](https://github.com/oxidezap/whatsapp-rust/pull/1304)) |
+| `devices_unkeyed_encrypt` | `u64` | Keying attempts that had a session and still produced no ciphertext — points at a stored session that exists and cannot be used, which is what session repair operates on ([#1304](https://github.com/oxidezap/whatsapp-rust/pull/1304)) |
 | `reconnects` | `u64` | Reconnect attempts started by the auto-reconnect loop |
 | `reconnect_errors` | `u32` | Consecutive reconnect failures (resets on success) |
 | `resends_throttled` | `u64` | Outbound resends dropped by the per-chat rate limiter — surfaces storm chats |
 | `last_data_received_ms` | `u64` | Timestamp (ms since UNIX epoch) of the last received data |
 
 Most counters are monotonic over the client's lifetime and survive reconnects. `last_data_received_ms` is the exception: it resets on connection teardown. `reconnect_errors` also resets, to `0` on every successful reconnect (it counts *consecutive* failures, not a lifetime total).
+
+<Note>
+`StatsSnapshot::devices_unkeyed_total()` sums the five `devices_unkeyed_*` fields above — every keying attempt this client lost, whatever the reason ([#1304](https://github.com/oxidezap/whatsapp-rust/pull/1304)). Usually the device is dropped and the send continues to everyone else, which is unchanged behavior (parity with WA Web). A batch-wide `406` or a `Required` distribution that cannot reach every target aborts the send instead; those attempts are still counted here. Either way, these counters make the state measurable instead of visible only in a log line. They count **attempts, not distinct devices**: a cold DM runs session establishment twice, so one send can record the same device more than once, and a retry that fails the same way counts again. See [`wa_unkeyable_device_total`](/advanced/metrics#counters) for the per-reason breakdown by label.
+</Note>
 
 <Note>
 **Breaking**: `last_data_sent_ms` was removed — nothing internal ever read it, and stamping it cost a clock read on every frame written (the client's hottest path, and a call out of the module on wasm32/embedded targets). `frames_sent` answers "is it still sending?"; there is no drop-in replacement for "when did I last write?" — an embedder that needs that timestamp should stamp it at its own send call site rather than have the wire path pay for it.

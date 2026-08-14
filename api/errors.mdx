@@ -15,6 +15,8 @@ As of PR #1257, `IqError::ServerError` also carries `response: RejectionStanza` 
 
 As of PR #1261, `wacore::bot_message::decrypt_bot_message` (and its private decryption helper) return `Result<T, BotMessageError>` instead of `anyhow::Result<T>`. Unlike the entries above, this is **a breaking change to `wacore`'s public API**, not an additive one — a caller matching on the previous `anyhow::Error` needs to switch to the typed enum. See [`BotMessageError`](#botmessageerror) below.
 
+As of PR #1299, a DM send that reaches no device of its recipient now fails instead of silently succeeding. A DM's recipient devices and the sender's own companion devices used to share one participant list, and the old guard only checked whether that list was empty. That missed one shape: every recipient device fails to encrypt (no session, a refused pre-key bundle), but a sender's own companion still succeeds. The stanza then went out carrying only the sender's own devices. The server acked it, and `send_message` returned `Ok` even though the recipient received nothing. Two conditions now surface as `SendError::NoRecipientDevice(wacore::send::NoRecipientDeviceError)` instead of `Ok` or the `Internal` catch-all: every resolved recipient device failing to encrypt, and the fan-out resolving no recipient device at all for a destination that isn't one of the sender's own identities. See [`NoRecipientDeviceError`](#norecipientdeviceerror) below.
+
 ## Error hierarchy
 
 ```
@@ -247,9 +249,37 @@ pub enum SendError {
     #[error("invalid send request: {0}")]
     InvalidRequest(String),
     #[error("{0}")]
+    NoRecipientDevice(#[source] wacore::send::NoRecipientDeviceError),
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
+
+`NoRecipientDevice` — added in PR #1299. A DM had no recipient device available: every resolved recipient device failed encryption, or no recipient device resolved for a non-self destination, so nothing was sent. Distinct from a transport failure: the connection is fine and the message id was never on the wire. The useful retry is `SendOptions::default().with_device_freshness(Freshness::Refresh)` passed to [`send_message_with_options`](/api/send#send_message_with_options), which forces the recipient's device list to re-resolve instead of reading the cached one. An immediate resend with the same (cached) options would hit the same empty result. Wraps [`NoRecipientDeviceError`](#norecipientdeviceerror), the typed cause from `wacore`, reachable via `source()`.
+
+#### NoRecipientDeviceError
+
+Added in PR #1299, in `wacore::send`. The typed cause carried by `SendError::NoRecipientDevice`.
+
+```rust
+#[non_exhaustive]
+pub enum NoRecipientDeviceError {
+    #[error("encryption failed for all {attempted} recipient device(s)")]
+    EncryptionFailed {
+        attempted: usize,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("no device resolved for the recipient")]
+    Unresolved,
+}
+```
+
+**Variants:**
+- `EncryptionFailed` — every device resolved for the recipient was attempted and none produced an `<enc>` node. `attempted` is the device count; `source` is the first per-device failure (a missing session, a refused pre-key bundle), reachable via `source()`.
+- `Unresolved` — the fan-out held no device for the recipient to begin with, so nothing was attempted and there is no per-device cause. Only returned when the destination is not one of the sender's own identities — an empty recipient half for a self chat (note to self) is the normal shape, since every resolved device is the sender's own, and that case still returns `Ok`.
+
+Not returned when every one of the sender's *own* devices fails to encrypt in a self chat — that stays on the pre-existing `Internal` catch-all, since it isn't about a recipient at all.
 
 ### GroupError
 
@@ -924,3 +954,31 @@ match decrypt_bot_message(message_secret, enc_iv, enc_payload, &ctx) {
     },
 }
 ```
+
+### From PR #1299: a DM with no recipient device now returns a typed error
+
+Previously, a DM where every recipient device failed to encrypt could still return `Ok` if one of the sender's own companion devices succeeded — the stanza went out carrying only the sender's own devices, the server acked it, and the caller had no way to tell the message never reached its recipient. That case, and the case where the fan-out resolved no recipient device at all (for a non-self destination), now return `Err(SendError::NoRecipientDevice(..))` instead:
+
+```rust
+// Before — `Ok` did not guarantee the recipient could read this message
+match client.send_message(to.clone(), message).await {
+    Ok(result) => { /* looked like success even with no recipient device reached */ }
+    Err(e) => eprintln!("send failed: {e}"),
+}
+
+// After — match the new variant to detect the specific failure
+use whatsapp_rust::{Freshness, SendError, send::SendOptions};
+match client.send_message(to.clone(), message.clone()).await {
+    Ok(result) => { /* ... */ }
+    Err(SendError::NoRecipientDevice(e)) => {
+        eprintln!("nothing reached the recipient: {e}");
+        // Force a device-list refresh before retrying — an immediate resend
+        // with the same (cached) options would hit the same empty result.
+        let options = SendOptions::default().with_device_freshness(Freshness::Refresh);
+        client.send_message_with_options(to.clone(), message, options).await?;
+    }
+    Err(e) => eprintln!("send failed: {e}"),
+}
+```
+
+`SendError` is `#[non_exhaustive]`, so this new variant does not break a `match` that already ends in a catch-all arm. See [`NoRecipientDeviceError`](#norecipientdeviceerror) for the two variants it can carry.

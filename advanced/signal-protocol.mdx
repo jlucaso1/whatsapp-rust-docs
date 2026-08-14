@@ -1969,6 +1969,8 @@ WA Web has a bare-`<enc>` fast path for single primary device (`WAWebSendMsgCrea
 
 <Note>
 **Fail-fast on total encrypt failure (v0.6).** If per-device encryption fails for *every* recipient device, the DM send now returns an error instead of emitting a stanza with an empty participant list (which the server would silently swallow, making the message look sent when it wasn't). A partial failure — some devices encrypt, some don't — still sends to the devices that succeeded.
+
+**Recipient and own-device results are checked separately (PR [#1299](https://github.com/oxidezap/whatsapp-rust/pull/1299)).** The recipient half and the own-companion half of the fan-out write into the same `<participants>` list. The emptiness check above only ever caught the case where *neither* half produced a node. It missed a stanza built from own companions alone: every recipient device failed, one own companion still encrypted, and the list was non-empty. The server acked that stanza, and the recipient never received it. The recipient half is now checked immediately after it runs, before the own-device half is attempted at all. An empty recipient half (for a non-self destination) or an all-failed recipient half returns `SendError::NoRecipientDevice` — see [`NoRecipientDeviceError`](/api/errors#norecipientdeviceerror). No own-companion sender chain advances for a stanza that isn't going out. The residual empty-participants guard above is now reachable only for a self chat where every own device fails.
 </Note>
 
 **DM per-device locking:**

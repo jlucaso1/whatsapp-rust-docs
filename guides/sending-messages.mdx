@@ -925,9 +925,14 @@ match client.send_message(jid.clone(), message).await {
     Err(SendError::InvalidRequest(msg)) => {
         eprintln!("Malformed request: {}", msg);
     }
+    Err(SendError::NoRecipientDevice(e)) => {
+        eprintln!("No recipient device available; refresh the device list before retrying: {}", e);
+    }
     Err(e) => eprintln!("Send error: {}", e),
 }
 ```
+
+A DM where every recipient device failed to encrypt — or where the fan-out resolved no recipient device at all for a non-self destination — returns `SendError::NoRecipientDevice` instead of reporting success. (A note to self with no recipient half is the normal shape, since every resolved device is your own, and still returns `Ok`.) Retry with `SendOptions::default().with_device_freshness(Freshness::Refresh)` passed to `send_message_with_options` rather than an immediate resend — a resend with the same cached device list hits the same empty result. See [`NoRecipientDeviceError`](/api/errors#norecipientdeviceerror) for the two ways this can happen and the [Error Types migration guide](/api/errors#from-pr-1299-a-dm-with-no-recipient-device-now-returns-a-typed-error) for the full retry example.
 
 See the [Error Types reference](/api/errors) for the complete `SendError` definition and all domain error types.
 

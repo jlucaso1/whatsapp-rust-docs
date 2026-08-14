@@ -255,7 +255,7 @@ pub enum SendError {
 }
 ```
 
-`NoRecipientDevice` — added in PR #1299. A DM could not be encrypted for a single device of its recipient, so nothing was sent. Distinct from a transport failure: the connection is fine and the message id was never on the wire, so the useful retry is one that re-resolves the device list (`Freshness::Refresh`) and tries again, not an immediate resend. Wraps [`NoRecipientDeviceError`](#norecipientdeviceerror), the typed cause from `wacore`, reachable via `source()`.
+`NoRecipientDevice` — added in PR #1299. A DM had no recipient device available: every resolved recipient device failed encryption, or no recipient device resolved for a non-self destination, so nothing was sent. Distinct from a transport failure: the connection is fine and the message id was never on the wire, so the useful retry is one that re-resolves the device list (`Freshness::Refresh`) and tries again, not an immediate resend. Wraps [`NoRecipientDeviceError`](#norecipientdeviceerror), the typed cause from `wacore`, reachable via `source()`.
 
 #### NoRecipientDeviceError
 

@@ -926,7 +926,7 @@ match client.send_message(jid.clone(), message).await {
         eprintln!("Malformed request: {}", msg);
     }
     Err(SendError::NoRecipientDevice(e)) => {
-        eprintln!("Recipient unreachable, retry with a device refresh: {}", e);
+        eprintln!("No recipient device available; refresh the device list before retrying: {}", e);
     }
     Err(e) => eprintln!("Send error: {}", e),
 }

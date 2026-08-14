@@ -7,6 +7,10 @@ description: Opt in to bounding a storm of inbound group/status retry receipts, 
 
 WhatsApp Web has **no volume-based throttle on inbound retry receipts**. `WAWebHandleRetryRequest` serializes them per chat, refuses past `MAX_RETRY`, and otherwise processes every receipt — its gates are all semantic (`ALREADY_DELIVERED`, `CHANGED_IDENTITY`, `RECORD_MISSING`, `DEVICE_NOT_RECIPIENT`, `HIGH_RETRY_COUNT`, `MESSAGE_EXPIRED`), never "this member is asking too often." This SDK mirrors that: by default, every inbound `<receipt type="retry">` runs the full repair path (`markForgetSenderKey`, key-bundle processing, resend).
 
+<Note>
+**The sender-key repair (`markForgetSenderKey`) is not gated on finding the original message ([#1300](https://github.com/oxidezap/whatsapp-rust/pull/1300)).** A group/status send marks its *entire* distribution list as holding the sender key — including a device whose SKDM failed to encrypt — so the retry receipt's cold mark is the only path back for that device. The recent-message lookup (`RECORD_MISSING`/`MESSAGE_EXPIRED` above) governs only the **resend**: it has its own TTL (`sent_message_ttl_secs`, default 2h) and can miss on a genuine retry storm. Before #1300 the repair sat behind that lookup, so a device that outlived the TTL was stranded warm forever, even across restarts. The repair now runs before the lookup, so it fires whether or not the original message is still cached.
+</Note>
+
 A single-user WA Web client never sends at a volume where this matters. A bot in a large group can, if a cohort of members has pairwise sessions that never establish — each of those members retries on every message, driving the repair path at storm rate.
 
 Registering a `RetryAdmission` policy lets you bound that cost **without the SDK diverging from WhatsApp Web by default**. Leaving it unset keeps exact WA Web behavior, at zero cost — the check on the receive path is a single `OnceLock::get()`.
@@ -22,7 +26,11 @@ The policy is only consulted for **group and `status@broadcast`** retry receipts
 - Retries from your own companion devices (`is_peer`) — their session must always be able to rebuild.
 - Any 1:1 (DM) retry.
 
-When `admit` returns `false`, the receipt is dropped before the group-info fetch, the unknown-device `rotateKey` block, `markForgetSenderKey`, key-bundle processing, and the resend. A dropped receipt is not queued — the requester re-requests on its own timer, so a policy should refill over time to keep genuine recovery possible.
+The check runs immediately after the unknown-device (`hasDevice`) gate, before any repair work. When `admit` returns `false`, the receipt is dropped before the sender-key cold mark (`markForgetSenderKey`), the recent-message lookup, the group-info fetch, the unknown-participant `rotateKey` block, key-bundle processing, and the resend. A dropped receipt is not queued — the requester re-requests on its own timer, so a policy should refill over time to keep genuine recovery possible.
+
+<Note>
+As of [#1300](https://github.com/oxidezap/whatsapp-rust/pull/1300), `markForgetSenderKey` (internally `mark_requester_for_fresh_skdm`) runs right after this admission check and before the recent-message lookup, group-info fetch, and `rotateKey` block — not after them. The admission check is still the single gate that decides whether any of that work happens at all; only its position relative to the *other* repair stages changed.
+</Note>
 
 ## The `RetryAdmission` trait
 
@@ -48,6 +56,10 @@ Object-safe and WASM-safe (`MaybeSendSync` is `Send + Sync` on native targets, u
 The device is intentionally part of `requester`, but a policy may key on the user alone: WhatsApp Web re-targets a whole user's sender key when its primary device goes cold, so all devices of one broken account can reasonably share a single budget.
 
 `RetryAdmission` is re-exported from the crate root and from the `prelude`.
+
+<Warning>
+Enabling a `RetryAdmission` policy has a cost beyond a dropped resend: since [#1300](https://github.com/oxidezap/whatsapp-rust/pull/1300), a missed repair is absorbing. If `admit` drops a receipt from a device whose sender key genuinely needs to be forgotten, that device stays warm (excluded from future SKDM distribution) until a later retry from the same requester is admitted. Size the policy's refill rate with that in mind — this SDK's default (policy unset) never has this failure mode, since every receipt is processed.
+</Warning>
 
 ## Opting in
 

@@ -968,14 +968,14 @@ match client.send_message(to.clone(), message).await {
 
 // After — match the new variant to detect the specific failure
 use whatsapp_rust::{Freshness, SendError, send::SendOptions};
-match client.send_message(to.clone(), message).await {
+match client.send_message(to.clone(), message.clone()).await {
     Ok(result) => { /* ... */ }
     Err(SendError::NoRecipientDevice(e)) => {
         eprintln!("nothing reached the recipient: {e}");
         // Force a device-list refresh before retrying — an immediate resend
         // with the same (cached) options would hit the same empty result.
         let options = SendOptions::default().with_device_freshness(Freshness::Refresh);
-        client.send_message_with_options(to.clone(), message.clone(), options).await?;
+        client.send_message_with_options(to.clone(), message, options).await?;
     }
     Err(e) => eprintln!("send failed: {e}"),
 }

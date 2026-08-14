@@ -289,11 +289,18 @@ pub struct SendOptions {
     /// Force the `<message type="...">` attribute instead of deriving it from
     /// content. Escape hatch for a type the classifier can't infer.
     pub stanza_type_override: Option<StanzaType>,
+    /// Whether to read the recipient's device list from cache or force a
+    /// refresh before sending. Defaults to `Freshness::CachePreferred`. Set
+    /// to `Freshness::Refresh` when retrying after
+    /// [`SendError::NoRecipientDevice`](/api/errors#norecipientdeviceerror) —
+    /// an immediate resend with a cached (and possibly stale) device list
+    /// hits the same empty result.
+    pub device_freshness: Freshness,
 }
 ```
 
 <Note>
-`SendOptions` is `#[non_exhaustive]`, so it can no longer be constructed as a struct literal (even with `..Default::default()`) from outside the crate. Build it by chaining the `with_*` setters off `SendOptions::default()` instead: `SendOptions::default().with_message_id(id)`. Each field above has a matching `with_*` method (`with_message_id`, `with_extra_stanza_nodes`, `with_ephemeral_expiration`, `with_stanza_type_override`).
+`SendOptions` is `#[non_exhaustive]`, so it can no longer be constructed as a struct literal (even with `..Default::default()`) from outside the crate. Build it by chaining the `with_*` setters off `SendOptions::default()` instead: `SendOptions::default().with_message_id(id)`. Each field above has a matching `with_*` method (`with_message_id`, `with_extra_stanza_nodes`, `with_ephemeral_expiration`, `with_stanza_type_override`, `with_device_freshness`).
 </Note>
 
 <ParamField path="message_id" type="Option<String>" default="None">
@@ -318,6 +325,10 @@ pub struct SendOptions {
   <Note>
     The override is applied when the stanza is first sent. The retry path reclassifies from content, so an override doesn't follow a message through resends.
   </Note>
+</ParamField>
+
+<ParamField path="device_freshness" type="Freshness" default="Freshness::CachePreferred">
+  Controls whether the recipient's device list is read from cache or re-resolved before sending. Leave as the default for normal sends. Pass `Freshness::Refresh` when retrying a DM after [`SendError::NoRecipientDevice`](/api/errors#norecipientdeviceerror) — the cached device list produced the failure, so an immediate resend with the same cache would hit the same empty result.
 </ParamField>
 
 ### Example: Send with a custom message ID

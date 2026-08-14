@@ -283,6 +283,42 @@ if message_ids.len() > 1 {
 
 ---
 
+## Retry receipts and decrypt-fail visibility
+
+A retry receipt (`type="retry"`, see [`ReceiptType::Retry`](#receipt-types) below) can carry an extra `<meta mode="…">` child reporting whether the stanza that triggered it was one the client was told to hide on decrypt failure — i.e. whether the recipient's UI showed nothing for it (`decrypt-fail="hide"` on the original `<enc>`; see [Decrypt-fail mode](/guides/receiving-messages#decrypt-fail-mode)).
+
+```rust
+pub const RECEIPT_MODE_HID_FAILED_DECRYPT: u32 = 1 << 2;
+
+pub fn build_receipt_meta_node(mode: u32) -> Option<Node>
+```
+
+`RECEIPT_MODE_HID_FAILED_DECRYPT` is bit position 2 of WhatsApp Web's `<meta mode>` bitmask, already shifted — the only bit this client sets. The other two positions WA Web defines (`ORPHAN`, `NO_CHECKMARK_UX`) name states this client does not model. `build_receipt_meta_node` returns `None` for an all-zero mask rather than emitting `<meta mode="0"/>`, matching WA Web, which omits the node entirely when nothing is set.
+
+<Note>
+The bit is set only when **all** of the following hold:
+- the retry was requested with [`RetryRequestOptions::with_decrypt_fail_mode(DecryptFailMode::Hide)`](/guides/receiving-messages#requesting-a-retry-manually) (the automatic retry pipeline supplies this from the failing stanza's own `decrypt-fail` attribute — no action needed for the built-in retry flow)
+- the `receipt_mode_bitmask_enabled` ab-prop is enabled (introduces the `<meta mode>` node at all)
+- the `web_send_hid_failed_decrypt_in_receipts_enabled` ab-prop is enabled (a separate experiment gating this specific bit)
+
+Both props default off, and both are watched (`iq::props::WATCHED`) so a server-pushed value actually takes effect instead of silently falling back to the registry default forever. A cold props cache — or either prop disabled — sends the retry receipt exactly as before this feature existed, with no `<meta>` child at all.
+</Note>
+
+For manual retry callers (`Client::request_message_retry`), pass the mode explicitly:
+
+```rust
+client.request_message_retry(
+    &stanza,
+    RetryRequestOptions::new()
+        .with_reason(RetryReason::BadMac)
+        .with_decrypt_fail_mode(DecryptFailMode::Hide),
+).await?;
+```
+
+See [Requesting a retry manually](/guides/receiving-messages#requesting-a-retry-manually) for the full `RetryRequestOptions` builder.
+
+---
+
 ## Receipt Types
 
 WhatsApp supports multiple receipt types:
@@ -326,7 +362,7 @@ pub enum ReceiptType {
 </ParamField>
 
 <ParamField path="Retry" type="variant">
-  Retry receipt (type=`"retry"`). Recipient failed to decrypt the message and is requesting a retry. Automatically handled by the library.
+  Retry receipt (type=`"retry"`). Recipient failed to decrypt the message and is requesting a retry. Automatically handled by the library. Can carry the `HID_FAILED_DECRYPT` bit — see [Retry receipts and decrypt-fail visibility](#retry-receipts-and-decrypt-fail-visibility) above.
 </ParamField>
 
 <ParamField path="EncRekeyRetry" type="variant">

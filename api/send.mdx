@@ -1346,6 +1346,8 @@ pub enum SendError {
     #[error("invalid send request: {0}")]
     InvalidRequest(String),
     #[error("{0}")]
+    NoRecipientDevice(#[source] wacore::send::NoRecipientDeviceError),
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -1354,6 +1356,7 @@ pub enum SendError {
 - `NotLoggedIn` — client is not authenticated; check connection state before sending
 - `Iq` — IQ request required by the send path failed
 - `InvalidRequest` — the send request was malformed (e.g., invalid JID, bad message shape)
+- `NoRecipientDevice` — added in PR #1299. A DM had no recipient device available: every resolved recipient device failed encryption, or no recipient device resolved for a non-self destination, so nothing was sent. See [`NoRecipientDeviceError` in the Error Types reference](/api/errors#norecipientdeviceerror) for the two variants it can carry.
 - `Client` — underlying transport/connection error
 - `Internal` — catch-all for errors not yet assigned a typed variant. Includes a failure to durably persist the outbound Signal ratchet advance before the stanza was sent — see the durability note under [`send_message`](#send_message).
 
@@ -1367,6 +1370,7 @@ match client.send_message(jid.clone(), message).await {
     Err(SendError::NotLoggedIn) => eprintln!("Not authenticated"),
     Err(SendError::Iq(e)) => eprintln!("IQ failed: {}", e),
     Err(SendError::InvalidRequest(msg)) => eprintln!("Bad request: {}", msg),
+    Err(SendError::NoRecipientDevice(e)) => eprintln!("No recipient device reached: {}", e),
     Err(e) => eprintln!("Send failed: {}", e),
 }
 ```

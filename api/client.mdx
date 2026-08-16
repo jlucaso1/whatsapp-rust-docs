@@ -2452,6 +2452,7 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `pdo_pending_requests` | `u64` | PDO pending request cache (count only) |
 | `pdo_requested` | `u64` | PDO once-per-message memo cache (count only) |
 | `session_locks` | `u64` | Per-device session locks (count only) |
+| `ensure_inflight` | `u64` | Addresses whose `ensure_e2e_sessions` prekey fetch is in flight, so a concurrent caller for the same address waits on it instead of fetching the same bundle again (count only). Normally zero — it only holds an address for the span of one prekey fetch. A value that stays nonzero across repeated samples warrants investigation, though sustained request turnover across many addresses can also keep it nonzero without any single fetch being stuck ([#1315](https://github.com/oxidezap/whatsapp-rust/pull/1315)) |
 | `chat_lanes` | `u64` | Per-chat lanes — combined enqueue lock + message queue (count only) |
 | `group_distribution_locks` | `u64` | Live per-group sender-key distribution lanes (count only) |
 | `group_distribution_lock_evictions` | `u64` | Cumulative capacity evictions of cold (non-live) distribution lanes; poll successive reports to derive a rate |

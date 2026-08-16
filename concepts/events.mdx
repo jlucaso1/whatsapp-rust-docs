@@ -193,6 +193,7 @@ pub enum Event {
     OfflineSyncCompleted(OfflineSyncCompleted),
     DirtyState(DirtyState),
     AppStateSyncFailed(AppStateSyncFailed),
+    ClientExpirationChanged(ClientExpirationChanged),
 
     // Device Updates
     DeviceListUpdate(DeviceListUpdate),
@@ -2451,6 +2452,42 @@ Event::AppStateSyncFailed(AppStateSyncFailed { fatal, retryable, connected, .. }
     }
     if connected {
         println!("connected anyway, degraded until the above resolves");
+    }
+}
+```
+
+### ClientExpirationChanged
+
+**Emitted:** When the server sends (or withdraws) an `<ib><client_expiration t="...">` marker — the date it expects to stop accepting the client build currently running. Fires only when the deadline actually changes; a restatement of the same deadline is silent, so a handler wired to alert on this event doesn't fire on every reconnect.
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct ClientExpirationChanged {
+    pub expires_at: Option<i64>,
+    pub version: (u32, u32, u32),
+    pub withdrawn: bool,
+}
+```
+
+**Fields:**
+- `expires_at` - Unix seconds after which the server expects to stop accepting this build. `None` when the deadline was withdrawn (`withdrawn: true`).
+- `version` - The `(primary, secondary, tertiary)` build the deadline was issued against — a deadline issued for one build says nothing about the next, so this is how a consumer checks the announcement still applies to the running binary.
+- `withdrawn` - `true` when the server retracted a deadline it had previously set (the `<client_expiration>` child arrived with no `t` attribute).
+
+<Note>
+This is **notice, not an instruction**. The client keeps connecting until the server actually refuses it — the stanza is about the *build*, not the current connection — so whether to ship a newer version or alert an operator is the consumer's call; this library never disconnects on its own because of it.
+
+The recorded deadline is never sooner than **three days** out, even when the server's own answer is more abrupt (`t` at or before now) — a server that says "now" still has to leave a window in which the build can be replaced. A deadline also only ever moves **closer**: a later `t` than the one already held is treated as a stale retransmit or a host that hasn't caught up, and is ignored rather than granted as an extension. Because the comparison is against the (possibly floored) stored value, a server that keeps re-sending the same abrupt `t` keeps rolling the three-day floor forward from whenever each stanza arrives, rather than pinning one fixed date — a dated deadline, once stored, settles and further repeats change nothing. See [`ServerClientExpiration`](/concepts/storage#serverclientexpiration) for the persisted record and the full decision rule.
+</Note>
+
+**Example:**
+```rust
+Event::ClientExpirationChanged(ClientExpirationChanged { expires_at, version, withdrawn, .. }) => {
+    if withdrawn {
+        println!("client expiration deadline withdrawn for build {version:?}");
+    } else if let Some(expires_at) = expires_at {
+        println!("build {version:?} will stop being accepted at {expires_at}");
     }
 }
 ```

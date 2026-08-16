@@ -643,6 +643,8 @@ pub struct Device {
     pub lid_migrated: bool,                  // Account is 1:1-LID-migrated; gates DM wire addressing
     #[serde(default)]
     pub last_signed_pre_key_rotation_ms: i64, // WA Web RotateKeyJob cadence clock; 0 = pre-feature device, baselined (not rotated) on first connect
+    #[serde(default)]
+    pub server_client_expiration: Option<ServerClientExpiration>, // Server's <ib><client_expiration> deadline for the running build; None until the server says otherwise
 }
 
 /// Cached form of the server's two-cert chain. `leaf.key` is the server
@@ -660,9 +662,32 @@ pub struct CachedNoiseCert {
     pub not_before: i64,   // Validity window (Unix epoch seconds)
     pub not_after: i64,
 }
+
+/// The server's answer to "when does this client build stop being accepted",
+/// scoped to the build it was issued against.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerClientExpiration {
+    pub expires_at: i64,           // Unix seconds; server stops accepting this build after this
+    pub version: (u32, u32, u32),  // The (primary, secondary, tertiary) build the deadline applies to
+}
 ```
 
 The `server_cert_chain` field is populated after a successful XX (or XXfallback) handshake and consumed on the next connect to attempt **Noise IK**. It is cleared via `DeviceCommand::ClearServerCertChain` if a resumed IK handshake fails crypto-fatally. See [Authentication — Noise Protocol Handshake](/concepts/authentication#noise-protocol-handshake).
+
+### ServerClientExpiration
+
+`server_client_expiration` records the server's `<ib><client_expiration>` deadline (see [`ClientExpirationChanged`](/concepts/events#clientexpirationchanged)) — the date it expects to stop accepting the client build currently running. It is `None` until the server says otherwise, which is the common case: the stanza is sent when a build is being retired, not on every connect.
+
+Set through `DeviceCommand::SetServerClientExpiration(Option<ServerClientExpiration>)`, applied by `ServerClientExpiration::decide` (`wacore/src/store/device.rs`) rather than written directly from the stanza's `t`:
+
+- **A deadline only moves closer.** A later `t` than the one already held is treated as a stale retransmit or a host that hasn't caught up, and does not extend the deadline.
+- **At least three days of notice.** Whatever the server says, the recorded `expires_at` is floored at `now + 3 days`, so a server that says "now" still leaves a window in which the build can be replaced.
+- **Scoped to the running build.** A record left over from an earlier build (`version` doesn't match the running `(app_version_primary, app_version_secondary, app_version_tertiary)`) is treated as absent rather than compared against — otherwise an old build's nearer date could suppress the new build's own, unrelated deadline.
+- A stanza with no `t` attribute withdraws the deadline (`DeviceCommand::SetServerClientExpiration(None)`), but only if one for the running build was actually held — withdrawing something never held is a no-op and dispatches no event.
+
+Because the comparison is against the stored (possibly floored) value rather than the raw `t`, an abrupt deadline that keeps getting resent keeps rolling the three-day floor forward from whenever each stanza arrives; a dated deadline, once stored, settles and further repeats change nothing.
+
+Persisted as a single nullable `TEXT` column holding the record as JSON (see [Database schema](#database-schema) below) — a column per field buys nothing here, since nothing queries or orders by the version triple. A row that fails to decode (written by a newer build, or corrupted) reads as no deadline rather than failing the whole device load; the next `<ib>` restates it.
 
 <Note>
   The `account` field uses a custom `account_serde` module to bridge buffa-generated protobuf types (which lack `serde::Deserialize`) into serde. It encodes `ADVSignedDeviceIdentity` to protobuf bytes on serialization and decodes them back on deserialization. The `#[serde(default)]` attribute ensures backward compatibility — old data missing this field deserializes as `None`.
@@ -731,7 +756,8 @@ CREATE TABLE device (
     server_cert_chain BLOB,  -- Cached two-cert chain for Noise IK resume
     login_counter INTEGER NOT NULL DEFAULT 0,  -- Per-connect counter; sent as ClientPayload.lc
     lid_migrated BOOLEAN NOT NULL DEFAULT 0,  -- Account is 1:1-LID-migrated; gates DM wire addressing
-    last_signed_pre_key_rotation_ms BIGINT NOT NULL DEFAULT 0  -- WA Web RotateKeyJob cadence clock; 0 = unset/legacy, baselined on first connect
+    last_signed_pre_key_rotation_ms BIGINT NOT NULL DEFAULT 0,  -- WA Web RotateKeyJob cadence clock; 0 = unset/legacy, baselined on first connect
+    server_client_expiration TEXT  -- ServerClientExpiration record as JSON; NULL = no deadline held
 );
 
 -- Signal protocol tables

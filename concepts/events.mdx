@@ -159,7 +159,7 @@ pub enum Event {
     // User Updates
     PictureUpdate(PictureUpdate),
     UserAboutUpdate(UserAboutUpdate),
-    PushNameUpdate(PushNameUpdate),
+    RetiredPushNameUpdate(RetiredPushNameUpdate),
     SelfPushNameUpdated(SelfPushNameUpdated),
 
     // Group Updates
@@ -1429,20 +1429,23 @@ pub struct UserAboutUpdate {
 }
 ```
 
-### PushNameUpdate
-
-**Emitted:** When a contact changes their display name
+### `RetiredPushNameUpdate`
 
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
 #[non_exhaustive]
-pub struct PushNameUpdate {
-    pub jid: Jid,
-    pub message: Box<MessageInfo>,
-    pub old_push_name: String,
-    pub new_push_name: String,
-}
+pub struct RetiredPushNameUpdate {}
 ```
+
+<Note>
+Breaking change (PR #1310): this event is retired. Nothing constructs or dispatches it, and nothing ever will. The payload promised an `old_push_name`/`new_push_name` comparison, but this library holds no contact store to source the previous name from. `EventKind::PushNameUpdate` is renamed `EventKind::RetiredPushNameUpdate` the same way.
+
+Both the `EventKind` and `Event` variants keep their slot instead of being deleted. `EventKind`'s discriminant is an `EventInterest` bit index a consumer may persist. `Event` derives `Serialize` into index-keyed formats (bincode, postcard) that key a variant by position. Removing either would renumber every variant after it and change how already-stored data decodes. The payload struct is emptied instead, so the slot is held without claiming anything.
+
+A handler matching `Event::PushNameUpdate(..)` should drop the arm — it can never fire — or rename it to `Event::RetiredPushNameUpdate(..)`.
+
+To track a contact's push name, read [`MessageInfo::push_name`](#messages) on the message events you already handle. It comes from the stanza's `notify` attribute, and a stanza without that attribute (e.g. newsletter traffic) leaves it as an empty string. Treat an empty `push_name` as "not present," not as a rename to `""`, and diff only non-empty values against your own contact store if you need change detection.
+</Note>
 
 ### SelfPushNameUpdated
 

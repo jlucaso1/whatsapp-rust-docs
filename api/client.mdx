@@ -1290,6 +1290,17 @@ The `LearningSource` enum indicates how a LID-PN mapping was discovered. The sou
   A pair that already matches the cache's current mapping always re-affirms durability regardless of source — it is never treated as a conflict. This includes an exact match, and also a reverse-only match: the LID-PN cache is capacity-bounded (see [`lid_pn_cache`](/api/bot#cache-configuration-reference)), so the PN→LID entry can be evicted while the LID→PN entry survives, and a re-learn of that surviving pair still counts as self-consistent.
 </Note>
 
+#### Refresh on `refresh_lid` acks
+
+A send-message ack can carry `refresh_lid="true"`, the server's way of telling the client that the LID-PN mapping it holds for the acking peer is stale. It's the only invalidation the client gets for this mapping: lookups are cache-aside, so nothing else re-checks an entry just because it might have gone stale. Without acting on the flag, a stale mapping would stay stale for the process lifetime, and every Signal address derived from it would keep resolving to the wrong identity ([#1313](https://github.com/oxidezap/whatsapp-rust/pull/1313)).
+
+On a flagged ack, the client re-resolves the peer with the same authoritative live query an observational `LearningSource` conflict uses: `LidQuerySpec`, requesting only `<lid>`. It persists the corrected pair through `add_lid_pn_mapping` under `LearningSource::Usync`. A few details worth knowing if you're watching this happen:
+
+- The query is addressed by **phone number**, not by the LID under suspicion. Asking about the LID itself would look the answer up under the very key that might be wrong. A peer with no cached mapping yet has nothing stale to correct, so it triggers no query.
+- Hosted peers (`@hosted`/`@hosted.lid`) are refreshed the same way as `@lid`/`@s.whatsapp.net` peers, since they resolve their Signal address from the same cache.
+- A burst of sends to one stale peer acks one message at a time, and every ack repeats the flag. Refreshes for the same number are coalesced, so a second flagged ack while one is already in flight does not start a duplicate query. The coalescing key is scoped to the connection that started the refresh, so a task still parked on a dead socket's IQ can never suppress the next connection's refresh for the same peer.
+- In-flight refresh reservations are visible via [`pending_lid_refreshes`](#memory_report) in `memory_report()`.
+
 ### persistence_manager
 
 ```rust
@@ -2454,6 +2465,7 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `node_waiters` | `usize` | Active node waiters |
 | `sent_node_waiters` | `usize` | Waiters parked on outgoing nodes, the pre-encryption counterpart of `node_waiters`. Each retains a filter and a oneshot sender ([#1235](https://github.com/oxidezap/whatsapp-rust/pull/1235)) |
 | `pending_retries` | `usize` | Pending message retries |
+| `pending_lid_refreshes` | `usize` | Numbers with a `refresh_lid` re-resolve in flight, keyed by `(connection_generation, PN-side JID)`. Counts active reservations, not distinct peers — the same phone number can hold more than one across a reconnect, since an old generation's entry is only released by the task that took it. A value that stays high across repeated samples points at refreshes not completing rather than at request volume alone — though sustained turnover across many peers can also hold it up, since a completed reservation can be replaced by a fresh one between samples ([#1313](https://github.com/oxidezap/whatsapp-rust/pull/1313)) |
 | `presence_subscriptions` | `usize` | Active presence subscriptions |
 | `app_state_key_requests` | `usize` | Pending app state key requests |
 | `app_state_key_cache` | `usize` | Expanded app-state keys the app-state processor holds in memory. No capacity cap and no TTL — one entry per distinct key id the server's patches reference, emptied only on reconnect. Zero until the first app-state sync builds the processor ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)) |

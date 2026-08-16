@@ -1283,6 +1283,78 @@ for pic in pictures {
 }
 ```
 
+### report_messages_to_admins
+
+Report one or more messages to the group's own admins. This is distinct from [reporting to WhatsApp](/api/spam-report) — it stays inside the group and is gated by the group's own `allow_admin_reports` setting (see [`set_allow_admin_reports`](#set_allow_admin_reports)).
+
+```rust
+pub async fn report_messages_to_admins(
+    &self,
+    jid: impl Into<Jid>,
+    message_ids: &[String],
+) -> Result<(), GroupError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+- `message_ids` - Stanza IDs of the messages being reported
+
+**Returns:**
+- `()` - The server answers an empty result on success; nothing here reports which of the listed ids were accepted.
+
+<Note>
+A refusal arrives as a `GroupError::Iq` wrapping the server's error code: `400` (`bad-request`, malformed list), `403` (`forbidden`, the group does not allow admin reports or this sender may not report in it), `404` (`item-not-found`, unknown group or message), `423` (`locked`, a locked group), or `429` (`rate-overlimit`, too many reports in sequence).
+</Note>
+
+**Example:**
+```rust
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+let message_ids = vec!["MSG-AAA".to_string(), "MSG-BBB".to_string()];
+
+client.groups().report_messages_to_admins(group_jid, &message_ids).await?;
+```
+
+### get_reported_messages
+
+Fetch the messages already reported to a group's admins.
+
+```rust
+pub async fn get_reported_messages(
+    &self,
+    jid: impl Into<Jid>,
+) -> Result<ReportedGroupMessages, GroupError>
+```
+
+**Parameters:**
+- `jid` - Group JID
+
+**Returns:**
+- [`ReportedGroupMessages`](#reportedgroupmessages) - The addressing mode the server used for the response JIDs (when declared) plus every reported message and who reported it.
+
+<Note>
+A refusal arrives as a `GroupError::Iq`: `400` (`bad-request`), `401` (`not-authorized`), `404` (`item-not-found`), `423` (`locked`), or `429` (`rate-overlimit`). This mirrors the `set` error list above except `401` replaces `403` for the permission case.
+</Note>
+
+**Example:**
+```rust
+use whatsapp_rust::features::groups::ReportedGroupMessages;
+
+let group_jid: Jid = "120363012345678@g.us".parse()?;
+let ReportedGroupMessages { addressing_mode, reports } =
+    client.groups().get_reported_messages(group_jid).await?;
+
+println!("Addressing mode: {:?}", addressing_mode);
+for report in reports {
+    println!("Message {} reported by:", report.message_id);
+    for reporter in &report.reporters {
+        println!(
+            "  {} at {} (phone: {:?}, username: {:?})",
+            reporter.jid, reporter.timestamp, reporter.phone_number, reporter.username,
+        );
+    }
+}
+```
+
 ## Types
 
 ### `Freshness`
@@ -1642,6 +1714,54 @@ The `metadata` field carries the full group state returned by the server (same s
 
 <Note>
 Prior to v0.6 this struct only exposed a `gid: Jid`. Replace `result.gid` with `result.metadata.id` when upgrading (`GroupMetadata.id`, not `jid`). The same migration applies to `CreateCommunityResult`.
+</Note>
+
+### ReportedGroupMessages
+
+Result of [`get_reported_messages`](#get_reported_messages) — the outstanding reports an admin can see for a group.
+
+```rust
+pub struct ReportedGroupMessages {
+    pub addressing_mode: Option<AddressingMode>,
+    pub reports: Vec<ReportedGroupMessage>,
+}
+```
+
+`addressing_mode` reflects the addressing the server used for JIDs in this response, when it declared one.
+
+### ReportedGroupMessage
+
+One reported message and everyone who reported it.
+
+```rust
+pub struct ReportedGroupMessage {
+    pub message_id: String,
+    pub reporters: Vec<GroupMessageReporter>,
+}
+```
+
+Nothing guarantees this device still holds the message `message_id` names.
+
+### GroupMessageReporter
+
+One account that reported a message to the group's admins.
+
+```rust
+pub struct GroupMessageReporter {
+    pub jid: Jid,
+    pub timestamp: u64,
+    pub phone_number: Option<Jid>,
+    pub username: Option<String>,
+}
+```
+
+- `jid` - The reporting account, in whatever addressing the response declares.
+- `timestamp` - When the report was filed, in seconds since the Unix epoch.
+- `phone_number` - The reporter's phone-number JID, when the server's identity mixin carries one (e.g. a LID-addressed reporter with a known PN mapping).
+- `username` - The reporter's Meta username, when the identity mixin carries one.
+
+<Note>
+`phone_number` and `username` are populated on the same node the `jid` came from — the server may attach a phone number, a username, both, or neither to a `<reporter>` entry, and neither is verified beyond parsing.
 </Note>
 
 ### GroupJoinError

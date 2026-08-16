@@ -104,6 +104,18 @@ println!("Chat: {}", info.source.chat);
 println!("Sender: {}", info.source.sender);
 println!("From me: {}", info.source.is_from_me);
 
+// Check the envelope type and encrypted media type
+match &info.r#type {
+    Some(StanzaMessageType::Text) => println!("Text envelope"),
+    Some(StanzaMessageType::Media) => println!("Media envelope"),
+    Some(other) => println!("Envelope type: {other:?}"),
+    None => println!("No type attribute on the stanza"),
+}
+
+if let Some(media_type) = &info.media_type {
+    println!("Enc media type: {}", media_type.as_str());
+}
+
 // Check if it's a group message
 if info.source.chat.is_group() {
     println!("Group message from participant: {}", info.source.sender);
@@ -124,6 +136,14 @@ if let Some(parent_key) = &info.comment_target {
     println!("Comment on post: {:?}", parent_key.id);
 }
 ```
+
+<Warning>
+Breaking change: `MessageInfo::r#type` changed from `String` to `Option<StanzaMessageType>`, and `MessageInfo::media_type` changed from `String` to `Option<EncMediaType>`. Both are `WireEnum`s carrying an `Unknown(String)` fallback for a value this build doesn't model, so no wire value is dropped.
+
+Migrate a string comparison like `info.r#type == "text"` to `info.r#type == Some(StanzaMessageType::Text)`, or keep comparing strings with `info.r#type.as_ref().map(StanzaMessageType::as_str) == Some("text")`. The same shape applies to `media_type` with `EncMediaType`. Code that previously treated `""` as "no type" now matches `None` instead — the empty-string sentinel is gone.
+
+`media_type` is populated by aggregating the `mediatype` attribute across the stanza's `<enc>` nodes: the first `<enc>` that declares one wins, in enumeration order (direct children first, then this device's own `<enc>` under `<participants>`). A later disagreeing value on the same stanza is dropped.
+</Warning>
 
 The `ephemeral_expiration` field contains the disappearing messages timer in seconds, extracted from the message's `contextInfo.expiration`. This tells you how long the message will be visible before it auto-deletes. Use this value when sending replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
 
@@ -423,6 +443,10 @@ Each incoming message has a `decrypt_fail_mode` attribute parsed from the `<enc>
 
 If any `<enc>` node in the stanza has `decrypt-fail="hide"`, the entire message uses `Hide` mode. See [Decrypt-fail suppression](/api/send#decrypt-fail-suppression) for which outgoing message types set this attribute.
 
+<Note>
+When a retry is requested for a stanza that carried `decrypt-fail="hide"`, the retry receipt can report that back to the sender in a `<meta mode>` bitmask bit, gated behind two ab-props that both default off. See [`RetryRequestOptions::with_decrypt_fail_mode`](#requesting-a-retry-manually) below and [Retry receipts and decrypt-fail visibility](/api/receipt#retry-receipts-and-decrypt-fail-visibility) for the wire details.
+</Note>
+
 ### Decryption retry mechanism
 
 The library automatically:
@@ -460,8 +484,9 @@ pub async fn request_message_retry(
 
 ```rust
 RetryRequestOptions::new()
-    .with_reason(RetryReason::BadMac)       // diagnostic reason sent to the sender, default UnknownError
-    .with_force_include_keys(true)          // request the local key bundle even below the normal threshold
+    .with_reason(RetryReason::BadMac)               // diagnostic reason sent to the sender, default UnknownError
+    .with_force_include_keys(true)                   // request the local key bundle even below the normal threshold
+    .with_decrypt_fail_mode(DecryptFailMode::Hide)   // carry the original stanza's decrypt-fail mode into the receipt
 ```
 
 `RetryRequestOutcome` reports what happened without the caller needing to inspect internal counters:
@@ -474,6 +499,10 @@ This call only sends the retry receipt; a transport ack (to clear the stanza fro
 
 <Note>
 Key material is attached to a retry receipt only when `retry_count >= 2`, `force_include_keys` is explicitly set, or the destination is stateless/hosted — never on the strength of `reason` alone. The diagnostic `RetryReason` only affects what's reported to the sender, not whether keys go out.
+</Note>
+
+<Note>
+`with_decrypt_fail_mode` defaults to `DecryptFailMode::Show`, meaning a caller that doesn't call it sends no `<meta mode>` node at all — behavior is unchanged unless you opt in. Pass the `DecryptFailMode` your own [decrypt-failure handling](#decrypt-fail-mode) determined for the original stanza. See [Retry receipts and decrypt-fail visibility](/api/receipt#retry-receipts-and-decrypt-fail-visibility) for what the receiving side does with the bit.
 </Note>
 
 #### Retransmitting a message manually

@@ -895,13 +895,13 @@ pub struct MessageInfo {
     pub source: MessageSource,
     pub id: MessageId,
     pub server_id: MessageServerId,
-    pub r#type: String,
+    pub r#type: Option<StanzaMessageType>,
     pub push_name: String,
     pub timestamp: DateTime<Utc>,
     pub server_timestamp_us: Option<i64>,
     pub category: MessageCategory,
     pub multicast: bool,
-    pub media_type: String,
+    pub media_type: Option<EncMediaType>,
     pub edit: EditAttribute,
     pub bot_info: Option<MsgBotInfo>,
     pub meta_info: MsgMetaInfo,
@@ -930,6 +930,50 @@ pub struct MessageSource {
 ```
 
 `sender_alt` carries the LID/PN counterpart of `sender` whenever the stanza exposes one — including `status@broadcast` messages, which always include `participant_lid` (or `participant_pn` for LID-addressed status). The library reads it unconditionally so the [LID-PN cache](/concepts/storage#lidpncache) can re-warm from the message itself, matching WA Web's `WAWebMsgParser`.
+
+<Warning>
+Breaking change: `MessageInfo::r#type` changed from `String` to `Option<StanzaMessageType>`, and `MessageInfo::media_type` changed from `String` to `Option<EncMediaType>`. Migrate a comparison like `info.r#type == "text"` to `info.r#type == Some(StanzaMessageType::Text)`, or keep comparing strings with `info.r#type.as_ref().map(StanzaMessageType::as_str) == Some("text")` — same shape for `media_type` with `EncMediaType`. Code that previously treated `""` as "absent" now matches `None` instead.
+</Warning>
+
+**StanzaMessageType:**
+
+The `<message type="…">` envelope attribute, parsed before any `<enc>` is decrypted. `None` when the stanza carried no `type` attribute at all; an unrecognized value is preserved as `Unknown` rather than dropped.
+
+```rust
+pub enum StanzaMessageType {
+    Text,             // "text"
+    Media,            // "media"
+    MediaNotify,      // "medianotify"
+    Pay,              // "pay"
+    Poll,             // "poll"
+    Reaction,         // "reaction"
+    Event,            // "event"
+    Unknown(String),  // Forward-compatible fallback, holds the raw wire value
+}
+```
+
+<Note>
+`StanzaMessageType` says nothing about the decrypted content — it is the envelope's own claim, and nothing verifies it against the `Message` that comes out of the ciphertext.
+</Note>
+
+**EncMediaType:**
+
+The `mediatype` attribute of an `<enc>` node — a hint about the payload the ciphertext carries, available before the decryption that would reveal it. `MessageInfo::media_type` aggregates this across the stanza's `<enc>` nodes: the first one that declares a value wins (direct children first, then this device's own `<enc>` under `<participants>`); a later disagreeing value is dropped. `None` when no `<enc>` carried the attribute.
+
+```rust
+pub enum EncMediaType {
+    Image, Video, Ptv, Audio, Ptt, Location, Vcard, Document, Url, Call,
+    Gif, Future, ContactArray, LiveLocation, ProfilePic, Sticker,
+    StickerPack, Hsm, ProductImage, Template, MdAppState, MdHistorySync,
+    List, ListResponse, Button, ButtonResponse, Order, Product,
+    NativeFlowResponse, GroupHistory,
+    Unknown(String),  // Forward-compatible fallback, holds the raw wire value
+}
+```
+
+<Note>
+It is the sender's claim and nothing checks it against the decrypted `Message`, so it is useful for routing and telemetry, not for deciding what a message is. `MessageInfo::media_type` is aggregated to one value per message — a fan-out stanza's per-device `<enc>` copies all repeat the same attribute in practice, so the aggregation only fills the field when the direct children carry nothing.
+</Note>
 
 **MessageCategory:**
 ```rust
@@ -982,9 +1026,9 @@ Additional metadata for message threading, targeting, and abuse reporting.
 pub struct MsgMetaInfo {
     pub target_id: Option<MessageId>,
     pub target_sender: Option<Jid>,
-    pub deprecated_lid_session: Option<bool>,
     pub thread_message_id: Option<MessageId>,
     pub thread_message_sender_jid: Option<Jid>,
+    pub poll_type: Option<PollType>,
     pub content_type: Option<String>,
     pub appdata: Option<String>,
     pub reporting_tag: Option<String>,
@@ -997,17 +1041,37 @@ pub struct MsgMetaInfo {
 |-------|-------------|
 | `target_id` | ID of the message being targeted (for edits/revokes) |
 | `target_sender` | Sender of the targeted message |
-| `deprecated_lid_session` | Legacy LID session flag |
-| `thread_message_id` | ID of the thread parent message |
-| `thread_message_sender_jid` | Sender of the thread parent message |
+| `thread_message_id` | ID of the message this one threads under (`<meta thread_msg_id="…">`) |
+| `thread_message_sender_jid` | Who authored `thread_message_id`; absent whenever that is |
+| `poll_type` | Which stage of a poll's lifecycle the envelope carries (`<meta polltype="…">`); see `PollType` below |
 | `content_type` | High-level content classification carried by the server (e.g. `"image"`, `"document"`) so consumers can filter without decoding the message body |
 | `appdata` | Opaque per-message app data used by the abuse-report flow |
 | `reporting_tag` | Tag the server attaches so the recipient can submit an abuse report tied to this message |
 | `reporting_token` | Raw bytes of the abuse-report token paired with `reporting_tag` |
 | `reporting_token_version` | Version of the reporting-token scheme used by the server |
 
+**PollType:**
+
+Read only when the envelope's `r#type` is `StanzaMessageType::Poll`, mirroring the official WhatsApp Web parser, which scopes the `polltype` attribute to poll envelopes. Closed on purpose — a `polltype` value outside this list parses as `None` rather than being preserved as an `Unknown` variant, since upstream treats it the same way.
+
+```rust
+pub enum PollType {
+    Creation,       // "creation"
+    QuizCreation,   // "quiz_creation"
+    Vote,           // "vote"
+    ResultSnapshot, // "result_snapshot"
+    Edit,           // "edit"
+}
+```
+
 <Note>
-`server_timestamp_us`, `verified_level`, `verified_name_serial`, `peer_recipient_pn`, plus all five `MsgMetaInfo` additions above were added in v0.6 as part of aligning inbound parsing with WA Web. They are populated only when the server includes the corresponding stanza attribute, so existing consumers that ignore them keep working.
+`server_timestamp_us`, `verified_level`, `verified_name_serial`, `peer_recipient_pn`, plus `target_id`, `target_sender`, `thread_message_id`, `thread_message_sender_jid`, `content_type`, `appdata`, `reporting_tag`, `reporting_token`, and `reporting_token_version` on `MsgMetaInfo` were added in v0.6 as part of aligning inbound parsing with WA Web. They are populated only when the server includes the corresponding stanza attribute, so existing consumers that ignore them keep working.
+</Note>
+
+<Note>
+Breaking change: `MsgMetaInfo::deprecated_lid_session` was removed. It was declared but never assigned by any parser, and no wire attribute maps to it — nothing to migrate to, callers should simply drop the field access.
+
+`thread_message_id` and `thread_message_sender_jid` were already declared before this change but always empty; they are now actually populated, sourced from the poll envelope's `thread_msg_id` / `thread_msg_sender_jid` attributes. `poll_type` is new, sourced from `<meta polltype="…">` and scoped to `StanzaMessageType::Poll` envelopes only.
 </Note>
 
 <Note>
@@ -2828,6 +2892,10 @@ pub struct DecryptedPayload {
     pub info: Arc<MessageInfo>,
     pub enc_index: usize,
     pub enc_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_type: Option<String>,
     #[serde(skip)]
     pub payload: Bytes,
 }
@@ -2839,6 +2907,8 @@ Event::DecryptedPayload(DecryptedPayload)
 - `info` — Which message this came from.
 - `enc_index` — Which `<enc>` of the stanza produced these bytes, counting from zero in the order the client enumerates them: the stanza's direct `<enc>` children first, then the ones under `<participants><to>` addressed to this device (the fan-out shape, where one stanza carries a copy per device and only yours is yours to decrypt). This is a position in that concatenation, not a child index or a position within `enc_type`'s bucket — an `<enc>` that produces no payload still consumes its slot, so a consumer correlating a forwarded payload back to its node has to walk the stanza the same way.
 - `enc_type` — The `type` attribute the `<enc>` carried: `msg`, `pkmsg`, `skmsg`, …
+- `state` — The `state` attribute the `<enc>` carried, verbatim, or `None` when it carried none. The server's own annotation of the session this copy was encrypted under. This build does not model the possible values or act on them; they are handed over as text so a consumer can.
+- `session_type` — The `session_type` attribute the `<enc>` carried, verbatim, or `None` when it carried none. Unmodelled and unacted-on, like `state`.
 - `payload` — The plaintext, unpadded, exactly as decoding receives it. A `Bytes`, so forwarding it is a refcount bump, not a copy.
 
 This is a library extension with no WhatsApp Web equivalent. It exists because a plaintext that decrypts but fails to decode is otherwise lost: `handle_decrypted_plaintext` turns bytes into `wa::Message`, and when that decode fails — a field a build predates, a message type it doesn't model — the bytes disappear. Nothing can ask for them again, because opening them already consumed state that won't recur: the Signal ratchet advances, so the same ciphertext will never decrypt a second time. `DecryptedPayload` fires whether or not the decode that follows succeeds, which is the point: the failing case is the one with nothing else to look at. It also enables recording traffic for faithful replay (re-encoding a decoded `Message` does not reproduce the original bytes) and decoding with a newer protobuf than the running build carries.

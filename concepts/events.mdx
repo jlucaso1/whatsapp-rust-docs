@@ -1224,6 +1224,14 @@ pub enum DecryptFailMode {
 }
 ```
 
+<Note>
+The client deduplicates dispatch per `(chat, id, sender)`, not `(chat, id)` alone. A stanza id comes from the sending client. That id is only unique within a `(chat, sender)` pair. So two different senders can reuse the same id in one chat. The client treats those as two distinct messages and dispatches an event for each, instead of folding the second into the first.
+
+The client keys the sender on its wire-form JID. It deliberately leaves that JID unresolved to a LID/PN identity, because resolving it would let the key move as the client learns that mapping at runtime. This choice has one accepted cost: if a redelivery's sender switches PN/LID namespace mid-flight, the client treats it as a new message and dispatches a second placeholder. The client accepts that cost because a duplicate placeholder is visible and recoverable, while a silently dropped message is not.
+
+The dedup cache holds each key for up to 5 minutes (a TTL measured from first dispatch), or until it evicts the key to stay under its 1,000-entry capacity — whichever comes first. Once a key leaves the cache, a later redelivery of that same message dispatches the event again.
+</Note>
+
 ### Notification
 
 **Emitted:** For raw notification stanzas that are not handled by a more specific event type
@@ -3093,7 +3101,7 @@ pub enum EncDecryptFailureReason {
 #### What it does not say
 
 <Note>
-- **Not a display signal.** Whether to show the user a placeholder is [`UndecryptableMessage`](#undecryptablemessage), which is per *message*, deduplicated by `(chat, id)`, and carries the server's `decrypt-fail` hint. `EncDecryptFailed` is per `<enc>`, is not deduplicated, and answers a different question.
+- **Not a display signal.** Whether to show the user a placeholder is [`UndecryptableMessage`](#undecryptablemessage), which is per *message*, deduplicated by `(chat, id, sender)`, and carries the server's `decrypt-fail` hint. `EncDecryptFailed` is per `<enc>`, is not deduplicated, and answers a different question.
 - **Not a loss report.** Most reasons are recoverable — the client may already have asked the sender to resend — and this event says nothing about whether a retry went out or succeeded later.
 - **Repeats.** A redelivered stanza that fails again emits it again, once per `<enc>` per delivery. Correlate on `(info.source.chat, info.source.sender, info.id, enc_index)` if you want at-most-once per `<enc>` — `info.id` alone is not globally unique, only within a `(chat, sender)` pair (see [Idempotency Requirement](/advanced/inbound-durability#idempotency-requirement)).
 - **A duplicate is not a failure.** An `<enc>` the server redelivered that this device already processed emits neither this event nor [`DecryptedPayload`](#decryptedpayload) — its plaintext was reported the first time round. A stanza whose only duplicate `<enc>` sits beside one that genuinely fails still reports that other `<enc>` as `NotAttempted`, on every delivery, since no delivery ever produced its plaintext.
@@ -3373,3 +3381,4 @@ async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
     Complete client API reference
   </Card>
 </CardGroup>
+

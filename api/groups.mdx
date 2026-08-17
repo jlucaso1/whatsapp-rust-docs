@@ -26,7 +26,7 @@ Query group information with caching support.
 |---|---|---|
 | Returns | `Arc<GroupInfo>` (slim) | `GroupMetadata` (full) |
 | Fields | Participant JIDs, addressing mode, LID/PN mapping, CAG flag | Subject, description, admin roles, ephemeral/membership settings, and everything else |
-| Cache | Cached; a hit is free, a miss sends the persisted phash so an unchanged group costs a `not-modified` reply | Always hits the network; no phash sent, no population of the group cache |
+| Cache | Cached; a hit is free, a miss sends the persisted phash so an unchanged group costs a `not-modified` reply | Hits the network; no phash sent, no population of the group cache. Concurrent calls for the same group share one round trip — see [`get_metadata`](#get_metadata) |
 | Use for | Routing and encrypting a message (the send path's own choice) | Displaying or auditing a group |
 
 Use [`query_info_with_freshness`](#query_info_with_freshness) when you need explicit control over `query_info`'s staleness instead of the default cache-preferred behavior.
@@ -211,7 +211,11 @@ pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, GroupError>
 **Returns:**
 - `GroupMetadata` - Owned, full user-facing metadata: subject, description, creator, per-participant admin roles, and ephemeral/membership settings (see `get_participating` for the full field list). In a LID-addressed group, participant phone numbers the server left out are backfilled from known LID/PN mappings on a best-effort basis; a participant with no known mapping keeps `phone_number: None`.
 
-The query always hits the network (no phash is sent, so the server never answers `not-modified`) and the result does not populate the group cache. Use this for displaying or auditing a group; when you only need the participant list to send a message, prefer the cached [`query_info`](#query_info).
+The query hits the network (no phash is sent, so the server never answers `not-modified`) and the result does not populate the group cache. Use this for displaying or auditing a group; when you only need the participant list to send a message, prefer the cached [`query_info`](#query_info).
+
+<Note>
+**Concurrent calls for one group share a round trip.** A call that arrives while another is already in flight for the same group is answered by that in-flight query instead of sending its own — so the metadata it returns can describe an instant slightly before the call was made, bounded by how long the query in flight has been running. Sequential calls are unaffected: each one sends its own query. If an earlier `get_metadata` call is already in flight, wait for it to finish before calling `get_metadata` again. Then issue a new sequential call when you need a result ordered after that earlier call.
+</Note>
 
 **Example:**
 ```rust

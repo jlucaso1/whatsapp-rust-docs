@@ -1224,6 +1224,12 @@ pub enum DecryptFailMode {
 }
 ```
 
+<Note>
+Dispatch is single-flight per message, keyed on `(chat, id, sender)` — not `(chat, id)` alone. A stanza id is chosen by the sending client and is only unique within a `(chat, sender)` pair, so two different senders reusing the same id in one chat are two distinct messages, each getting its own event, instead of the second silently folding into the first.
+
+The sender is keyed on its wire-form JID, deliberately left unresolved to its LID/PN identity: resolving it would let the key move as that mapping is learned at runtime. The accepted cost of leaving it unresolved is the reverse case — a redelivery whose sender switches PN/LID namespace mid-flight is treated as a new message and dispatches a second placeholder. That is considered the lesser harm, since a duplicate placeholder is visible and recoverable, unlike a message going missing with nothing to say so.
+</Note>
+
 ### Notification
 
 **Emitted:** For raw notification stanzas that are not handled by a more specific event type
@@ -3093,7 +3099,7 @@ pub enum EncDecryptFailureReason {
 #### What it does not say
 
 <Note>
-- **Not a display signal.** Whether to show the user a placeholder is [`UndecryptableMessage`](#undecryptablemessage), which is per *message*, deduplicated by `(chat, id)`, and carries the server's `decrypt-fail` hint. `EncDecryptFailed` is per `<enc>`, is not deduplicated, and answers a different question.
+- **Not a display signal.** Whether to show the user a placeholder is [`UndecryptableMessage`](#undecryptablemessage), which is per *message*, deduplicated by `(chat, id, sender)`, and carries the server's `decrypt-fail` hint. `EncDecryptFailed` is per `<enc>`, is not deduplicated, and answers a different question.
 - **Not a loss report.** Most reasons are recoverable — the client may already have asked the sender to resend — and this event says nothing about whether a retry went out or succeeded later.
 - **Repeats.** A redelivered stanza that fails again emits it again, once per `<enc>` per delivery. Correlate on `(info.source.chat, info.source.sender, info.id, enc_index)` if you want at-most-once per `<enc>` — `info.id` alone is not globally unique, only within a `(chat, sender)` pair (see [Idempotency Requirement](/advanced/inbound-durability#idempotency-requirement)).
 - **A duplicate is not a failure.** An `<enc>` the server redelivered that this device already processed emits neither this event nor [`DecryptedPayload`](#decryptedpayload) — its plaintext was reported the first time round. A stanza whose only duplicate `<enc>` sits beside one that genuinely fails still reports that other `<enc>` as `NotAttempted`, on every delivery, since no delivery ever produced its plaintext.

@@ -1225,9 +1225,11 @@ pub enum DecryptFailMode {
 ```
 
 <Note>
-Dispatch is single-flight per message, keyed on `(chat, id, sender)` — not `(chat, id)` alone. A stanza id is chosen by the sending client and is only unique within a `(chat, sender)` pair, so two different senders reusing the same id in one chat are two distinct messages, each getting its own event, instead of the second silently folding into the first.
+The client deduplicates dispatch per `(chat, id, sender)`, not `(chat, id)` alone. A stanza id comes from the sending client. That id is only unique within a `(chat, sender)` pair. So two different senders can reuse the same id in one chat. The client treats those as two distinct messages and dispatches an event for each, instead of folding the second into the first.
 
-The sender is keyed on its wire-form JID, deliberately left unresolved to its LID/PN identity: resolving it would let the key move as that mapping is learned at runtime. The accepted cost of leaving it unresolved is the reverse case — a redelivery whose sender switches PN/LID namespace mid-flight is treated as a new message and dispatches a second placeholder. That is considered the lesser harm, since a duplicate placeholder is visible and recoverable, unlike a message going missing with nothing to say so.
+The client keys the sender on its wire-form JID. It deliberately leaves that JID unresolved to a LID/PN identity, because resolving it would let the key move as the client learns that mapping at runtime. This choice has one accepted cost: if a redelivery's sender switches PN/LID namespace mid-flight, the client treats it as a new message and dispatches a second placeholder. The client accepts that cost because a duplicate placeholder is visible and recoverable, while a silently dropped message is not.
+
+The dedup cache holds each key for up to 5 minutes (a TTL measured from first dispatch), or until it evicts the key to stay under its 1,000-entry capacity — whichever comes first. Once a key leaves the cache, a later redelivery of that same message dispatches the event again.
 </Note>
 
 ### Notification

@@ -214,7 +214,7 @@ pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, GroupError>
 The query hits the network (no phash is sent, so the server never answers `not-modified`) and the result does not populate the group cache. Use this for displaying or auditing a group; when you only need the participant list to send a message, prefer the cached [`query_info`](#query_info).
 
 <Note>
-**Concurrent calls for one group share a round trip.** A call that arrives while another is already in flight for the same group is answered by that in-flight query instead of sending its own — so the metadata it returns can describe an instant slightly before the call was made, bounded by how long the query in flight has been running. Sequential calls are unaffected: each one sends its own query. If you need a read that is strictly ordered after the moment you called `get_metadata`, wait for an outstanding call to finish rather than issuing a second one alongside it.
+**Concurrent calls for one group share a round trip.** A call that arrives while another is already in flight for the same group is answered by that in-flight query instead of sending its own — so the metadata it returns can describe an instant slightly before the call was made, bounded by how long the query in flight has been running. Sequential calls are unaffected: each one sends its own query. If an earlier `get_metadata` call is already in flight, wait for it to finish before calling `get_metadata` again. Then issue a new sequential call when you need a result ordered after that earlier call.
 </Note>
 
 **Example:**

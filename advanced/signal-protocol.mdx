@@ -2216,6 +2216,48 @@ Prewarming recovers roughly 90% of the gap between rebuilding cold and keeping t
 
 Location: `wacore/libsignal/src/protocol/sender_keys.rs`, `wacore/libsignal/src/core/curve.rs`
 
+### Stack-backed buffers for addon crypto, ADV validation, and prekeys
+
+As of [#1324](https://github.com/oxidezap/whatsapp-rust/pull/1324), four more short-lived allocation sources move to stack-backed storage, without changing the wire format, the crypto, or any existing call site.
+
+**Addon crypto** (reactions, poll votes, message edits, comments): `derive_use_case_secret`'s HKDF `info` string (`stanzaId || parentSender || modificationSender || <usecase>`) and `build_aad`'s AAD buffer are bounded by WhatsApp's own addressing shapes, so both move from `Vec<u8>` to `SmallVec` aliases that spill to the heap only for pathological JIDs:
+
+```rust
+// wacore/src/secret_enc_addon.rs
+type InfoBuffer = SmallVec<[u8; 128]>;
+pub(crate) type AadBuffer = SmallVec<[u8; 96]>;
+```
+
+**ADV identity validation** ([above](#adv-companion-identity-validation)): `validate_adv_with_identity_key` decodes through `ADVSignedDeviceIdentityView` instead of an owned `ADVSignedDeviceIdentity`, and the two signed messages verified per prefix family are assembled once into a stack buffer and re-prefixed per candidate, instead of rebuilt with `.concat()` on every attempt:
+
+```rust
+// wacore/src/adv.rs
+type AdvSigBuffer = SmallVec<[u8; 256]>;
+```
+
+**`PreKeyBundle`**: the signed pre-key signature is a fixed-length XEdDSA signature, so it is now stored inline as `[u8; 64]` instead of behind a `Vec<u8>`:
+
+```rust
+// wacore/libsignal/src/protocol/state/bundle.rs
+pub const SIGNED_PRE_KEY_SIGNATURE_LEN: usize = 64;
+
+pub fn new(
+    // ...
+    signed_pre_key_signature: impl TryInto<[u8; SIGNED_PRE_KEY_SIGNATURE_LEN]>,
+    // ...
+) -> Result<Self>
+```
+
+`signed_pre_key_signature` accepts anything that converts into `[u8; 64]`: a `[u8; 64]` fresh off `calculate_signature` passes through with no allocation, while a `Vec<u8>` from a store row is checked and rejected with `InvalidArgument` if it is not exactly 64 bytes. Existing call sites passing `Vec<u8>` keep compiling unchanged, since `TryFrom<Vec<T>> for [T; N]` covers the conversion.
+
+**Stored record bridges**: `prekey_structure_to_record` and `signed_prekey_structure_to_record` (`wacore/libsignal/src/store/record_helpers.rs`) used to parse a stored structure's keys just to validate them, then rebuild the structure from the parsed keys — reallocating both key fields (and the signature, for the signed variant) on every prekey read. They now validate and adopt the caller's structure directly, via the new `PreKeyRecord::from_storage` and `GenericSignedPreKey::from_stored_structure`, which normalize the stored public key exactly as `deserialize` always did — a pre-0.7 33-byte row still heals on its next write.
+
+**`SessionRecord::serialize_into`**: the scratch `Vec<usize>` carrying archived states' encoded lengths between the sizing pass and the writing pass is now an 8-slot stack array, with a heap fallback for an archive deeper than that (`previous_sessions` holds 0–3 states in the common case).
+
+Benchmarked with `divan::AllocProfiler`: `PreKeyBundle::new`/`clone` and `SessionRecord::serialize_into` drop to 0 allocations each (from 1), and the addon/ADV paths lose 1–8 allocations per call depending on the message type and prefix family. Wall time is flat everywhere a fixed-cost primitive — AES-GCM, HKDF, or XEdDSA verification — already dominates the call.
+
+Location: `wacore/src/secret_enc_addon.rs`, `wacore/src/adv.rs`, `wacore/libsignal/src/protocol/state/bundle.rs`, `wacore/libsignal/src/store/record_helpers.rs`, `wacore/libsignal/src/protocol/state/session.rs`
+
 ## Public API
 
 The `client.signal()` accessor exposes low-level Signal protocol operations for direct use. This includes 1:1 and group encryption/decryption, session validation, session deletion, participant node creation, and device resolution.

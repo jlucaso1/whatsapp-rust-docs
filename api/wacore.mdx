@@ -765,7 +765,7 @@ wacore includes a suite of [divan](https://github.com/nvzqz/divan) benchmarks �
 | `sender_key_derivation_benchmark` | `wacore/benches/sender_key_derivation_benchmark.rs` | Sender-key chain derivation, including the prewarm path |
 | `signal_address_probe_benchmark` | `wacore/benches/signal_address_probe_benchmark.rs` | Server-aware Signal address lookup probes |
 | `sframe_varint_benchmark` | `wacore/benches/sframe_varint_benchmark.rs` | SFrame varint header codec (requires the `voip` feature) |
-| `voip_benchmark` | `wacore/benches/voip_benchmark.rs` | VoIP media-path hot loops (requires the `voip` feature) |
+| `voip_benchmark` | `wacore/benches/voip_benchmark.rs` | VoIP media-path hot loops (requires the `voip-mlow` feature). Under the `bench-internals` feature, adds a `codec_stages` group — nine rows attributing MLow encoder CPU to a stage (`analyze_frame`, `entropy_encode`, `lpc_front_end`, `fft512_forward`, `fft576_roundtrip`, `perc_model_frame`, `pitch_search`, `lsf_quantize`, `celp_subframes_frame`) via the `wacore::voip::mlow::stage_bench` harness, so a codec-internal change shows *which* stage moved instead of only moving the single `mlow_encode` row |
 | `binary_benchmark` | `wacore/binary/benches/binary_benchmark.rs` | Binary protocol encoding/decoding — marshal and unmarshal operations for various node sizes and structures |
 | `jid_benchmark` | `wacore/binary/benches/jid_benchmark.rs` | JID parsing, formatting, and equality |
 | `appstate_benchmark` | `wacore/appstate/benches/appstate_benchmark.rs` | App-state hash/MAC primitives |
@@ -786,6 +786,13 @@ cargo bench -p wacore-libsignal --bench libsignal_benchmark
 
 # Feature-gated suites
 cargo bench -p wacore --features voip --bench sframe_varint_benchmark
+
+# Per-stage MLow codec attribution — adds the codec_stages rows to voip_benchmark.
+# `bench-internals` alone is intentionally not enough to select the target: the
+# bench's `required-features` is `["voip-mlow"]` only, so `codec_stages` is
+# `#[cfg]`-gated inside the bench body instead of pulled in through Cargo's
+# required-features (see CI integration below for why that distinction matters).
+cargo bench -p wacore --features voip-mlow,bench-internals --bench voip_benchmark
 ```
 
 ### Integration benchmarks
@@ -835,6 +842,7 @@ The library includes several allocation-reduction strategies that the integratio
 - **Streaming visitor/sink for history-sync records** — `process_history_sync_bytes_with_record_visitor` and `process_history_sync_bytes_with_record_sink` (via the [`HistoryMsgSecretRecordVisitor`](#history_sync-types) trait) go a step further than the filter predicate above. You can build your own storage row directly from the borrowed `HistoryMsgSecretRecordRef`. This ensures the intermediate owned `HistoryMsgSecretRecord` is never allocated at all. Bench (allocator-instrumented synthetic history extraction): 20.20 MiB → 14.43 MiB allocated (-28.6%); CodSpeed history stream-drain memory: 243.8 KB → 115.2 KB (2.1× less)
 - **Borrowed JID parsing** — [`jid::parse_jid_ref`](#wacore-binary) parses common protocol JIDs into a `JidRef` with zero allocation, falling back to `Jid`'s owned parser only for edge cases. Cut allocations 4,093 → 97 in the history-sync task's JID classification path
 - **In-place buffered media decrypt** — non-streaming `HttpClient` downloads now authenticate the already-buffered response body and decrypt AES-256-CBC in place (`DownloadUtils::verify_and_decrypt_in_place`, see [download](/api/download#downloadutils)), truncating the MAC/padding tail instead of allocating a second file-sized output buffer. Streaming clients are unaffected. Buffered download/decrypt span: 4.355 MiB → 2.146 MiB
+- **Stack arrays in the MLow codec's analysis internals** — `smpl_nlsf2a` sizes its scratch buffers by the fixed LPC order (16); it now stores three of its four `Vec`s as stack arrays instead. `smpl_lsf_quant::get_maxi_k` bounds its `used` mask by `n ≤ 17` and now stores it on the stack too, the same fix `smpl_celp::smpl_get_maxi_k` already carries. `CelpEncoder::encode_subframe` used to allocate a `vec![0.0f32; 160]` scratch buffer fresh inside its rate loop; it now pools that buffer and hoists it out of the loop. None of the three touch floating-point arithmetic — the `voip::mlow` golden-checksum tests pin that. Whole-frame `mlow_encode`: 633 → 534 allocations (−15.6%), 519.8 KB → 499.2 KB (−4.0%) ([#1320](https://github.com/oxidezap/whatsapp-rust/pull/1320))
 
 ### CI integration
 
@@ -844,6 +852,7 @@ Both benchmark types run from a single workflow, `.github/workflows/codspeed.yml
 - Sharded across two jobs — `wacore`/`wacore-noise` and `wacore-binary`/`wacore-libsignal`/`wacore-appstate` — so one shard failing doesn't cancel the other; CodSpeed merges the shards into one run
 - Run under both the simulation (instruction-count) and memory instruments
 - `MALLOC_*` environment variables freeze glibc malloc's adaptive thresholds, whose allocation-history-dependent decisions otherwise read as spurious deltas
+- The `wacore`/`wacore-noise` shard passes `--features voip-mlow,bench-internals`. Without a `features` entry, a CodSpeed shard builds its bench targets under only the crate's default features. Both `voip_benchmark` and `sframe_varint_benchmark` declare `required-features`, and cargo *silently skips* a bench target whose required features are off instead of erroring. Before this fix, the entire VoIP media plane — MLow encode/decode, E2E-SRTP, SFrame, and the `codec_stages` per-stage rows — built nowhere and uploaded nothing ([#1320](https://github.com/oxidezap/whatsapp-rust/pull/1320))
 
 **Integration benchmarks:**
 - Run in their own job with a Bartender mock server as a Docker service container

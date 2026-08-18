@@ -88,6 +88,7 @@ whatsapp-rust supports several optional features:
 | `voip-encoded` | Narrower `voip` profile: relay transport and encoded-audio boundary only, no bundled codec — supply raw Opus/MLOW packets from your own encoder/decoder | ❌ No |
 | `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW codec | ❌ No |
 | `voip-libopus` | `voip-encoded` plus the optional libopus FFI codec adapter | ❌ No |
+| `mlow-fast-fft` | Opt-in real FFT for the MLow encoder's analysis stage, computed via a half-length complex transform — same math, ~27% fewer encoder instructions, but not bit-identical to the reference encoder's output bitstream. Implies `voip-mlow`; off by default because the resulting bitstream hasn't been validated against a real WhatsApp decoder. See [VoIP Calls](/guides/voip-calls#mlow-codec) | ❌ No |
 | `legacy-session-interop` | Typed interop with the decoded legacy libsignal `SessionRecord` v1 model, for migrating externally produced auth state. See [Signal Protocol](/advanced/signal-protocol) | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `danger-skip-cert-chain-verify` | Skip the Noise handshake certificate-chain check (unsafe) | ❌ No |

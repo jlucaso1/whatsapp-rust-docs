@@ -597,6 +597,27 @@ The decoder operates at a single fixed point:
   MLOW is broadly compatible and pure Rust, but its analysis-by-synthesis encoder costs more CPU than native Opus. Native Opus avoids MLOW transcoding but a peer may still send proprietary MLOW, so an Opus-only application still needs an external MLOW decoder for that fallback (see `voip-mlow`'s `OPUS_MLOW_16KHZ_60MS` escape in [Audio codecs](#audio-codecs)).
 </Tip>
 
+### Opt-in split FFT (`mlow-fast-fft`)
+
+The encoder's two perceptual/LPC-analysis FFTs each run a full complex transform on data that's actually real (forward) or Hermitian (inverse) — twice the butterflies the transform needs. The `mlow-fast-fft` feature packs the input into one half-length complex transform instead, roughly halving each FFT and cutting the whole encode by about 27%.
+
+`mlow-fast-fft` landed after the published **0.7.0** release, so it needs a git dependency until a later version ships it:
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["mlow-fast-fft"] }
+```
+
+<Warning>
+  This is a different operation sequence for the same transform. It does **not** reproduce the reference encoder bit for bit. MLow's pulse search, pitch estimator, and LSF quantizer all resolve ties on `f32` comparisons, so that last-bit difference cascades into a different, still well-formed bitstream.
+
+  [PR #1323](https://github.com/oxidezap/whatsapp-rust/pull/1323) bounds the numerical drift and shows it's the same size as a one-ULP input nudge. But nothing in this repository's test suite decodes with a real WhatsApp client, so it can't confirm one decodes the resulting bitstream the same way it decodes the reference one.
+
+  The feature stays off by default. Turn it on only if you can validate the output against a live WhatsApp decoder yourself.
+</Warning>
+
+`mlow-fast-fft` implies `voip-mlow`.
+
 ## H.264 video plane
 
 Unlike MLow, whatsapp-rust does **not** implement an H.264 encoder or decoder — the codec is owned by the consumer. What `wacore` does implement, in pure Rust, is the RTP media plane around it:

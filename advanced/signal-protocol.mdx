@@ -2220,7 +2220,7 @@ Location: `wacore/libsignal/src/protocol/sender_keys.rs`, `wacore/libsignal/src/
 
 As of [#1324](https://github.com/oxidezap/whatsapp-rust/pull/1324), more short-lived allocation sources — addon crypto, ADV validation, `PreKeyBundle`, the prekey store bridges, and session serialization — move to stack-backed storage, without changing the wire format, the crypto, or any existing call site.
 
-**Addon crypto** (reactions, poll votes, message edits, comments): `derive_use_case_secret`'s HKDF `info` string (`stanzaId || parentSender || modificationSender || <usecase>`) and `build_aad`'s AAD buffer are bounded by WhatsApp's own addressing shapes, so both move from `Vec<u8>` to `SmallVec` aliases that spill to the heap only for pathological JIDs:
+**Addon crypto** (reactions, poll votes, message edits, comments): `derive_use_case_secret`'s HKDF `info` string (`stanzaId || parentSender || modificationSender || <usecase>`) and `build_aad`'s AAD buffer move from `Vec<u8>` to `SmallVec` aliases:
 
 ```rust
 // wacore/src/secret_enc_addon.rs
@@ -2228,12 +2228,16 @@ type InfoBuffer = SmallVec<[u8; 128]>;
 pub(crate) type AadBuffer = SmallVec<[u8; 96]>;
 ```
 
+`InfoBuffer` spills to the heap once `stanza_id.len() + parent_sender.len() + modification_sender.len() + use_case.len()` exceeds 128 bytes. `AadBuffer` spills once `stanza_id.len() + 1 + modification_sender.len()` exceeds 96 bytes. Both limits cover WhatsApp's real addressing shapes with room to spare; neither is enforced by protocol validation, so an unusually long stanza id or JID still works — it just falls back to a heap allocation instead of staying inline.
+
 **ADV identity validation** ([above](#adv-companion-identity-validation)): `validate_adv_with_identity_key` decodes through `ADVSignedDeviceIdentityView` instead of an owned `ADVSignedDeviceIdentity`, and the two signed messages verified per prefix family are assembled once into a stack buffer and re-prefixed per candidate, instead of rebuilt with `.concat()` on every attempt:
 
 ```rust
 // wacore/src/adv.rs
 type AdvSigBuffer = SmallVec<[u8; 256]>;
 ```
+
+The device message is `prefix(2) || details || identity(32) || accountKey(32)`, so this buffer spills once `details.len() + 66` exceeds 256 bytes — comfortably above the couple dozen bytes a real `ADVDeviceIdentity` encodes to.
 
 **`PreKeyBundle`**: the signed pre-key signature is a fixed-length XEdDSA signature, so it is now stored inline as `[u8; 64]` instead of behind a `Vec<u8>`:
 
@@ -2254,7 +2258,7 @@ pub fn new(
 
 **`SessionRecord::serialize_into`**: the scratch `Vec<usize>` carrying archived states' encoded lengths between the sizing pass and the writing pass is now an 8-slot stack array, with a heap fallback for an archive deeper than that (`previous_sessions` holds 0–3 states in the common case).
 
-Benchmarked with `divan::AllocProfiler`: `PreKeyBundle::new`/`clone` and `SessionRecord::serialize_into` drop to 0 allocations each (from 1), and the addon/ADV paths lose 1–8 allocations per call depending on the message type and prefix family. Wall time is flat everywhere a fixed-cost primitive — AES-GCM, HKDF, or XEdDSA verification — already dominates the call.
+The source PR measured these with `divan::AllocProfiler`: `PreKeyBundle::new`/`clone` and `SessionRecord::serialize_into` dropped to 0 allocations each (from 1), and the addon/ADV paths lost 1–8 allocations per call depending on the message type and prefix family. That measurement used temporary benches for the addon and ADV paths, since neither had bench coverage before; those benches were removed before merging and are not part of the repository. `SessionRecord::serialize_into` and `PreKeyBundle` are covered by the existing `wacore/libsignal/benches/libsignal_benchmark.rs`, which shows wall time flat within noise — expected, since AES-GCM, HKDF, and XEdDSA verification already dominate each call.
 
 Location: `wacore/src/secret_enc_addon.rs`, `wacore/src/adv.rs`, `wacore/libsignal/src/protocol/state/bundle.rs`, `wacore/libsignal/src/store/record_helpers.rs`, `wacore/libsignal/src/protocol/state/session.rs`
 

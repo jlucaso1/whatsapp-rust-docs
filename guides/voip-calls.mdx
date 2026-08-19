@@ -599,9 +599,20 @@ The decoder operates at a single fixed point:
 
 ### Analysis FFT
 
-The encoder's two perceptual/LPC-analysis FFTs pack their real-valued (forward) or Hermitian (inverse) input into one half-length complex transform, rather than running a full-length complex transform on data that's half redundant. This roughly halves the butterflies each of those FFTs needs and cuts whole-encode CPU by about 21%, with no separate encoder-side heap arena to carry for it.
+The encoder runs two perceptual/LPC-analysis FFTs: a 512-point transform and a 576-point transform. Both take real-valued input on the forward pass and Hermitian input on the inverse pass. Each now packs its own input into its own half-length complex transform, instead of running a full-length complex transform on data that's half redundant. This roughly halves the butterflies each FFT needs. It cuts whole-encode CPU by about 21%. It also needs no separate encoder-side heap arena to hold a second, full-length plan.
 
-This is the encoder's only analysis-FFT path — there is no feature flag and no full-length fallback to opt into. [PR #1330](https://github.com/oxidezap/whatsapp-rust/pull/1330) removed the earlier `mlow-fast-fft` opt-in after establishing perceptual equivalence with the reference encoder it replaced (PESQ-WB/ESTOI/segSNR/LSD on 991 s of clean and noisy speech) and confirming every emitted frame keeps the same TOC byte and packet-size envelope. It also turns out to be the technique the `smpl` C reference implementation this codec was validated against already uses.
+This is the encoder's only analysis-FFT path in current source. There is no feature flag and no full-length fallback to opt into. [PR #1330](https://github.com/oxidezap/whatsapp-rust/pull/1330) removed the earlier opt-in `mlow-fast-fft` feature that gated this transform. That change established perceptual equivalence with the reference encoder it replaced — measured with PESQ-WB, ESTOI, segSNR, and LSD over 991 s of clean and noisy speech. It also confirmed every emitted frame keeps the same TOC byte and packet-size envelope as before. The half-length technique turns out to be what the `smpl` C reference implementation this codec was validated against already uses.
+
+<Warning>
+  This landed after the published **0.7.0** release, so it needs a git dependency until a later version ships it:
+
+  ```toml Cargo.toml
+  [dependencies]
+  whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["voip"] }
+  ```
+
+  The published `0.7.0` crate still runs the previous full-length transform unconditionally — there was never a feature flag to select between the two in a release.
+</Warning>
 
 ## H.264 video plane
 

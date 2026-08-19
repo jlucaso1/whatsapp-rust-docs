@@ -998,10 +998,10 @@ Newsletter (channel) reactions use a different plaintext stanza format and are n
 
 ## Phash validation (stale device list detection)
 
-When sending group, status, or DM messages, the library automatically validates the participant hash (`phash`) from the server's acknowledgment against the locally computed value. If the hashes differ, the appropriate caches are invalidated so the next send re-fetches current participant devices from the server:
+When sending group, status, or DM messages, the library automatically validates the participant hash (`phash`) from the server's acknowledgment against the locally computed value. Group sends only compare it as of [#1328](https://github.com/oxidezap/whatsapp-rust/pull/1328) — before that, a group ack's `phash` attribute was never checked at all. If the hashes differ:
 
-- **Group messages**: sender key device cache and group info cache are invalidated
-- **Status messages**: sender key device cache is invalidated
+- **Group messages**: group metadata is invalidated (participants are re-queried on the next send); sender-key device tracking is **not** reset, since forcing full SKDM redistribution on every mismatch would cost a fan-out per message for as long as the divergence lasted
+- **Status messages**: sender key device cache is invalidated (forces full SKDM redistribution)
 - **DM messages**: the device registry cache is invalidated for both the recipient and your own phone number (PN), matching WA Web's `syncDeviceListJob([recipient, me])` behavior
 
 For DMs, the phash is computed locally from the sent device set but is **not** sent on the wire (WA Web only sends phash for groups). The phash is returned via the `PreparedDmStanza.phash` field and compared against the server's ACK phash.

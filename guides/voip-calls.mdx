@@ -597,26 +597,22 @@ The decoder operates at a single fixed point:
   MLOW is broadly compatible and pure Rust, but its analysis-by-synthesis encoder costs more CPU than native Opus. Native Opus avoids MLOW transcoding but a peer may still send proprietary MLOW, so an Opus-only application still needs an external MLOW decoder for that fallback (see `voip-mlow`'s `OPUS_MLOW_16KHZ_60MS` escape in [Audio codecs](#audio-codecs)).
 </Tip>
 
-### Opt-in split FFT (`mlow-fast-fft`)
+### Analysis FFT
 
-The encoder's two perceptual/LPC-analysis FFTs each run a full complex transform on data that's actually real (forward) or Hermitian (inverse) — twice the butterflies the transform needs. The `mlow-fast-fft` feature packs the input into one half-length complex transform instead, roughly halving each FFT and cutting the whole encode by about 27%.
+The encoder runs two perceptual/LPC-analysis FFTs: a 512-point transform and a 576-point transform. Both take real-valued input on the forward pass and Hermitian input on the inverse pass. Each now packs its own input into its own half-length complex transform, instead of running a full-length complex transform on data that's half redundant. This roughly halves the butterflies each FFT needs. It also needs no separate encoder-side heap arena to hold a second, full-length plan. In [PR #1330](https://github.com/oxidezap/whatsapp-rust/pull/1330)'s own benchmark — five runs pinned to a P-core over 486 s of audio — this cut whole-encode CPU by about 21%.
 
-`mlow-fast-fft` landed after the published **0.7.0** release, so it needs a git dependency until a later version ships it:
-
-```toml Cargo.toml
-[dependencies]
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["mlow-fast-fft"] }
-```
+This is the encoder's only analysis-FFT path in current source. There is no feature flag and no full-length fallback to opt into. PR #1330 removed the earlier opt-in `mlow-fast-fft` feature that gated this transform. That change established perceptual equivalence with the reference encoder it replaced — measured with PESQ-WB, ESTOI, segSNR, and LSD over 991 s of clean and noisy speech. It also confirmed that every one of the 8,106 frames in that validation corpus keeps the same TOC byte and packet-size envelope as before. The half-length technique turns out to be what the `smpl` C reference implementation this codec was validated against already uses.
 
 <Warning>
-  This is a different operation sequence for the same transform. It does **not** reproduce the reference encoder bit for bit. MLow's pulse search, pitch estimator, and LSF quantizer all resolve ties on `f32` comparisons, so that last-bit difference cascades into a different, still well-formed bitstream.
+  This landed after the published **0.7.0** release, so it needs a git dependency until a later version ships it:
 
-  [PR #1323](https://github.com/oxidezap/whatsapp-rust/pull/1323) bounds the numerical drift and shows it's the same size as a one-ULP input nudge. But nothing in this repository's test suite decodes with a real WhatsApp client, so it can't confirm one decodes the resulting bitstream the same way it decodes the reference one.
+  ```toml Cargo.toml
+  [dependencies]
+  whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["voip"] }
+  ```
 
-  The feature stays off by default. Turn it on only if you can validate the output against a live WhatsApp decoder yourself.
+  The published `0.7.0` crate still runs the previous full-length transform unconditionally — there was never a feature flag to select between the two in a release.
 </Warning>
-
-`mlow-fast-fft` implies `voip-mlow`.
 
 ## H.264 video plane
 

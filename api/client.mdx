@@ -447,6 +447,10 @@ let code = client.pair_with_code(new_options).await?;
 
 ### set_passkey_authenticator
 
+<Note>
+  **Requires the `passkey` feature** (opt-in, off by default as of the next release after 0.7.0). `set_passkey_authenticator`, `send_passkey_response`, and `send_passkey_confirmation` below don't exist without it. See [Feature flags](/installation#feature-flags) and [Authentication — Passkey linking](/concepts/authentication#passkey-linking-shortcake_passkey).
+</Note>
+
 ```rust
 pub async fn set_passkey_authenticator(&self, authenticator: Arc<dyn PasskeyAuthenticator>)
 ```
@@ -2485,8 +2489,36 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `custom_enc_handlers` | `usize` | Registered custom encryption handlers |
 | `stanza_interceptors` | `usize` | Registered stanza interceptors ([`add_stanza_interceptor`](#add_stanza_interceptor)). A handle that outlives its interest leaves one registered, and a leak here costs a walk on every stanza — which this count is what makes visible ([#1239](https://github.com/oxidezap/whatsapp-rust/pull/1239)) |
 | `plugin_stanza_interceptors` | `u64` | Behind the `plugins` feature: sum of every installed plugin's active [stanza interceptors](/advanced/plugins#stanza-interception) ([#1241](https://github.com/oxidezap/whatsapp-rust/pull/1241)) |
+| `subsystems` | `Vec<SubsystemMemory>` | What the optional subsystems attached to this build retain — one entry per `(subsystem, collection)` pair reported by an attached subsystem (currently only `voip`, behind the `voip-runtime` feature family). Empty when no such subsystem is compiled in, rather than a `cfg`'d field per subsystem — the report has one shape whatever features this build enables |
 
-`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field. `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown. This output includes an `--- In-flight history sync ---` section with the two peak fields above, followed by a `--- Transient retention ---` section for `inbound_commit_batch`, `msg_secret_buffer`, and `pending_device_sync` ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)).
+`CollectionStats` carries both `entries: u64` and `bytes: u64`. `MemoryReport::total_estimated_bytes(&self) -> u64` sums `.bytes` across every byte-carrying field, `subsystems` included. `MemoryReport` implements `Display` for a pretty-printed, human-readable breakdown. This output includes an `--- In-flight history sync ---` section with the two peak fields above, followed by a `--- Transient retention ---` section for `inbound_commit_batch`, `msg_secret_buffer`, and `pending_device_sync` ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)).
+
+**Reading a subsystem's collections:**
+
+```rust
+pub fn subsystem(&self, which: SubsystemCollection) -> Option<CollectionStats>
+```
+
+Looks up one collection of one attached subsystem by `SubsystemCollection`, a compile-checked constant rather than a string — naming a collection that doesn't exist is a build error, and `None` means either the subsystem isn't attached to this build or it doesn't report that collection. The `voip` subsystem (feature `voip-runtime` and its `voip-*` aliases) exposes its constants under `whatsapp_rust::voip::collections`:
+
+| Constant | Collection |
+|----------|------------|
+| `voip::collections::ACTIVE_CALLS` | Active and ringing calls, with their bounded pre-offer group controls |
+| `voip::collections::PENDING_OUTGOING` | Outgoing calls parked until the server sends the relay that owns them |
+| `voip::collections::PENDING_LINK_UPDATES` | Admission snapshots retained while a call-link join ACK is in flight |
+
+```rust
+use whatsapp_rust::voip;
+
+let report = client.memory_report().await;
+if let Some(active_calls) = report.subsystem(voip::collections::ACTIVE_CALLS) {
+    println!("active calls: {} entries, {} bytes", active_calls.entries, active_calls.bytes);
+}
+```
+
+<Note>
+  **Breaking change (unreleased):** `MemoryReport` used to carry three individual `voip-runtime`-gated fields (`active_calls`, `pending_outgoing_calls`, `pending_call_link_updates`) directly on the struct. They're now reached through `subsystems` / `subsystem()` above instead, so a build with no optional subsystem attached pays no `cfg`'d field for one it doesn't use. Migration: `report.active_calls` → `report.subsystem(voip::collections::ACTIVE_CALLS)`.
+</Note>
 
 **Example:**
 
@@ -2628,3 +2660,4 @@ As of PR #1090, `connect()`/`wait_for_socket()`/`wait_for_connected()` return [`
 - [Events](/concepts/events) - Event system and types
 - [Sending Messages](/guides/sending-messages) - Sending and receiving messages
 - [Group Management](/guides/group-management) - Working with groups
+

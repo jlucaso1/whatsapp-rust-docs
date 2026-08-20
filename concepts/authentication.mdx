@@ -635,6 +635,17 @@ Retiring a flow that reached stage 2 — via a refusal, the one-minute timer, or
 
 ## Passkey linking (SHORTCAKE_PASSKEY)
 
+<Warning>
+  **Breaking change (unreleased):** passkey linking now lives behind an opt-in `passkey` feature flag, off by default:
+
+  ```toml Cargo.toml
+  [dependencies]
+  whatsapp-rust = { version = "0.7", features = ["passkey"] }
+  ```
+
+  Without it, `whatsapp_rust::passkey` doesn't exist — `set_passkey_authenticator`, `send_passkey_response`, and `send_passkey_confirmation` are unavailable — and a `passkey_prologue_request` notification from the server reaches your app as `Event::Notification` instead of the `Event::PairPasskey*` events below, the same way any notification type this client doesn't model does. See [Feature flags](/installation#feature-flags).
+</Warning>
+
 ### How it works
 
 **Location:** `wacore/src/shortcake.rs` (pure crypto/protobuf core), `src/passkey/mod.rs` (the `PasskeyAuthenticator` seam), `src/passkey/flow.rs` (the client driver)
@@ -1297,3 +1308,4 @@ bot.run().await?;
     Build your first bot
   </Card>
 </CardGroup>
+

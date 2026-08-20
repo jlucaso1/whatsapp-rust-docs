@@ -636,14 +636,14 @@ Retiring a flow that reached stage 2 — via a refusal, the one-minute timer, or
 ## Passkey linking (SHORTCAKE_PASSKEY)
 
 <Warning>
-  **Breaking change (unreleased):** passkey linking now lives behind an opt-in `passkey` feature flag, off by default:
+  **Breaking change (unreleased):** enable the opt-in `passkey` feature flag if you use passkey linking — it's off by default. This lands after the published **0.7.0** release, so it needs a git dependency until a later version ships it:
 
   ```toml Cargo.toml
   [dependencies]
-  whatsapp-rust = { version = "0.7", features = ["passkey"] }
+  whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["passkey"] }
   ```
 
-  Without it, `whatsapp_rust::passkey` doesn't exist — `set_passkey_authenticator`, `send_passkey_response`, and `send_passkey_confirmation` are unavailable — and a `passkey_prologue_request` notification from the server reaches your app as `Event::Notification` instead of the `Event::PairPasskey*` events below, the same way any notification type this client doesn't model does. See [Feature flags](/installation#feature-flags).
+  Skip the feature (or stay on the published `0.7.0`, where nothing gates it yet) and `whatsapp_rust::passkey` doesn't exist for you — `set_passkey_authenticator`, `send_passkey_response`, and `send_passkey_confirmation` are unavailable, and a `passkey_prologue_request` notification from the server reaches your app as `Event::Notification` instead of the `Event::PairPasskey*` events below, the same way any notification type this client doesn't model does. See [Feature flags](/installation#feature-flags).
 </Warning>
 
 ### How it works

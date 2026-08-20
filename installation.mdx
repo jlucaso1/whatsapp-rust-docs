@@ -83,6 +83,7 @@ whatsapp-rust supports several optional features:
 | `metrics` | Emit `wa_*` counters, histograms, and gauges through the [`metrics`](https://docs.rs/metrics) facade for Prometheus/OTLP dashboards. See [Metrics](/advanced/metrics) | ❌ No |
 | `client-lifecycle` | Low-level, generation-scoped extension lifecycle seam (`ClientLifecycle`, `ConnectionScope`). Enabled automatically by `plugins`; enable it directly only if you need lifecycle hooks without the full native plugin host | ❌ No |
 | `plugins` | Build-time native plugin host: type-safe `ClientPlugin` registration through `ClientBuilder`, capability-scoped APIs, and generation-scoped task lifecycle. Enables `client-lifecycle` (see [Native plugins](/advanced/plugins)) | ❌ No |
+| `passkey` | Passkey (SHORTCAKE_PASSKEY) companion-linking flow: `whatsapp_rust::passkey`, `set_passkey_authenticator`, `send_passkey_response`, `send_passkey_confirmation`. Enable it to receive the `Event::PairPasskey*` events — if you don't, your app receives a `passkey_prologue_request` as a plain `Event::Notification` instead. See [Authentication — Passkey linking](/concepts/authentication#passkey-linking-shortcake_passkey) | ❌ No |
 | `voip` | 1:1 voice and video calls, full profile: bundled MLow + libopus codec adapters, codec-neutral H.264 video plane, E2E-SRTP encryption, relay transport. Alias for `voip-mlow` + `voip-libopus` (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
 | `voip-runtime` | Internal base feature enabled by every `voip-*` feature below (Tokio driver, relay transport, DTLS/SCTP). Not meant to be named directly — pick `voip-encoded` or a codec feature instead | ❌ No |
 | `voip-encoded` | Narrower `voip` profile: relay transport and encoded-audio boundary only, no bundled codec — supply raw Opus/MLOW packets from your own encoder/decoder | ❌ No |
@@ -92,6 +93,10 @@ whatsapp-rust supports several optional features:
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `danger-skip-cert-chain-verify` | Skip the Noise handshake certificate-chain check (unsafe) | ❌ No |
 | `debug-snapshots` | Debug protocol snapshots | ❌ No |
+
+<Warning>
+  **Breaking change (unreleased):** enable `passkey` explicitly if you use passkey linking — it's now opt-in and off by default, where earlier versions compiled it into every build. Add `features = ["passkey"]` before upgrading — see the row above.
+</Warning>
 
 <Tip>
   All default features enable Tokio as the async runtime, but every component is optional. To target a different runtime (async-std, WASM, etc.), disable all defaults and provide your own implementations of the `Runtime`, `TransportFactory`, `HttpClient`, and `Backend` traits. See [custom backends](/guides/custom-backends) for details.

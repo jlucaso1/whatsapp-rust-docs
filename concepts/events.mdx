@@ -737,6 +737,10 @@ pub struct PairError {
 
 ### PairPasskeyRequest
 
+<Note>
+  **Requires the `passkey` feature** (opt-in, off by default as of the next release after 0.7.0). Without it, `PairPasskeyRequest`, `PairPasskeyConfirmation`, and `PairPasskeyError` below are never emitted — a `passkey_prologue_request` notification instead reaches your handler as `Event::Notification`. See [Feature flags](/installation#feature-flags) and [Authentication — Passkey linking](/concepts/authentication#passkey-linking-shortcake_passkey).
+</Note>
+
 **Emitted:** During [passkey (SHORTCAKE_PASSKEY) linking](/concepts/authentication#passkey-linking-shortcake_passkey), when the server asks for a WebAuthn assertion to gate the link
 
 ```rust
@@ -3381,4 +3385,5 @@ async fn handle_event(event: &Event, client: Arc<Client>) -> Result<()> {
     Complete client API reference
   </Card>
 </CardGroup>
+
 

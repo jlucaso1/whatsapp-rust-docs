@@ -571,7 +571,7 @@ The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket
 
   - `wacore` with `features = ["voip"]` — pure Rust (H.264 RTP media plane, SRTP crypto, encoded-audio boundary, `CallEngine`). No FFI, no bundled audio codec. Compiles to WASM and embedded targets (esp32).
   - `wacore` with `features = ["voip-mlow"]` — adds the pure-Rust MLOW codec on top of `voip`. Still no FFI; still compiles to WASM/esp32.
-  - `whatsapp-rust` with `features = ["voip-encoded"]` — adds the Tokio async driver and webrtc-rs (DTLS/SCTP), no audio codec linked. **Does not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
+  - `whatsapp-rust` with `features = ["voip-encoded"]` — adds a Tokio driver task built on the sans-IO `rtc-dtls`/`rtc-sctp`/`rtc-datachannel` crates (DTLS/SCTP), no audio codec linked. **Does not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
   - `whatsapp-rust` with `features = ["voip-mlow"]` / `["voip-libopus"]` / `["voip"]` — `voip-encoded` plus the corresponding codec adapter(s). Same platform restriction as `voip-encoded`.
 </Warning>
 

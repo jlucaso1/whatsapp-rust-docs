@@ -12,7 +12,7 @@ WAM (WhatsApp Metrics) is the telemetry the official WhatsApp client uploads abo
 | `whatsapp-rust-wam-catalog` | A generated catalog — every event, field id, enum member, global, and constant WA Web declares (436 events, 8,112 fields) — plus a byte-exact buffer codec. |
 | `whatsapp-rust-plugin-wam` | The runtime: observation, sampling, buffering, flush, and upload, packaged as a [native plugin](/advanced/plugins). |
 
-Neither crate is in the default build, and neither is published to crates.io yet — add them as `git` dependencies the same way you would [`passkey`](/concepts/authentication#passkey-linking) or [`voip`](/guides/voip-calls) ahead of a release that carries them.
+Neither crate is in the default build, and neither is published to crates.io yet — add them as `git` dependencies the same way you would [`passkey`](/concepts/authentication#passkey-linking-shortcake_passkey) or [`voip`](/guides/voip-calls) ahead of a release that carries them.
 
 <Note>
 This is the client reporting on itself, not a message-content feature. Read [Privacy and PII](#privacy-and-pii) before enabling it in an application that handles user data you don't control.
@@ -92,7 +92,9 @@ pub struct WamConfig {
 }
 ```
 
-- **`identity`** — what this client says about itself in a buffer's globals. `WamIdentity::web()` (the default) derives `appVersion`, `platform`, and `osVersion` from the same `ClientProfile` the pairing payload is built from, so telemetry and pairing can never disagree. `ocVersion` (0) and `appIsBetaRelease` (false) are facts, not configuration — this isn't the official client, and the pairing payload announces the release channel. Build a `WamIdentity` with `from_profile` to match a non-web `ClientProfile`.
+- **`identity`** — what this client says about itself in a buffer's globals. `WamIdentity::web()` (the default) derives `appVersion`, `platform`, and `osVersion` from the same `ClientProfile` the pairing payload is built from, so telemetry and pairing agree at the point `WamIdentity` is built. `ocVersion` (0) and `appIsBetaRelease` (false) are facts, not configuration — this isn't the official client, and the pairing payload announces the release channel. Build a `WamIdentity` with `from_profile` to match a non-web `ClientProfile`.
+
+  `WamIdentity` is captured once, when you build `WamConfig`, and the plugin never re-reads it. If your application calls `Client::set_client_profile` after installing `WamPlugin`, the pairing payload and the WAM identity can drift apart — build `WamIdentity` from the same `ClientProfile` you intend to keep using, or reinstall the plugin after a profile change.
 
   `service_improvement_opt_out` is left absent by default because the library has no way to read the account's actual preference. Setting it only records a value in the buffer's globals — it does **not** suppress anything this plugin sends. If your application knows the user opted out of telemetry, don't install `WamPlugin` at all; setting this field to `true` is not a substitute for that.
 - **`store`** — see [Persistence](#persistence).
@@ -128,11 +130,11 @@ Every derivation reads the stanza envelope, never the decoded message content �
 
 ## Upload behavior
 
-Buffers accumulate for a few seconds before being written, and are sent on a timer or once a size threshold is crossed. A failed upload is retried with a backoff (starting at one second, doubling, capped at two minutes) — except when the server's response classifies the buffer itself as refused (a 4xx that isn't a `wait`, `408`, or `429`), in which case it's dropped rather than retried forever. Shutdown gets one best-effort flush inside the same deadline the [plugin host](/advanced/plugins#lifecycle-and-task-scopes) already applies to every shutdown callback — it never blocks teardown waiting on the network.
+Buffers accumulate for a few seconds before being written, and are sent on a timer or once a size threshold is crossed. A failed upload is retried with a backoff (starting at one second, doubling, capped at two minutes) — except when the server's response classifies the buffer itself as refused (a 4xx that isn't a `wait`, `408`, or `429`), in which case it's dropped rather than retried forever. Shutdown gets one best-effort flush inside the same deadline the [plugin host](/advanced/plugins#lifecycle-and-task-scopes) already applies to every shutdown callback (5 seconds by default) — teardown can block on that upload for up to the deadline, never longer, and whatever doesn't finish in time is left for the store to retain instead.
 
 ## Cost
 
-Measured on a stripped release build with `CARGO_PROFILE_RELEASE_STRIP=false`, the same build [`binary-size-ci`](/advanced/build-flags) gates on:
+Measured on a stripped release build with `CARGO_PROFILE_RELEASE_STRIP=false`, the same build [binary-size CI](/changelog/2026-06-12-binary-size-ci) gates on:
 
 | build | delta |
 | --- | --- |

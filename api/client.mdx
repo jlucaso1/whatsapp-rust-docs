@@ -517,12 +517,12 @@ Returns `true` if authenticated with WhatsApp servers.
 pub fn reachability(&self) -> Reachability
 ```
 
-Added in PR #1332. What the client's connection state means for work handed to it right now — see [`Reachability`](#reachability-enum) below. The single place that state is turned into an answer, so a caller doesn't have to assemble one from [`is_connected()`](#is_connected), [`is_logged_in()`](#is_logged_in), and [`is_paused()`](#is_paused) individually: those flags don't compose safely on their own. A stream-error teardown sets its terminal condition before it clears the session, `is_logged_in` becomes true one instruction before the connection generation it authenticates, and a rate-limited (429) session keeps its socket open while no longer being reachable.
+Added in PR #1332. What the client's connection state means for work handed to it right now — see [`Reachability`](#reachability-enum) below. It's the single place that state is turned into an answer. A caller no longer has to assemble one from [`is_connected()`](#is_connected), [`is_logged_in()`](#is_logged_in), and [`is_paused()`](#is_paused) individually, because those flags don't compose safely on their own. A stream-error teardown sets its terminal condition before it clears the session. `is_logged_in` becomes true one instruction before the connection generation it authenticates. And a rate-limited (429) session keeps its socket open while no longer being reachable.
 
 Reads flags only — no lock, no allocation — so it costs the same whether the answer is acted on or discarded.
 
 <Note>
-A refused call (e.g. `ClientError::NotConnected`) and `reachability()` answer different questions. The error is a fact about one attempt, and may already be stale by the time it's read — the connection could be lost right after a call was admitted, or restored right after one was refused. `reachability()` is state, re-read on demand, and it's what tells "this comes back on its own" (`Reachability::Reconnecting`) apart from "stop trying" (`Reachability::Finished`) — a distinction the error alone can't make, since a client between connections and a finished one refuse a call with the identical message.
+A refused call (e.g. `ClientError::NotConnected`) and `reachability()` answer different questions. The error is a fact about one attempt, and it may already be stale by the time it's read — the connection could be lost right after a call was admitted, or restored right after one was refused. `reachability()` is state, re-read on demand. It's what tells "this comes back on its own" (`Reachability::Reconnecting`) apart from "stop trying" (`Reachability::Finished`) — a distinction the error alone can't make, since a client between connections and a finished one refuse a call with the identical message.
 </Note>
 
 ### wait_until_reachable
@@ -533,28 +533,32 @@ pub async fn wait_until_reachable(&self) -> Reachability
 
 Added in PR #1332. Waits until the client can reach the server again, or until waiting stops being the right answer. Returns the [`Reachability`](#reachability-enum) that ended the wait: `Reachability::Reachable` once a connection arrives, otherwise the reason none will without the caller doing something about it. `Reachability::Reconnecting` is never returned — it's the one state this call waits out.
 
-Bounded by the client's own lifetime rather than by a duration: the reconnect backoff is jittered, capped at 900s, and followed by a handshake, so no constant here would be honest. Cancellation is the caller's to apply — drop the future, or wrap it in your own `tokio::time::timeout`.
+Bounded by the client's own lifetime rather than by a duration. The reconnect backoff is jittered, capped at 900s, and followed by a handshake, so no constant here would be honest. Cancellation is the caller's to apply: drop the future, or wrap it in your own `tokio::time::timeout`.
 
-Waiting restores the ability to ask, never the request that was refused — nothing is re-sent. Issue the call again after this returns, knowing the answer can already be stale by the time that next call reaches the socket.
+Waiting restores the ability to ask. It never re-sends the request that was refused. Issue the call again after this returns. The answer can already be stale by the time that next call reaches the socket.
 
 <Warning>
-Not for use from an event handler: the event bus dispatches on the read loop, so a handler that awaits this blocks the very connection it's waiting for.
+Not for use from an event handler. The event bus dispatches on the read loop, so a handler that awaits this blocks the very connection it's waiting for.
 </Warning>
 
-A [`pause()`](#pause) ends this wait rather than being sat through — `resume()` is what actually brings the client back, and that's the application's call to make, not something to park through indefinitely while holding the `Arc<Client>` whose drop would otherwise have been the only other way out.
+A [`pause()`](#pause) ends this wait rather than being sat through. `resume()` is what actually brings the client back, and that's the application's call to make — not something to park through indefinitely while holding the `Arc<Client>` whose drop would otherwise have been the only other way out.
 
 **Example:**
+
+`wait_until_reachable()` only has something to offer when the connection is what's wrong. Gate the retry on [`ErrorChainExt::is_transport_unavailable()`](/api/errors#error-chain-recovery) rather than on any `Err`, so a validation or authorization failure gets handled or propagated directly instead of parked behind a connection wait that can't resolve it:
+
 ```rust
-use whatsapp_rust::Reachability;
+use whatsapp_rust::{ErrorChainExt, Reachability};
 
 match client.contacts().get_user_info(&[jid.clone()]).await {
     Ok(info) => { /* ... */ }
-    Err(_) => match client.wait_until_reachable().await {
+    Err(e) if e.is_transport_unavailable() => match client.wait_until_reachable().await {
         Reachability::Reachable => {
             // retry the call now that a connection is back
         }
         other => eprintln!("not retrying: {other:?}"),
     },
+    Err(e) => eprintln!("request failed: {e}"), // not a connectivity problem — waiting won't help
 }
 ```
 
@@ -580,9 +584,9 @@ Added in PR #1332. Reported by [`reachability()`](#reachability) and settled by 
 
 **Variants:**
 - `Reachable` — a request sent now has a socket, an authenticated session, and a reader to decode the answer.
-- `Reconnecting` — between connections, with something driving the client back to one, including through a 429/503 rate-limit backoff. The one state `wait_until_reachable()` waits out; only `reachability()` ever reports it.
-- `Paused` — [`pause()`](#pause) is in effect. Like `Reconnecting` the client is not finished, but what ends it is [`resume()`](#resume), and only the application knows when that comes — so `wait_until_reachable()` returns here instead of sitting through it, while the connect path's own internal wait (used by things like app-state resync) does sit through a pause, since nothing on the next connection would re-issue that work otherwise.
-- `Unsupervised` — nothing is reading this client (no [`run()`](#run) loop driving it), so no answer would ever be decoded and no reconnect will be attempted. Not terminal — the application may still use the connection directly — but waiting cannot fix it. Outranks `Paused` where both hold, since a paused client with no reader has nothing to reconnect it either way.
+- `Reconnecting` — between connections, with something driving the client back to one. Covers a 429/503 rate-limit backoff too. The one state `wait_until_reachable()` waits out; only `reachability()` ever reports it.
+- `Paused` — [`pause()`](#pause) is in effect. Like `Reconnecting` the client is not finished, but what ends it is [`resume()`](#resume), and only the application knows when that comes. So `wait_until_reachable()` returns here instead of sitting through it. The connect path's own internal wait — used by things like app-state resync — does sit through a pause, since nothing on the next connection would re-issue that work otherwise.
+- `Unsupervised` — nothing is reading this client: no [`run()`](#run) loop is driving it. No answer would ever be decoded and no reconnect will be attempted. Not terminal — the application may still use the connection directly — but waiting cannot fix it. Outranks `Paused` where both hold, since a paused client with no reader has nothing to reconnect it either way.
 - `Finished` — the session is over for good: shut down, logged out, replaced, or refused in a way no reconnect recovers.
 
 `is_reachable()` is `true` only for `Reachable`. `recovers_on_its_own()` is `true` only for `Reconnecting` — `false` for `Paused`, since that client does come back, but on `resume()` rather than by itself.

@@ -1028,19 +1028,29 @@ pub enum BotEditType {
 Additional metadata for message threading, targeting, and abuse reporting.
 
 ```rust
+pub type ReportingBytes = SmallVec<[u8; 20]>;
+
 pub struct MsgMetaInfo {
-    pub target_id: Option<MessageId>,
+    pub target_id: Option<CompactString>,
     pub target_sender: Option<Jid>,
-    pub thread_message_id: Option<MessageId>,
+    pub thread_message_id: Option<CompactString>,
     pub thread_message_sender_jid: Option<Jid>,
     pub poll_type: Option<PollType>,
-    pub content_type: Option<String>,
-    pub appdata: Option<String>,
-    pub reporting_tag: Option<String>,
-    pub reporting_token: Option<Bytes>,
-    pub reporting_token_version: Option<i32>,
+    pub content_type: Option<CompactString>,
+    pub appdata: Option<CompactString>,
+    pub reporting_tag: Option<ReportingBytes>,
+    pub reporting_token: Option<ReportingBytes>,
+    pub reporting_token_version: Option<i64>,
 }
 ```
+
+<Warning>
+Breaking change ([whatsapp-rust#1343](https://github.com/oxidezap/whatsapp-rust/pull/1343)): `target_id` and `thread_message_id` changed from `Option<MessageId>` to `Option<CompactString>`. `content_type` and `appdata` changed from `Option<String>` to `Option<CompactString>`. `CompactString` (`wacore_binary::CompactString`) stores up to 24 bytes inline on 64-bit targets, with a smaller inline limit on 32-bit/wasm32 — a message id and these short keywords fit inline on 64-bit.
+
+`reporting_tag` and `reporting_token` changed from `Option<Vec<u8>>` to `Option<ReportingBytes>`, a new `SmallVec<[u8; 20]>` alias. It keeps a 16-or-20-byte tag or a 16-byte token inline; a payload wider than 20 bytes still spills to the heap.
+
+Read-only access — comparisons, `.as_deref()`, formatting — is unaffected, since both types deref to `&str`/`&[u8]`. A call site that assigns these fields from a `String`/`Vec<u8>` literal, or moves a value out into one, needs one `.into()` per site (`.to_vec()` for `ReportingBytes` → `Vec<u8>`).
+</Warning>
 
 | Field | Description |
 |-------|-------------|

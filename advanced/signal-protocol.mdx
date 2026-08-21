@@ -734,15 +734,24 @@ The tracking update is **deferred until after the server acknowledges** the mess
 
 **`PreparedGroupStanza` return value:**
 
-`prepare_group_stanza` returns a `PreparedGroupStanza` struct containing the stanza `node` and a `skdm_devices: Vec<Jid>` field listing exactly which devices received SKDM in this stanza. This eliminates the need for callers to re-resolve devices after sending, closing a race window where the device list could change between stanza preparation and post-ACK tracking update.
+`prepare_group_stanza` returns a `PreparedGroupStanza` struct containing the stanza `node` and a `skdm_devices: Vec<Jid>` field: the devices this send reports as holding the sender key, so the post-ACK warm mark below can use it directly. This is the *distribution target set*, not literally "devices that received SKDM" — it marks the whole list a send meant to key (matching WA Web `markHasSenderKey(x, M)`), including an external participant's companion device whose SKDM encryption failed, so a transient per-device failure doesn't force a re-fanout on every later send. (Your own companion devices are a separate case — see the `has_key=true` exclusion under ["Own devices are never marked `has_key=true`"](#per-device-sender-key-tracking) below.) It eliminates the need for callers to re-resolve devices after sending, closing a race window where the device list could change between stanza preparation and post-ACK tracking update.
 
 ```rust
 pub struct PreparedGroupStanza {
     pub node: Node,
-    /// Devices that received SKDM in this stanza. Empty when no SKDM was distributed.
+    /// The devices this send reports as holding the sender key — the
+    /// distribution target set, not just the ones SKDM-encryption actually
+    /// succeeded for. Empty when no distribution occurred.
     pub skdm_devices: Vec<Jid>,
+    /// The phash on the stanza, so the caller can compare it against the
+    /// one the server echoes back on the ack.
+    pub phash: Option<CompactString>,
 }
 ```
+
+<Note>
+**A primary device for which local SKDM encryption produced no node is excluded from `skdm_devices`, as of [#1328](https://github.com/oxidezap/whatsapp-rust/pull/1328).** This covers a *local* failure only — a failed pre-key fetch, a session-setup error — not a node that was sent but never reached or was never processed by the recipient; the sender has no signal for that case, and it still relies on a retry receipt same as before. The whole-target-set marking above is unchanged for an *external participant's companion* device — matching `getKeyDistributionMsg`'s `isPrimaryDevice` gate, WA Web can never reach that marking with a failed **primary** in the set at all, because a primary's encryption failure rejects the entire send outright. This SDK's best-effort send carries on instead of failing the group over one member, so it enforces the same guarantee directly: `retain_reportable_sender_key_devices` filters a primary with no local SKDM node out of `skdm_devices` before it reaches the warm mark. Reporting such a primary as warm would hide that member's whole user behind the incremental-targeting diff above until that member's own retry receipt corrects it — in the field report that motivated this fix, a closed group's low message volume meant that correction could take a long time to arrive. The same PR keeps a companion the usync response cannot validate (no `signedKeyIndexBytes`) from dropping its primary out of the resolved participant set entirely, at the device-list projection layer — see [USync](/api/usync).
+</Note>
 
 **Implementation:**
 
@@ -891,24 +900,35 @@ When sending group, status, or DM messages, the library validates the participan
 4. When the server's ack for that message ID arrives, the read loop compares its `phash` attribute against the expected value inline, with no task involved
 5. On a match the entry is just dropped; on a mismatch the client spawns a task to invalidate caches — so a send only pays for a task in the uncommon case, not on every send ([#1116](https://github.com/oxidezap/whatsapp-rust/pull/1116))
 
-**On mismatch, the following caches are invalidated:**
+<Note>
+**Group sends did not register a phash waiter at all until [#1328](https://github.com/oxidezap/whatsapp-rust/pull/1328).** `prepare_group_stanza` always computed and attached the phash to the outgoing stanza, but the field the send path used to carry a phash back out for ack comparison was hardcoded to `None` on the group branch — so step 4 above only ever ran for DM and status sends. A group whose participant device set diverged from the server's had no way to detect it short of a member's own retry receipt, which in a closed group never arrives on its own: nothing else there generates inbound traffic. `PreparedGroupStanza` now carries the stanza's `phash`, and the group send path forwards it the same way the DM branch already did.
+</Note>
 
-| Send path | Sender key device cache | Group info cache | Device registry |
+**On mismatch, the following happens:**
+
+| Send path | Sender key device tracking | Group/status metadata cache | Device registry |
 |-----------|------------------------|-----------------|----------------|
-| Group messages | Invalidated | Invalidated | — |
-| Status messages | Invalidated | Not invalidated | — |
+| Group messages | Not reset | Invalidated (participants re-queried on the next send) | — |
+| Status messages | Reset (forces full SKDM redistribution) | — | — |
 | DM messages | — | — | Recipient + own PN devices invalidated |
+
+<Note>
+**A disagreeing group phash no longer resets sender-key tracking ([#1328](https://github.com/oxidezap/whatsapp-rust/pull/1328)).** Status broadcasts still clear their sender-key tracking on mismatch, falling back to deleting the bot's own sender key if the clear fails — but a group takes neither arm, dropping only its cached metadata. This mirrors WA Web's `resendGroupMsg`, whose group branch is `sendQueryGroup` alone: no `markForgetSenderKey`, no device-table write. Resetting a whole group's sender-key tracker on every mismatch would cost a full SKDM fan-out per message for as long as the divergence lasted — a bigger regression than the mismatch itself. The re-queried metadata is what lets the next send resolve participants fresh instead.
+</Note>
 
 For DM messages, the phash covers both recipient and own devices (matching WA Web's `syncDeviceListJob([recipient, me])`). On mismatch, the client invalidates the device registry cache for both the recipient's user JID and your own phone number (PN) JID, ensuring the next send re-fetches the current device list for both parties.
 
 ```rust
 // src/send.rs — simplified phash validation flow
 
-// Group/status path: phash from stanza attribute
-let our_phash = stanza.attrs().optional_string("phash").map(|s| s.into_owned());
-
-// DM path: phash from PreparedDmStanza (not on the wire)
-let dm_phash = prepared.phash;
+// Each branch populates SendBranchOutput::ack_phash from its own prepared
+// stanza — group and DM both read it off `prepared.phash` (the group phash
+// is also on the wire; the DM phash is computed locally only). This is what
+// the ack is later compared against.
+let branch_output = SendBranchOutput {
+    ack_phash: prepared.phash,
+    // ...other fields
+};
 
 // On DM phash mismatch:
 if !jid.is_group() && !jid.is_status_broadcast() {

@@ -92,7 +92,9 @@ pub struct WamConfig {
 }
 ```
 
-- **`identity`** — what this client says about itself in a buffer's globals. `WamIdentity::web()` (the default) derives `appVersion`, `platform`, and `osVersion` from the same `ClientProfile` the pairing payload is built from, so telemetry and pairing can never disagree. `ocVersion` (0) and `appIsBetaRelease` (false) are facts, not configuration — this isn't the official client, and the pairing payload announces the release channel. Build a `WamIdentity` with `from_profile` to match a non-web `ClientProfile`, or set `service_improvement_opt_out` if your application knows the account's telemetry preference (it's left absent by default because the library has no way to read it — an application aware the user opted out should not install this plugin at all).
+- **`identity`** — what this client says about itself in a buffer's globals. `WamIdentity::web()` (the default) derives `appVersion`, `platform`, and `osVersion` from the same `ClientProfile` the pairing payload is built from, so telemetry and pairing can never disagree. `ocVersion` (0) and `appIsBetaRelease` (false) are facts, not configuration — this isn't the official client, and the pairing payload announces the release channel. Build a `WamIdentity` with `from_profile` to match a non-web `ClientProfile`.
+
+  `service_improvement_opt_out` is left absent by default because the library has no way to read the account's actual preference. Setting it only records a value in the buffer's globals — it does **not** suppress anything this plugin sends. If your application knows the user opted out of telemetry, don't install `WamPlugin` at all; setting this field to `true` is not a substitute for that.
 - **`store`** — see [Persistence](#persistence).
 - **`max_queued_events`** (default `4096`) — a bound on memory, not throughput. Events are small and the queue drains every few seconds under normal operation; this only protects against unbounded growth if the flush task stalls.
 

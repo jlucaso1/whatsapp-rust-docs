@@ -252,7 +252,7 @@ loop {
 
 ## UreqHttpClient
 
-The default HTTP client implementation using the `ureq` crate (v3.3) for synchronous HTTP requests.
+The default HTTP client implementation using the `ureq` crate (v3.4) for synchronous HTTP requests.
 
 ### Features
 
@@ -467,7 +467,7 @@ let agent: ureq::Agent = Config::builder()
 
 Cloning a client shares the underlying `ureq::Agent` and therefore its pool: a request made through one clone is reflected in every other clone's `resource_report()`, including clones held by other sessions when you've [shared one client across many sessions](#sharing-one-client-across-many-sessions). `pool_connections` and `pool_buffer_bytes` describe that one shared pool, not a per-session allocation. If you sum `Client::resource_report().await.http` across sessions that share a client, sum it once for the shared agent instead of once per session — otherwise you count the same pool N times over.
 
-ureq 3.3 treats any 4xx/5xx as `ureq::Error::StatusCode` by default — the opposite of the `HttpClient` contract above. `UreqHttpClient` sends every request through `status_as_response`, which disables `http_status_as_error` **per request** instead of once on the shared agent. That placement matters: a caller-supplied agent from [`with_agent`](#with_agent) carries ureq's own defaults, not `UreqHttpClient`'s, so only a per-request override reaches it too:
+ureq 3.4 treats any 4xx/5xx as `ureq::Error::StatusCode` by default — the opposite of the `HttpClient` contract above. `UreqHttpClient` sends every request through `status_as_response`, which disables `http_status_as_error` **per request** instead of once on the shared agent. That placement matters: a caller-supplied agent from [`with_agent`](#with_agent) carries ureq's own defaults, not `UreqHttpClient`'s, so only a per-request override reaches it too:
 
 ```rust
 fn status_as_response<Any>(req: ureq::RequestBuilder<Any>) -> ureq::RequestBuilder<Any> {
@@ -709,7 +709,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 1. **Blocking operations** - Always wrap blocking HTTP libraries in `tokio::task::spawn_blocking`
 2. **Streaming for large files** - Use `execute_streaming` for media downloads to avoid buffering
 3. **Error handling** - Return descriptive errors with context
-4. **Timeouts** - ureq 3.3 applies per-IP connection timeouts automatically; implement request-level timeouts for reliability
+4. **Timeouts** - ureq 3.4 applies per-IP connection timeouts automatically; implement request-level timeouts for reliability
 5. **Retries** - Consider retry logic for transient failures
 6. **Connection pooling** - Use a shared `ureq::Agent` (as `UreqHttpClient` does) for connection reuse within a session, and [share one `UreqHttpClient` across sessions](#sharing-one-client-across-many-sessions) when running many of them in one process
 

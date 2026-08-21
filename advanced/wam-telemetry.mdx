@@ -104,7 +104,7 @@ pub struct WamConfig {
 
 Two things need to survive a restart: the per-channel sequence number, and buffers the server hasn't accepted yet. Both go through the `WamStore` trait, which the plugin owns — there is no storage capability in the plugin host, deliberately: a capability is a promise about every plugin, and one plugin needing a key-value store isn't that.
 
-`InMemoryWamStore` is the default. With it, a restart renumbers the sequence from 1 (what a fresh browser profile does anyway) and loses any buffer that hadn't been delivered yet — telemetry that was already best-effort. An application that wants durability implements `WamStore` against its own database; `WamApi::stats().store_is_durable` reports which one is in effect.
+`InMemoryWamStore` is the default. With it, a restart renumbers the sequence from 1 (what a fresh browser profile does anyway) and loses any buffer that hadn't been delivered yet — telemetry that was already best-effort. An application that wants durability implements `WamStore` against its own database; `WamApi::stats().store_is_durable` reports which one is in effect. A store that fails outright — it cannot be read, cannot issue a sequence number, or refuses to hold a buffer — costs the same buffer or event a durable store's ordinary unavailability would, and the runtime reports the loss itself once a later buffer exists to carry it (`WamClientErrors`, above), rather than only moving a local counter nothing ever uploads.
 
 ## Diagnostics
 
@@ -130,7 +130,9 @@ Every derivation reads the stanza envelope, never the decoded message content �
 
 ## Upload behavior
 
-Buffers accumulate for a few seconds before being written, and are sent on a timer or once a size threshold is crossed. A failed upload is retried with a backoff (starting at one second, doubling, capped at two minutes) — except when the server's response classifies the buffer itself as refused (a 4xx that isn't a `wait`, `408`, or `429`), in which case it's dropped rather than retried forever. Shutdown gets one best-effort flush inside the same deadline the [plugin host](/advanced/plugins#lifecycle-and-task-scopes) already applies to every shutdown callback (5 seconds by default) — teardown can block on that upload for up to the deadline, never longer, and whatever doesn't finish in time is left for the store to retain instead.
+Buffers accumulate for a few seconds before being written, and are sent on a timer or once a size threshold is crossed. A failed upload is retried with a backoff (starting at one second, doubling, capped at two minutes) — except when the server's response classifies the buffer itself as refused (a 4xx that isn't a `wait`, `408`, or `429`), in which case it's dropped rather than retried forever.
+
+The best-effort flush at shutdown happens inside the flush loop itself, not in a separate shutdown callback. `WamPlugin` requests the install-scoped `Tasks` capability for this loop, so it runs once for the life of the client and is cancelled only at terminal teardown — a reconnect never touches it. The loop is spawned with [`spawn_cooperative`](/advanced/plugins#lifecycle-and-task-scopes) rather than the host's default abort-on-cancel. That makes shutdown turn the loop's `sleep` into an error instead of dropping the loop where it was suspended. The loop then makes one final pass itself: it observes a `WebWamForceFlush` event, then delivers or retains whatever buffer was already being filled, before returning. The same writer that was accumulating events is the one that flushes them, so nothing hands a parked buffer to a second writer. The [plugin host](/advanced/plugins#lifecycle-and-task-scopes) still only waits up to its configured task-drain deadline (5 seconds by default) for that final pass to finish. Teardown can block on it for up to the deadline, never longer, and whatever doesn't finish in time is left for the store to retain instead.
 
 ## Cost
 

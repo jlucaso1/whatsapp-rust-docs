@@ -538,7 +538,7 @@ Bounded by the client's own lifetime rather than by a duration. The reconnect ba
 Waiting restores the ability to ask. It never re-sends the request that was refused. Issue the call again after this returns. The answer can already be stale by the time that next call reaches the socket.
 
 <Warning>
-Not for use from an event handler. The event bus dispatches on the read loop, so a handler that awaits this blocks the very connection it's waiting for.
+Safe from an [`on_event`](/api/bot#on_event)/`on_event_for` closure: those run off a spawned or drainer task, never on the read loop. Not safe from a [`with_event_handler`](/api/bot#with_event_handler)/`EventHandler::handle_event` implementation — that dispatches synchronously, inline on the read loop, so blocking on this call there (e.g. via a nested runtime) blocks the very connection it's waiting for.
 </Warning>
 
 A [`pause()`](#pause) ends this wait rather than being sat through. `resume()` is what actually brings the client back, and that's the application's call to make — not something to park through indefinitely while holding the `Arc<Client>` whose drop would otherwise have been the only other way out.
@@ -584,7 +584,7 @@ Added in PR #1332. Reported by [`reachability()`](#reachability) and settled by 
 
 **Variants:**
 - `Reachable` — a request sent now has a socket, an authenticated session, and a reader to decode the answer.
-- `Reconnecting` — between connections, with something driving the client back to one. Covers a 429/503 rate-limit backoff too. The one state `wait_until_reachable()` waits out; only `reachability()` ever reports it.
+- `Reconnecting` — between connections, with something driving the client back to one: the normal auto-reconnect backoff, a [429's extended backoff](#rate-limiting-429), or a 503's normal backoff (see the [stream error table](#stream-error-handling) — 503 is service-unavailable, not rate limiting). The one state `wait_until_reachable()` waits out; only `reachability()` ever reports it.
 - `Paused` — [`pause()`](#pause) is in effect. Like `Reconnecting` the client is not finished, but what ends it is [`resume()`](#resume), and only the application knows when that comes. So `wait_until_reachable()` returns here instead of sitting through it. The connect path's own internal wait — used by things like app-state resync — does sit through a pause, since nothing on the next connection would re-issue that work otherwise.
 - `Unsupervised` — nothing is reading this client: no [`run()`](#run) loop is driving it. No answer would ever be decoded and no reconnect will be attempted. Not terminal — the application may still use the connection directly — but waiting cannot fix it. Outranks `Paused` where both hold, since a paused client with no reader has nothing to reconnect it either way.
 - `Finished` — the session is over for good: shut down, logged out, replaced, or refused in a way no reconnect recovers.

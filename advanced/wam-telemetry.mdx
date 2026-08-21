@@ -1,0 +1,150 @@
+---
+title: "WAM telemetry"
+description: "Emit WhatsApp Metrics (WAM) — the binary telemetry buffer the official client uploads about itself — from a generated event catalog, behind an opt-in native plugin."
+---
+
+## Overview
+
+WAM (WhatsApp Metrics) is the telemetry the official WhatsApp client uploads about itself: a binary buffer of numbered events, preceded by buffer-level globals, sent under `<iq xmlns="w:stats">`. whatsapp-rust has never sent any of it. Two workspace crates now make a small, honest subset of it possible:
+
+| crate | what it is |
+| --- | --- |
+| `whatsapp-rust-wam-catalog` | A generated catalog — every event, field id, enum member, global, and constant WA Web declares (436 events, 8,112 fields) — plus a byte-exact buffer codec. |
+| `whatsapp-rust-plugin-wam` | The runtime: observation, sampling, buffering, flush, and upload, packaged as a [native plugin](/advanced/plugins). |
+
+Neither crate is in the default build, and neither is published to crates.io yet — add them as `git` dependencies the same way you would [`passkey`](/concepts/authentication#passkey-linking-shortcake_passkey) or [`voip`](/guides/voip-calls) ahead of a release that carries them.
+
+<Note>
+This is the client reporting on itself, not a message-content feature. Read [Privacy and PII](#privacy-and-pii) before enabling it in an application that handles user data you don't control.
+</Note>
+
+## Why a plugin, not a built-in subsystem
+
+[Native plugins](/advanced/plugins) exist precisely for this shape of extension: something that wants to *watch* work the core already does, rather than claim a stanza tag, notification type, or IQ namespace of its own. WAM claims none of those, so it attaches through the plugin host's event-observation capability instead of becoming a feature-gated part of the core.
+
+The practical consequence is that a default build — and a build with `plugins` enabled but this plugin not installed — carries none of this. Installing `WamPlugin` is what turns on:
+
+- Three additional core events flowing to a subscriber for the life of the client (`DecryptedPayload`, `EncDecryptFailed`, `RawNode` — the last is filtered to `<receipt>` stanzas).
+- The plugin's own buffering, flush, and upload task.
+
+## Enabling it
+
+```toml Cargo.toml
+[dependencies]
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["plugins"] }
+whatsapp-rust-plugin-wam = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
+```
+
+```rust
+use whatsapp_rust_plugin_wam::{WamConfig, WamPlugin};
+
+let client = Client::builder()
+    // platform dependencies: backend, transport, http client, runtime...
+    .with_plugin(WamPlugin::new(WamConfig::default()))
+    .build()
+    .await?
+    .into_client();
+
+let wam = client
+    .plugin::<WamPlugin>()
+    .expect("wam plugin is installed");
+println!("{:?}", wam.stats());
+```
+
+`WamPlugin` requests the `CoreEvents`, `Tasks`, and `Iq` [capabilities](/advanced/plugins#capabilities) — nothing else. Construct a fresh `WamPlugin` per `Client`; like every plugin, it's install-once for that client's lifetime.
+
+## The honesty rule
+
+**An event is emitted only when every field it writes is honestly derivable from activity this client actually observed.** No invented value, no sentinel, no placeholder standing in for something the client can't actually see. A field this client doesn't know is left absent — the wire format distinguishes absent from zero, so the server can tell the difference.
+
+That rule, not implementation effort, is why the catalog carries 436 events and the plugin emits seven of them.
+
+## What it emits
+
+Each event is derived from the core event stream, at the unit it actually counts:
+
+| event | derived from | the unit it counts |
+| --- | --- | --- |
+| `E2eMessageRecv` | `DecryptedPayload`, some `EncDecryptFailed` | one `<enc>` this client tried to decrypt |
+| `MessageReceive` | `Messages` | one decrypted message |
+| `ReceiptStanzaReceive` | `RawNode`, filtered to `<receipt>` | one inbound receipt stanza |
+| `WebcSocketConnect` | `Connected` | one authenticated socket |
+| `WebWamForceFlush` | plugin shutdown | one flush ahead of schedule |
+| `WamClientErrors`, `WamDroppedEvent` | the runtime's own losses | one abandoned buffer or event |
+
+All seven upload on the `regular` channel. A conformance test (`plugins/wam/src/parity.rs`) encodes every one of them at its maximum through the real codec and checks every field id that reaches the wire against what WA Web itself writes at that call site, so a field this plugin writes that the official client doesn't is a build failure, not a runtime surprise.
+
+## What it does not emit, and why
+
+- **Anything derived from sending a message (18 events).** `MessageSend`, `MediaUpload2`, `StatusPost`, `E2eMessageSend`, and the rest of that family describe an outgoing message's type, media, per-device encryption count, and stage timings. The core currently publishes only `Event::SentFrame` — the marshaled bytes of a stanza after the write — which carries none of that semantic information. Re-deriving a 95-field event from a frame would be reconstruction, not observation.
+- **The `private` channel (50 events).** These need a blind-signed token and a persisted, rotating anonymous id, neither of which this client has.
+- **Two inbound-only counters.** `MessageHighRetryCount` and `MdRetryFromUnknownDevice` describe values this client already tracks internally, but nothing puts them on the event bus yet — a plugin can only see events, not internal counters.
+- **Two browser-only lifecycle facts.** `WebcPageResume` and `WebcStreamModeChange` describe WA Web's own page/stream model, which this client has no equivalent of.
+- **Beaconing.** The official client gives a small fraction of clients a per-event sequence number, rolled once per UTC day. Getting that right needs a durable, per-event counter that survives every restart — without one, a process that restarts several times a day would roll several times and skew any cohort built on the "once per day" assumption. Not implementing it is the honest answer to not having that counter, not an oversight.
+
+## Configuration
+
+```rust
+pub struct WamConfig {
+    pub identity: WamIdentity,
+    pub store: Arc<dyn WamStore>,
+    pub max_queued_events: usize,
+}
+```
+
+- **`identity`** — what this client says about itself in a buffer's globals. `WamIdentity::web()` (the default) derives `appVersion`, `platform`, and `osVersion` from the same `ClientProfile` the pairing payload is built from, so telemetry and pairing agree at the point `WamIdentity` is built. `ocVersion` (0) and `appIsBetaRelease` (false) are facts, not configuration — this isn't the official client, and the pairing payload announces the release channel. Build a `WamIdentity` with `from_profile` to match a non-web `ClientProfile`.
+
+  `WamIdentity` is captured once, when you build `WamConfig`, and the plugin never re-reads it. If your application calls `Client::set_client_profile` after installing `WamPlugin`, the pairing payload and the WAM identity can drift apart, and there's no way to update the running plugin's copy — a plugin is [install-once for the lifetime of its `Client`](/advanced/plugins#registering-plugins-with-clientbuilder). Decide the `ClientProfile` before you build either, and build a new `Client` (with a matching `WamIdentity`) if it needs to change.
+
+  `service_improvement_opt_out` is left absent by default because the library has no way to read the account's actual preference. Setting it only records a value in the buffer's globals — it does **not** suppress anything this plugin sends. If your application knows the user opted out of telemetry, don't install `WamPlugin` at all; setting this field to `true` is not a substitute for that.
+- **`store`** — see [Persistence](#persistence).
+- **`max_queued_events`** (default `4096`) — a bound on memory, not throughput. Events are small and the queue drains every few seconds under normal operation; this only protects against unbounded growth if the flush task stalls.
+
+## Persistence
+
+Two things need to survive a restart: the per-channel sequence number, and buffers the server hasn't accepted yet. Both go through the `WamStore` trait, which the plugin owns — there is no storage capability in the plugin host, deliberately: a capability is a promise about every plugin, and one plugin needing a key-value store isn't that.
+
+`InMemoryWamStore` is the default. With it, a restart renumbers the sequence from 1 (what a fresh browser profile does anyway) and loses any buffer that hadn't been delivered yet — telemetry that was already best-effort. An application that wants durability implements `WamStore` against its own database; `WamApi::stats().store_is_durable` reports which one is in effect.
+
+## Diagnostics
+
+`WamApi::stats()` returns a `WamStats` snapshot:
+
+| field | meaning |
+| --- | --- |
+| `observed` | Events handed to the runtime |
+| `written` | Events written into a buffer |
+| `sampled_out` | Events discarded by sampling (expected — most events are meant to be sampled out) |
+| `dropped` | Events dropped because the queue was full |
+| `unbuffered` | Events lost because no buffer could be started for them (a sequence number couldn't be issued, or a global no longer belongs on the channel) |
+| `uploaded` | Buffers the server accepted |
+| `discarded` | Buffers abandoned (too large to upload, or past the retention cap) |
+| `upload_failures` | Failed upload attempts, retries included |
+| `store_is_durable` | Whether the configured store outlives the process |
+
+A snapshot is approximate under concurrency and, matching the rest of the client's [observability](/advanced/observability) surface, carries no JID, phone number, or message body.
+
+## Privacy and PII
+
+Every derivation reads the stanza envelope, never the decoded message content — the same boundary the official client's own receive metrics are built from. Nothing here carries a JID, phone number, or message body as a field value. If you enable this plugin, you're opting your deployment into sending the same categories of client-health telemetry the official WhatsApp client sends; review the event table above and your applicable privacy obligations before shipping it.
+
+## Upload behavior
+
+Buffers accumulate for a few seconds before being written, and are sent on a timer or once a size threshold is crossed. A failed upload is retried with a backoff (starting at one second, doubling, capped at two minutes) — except when the server's response classifies the buffer itself as refused (a 4xx that isn't a `wait`, `408`, or `429`), in which case it's dropped rather than retried forever. Shutdown gets one best-effort flush inside the same deadline the [plugin host](/advanced/plugins#lifecycle-and-task-scopes) already applies to every shutdown callback (5 seconds by default) — teardown can block on that upload for up to the deadline, never longer, and whatever doesn't finish in time is left for the store to retain instead.
+
+## Cost
+
+Measured on a stripped release build with `CARGO_PROFILE_RELEASE_STRIP=false`, the same build [binary-size CI](/changelog/2026-06-12-binary-size-ci) gates on:
+
+| build | delta |
+| --- | --- |
+| Default build (neither crate linked) | **0 bytes** |
+| `plugins` on, `WamPlugin` installed, vs. `plugins` on with no plugin installed | +~105 KB stripped, +~89 KB `.text` |
+
+Installing the plugin also has a per-message cost that recurs rather than being one-time: it holds open three [lease-gated](/advanced/observability) core events (`DecryptedPayload`, `EncDecryptFailed`, `RawNode`) for the life of the client, so every decrypted `<enc>` and every decoded inbound stanza now also crosses the plugin's event handler. No plaintext is copied in the process — the payload types involved are `Bytes` and `Arc`-shared — but the cost of constructing and dispatching the event itself is real and, as of this writing, unbenchmarked.
+
+## See also
+
+- [Native plugins](/advanced/plugins) — the capability model and lifecycle this plugin is built on.
+- [Metrics with the metrics facade](/advanced/metrics) — `wa_*` operational metrics for dashboards and alerts; a different thing from WAM, which is WhatsApp's own client-health telemetry format.
+- [Observability](/advanced/observability) — the PII and snapshot conventions this page's diagnostics follow.

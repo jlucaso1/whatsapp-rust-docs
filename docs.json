@@ -67,6 +67,7 @@
                   "advanced/websocket-handling",
                   "advanced/observability",
                   "advanced/metrics",
+                  "advanced/wam-telemetry",
                   "advanced/inbound-durability",
                   "advanced/retry-admission",
                   "advanced/plugins",

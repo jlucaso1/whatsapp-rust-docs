@@ -229,9 +229,12 @@ Interception runs before the built-in pipeline, so a claimed stanza is one the c
 
 These snapshots are on-demand and approximate under concurrency, and — matching the rest of the client's [observability](/advanced/observability) surface — never include JIDs, phone numbers, or message bodies.
 
-## Reference example
+## Reference examples
 
-The workspace ships `plugins/metrics` as a public-API conformance example: a metrics plugin built only against the same public API documented on this page, with no private access to the main crate. It's a good starting point for structuring your own plugin crate — manifest, capability requests, an `Api` type, and lifecycle hooks.
+The workspace ships two plugins built only against the same public API documented on this page, with no private access to the main crate — good starting points for structuring your own plugin crate:
+
+- `plugins/metrics` — a small conformance example: manifest, capability requests, an `Api` type, and lifecycle hooks.
+- `plugins/wam` — a larger, real-world one: it requests `CoreEvents`, `Tasks`, and `Iq`, owns a background flush/upload task across reconnects, and defines its own persistence trait rather than asking the host for one. See [WAM telemetry](/advanced/wam-telemetry).
 
 ## What's not supported yet
 

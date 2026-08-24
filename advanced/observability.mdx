@@ -151,6 +151,7 @@ WhatsApp identifiers contain phone numbers, so the library redacts them before t
 - **Legacy group IDs** of the form `<creator-phone>-<timestamp>` keep the timestamp and redact only the numeric prefix.
 - **`observe_protocol_address()`** applies the same scheme to Signal `ProtocolAddress` names embedded in logs.
 - The library's own `log!` calls already pipe JIDs and addresses through these helpers, so the bridged log lines carry the same redaction as the span fields.
+- **Push names** — the account's own display name — are never included in the library's log lines at all, since redaction doesn't apply to freeform text the way it does to JIDs. Pairing, app-state mutations, history sync, presence, and device-load logging report only that a push name changed (or was loaded), not the string itself ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
 
 <Warning>
 Redaction only covers identifiers the library emits. Anything your own application code logs — raw JIDs, phone numbers, message bodies — reaches the exporter unredacted under your own targets. Scrub them with `Jid::observe()` (and `observe_protocol_address()` for Signal addresses) before logging.

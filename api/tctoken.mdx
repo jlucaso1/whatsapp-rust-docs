@@ -294,6 +294,18 @@ The same newer-wins rule (older writes rejected, a byte-less placeholder always 
 A byte-less placeholder (written by post-send issuance before any real token has been received) is always replaced by the contact's first real token, even if the placeholder's own timestamp is newer — the newer-wins rule only blocks a stale write once a real token is on record.
 </Note>
 
+### LID discovery migration
+
+Tokens can arrive keyed by phone number before a contact's LID is known — for example, a token received while the peer was still PN-only. Token lookups are keyed through `resolve_tc_token_key`, which answers with the LID as soon as a PN↔LID mapping exists for that contact and with the PN before that. So the moment a mapping is learned, a token still filed under the PN becomes unreachable — the send path then behaves as if no token had ever arrived, even though one is stored.
+
+To prevent that, the library migrates a PN-keyed token to the LID key as part of LID discovery, alongside the device-registry and Signal-session re-keying that already happens there (see [LID-PN mappings](/concepts/storage#patched-cache-domains)):
+
+1. Read any token stored under the phone number
+2. If found, write it under the LID — **newer-wins**, so a token already stored under the LID (e.g. from a message that arrived after the mapping was learned) is never regressed by the older PN-keyed one
+3. Only after that write succeeds, delete the PN-keyed row
+
+The sender-side issuance timestamp isn't carried over in the migration — it only gates re-issuing your own token to the contact, so losing it costs at most one extra issuance, whereas the received token itself is what the send path can't do without ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
+
 ### Startup pruning
 
 Expired tokens are automatically pruned when the client connects, matching WhatsApp Web's `PrivacyTokenJob`.

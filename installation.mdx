@@ -143,33 +143,9 @@ To use a system-installed SQLite instead of the bundled version:
 whatsapp-rust-sqlite-storage = { version = "0.7", default-features = false }
 ```
 
-The optional `whatsapp-rust-chat-store` crate — an event-sourced SQLite chat/message history store, not re-exported through `whatsapp-rust` — has its own feature flag:
-
-| Feature | Description | Included by default |
-|---------|-------------|-----------------|
-| `search` | SQLite FTS5 full-text message search | ❌ No |
-
 <Note>
-  This crate is **not published to crates.io** — its schema and query surface are still moving, and publishing would pin both. Depend on the git source until it is released, and move `whatsapp-rust` and `whatsapp-rust-sqlite-storage` to the **same** git revision. A registry copy and a git copy of `whatsapp-rust-sqlite-storage` are two distinct crates to Cargo, and `ChatStore::new` would reject the `SqliteStore` from the other one — so the registry snippets above don't mix with this one.
+  A chat/message history store (`whatsapp-rust-chat-store`) previously lived in this repository as an opt-in crate. It has been extracted into its own repository, since materializing an event stream into chats, previews, and unread counts is an application decision rather than a protocol one — it no longer ships from `whatsapp-rust`.
 </Note>
-
-```toml Cargo.toml
-[dependencies]
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-```
-
-To enable full-text search, turn on the `search` feature:
-
-```toml Cargo.toml
-[dependencies]
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["search"] }
-whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-```
-
-See [Chat Store](/api/chat-store) for the full API.
 
 <Note>
   The default features provide everything needed for most use cases. Only customize features if you have specific requirements.

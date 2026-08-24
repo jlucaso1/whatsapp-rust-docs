@@ -104,24 +104,9 @@ Para usar um SQLite instalado no sistema em vez da versão empacotada:
 whatsapp-rust-sqlite-storage = { version = "0.7", default-features = false }
 ```
 
-O crate opcional `whatsapp-rust-chat-store` — um histórico de conversas/mensagens em SQLite baseado em eventos, que **não** é reexportado por `whatsapp-rust` — tem sua própria feature flag:
-
-| Feature | Descrição | Incluída por padrão |
-|---------|-----------|---------------------|
-| `search` | Busca textual completa de mensagens via SQLite FTS5 | ❌ Não |
-
 <Note>
-  Este crate **não é publicado no crates.io** — seu esquema e sua superfície de consulta ainda estão mudando, e publicar fixaria os dois. Dependa da fonte git até que ele seja lançado e mova `whatsapp-rust` e `whatsapp-rust-sqlite-storage` para a **mesma** revisão git. Para o Cargo, uma cópia do registry e uma cópia do git de `whatsapp-rust-sqlite-storage` são crates distintos, e `ChatStore::new` rejeitaria o `SqliteStore` da outra — ou seja, os trechos com versão do registry acima não se misturam com este.
+  Um histórico de conversas/mensagens (`whatsapp-rust-chat-store`) já existiu neste repositório como um crate opcional. Ele foi extraído para seu próprio repositório, já que materializar um fluxo de eventos em conversas, prévias e contadores de não lidas é uma decisão de aplicação, não de protocolo — ele não é mais distribuído a partir de `whatsapp-rust`.
 </Note>
-
-```toml Cargo.toml
-[dependencies]
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-whatsapp-rust-chat-store = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>", features = ["search"] }
-whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "<commit>" }
-```
-
-Veja [Chat Store](/api/chat-store) para a API completa.
 
 <Note>
   As features padrão fornecem tudo que é necessário para a maioria dos casos de uso. Personalize features somente se tiver requisitos específicos.

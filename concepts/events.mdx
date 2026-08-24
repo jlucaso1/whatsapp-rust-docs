@@ -882,7 +882,7 @@ Live traffic dispatches a batch of one, so per-message latency is unchanged from
 </Note>
 
 <Note>
-`hook_committed` is `true` when a registered [inbound durability hook](/advanced/inbound-durability) already committed this batch before it was dispatched. It defaults to `false` via the builder, so existing `.build()` calls compile unchanged. It's a signal for another consumer of the same event stream — not an instruction to skip anything on its own, since a hook that persists elsewhere would leave that consumer as the only materializer. [`ChatStore`](/api/chat-store) uses it via the opt-in [`skip_hook_committed_batches`](/api/chat-store#skipping-batches-your-durability-hook-already-committed) to avoid materializing a hook-fed batch twice.
+`hook_committed` is `true` when a registered [inbound durability hook](/advanced/inbound-durability) already committed this batch before it was dispatched. It defaults to `false` via the builder, so existing `.build()` calls compile unchanged. It's a signal for another consumer of the same event stream — not an instruction to skip anything on its own, since a hook that persists elsewhere would leave that consumer as the only materializer. An application-level store that also materializes this same event stream can use it to avoid double-processing a hook-fed batch.
 </Note>
 
 <Note>

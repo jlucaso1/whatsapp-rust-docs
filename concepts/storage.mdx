@@ -1415,7 +1415,14 @@ On top of that, the write itself is gated by a **source-aware write policy** (`l
 
 This means a bulk/observational seed can no longer clobber a freshly, authoritatively learned LID for a peer — it self-heals through the same live-query path WA Web uses instead of last-write-wins.
 
-History sync's `Other`-sourced seed itself draws from two places inside the sync: the bulk `HistorySync.phoneNumberToLidMappings` block, and each conversation's own `pnJid`/`lidJid` fields — a conversation named in one namespace can still yield a complete pair from just the opposite field, and in practice the bulk block omits pairs the conversations carry. Both are harvested, then collapsed to one pair per LID before either reaches the cache: the bulk block is the server's explicit identity table, so it outranks a conversation-derived pair naming the same LID or phone number; ties within one source keep the first occurrence. This resolution happens ahead of, and independently from, the source-aware write policy above — `LidPnCache` never sees more than one candidate pair per LID out of a single history sync ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
+History sync's `Other`-sourced seed itself draws from two places inside the sync: the bulk `HistorySync.phoneNumberToLidMappings` block, and each conversation's own `pnJid`/`lidJid` fields. A conversation named in one namespace can still yield a complete pair from just the opposite field. In practice the bulk block omits pairs the conversations carry, so both are harvested.
+
+The two sources are then collapsed to one pair per LID before either reaches the cache:
+
+- The bulk block is the server's explicit identity table, so it outranks a conversation-derived pair naming the same LID or phone number.
+- Ties within one source keep the first occurrence.
+
+This resolution happens ahead of, and independently from, the source-aware write policy above. `LidPnCache` never sees more than one candidate pair per LID out of a single history sync ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
 
 By default this cache neither idles out nor evicts for capacity — see [`LidPnCache`](#lidpncache) above: no time-based expiry, and capacity effectively unbounded, matching `WAWebLidPnCache`. So an entry is only ever corrected, never expired: lookups are cache-aside, and nothing proactively re-checks a mapping just because it might have gone stale. A mapping that quietly drifts (a peer re-pairing, an account migrating) would otherwise read as valid for the life of the process.
 

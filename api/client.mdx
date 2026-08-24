@@ -1368,10 +1368,14 @@ The `LearningSource` enum indicates how a LID-PN mapping was discovered. The sou
 | `BlocklistInactive` | From an inactive blocklist entry | Directed — overwrites on conflict; `created_at = 0` (stale) |
 | `Pairing` | From device pairing (own JID to LID) | Observational — seeds new LIDs only |
 | `DeviceNotification` | From a device notification with `lid` attribute | Observational — seeds new LIDs only |
-| `Other` | From an unknown/bulk source (e.g. the history-sync `phoneNumberToLidMappings` seed) | Observational — seeds new LIDs only |
+| `Other` | From an unknown/bulk source (e.g. history sync's PN/LID harvest — the bulk `phoneNumberToLidMappings` block and each conversation's own `pnJid`/`lidJid` fields) | Observational — seeds new LIDs only |
 
 <Note>
   A pair that already matches the cache's current mapping always re-affirms durability regardless of source — it is never treated as a conflict. This includes an exact match, and also a reverse-only match: the LID-PN cache is capacity-bounded (see [`lid_pn_cache`](/api/bot#cache-configuration-reference)), so the PN→LID entry can be evicted while the LID→PN entry survives, and a re-learn of that surviving pair still counts as self-consistent.
+</Note>
+
+<Note>
+  History sync's own harvesting logic collapses its two mapping sources to one pair per LID before either reaches this policy. The bulk block outranks a conversation-derived pair naming the same LID or phone number. Ties within one source keep the first occurrence. See [PN/LID mapping cache — LID-PN mappings](/concepts/storage#lid-pn-mappings) ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
 </Note>
 
 #### Refresh on `refresh_lid` acks

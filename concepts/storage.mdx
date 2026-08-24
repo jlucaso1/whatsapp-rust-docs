@@ -1403,7 +1403,9 @@ Group patches are cache-only — they are not persisted to the backend. If the c
 
 Only `leave()` uses full invalidation.
 
-**LID-PN mappings** (`src/client/lid_pn.rs`, `src/lid_pn_cache.rs`)
+#### LID-PN mappings
+
+`src/client/lid_pn.rs`, `src/lid_pn_cache.rs`
 
 The `LidPnCache` uses timestamp-based conflict resolution when adding new mappings: the PN → entry map only updates if the new entry's `created_at` is newer than or equal to the existing entry's, preventing older stale mappings from overwriting newer ones.
 
@@ -1417,7 +1419,7 @@ This means a bulk/observational seed can no longer clobber a freshly, authoritat
 
 History sync's `Other`-sourced seed itself draws from two places inside the sync: the bulk `HistorySync.phoneNumberToLidMappings` block, and each conversation's own `pnJid`/`lidJid` fields. A conversation named in one namespace can still yield a complete pair from just the opposite field. In practice the bulk block omits pairs the conversations carry, so both are harvested.
 
-The two sources are then collapsed to one pair per LID before either reaches the cache:
+History sync's own harvesting logic collapses the two sources to one pair per LID before either reaches `LidPnCache`:
 
 - The bulk block is the server's explicit identity table, so it outranks a conversation-derived pair naming the same LID or phone number.
 - Ties within one source keep the first occurrence.

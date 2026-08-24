@@ -1375,7 +1375,7 @@ The `LearningSource` enum indicates how a LID-PN mapping was discovered. The sou
 </Note>
 
 <Note>
-  History sync's own two mapping sources are collapsed to one pair per LID before either reaches this policy: the bulk block outranks a conversation-derived pair naming the same LID or phone number, and ties within one source keep the first occurrence. See [PN/LID mapping cache — LID-PN mappings](/concepts/storage#patched-cache-domains) ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
+  History sync's own harvesting logic collapses its two mapping sources to one pair per LID before either reaches this policy. The bulk block outranks a conversation-derived pair naming the same LID or phone number. Ties within one source keep the first occurrence. See [PN/LID mapping cache — LID-PN mappings](/concepts/storage#lid-pn-mappings) ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
 </Note>
 
 #### Refresh on `refresh_lid` acks

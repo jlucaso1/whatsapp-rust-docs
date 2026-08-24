@@ -296,15 +296,15 @@ A byte-less placeholder (written by post-send issuance before any real token has
 
 ### LID discovery migration
 
-Tokens can arrive keyed by phone number before a contact's LID is known — for example, a token received while the peer was still PN-only. Token lookups are keyed through `resolve_tc_token_key`, which answers with the LID as soon as a PN↔LID mapping exists for that contact and with the PN before that. So the moment a mapping is learned, a token still filed under the PN becomes unreachable — the send path then behaves as if no token had ever arrived, even though one is stored.
+Tokens can arrive keyed by phone number before a contact's LID is known — for example, a token received while the peer was still PN-only. `resolve_tc_token_key` keys token lookups: it returns the LID as soon as a PN↔LID mapping exists for that contact, and the PN before that. So the moment the client learns a mapping, a token still filed under the PN becomes unreachable through this lookup — the send path then behaves as if no token had ever arrived, even though one is stored.
 
-To prevent that, the library migrates a PN-keyed token to the LID key as part of LID discovery, alongside the device-registry and Signal-session re-keying that already happens there (see [LID-PN mappings](/concepts/storage#patched-cache-domains)):
+To prevent that, the client migrates a PN-keyed token to the LID key as part of LID discovery, alongside the device-registry and Signal-session re-keying that already happens there (see [LID-PN mappings](/concepts/storage#lid-pn-mappings)):
 
 1. Read any token stored under the phone number
 2. If found, write it under the LID — **newer-wins**, so a token already stored under the LID (e.g. from a message that arrived after the mapping was learned) is never regressed by the older PN-keyed one
 3. Only after that write succeeds, delete the PN-keyed row
 
-The newer-wins guarantee in step 2 relies on [`store_received_tc_token`](/api/store#tctoken-storage) being atomic. The built-in `SqliteStore` and `InMemoryBackend` implement it as a single atomic upsert, so this is safe out of the box. A custom [`Store`](/api/store) backend that keeps the default read-modify-write implementation of that method is not protected: a concurrently-arriving LID-keyed token can land between the migration's read and write, and the migration's write would then clobber it.
+The newer-wins guarantee in step 2 relies on [`store_received_tc_token`](/api/store#tctoken-storage) being atomic. The built-in backends guarantee this: `SqliteStore` performs the check-and-write inside an `IMMEDIATE` transaction, and `InMemoryBackend` performs it under its state lock. A custom [`Store`](/api/store) backend that keeps the default read-modify-write implementation of that method is not protected: a concurrently-arriving LID-keyed token can land between the migration's read and write, and the migration's write would then clobber it.
 
 The sender-side issuance timestamp isn't carried over in the migration. Normally this just means one extra post-send issuance later — but the [identity-change reissuance](#identity-change-reissuance) flow also reads `sender_timestamp` to decide whether a token was ever issued to the sender. If a contact's identity changes before the next send re-populates the timestamp, that flow sees no prior issuance and skips reissuing, rather than the token being lost outright ([#1345](https://github.com/oxidezap/whatsapp-rust/pull/1345)).
 

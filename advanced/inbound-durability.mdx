@@ -40,7 +40,7 @@ Within a batch, the commit order is: durable buffer write (one transaction) → 
 Offline delivery receipts are flushed once **per durable drain batch**, not only at the end of the full offline drain, matching WA Web's `createSnapshot` → `sendAggregateOfflineReceipts` per snapshot. This bounds the receipt buffer over a large backlog and caps redelivery on a mid-drain disconnect to a single snapshot instead of the whole backlog.
 </Note>
 
-Once your hook returns `Ok`, the dispatched `Event::Messages` carries `hook_committed: true` on its [`MessageBatch`](/concepts/events#messages) — a marker for another consumer of the same event stream, not an instruction to skip anything: a hook that persists somewhere other than that consumer's own store still needs it to materialize every batch. [`ChatStore`](/api/chat-store) is the one built-in consumer that acts on it, via the opt-in [`skip_hook_committed_batches`](/api/chat-store#skipping-batches-your-durability-hook-already-committed).
+Once your hook returns `Ok`, the dispatched `Event::Messages` carries `hook_committed: true` on its [`MessageBatch`](/concepts/events#messages) — a marker for another consumer of the same event stream, not an instruction to skip anything: a hook that persists somewhere other than that consumer's own store still needs it to materialize every batch. An application-level store that materializes this same event stream can use the flag to avoid double-processing a hook-fed batch.
 
 ## Opting In
 
@@ -252,4 +252,3 @@ Always use `tokio::task::spawn_blocking` for disk I/O inside the hook. Blocking 
 ## See also
 
 - [Retry Admission Hook](/advanced/retry-admission) — the sibling opt-in hook idiom (`OnceLock`, zero overhead unset) for gating inbound group/status retry receipts.
-- [Chat Store](/api/chat-store#skipping-batches-your-durability-hook-already-committed) — avoid double-materializing a batch when a hook and `ChatStore` feed off the same event stream.

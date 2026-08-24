@@ -496,7 +496,7 @@ let store = SqliteStore::new("sqlite://path/to/db.sqlite").await?;
 pub fn shared(&self) -> SharedSqlite;
 ```
 
-`SqliteStore::shared()` returns a clonable `SharedSqlite` handle onto the store's existing r2d2 connection pool and write-serialization semaphore. A sibling crate uses it to run its own queries and migrations against the *same* database file — without opening a second connection pool, which would mean two WAL writers contending for the file lock. This is how [`whatsapp-rust-chat-store`](/api/chat-store) attaches its chat/message tables to the same `whatsapp.db` file as the device store.
+`SqliteStore::shared()` returns a clonable `SharedSqlite` handle onto the store's existing r2d2 connection pool and write-serialization semaphore. A sibling crate uses it to run its own queries and migrations against the *same* database file — without opening a second connection pool, which would mean two WAL writers contending for the file lock. An application-level store — a chat/message history store, for example — can use this to attach its own tables to the same `whatsapp.db` file as the device store.
 
 ```rust
 pub struct SharedSqlite { /* ... */ }
@@ -518,7 +518,7 @@ impl SharedSqlite {
 ```
 
 <Note>
-`read` takes a permit from a separate reader pool, sized by [`SqliteStoreConfig::read_pool_size`](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig). A burst of reads can then run alongside a pending write instead of queueing behind `run`'s write-path permits. If `read_pool_size` is `0` (the default) or the underlying connection isn't WAL, `read` falls back to queueing on the same permits as `run` — it's always safe to call. Wrapping the closure in a deferred transaction also means a `read` that issues more than one statement (e.g. resolve a chat's identity keys, then query by them) sees one consistent snapshot across all of them, rather than possibly straddling a write that commits in between. Prefer `read` over `run` for anything that only queries. [`whatsapp-rust-chat-store`](/api/chat-store)'s query paths do, and so does most of `SqliteStore`'s own `SignalStore`/`AppSyncStore`/`ProtocolStore`/`DeviceStore` surface as of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222) — session, identity, sender-key, and pre-key lookups among them. A handful of reads are deliberately kept on `run` instead: a stale answer for these would go out on the wire, fail an operation outright, or overwrite a cache unconditionally (app-state sync key lookups, `messageSecret` reads, `get_devices`).
+`read` takes a permit from a separate reader pool, sized by [`SqliteStoreConfig::read_pool_size`](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig). A burst of reads can then run alongside a pending write instead of queueing behind `run`'s write-path permits. If `read_pool_size` is `0` (the default) or the underlying connection isn't WAL, `read` falls back to queueing on the same permits as `run` — it's always safe to call. Wrapping the closure in a deferred transaction also means a `read` that issues more than one statement (e.g. resolve a chat's identity keys, then query by them) sees one consistent snapshot across all of them, rather than possibly straddling a write that commits in between. Prefer `read` over `run` for anything that only queries. Most of `SqliteStore`'s own `SignalStore`/`AppSyncStore`/`ProtocolStore`/`DeviceStore` surface does, as of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222) — session, identity, sender-key, and pre-key lookups among them. A handful of reads are deliberately kept on `run` instead: a stale answer for these would go out on the wire, fail an operation outright, or overwrite a cache unconditionally (app-state sync key lookups, `messageSecret` reads, `get_devices`).
 </Note>
 
 ### Sharing the pool with sibling devices
@@ -944,4 +944,3 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 - [Transport Trait](/api/transport) - Network transport abstraction
 - [HTTP Client Trait](/api/http-client) - HTTP client abstraction
 - [Client API](/api/client) - Main client interface
-- [Chat Store](/api/chat-store) - Optional chat/message history built on `SqliteStore::shared()`

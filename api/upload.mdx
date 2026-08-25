@@ -469,7 +469,7 @@ let info = enc.finalize_to_writer(&mut writer)?;
 ```
 
 <Note>
-  The encryptor's own internal state uses constant memory, regardless of file size — but this does not cover whatever destination you provide.
+  The encryptor's own internal state uses constant memory, regardless of file size, with one exception: the streaming sidecar. When enabled (the default for audio and video), it accumulates a per-64-KiB HMAC table — about 10 bytes per 64 KiB of ciphertext — until `finalize()`/`finalize_to_writer()` returns it, so it grows slowly with file size even when your destination is a writer. This also doesn't cover whatever destination you provide.
 
   With `update()`/`finalize()`, you're only buffering the crypto state and at most 15 bytes of remainder plaintext. Your destination `Vec` itself still grows with the encrypted output.
 

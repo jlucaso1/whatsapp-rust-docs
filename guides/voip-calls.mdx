@@ -34,7 +34,7 @@ tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 </Warning>
 
 <Warning>
-  [PR #1351](https://github.com/oxidezap/whatsapp-rust/pull/1351) fixed `CallHandle::hangup()` and `CallHandle::set_muted()` silently never reaching the peer. `hangup()` is renamed to `hangup_local()` (still local-only and silent) and a new `terminate()` sends `<terminate>` before tearing down — replace `handle.hangup().await` with `handle.terminate().await` to end a live call, or with `handle.hangup_local().await` if the call is already over for the peer. `set_muted()` is now `async` and returns `Result<(), CallError>` — it announces the new mute state over the wire instead of only flipping a local flag; add `.await?` at call sites. See [Call Handle](#call-handle) and [Call Termination](#call-termination) below.
+  [PR #1351](https://github.com/oxidezap/whatsapp-rust/pull/1351) fixed `CallHandle::hangup()` and `CallHandle::set_muted()` silently never reaching the peer. `hangup()` is renamed to `hangup_local()`, still local-only and silent. A new `terminate()` sends `<terminate>` before tearing down. Replace `handle.hangup().await` with `handle.terminate().await` to end a live call, or with `handle.hangup_local().await` if the call is already over for the peer. `set_muted()` is now `async` and returns `Result<(), CallError>`, so add `.await?` at call sites — it announces the new mute state over the wire instead of only flipping a local flag. See [Call Handle](#call-handle) and [Call Termination](#call-termination) below.
 </Warning>
 
 `voip` is a backward-compatible aggregate for `voip-mlow` + `voip-libopus` — both codec adapters linked in. If you only need one codec, or you exchange codec packets with an external encoder/decoder, pick a narrower feature instead:
@@ -105,6 +105,7 @@ async fn on_event(client: &Client, event: Event) -> anyhow::Result<()> {
 
 ```rust
 use whatsapp_rust::types::Jid;
+use whatsapp_rust::voip::CallTermination;
 
 let peer: Jid = "15551234567@s.whatsapp.net".parse()?;
 
@@ -119,10 +120,18 @@ let handle = client.voip()
 // Addressed at whichever devices still need to hear it — the call scope for a group or
 // call-link call, the device that answered a direct call, or every device an unanswered
 // outgoing call is still ringing.
-let outcome = handle.terminate().await;
-if !outcome.peer_notified() {
-    // Peer may not learn the call ended until its own transport times out — see
-    // `CallTermination` below for what each variant means.
+match handle.terminate().await {
+    CallTermination::PeerNotified | CallTermination::AlreadyEnded => {}
+    CallTermination::PartlyNotified { notified, unconfirmed } => {
+        // Some rung devices weren't confirmed and may keep ringing until their own
+        // transport times out. The local side is down either way.
+        warn!("terminate reached {notified} device(s), {unconfirmed} unconfirmed");
+    }
+    CallTermination::LocalOnly(e) => {
+        // No send was confirmed. The peer may not learn the call ended until its
+        // own transport times out — see `CallTermination` below for details.
+        warn!("terminate unconfirmed ({e}); ended locally");
+    }
 }
 
 // Or wait for the remote side to hang up
@@ -402,7 +411,7 @@ handle.stop_video().await?; // Idempotent.
 | `LocalOnly(CallError)` | No send was confirmed — carries why, though the stanza may still have reached the wire |
 | `AlreadyEnded` | The call was already over (peer terminate, superseded handle, earlier local teardown) — nothing was sent |
 
-`outcome.peer_notified()` returns `true` only for `PeerNotified`; match explicitly on `PartlyNotified` to distinguish a partial fan-out from a fully silent hangup.
+`outcome.peer_notified()` returns `true` only for `PeerNotified`; match explicitly on `PartlyNotified` and `LocalOnly` to tell a partial fan-out apart from a fully unconfirmed termination — see the table above for what to do with each.
 
 ## Multi-Device Behavior
 

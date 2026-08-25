@@ -342,7 +342,7 @@ Chunk-based AES-256-CBC media encryptor. Processes plaintext incrementally witho
 
 Two output modes with zero duplicated crypto logic:
 - `update()` / `finalize()` — append encrypted blocks to a `Vec<u8>`
-- `update_to_writer()` / `finalize_to_writer()` — write directly to any `Write` implementor, zero intermediate buffer
+- `update_to_writer()` / `finalize_to_writer()` — write to any `Write` implementor you provide, batching output into ~8 KiB runs internally rather than staging the whole file
 
 ```rust
 pub struct MediaEncryptor { /* ... */ }
@@ -371,7 +371,7 @@ let enc = MediaEncryptor::with_key(media_key, MediaType::Image)?;
 
 ### Feeding plaintext
 
-Feed plaintext in arbitrarily sized chunks. Encrypted AES blocks are emitted as soon as a full 16-byte block is available; partial blocks are buffered internally (at most 15 bytes).
+Feed plaintext in arbitrarily sized chunks. All complete blocks in a call are encrypted immediately. Only a trailing partial block (at most 15 bytes) is buffered across your calls. `update_to_writer()` also batches its ciphertext into ~8 KiB runs before writing, but only within a single call — it flushes everything to your writer before returning, so if you feed it small inputs you still get small, per-call writes rather than full 8 KiB runs. See the memory note below for details.
 
 ```rust
 // Append encrypted blocks to a Vec
@@ -469,7 +469,13 @@ let info = enc.finalize_to_writer(&mut writer)?;
 ```
 
 <Note>
-  Memory usage is constant regardless of file size — only the crypto state and at most 15 bytes of remainder are buffered. Unlike `encrypt_media_streaming`, `MediaEncryptor` does not require a sync `Read` source, making it suitable for async contexts.
+  The encryptor's own internal state uses constant memory, regardless of file size, with one exception: the streaming sidecar. When enabled (the default for audio and video), it accumulates a per-64-KiB HMAC table — about 10 bytes per 64 KiB of ciphertext — until `finalize()`/`finalize_to_writer()` returns it, so it grows slowly with file size even when your destination is a writer. This also doesn't cover whatever destination you provide.
+
+  With `update()`/`finalize()`, you're only buffering the crypto state and at most 15 bytes of remainder plaintext. Your destination `Vec` itself still grows with the encrypted output.
+
+  With `update_to_writer()`/`finalize_to_writer()`, ciphertext is also staged internally, bounding memory at crypto state + remainder + ~8 KiB. It's flushed to your writer in ~8 KiB runs rather than once per 16-byte block, amortizing the `Write` call — but only within a single call, since nothing is held across calls. If you feed it small chunks (e.g. one 16-byte block per call), you still get small, per-call writes rather than 8 KiB runs. Your writer itself (e.g. a `File`) need not retain anything.
+
+  Unlike `encrypt_media_streaming`, `MediaEncryptor` does not require a sync `Read` source, making it suitable for async contexts.
 </Note>
 
 ---

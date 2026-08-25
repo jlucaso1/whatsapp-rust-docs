@@ -246,7 +246,7 @@ let call = client
 </Warning>
 
 <Note>
-  `CallHandle::set_muted` only affects the built-in PCM path (`.audio(...)`) — it gates the mic feed before encoding, then announces the new state to the peer (`await`-ed, returns `Result<(), CallError>`). For `.encoded_audio(...)` calls, packets you push through `encoded_tx` are forwarded to the engine as-is; mute by pausing your own encoder or withholding packets, not by calling `set_muted`.
+  `CallHandle::set_muted`'s local mic-gating only applies to the built-in PCM path (`.audio(...)`) — for `.encoded_audio(...)` calls, packets you push through `encoded_tx` are still forwarded to the engine as-is, so silence your own source by pausing your encoder or withholding packets. But `set_muted` also announces the new state to the peer (`await`-ed, returns `Result<(), CallError>`) regardless of audio path, so encoded-audio callers should still call it alongside gating their encoder — otherwise the peer never learns the mic went quiet.
 </Note>
 
 `OPUS_MLOW_16KHZ_60MS` requires CELT-only Opus for packets you send: run each outbound packet through `packetize_opus_for_mlow` before pushing it to `encoded_tx`. On receive, a peer using this profile can still fall back to proprietary MLOW, so check each `EncodedAudioFrame`'s `codec` field first — only run `depacketize_opus_from_mlow` when `codec == AudioCodec::Opus`; frames with `codec == AudioCodec::Mlow` need an external MLOW decoder instead. Both packetize/depacketize helpers only rewrite the packet header — SILK/Hybrid Opus, or arbitrary Opus↔MLOW conversion, needs full decode/re-encode, which these helpers don't do.

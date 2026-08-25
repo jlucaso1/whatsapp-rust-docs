@@ -371,7 +371,7 @@ let enc = MediaEncryptor::with_key(media_key, MediaType::Image)?;
 
 ### Feeding plaintext
 
-Feed plaintext in arbitrarily sized chunks. Encrypted AES blocks are emitted as soon as a full 16-byte block is available; partial blocks are buffered internally (at most 15 bytes).
+Feed plaintext in arbitrarily sized chunks. All complete blocks in a call are encrypted immediately — nothing is deferred to the next call except a trailing partial block (at most 15 bytes), buffered internally. `update_to_writer()` additionally batches its output before handing it to the writer; see the memory note below.
 
 ```rust
 // Append encrypted blocks to a Vec
@@ -469,7 +469,7 @@ let info = enc.finalize_to_writer(&mut writer)?;
 ```
 
 <Note>
-  Memory usage is constant regardless of file size — only the crypto state and at most 15 bytes of remainder are buffered. Unlike `encrypt_media_streaming`, `MediaEncryptor` does not require a sync `Read` source, making it suitable for async contexts.
+  Memory usage is constant regardless of file size. `update()`/`finalize()` (the `Vec` destination) buffer only the crypto state and at most 15 bytes of remainder plaintext. `update_to_writer()`/`finalize_to_writer()` also stage ciphertext internally and flush it to the writer in ~8 KiB runs rather than once per 16-byte block, to amortize the `Write` call — so writer-mode memory is bounded at crypto state + remainder + ~8 KiB, not just 15 bytes. Unlike `encrypt_media_streaming`, `MediaEncryptor` does not require a sync `Read` source, making it suitable for async contexts.
 </Note>
 
 ---

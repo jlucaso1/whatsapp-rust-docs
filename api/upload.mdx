@@ -371,7 +371,7 @@ let enc = MediaEncryptor::with_key(media_key, MediaType::Image)?;
 
 ### Feeding plaintext
 
-Feed plaintext in arbitrarily sized chunks. All complete blocks in a call are encrypted immediately — nothing is deferred to the next call except a trailing partial block (at most 15 bytes), buffered internally. `update_to_writer()` additionally batches its output before handing it to the writer; see the memory note below.
+Feed plaintext in arbitrarily sized chunks. All complete blocks in a call are encrypted immediately. Only a trailing partial block (at most 15 bytes) is buffered across calls. `update_to_writer()` also batches its ciphertext into ~8 KiB runs before writing, but only within a single call — it flushes everything to the writer before returning, so calls fed small inputs still produce small, per-call writes rather than full 8 KiB runs. See the memory note below for details.
 
 ```rust
 // Append encrypted blocks to a Vec
@@ -469,7 +469,13 @@ let info = enc.finalize_to_writer(&mut writer)?;
 ```
 
 <Note>
-  The encryptor's own internal memory usage is constant regardless of file size — separate from whatever the destination retains. `update()`/`finalize()` buffer only the crypto state and at most 15 bytes of remainder plaintext (the destination `Vec` itself still grows with the encrypted output). `update_to_writer()`/`finalize_to_writer()` also stage ciphertext internally and flush it to the writer in ~8 KiB runs rather than once per 16-byte block, to amortize the `Write` call — so writer-mode internal memory is bounded at crypto state + remainder + ~8 KiB, not just 15 bytes, while the writer itself (e.g. a `File`) need not retain anything. Unlike `encrypt_media_streaming`, `MediaEncryptor` does not require a sync `Read` source, making it suitable for async contexts.
+  The encryptor's own internal state uses constant memory, regardless of file size. This does not cover whatever destination you provide.
+
+  `update()`/`finalize()` buffer only the crypto state and at most 15 bytes of remainder plaintext. The destination `Vec` itself still grows with the encrypted output.
+
+  `update_to_writer()`/`finalize_to_writer()` also stage ciphertext internally, bounding memory at crypto state + remainder + ~8 KiB. They flush that stage to the writer in ~8 KiB runs rather than once per 16-byte block, amortizing the `Write` call — but only within a single call, since nothing is held across calls. A caller feeding small chunks (e.g. one 16-byte block per call) still gets small, per-call writes rather than 8 KiB runs. The writer itself (e.g. a `File`) need not retain anything.
+
+  Unlike `encrypt_media_streaming`, `MediaEncryptor` does not require a sync `Read` source, making it suitable for async contexts.
 </Note>
 
 ---

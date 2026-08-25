@@ -132,6 +132,9 @@ match handle.terminate().await {
         // own transport times out — see `CallTermination` below for details.
         warn!("terminate unconfirmed ({e}); ended locally");
     }
+    // CallTermination is #[non_exhaustive]: a wildcard arm is required outside
+    // the whatsapp-rust crate even though every current variant is matched above.
+    _ => {}
 }
 
 // Or wait for the remote side to hang up

@@ -181,6 +181,8 @@ Backends that implement none of these return an error from the defaults, which c
 
 **`Event::Messages` is at-least-once too, when a hook is registered.** A redelivery whose buffered copy survived (e.g. the post-commit cleanup failed and the ack was lost) replays through the same commit and dispatches the event again — event handlers need the same idempotency discipline as the hook if they perform side effects.
 
+**Resent messages get their own, separate gate.** The redelivery handling above covers a byte-identical stanza the server replays. A sender-side outbox retry instead re-encrypts the same message under a new sender-key iteration, so it isn't byte-identical and reaches the pipeline as an apparently-fresh decrypt. Since [#1352](https://github.com/oxidezap/whatsapp-rust/pull/1352), an in-memory dispatch-once gate (`dispatched_messages` in `CacheConfig`, default 5-minute TTL) collapses that case to one `Event::Messages` too — see [Resend collapse](/concepts/events#messages). Unlike the pending-inbound buffer, this gate has no durable backing and does not survive a restart of your process, so it narrows the window for a duplicate dispatch rather than closing it: your hook and event handlers still need their own idempotency for the reasons above.
+
 ## Full Example
 
 The repository ships `examples/durability_hook.rs` — a file-backed archiver that appends each message in a batch to disk with a single `fsync` before returning `Ok`, and seeds the deduplication set from the archive on startup so dedupe survives a restart.

@@ -1207,6 +1207,7 @@ pub struct CacheEntryConfig {
 | `message_retry_counts` | 5 minutes | 1,000 | Retry count tracking |
 | `pdo_pending_requests` | 30 seconds | 500 | PDO pending requests |
 | `pdo_requested` | 24 hours | 512 | PDO placeholder-resend memo — at-most-once per message |
+| `dispatched_messages` | 5 minutes | 1,000 | Dispatch-once gate for a decrypted message, keyed by chat/id/sender — collapses a sender's outbox retry (same id, re-encrypted) into a single `Event::Messages`. Capacity 0 disables it. See [`Event::Messages`](/concepts/events#messages) |
 | `sender_key_devices_cache` | 1 hour (TTI) | 500 | Per-group SKDM distribution state |
 
 <Note>

@@ -893,6 +893,10 @@ Breaking change: `InboundMessage` and `MessageBatch` are now `#[non_exhaustive]`
 Both the message body and `MessageInfo` are `Arc`-wrapped inside `InboundMessage`. The same `Arc` slice handed to a registered [durability hook](/advanced/inbound-durability) is what this event carries — no deep clone, and a consumer never sees a message the hook did not commit (newsletter messages and PDO placeholder recoveries are the two exceptions: they dispatch event-only, bypassing the hook). Before v0.6 the body was `Box<wa::Message>`; the public guarantee changed from "owned, freely mutable" to "shared, immutable read access" — call `Arc::make_mut` (or clone the inner `wa::Message`) only if you genuinely need to mutate.
 </Note>
 
+<Note>
+**Resend collapse.** A sender whose network is bad can retry its own outbox, resending one message re-encrypted under a new sender-key iteration — the Signal ratchet decrypts it cleanly, since it isn't byte-identical to the first delivery, so nothing at that layer catches it. Since [#1352](https://github.com/oxidezap/whatsapp-rust/pull/1352), such a resend collapses to a single `Event::Messages` dispatch, keyed by chat, message id and sender (device dropped), for as long as the `dispatched_messages` cache window holds (default 5-minute TTL, 1,000 entries — see [cache configuration reference](/api/bot#cache-configuration-reference)). `stats().messages_suppressed_duplicate` counts what this collapses. The gate is in-memory only and does not survive a restart of your process, so a hook or consumer performing side effects still needs its own idempotency — see [`Event::Messages` is at-least-once too](/advanced/inbound-durability#caveats). It also does not cover a message delivered as several `msmsg` parts under one stanza id (e.g. a bot streaming a multi-part reply): each part still dispatches, since collapsing there could drop a part the consumer never got.
+</Note>
+
 **MessageInfo structure:**
 ```rust
 #[derive(Debug, Clone, Default, Serialize)]

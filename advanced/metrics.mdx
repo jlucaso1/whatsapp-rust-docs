@@ -74,7 +74,7 @@ All metrics are prefixed with `wa_` and emitted at the same boundaries as the ma
 
 | Name | Labels | Description |
 |------|--------|-------------|
-| `wa_recv_total` | `outcome` = `decrypted`, `duplicate`, `duplicate_resend`, `undecryptable`, `skmsg` | Inbound messages by decrypt outcome. `duplicate_resend` is a resent message suppressed by the [dispatch-once gate](/concepts/events#messages) ([#1352](https://github.com/oxidezap/whatsapp-rust/pull/1352)) — distinct from `duplicate`, the byte-identical redelivery the Signal ratchet itself rejects |
+| `wa_recv_total` | `outcome` = `decrypted`, `duplicate`, `duplicate_resend`, `undecryptable`, `skmsg` | Inbound messages by receive-processing outcome. Most values are decrypt outcomes; `duplicate_resend` is the one post-decrypt exception — it decrypts successfully but is then suppressed by the [dispatch-once gate](/concepts/events#messages) ([#1352](https://github.com/oxidezap/whatsapp-rust/pull/1352)), distinct from `duplicate`, the byte-identical redelivery the Signal ratchet itself rejects before decryption completes |
 | `wa_send_total` | `kind` = `dm`, `group`, `status` | Outgoing send attempts by kind |
 | `wa_retry_receipt_total` | `reason` | Retry receipts sent, by reason |
 | `wa_iq_total` | `result` = `ok`, `timeout`, `error` | IQ requests by result |

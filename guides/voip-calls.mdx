@@ -280,7 +280,7 @@ MLOW capability index 31 (`use_mlow_codec_v1`) drives the decision, read through
 | absent | `Unknown` | that participant is skipped — nothing resets |
 | present but unreadable (`ver` missing/unparseable, or below the index's version) | `Clear` | falls back to a capability that answers false for everything — all of it resets |
 
-Applying the decision needs no mutable `AudioFormat`: the **callee** learns the peer's capability from the `<offer>`, before the engine exists, so the call simply starts on the right codec; the **caller** learns it from `<preaccept>`/`<accept>`, riding the same channel that carries the answering device's LID, since both have to land before the first inbound packet. Mid-call, `MLOW_16KHZ_60MS` and `OPUS_16KHZ_60MS` agree on payload type, clock rate, timestamp step, sample rate, channels and samples per frame, so the swap changes no RTP header byte.
+Applying the decision needs no mutable `AudioFormat`: the **callee** learns the peer's capability from the `<offer>`, before the engine exists, so the call simply starts on the right codec; the **caller** learns it from `<preaccept>`/`<accept>`, riding the same channel that carries the answering device's LID. Both are *meant* to land before the first inbound packet, but that's not guaranteed on the caller side — see [Content as a corroborator](#content-as-a-corroborator) below for what covers the race being lost. Mid-call, `MLOW_16KHZ_60MS` and `OPUS_16KHZ_60MS` agree on payload type, clock rate, timestamp step, sample rate, channels and samples per frame, so the swap changes no RTP header byte.
 
 <Note>
   Group calls don't implement the mutual-AND walk yet — a group participant outside the rollout keeps the whole call on MLow. `GroupCallDevice::capability()` is public for when that gets implemented.
@@ -294,7 +294,14 @@ An incoming call rejects a locally selected rate that's absent from the peer's o
 
 #### Content as a corroborator
 
-Negotiation has two blind spots on receive: the capability can be absent from signaling (our own video `<accept>` omits it), and on the caller side it can lose the race with the first inbound packet. For those cases only, `codec_probe` corroborates without guessing — it never reads the payload alone. It checks whether the duration the peer's Opus header declares (via a structural, libopus-free RFC 6716 read that also works on wasm32/ESP32) agrees with the step its RTP timestamps actually advance by, **and** that step matches the call's negotiated cadence. The second check isn't redundant: MLow and Opus SILK read the same TOC bits as different duration sets at 10 ms/20 ms, so the two would agree by construction there even for a genuine MLow stream. Three consecutive agreements switch the decoder once and emit `CallEvent::AudioCodecSwitched { source: CodecDecisionSource::Content, .. }` — worth acting on, since it means the capability model of that peer was wrong, not just that one call got rescued.
+Negotiation has two blind spots on receive. The capability can be missing from signaling entirely (our own video `<accept>` omits it). Or, on the caller side, it can lose the race with the first inbound packet. `codec_probe` covers both cases, and only those cases — it never reads the payload alone, and it never runs when negotiation already answered the question.
+
+It checks two things together, and both have to hold:
+
+1. **Does the peer's Opus header agree with its own RTP timestamps?** Specifically, whether the duration the header declares — read structurally per RFC 6716, with no libopus, so this also works on wasm32/ESP32 — matches the step the timestamps actually advance by.
+2. **Does that step match the call's negotiated cadence?** This second check isn't redundant: MLow and Opus SILK read the same TOC bits as different duration sets at 10 ms/20 ms, so the two would agree by construction at those durations even for a genuine MLow stream. Requiring the negotiated cadence too is what keeps a real MLow call from being misread as Opus.
+
+Three consecutive agreements switch the decoder once, and emit `CallEvent::AudioCodecSwitched { source: CodecDecisionSource::Content, .. }`. Worth acting on: it means what this call believed about the peer's codec — from a real capability read, or from the default assumed when one of the two blind spots above applied — didn't match what's actually arriving, not just that one call got rescued.
 
 ### CLI reference
 
@@ -324,7 +331,7 @@ Two events on `handle.events()` turn the counters into an alarm:
 | `AudioSilent { silent_for_ms, rtp_received, frames_produced, dominant_reason }` | Audio RTP keeps arriving over a sliding window and none of it becomes sound. `dominant_reason` is an `AudioSilenceReason` — `NoDecoderForNegotiatedCodec`, `AuthenticationFailing`, `UnexpectedPayloadType`, `CodecRejectingFrames`, `CodecFlapping`, or `Unknown` — naming the counter that dominates that window. Re-emitted on a fixed cadence while it holds |
 | `AudioReceptionStalled { silent_for_ms }` | No audio RTP has arrived at all for long enough (since the relay allocated, or since the last packet) that reception itself looks stopped |
 
-They're deliberately distinct. `AudioSilent` is a codec problem: packets are arriving but nothing is becoming sound. `AudioReceptionStalled` is a transport problem: packets have stopped arriving at all. Conflating the two is exactly how issue #1105 stayed open for months before this PR. Neither is terminal — both are diagnostic, so treat them as something to log or alert on, not to react to inside the call.
+They're deliberately distinct. `AudioSilent` means audio RTP is still arriving but nothing is becoming sound — `dominant_reason` names why, which can be a codec problem (`CodecRejectingFrames`, `CodecFlapping`, `NoDecoderForNegotiatedCodec`) or an authentication one (`AuthenticationFailing`, `UnexpectedPayloadType`), not only a codec problem. `AudioReceptionStalled` means audio RTP has stopped arriving at all — that one's always transport. Conflating "nothing arriving" with "arriving but not decoding" is exactly how issue #1105 stayed open for months before this PR. Neither is terminal — both are diagnostic, so treat them as something to log or alert on, not to react to inside the call.
 
 `wacore::voip::PacketTap` — a trait that observes every relay datagram in both directions — is now public, and `TappedFactory` decorates a `RelayTransportFactory` with one. The runtime doesn't yet expose a factory-injection point for a live `CallHandle`, so it's reachable today from a shell building its own transport, not from the builder API above.
 

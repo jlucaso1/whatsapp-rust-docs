@@ -37,6 +37,10 @@ tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
   [PR #1351](https://github.com/oxidezap/whatsapp-rust/pull/1351) fixed `CallHandle::hangup()` and `CallHandle::set_muted()` silently never reaching the peer. `hangup()` is renamed to `hangup_local()`, still local-only and silent. A new `terminate()` sends `<terminate>` before tearing down. Replace `handle.hangup().await` with `handle.terminate().await` to end a live call, or with `handle.hangup_local().await` if the call is already over for the peer. `set_muted()` is now `async` and returns `Result<(), CallError>`, so add `.await?` at call sites — it announces the new mute state over the wire instead of only flipping a local flag. See [Call Handle](#call-handle) and [Call Termination](#call-termination) below.
 </Warning>
 
+<Warning>
+  [PR #1111](https://github.com/oxidezap/whatsapp-rust/pull/1111) fixed a codec-selection bug where a peer outside the `use_mlow_codec_v1` rollout could go completely silent with nothing logged: RTP payload type 120 carries either MLow or native Opus, and the engine used to trust the payload type alone instead of the negotiation. Codec choice is now read from the peer's negotiated capability, with a content probe corroborating only where negotiation can't tell, and a call with no viable decoder now reports `CallEvent::AudioSilent { dominant_reason: AudioSilenceReason::NoDecoderForNegotiatedCodec, .. }` instead of just going quiet. See [Negotiation](#negotiation) and [Media stats and silence detection](#media-stats-and-silence-detection) below.
+</Warning>
+
 `voip` is a backward-compatible aggregate for `voip-mlow` + `voip-libopus` — both codec adapters linked in. If you only need one codec, or you exchange codec packets with an external encoder/decoder, pick a narrower feature instead:
 
 | Feature | Contents |
@@ -265,11 +269,32 @@ let call = client
 
 ### Negotiation
 
-MLOW capability index 31 controls which codec the peer sends. A native-Opus answer clears that bit and adds `encode.use_mlow_codec_v1=false` to select the peer's decoder for the reverse direction — clearing the capability bit and setting `use_mlow_codec_v1=false` are both required together for full-duplex native Opus.
+RTP payload type 120 carries **either** codec — it's shared by MLow and native Opus, so the payload type alone never tells you which one a packet is. Codec choice is read from the peer's negotiated capability, not sniffed from the bytes.
+
+MLOW capability index 31 (`use_mlow_codec_v1`) drives the decision, read through `wacore::stanza::call::capability_bit`, which returns one of three states for a peer's `<capability>` blob — and two of them are handled in **opposite** directions:
+
+| peer `<capability>` | effect |
+|---|---|
+| carries index 31 | MLow survives if we asked for it too |
+| valid, without index 31 | MLow drops, both directions |
+| absent | that participant is skipped — nothing resets |
+| present but unreadable (`ver` missing/unparseable, or below the index's version) | falls back to a capability that answers false for everything — all of it resets |
+
+Applying the decision needs no mutable `AudioFormat`: the **callee** learns the peer's capability from the `<offer>`, before the engine exists, so the call simply starts on the right codec; the **caller** learns it from `<preaccept>`/`<accept>`, riding the same channel that carries the answering device's LID, since both have to land before the first inbound packet. Mid-call, `MLOW_16KHZ_60MS` and `OPUS_16KHZ_60MS` agree on payload type, clock rate, timestamp step, sample rate, channels and samples per frame, so the swap changes no RTP header byte.
+
+<Note>
+  Group calls don't implement the mutual-AND walk yet — a group participant outside the rollout keeps the whole call on MLow. `GroupCallDevice::capability()` is public for when that gets implemented.
+</Note>
+
+A native-Opus answer clears capability bit 31 and adds `encode.use_mlow_codec_v1=false` to select the peer's decoder for the reverse direction — clearing the capability bit and setting `use_mlow_codec_v1=false` are both required together for full-duplex native Opus.
 
 `options.enable_48khz_rtp_clock` is a separate, independent setting: `true` selects PT111/48 kHz, `false` (the default) selects PT120/16 kHz.
 
-An incoming call rejects a locally selected rate that's absent from the peer's offer, and a later incompatible preaccept/accept emits `CallEvent::AudioFormatMismatch` and terminates the call. Codec detection never overrides the negotiated RTP profile.
+An incoming call rejects a locally selected rate that's absent from the peer's offer, and a later incompatible preaccept/accept emits `CallEvent::AudioFormatMismatch` and terminates the call.
+
+#### Content as a corroborator
+
+Negotiation has two blind spots on receive: the capability can be absent from signaling (our own video `<accept>` omits it), and on the caller side it can lose the race with the first inbound packet. For those cases only, `codec_probe` corroborates without guessing — it never reads the payload alone. It checks whether the duration the peer's Opus header declares (via a structural, libopus-free RFC 6716 read that also works on wasm32/ESP32) agrees with the step its RTP timestamps actually advance by, **and** that step matches the call's negotiated cadence. The second check isn't redundant: MLow and Opus SILK read the same TOC bits as different duration sets at 10 ms/20 ms, so the two would agree by construction there even for a genuine MLow stream. Three consecutive agreements switch the decoder once and emit `CallEvent::AudioCodecSwitched { source: CodecDecisionSource::Content, .. }` — worth acting on, since it means the capability model of that peer was wrong, not just that one call got rescued.
 
 ### CLI reference
 
@@ -285,6 +310,23 @@ WA_AUDIO_CODEC=opus cargo run -p whatsapp-rust-voip-cli --release -- listen acce
 ```bash
 WA_AUDIO_CODEC=opus WA_AUDIO_PROFILE=pt111 cargo run -p whatsapp-rust-voip-cli --release -- listen accept
 ```
+
+### Media stats and silence detection
+
+[PR #1111](https://github.com/oxidezap/whatsapp-rust/pull/1111) added a per-call counters surface because every discard on the audio receive path used to be silent — a wrong payload type, an SRTP tag that didn't verify, a frame the decoder refused, a jitter buffer trimming its own head all returned with nothing logged, so a call carrying no audio and a call where nobody was talking looked identical.
+
+`handle.media_stats()` returns a `wacore::voip::CallMediaStats` (`#[non_exhaustive]`) snapshot of named counters — `rtp_received`, `srtp_unprotect_failed`, `audio_frames_decoded`, `mlow_off_point_dropped`, `playout_trimmed_samples`, and others, one per discard reason. `CallMediaStats::audio_produced()` sums the three "a consumer actually got a frame" counters (`audio_frames_decoded`, `audio_frames_delivered`, `foreign_frames_decoded`) regardless of which audio path the call uses. This is a separate, per-call surface from the app-wide [`wa_*` metrics](/advanced/metrics) and [tracing spans](/advanced/observability) — it dies with the call and isn't in `Client::stats()`.
+
+Two events on `handle.events()` turn the counters into an alarm:
+
+| `CallEvent` variant | Fires when |
+|---|---|
+| `AudioSilent { silent_for_ms, rtp_received, frames_produced, dominant_reason }` | Audio RTP keeps arriving over a sliding window and none of it becomes sound. `dominant_reason` is an `AudioSilenceReason` — `NoDecoderForNegotiatedCodec`, `AuthenticationFailing`, `UnexpectedPayloadType`, `CodecRejectingFrames`, `CodecFlapping`, or `Unknown` — naming the counter that dominates that window. Re-emitted on a fixed cadence while it holds |
+| `AudioReceptionStalled { silent_for_ms }` | No audio RTP has arrived at all for long enough (since the relay allocated, or since the last packet) that reception itself looks stopped |
+
+They're deliberately distinct — one is a codec problem, the other transport — and conflating them is exactly how issue #1105 stayed open for months before this PR. Neither is terminal; both are diagnostic, so treat them as something to log or alert on, not to react to inside the call.
+
+`wacore::voip::PacketTap` — a trait that observes every relay datagram in both directions — is now public, and `TappedFactory` decorates a `RelayTransportFactory` with one. The runtime doesn't yet expose a factory-injection point for a live `CallHandle`, so it's reachable today from a shell building its own transport, not from the builder API above.
 
 ## Video I/O
 
@@ -392,6 +434,7 @@ handle.stop_video().await?; // Idempotent.
 | `handle.announce_video_enabled().await` | Send the standalone `Enabled` stanza that completes a `start_video` upgrade. `whatsapp-rust`'s standard `<call>` handler already does this automatically on the peer's `UpgradeAccept` — only call it yourself if you're driving call signaling outside that handler |
 | `handle.stop_video().await` | Stop our own outbound video; idempotent. The peer's video plane is unaffected if they keep sending — see Video I/O above |
 | `handle.events()` | Subscribe to engine events (relay allocate, audio/video state changes, RTCP, failures) |
+| `handle.media_stats()` | Snapshot of per-call audio-path counters (`CallMediaStats`) — see [Media stats and silence detection](#media-stats-and-silence-detection) |
 | `handle.group_state()` | Roster/relay/waiting-room snapshot for a group or call-link call, `None` on a plain 1:1 call — see [Group calls](#group-calls) |
 | `handle.invite_participant(&jid).await` | Add a participant who isn't in the call yet, including promoting a 1:1 call to a group call — see [Promoting a 1:1 call to a group call](#promoting-a-11-call-to-a-group-call) |
 | `handle.ring_participant(&jid).await` | Re-ring a participant already in the roster but not currently connected — see [Promoting a 1:1 call to a group call](#promoting-a-11-call-to-a-group-call) |

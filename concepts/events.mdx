@@ -1570,7 +1570,7 @@ pub struct GroupParticipantInfo {
 
 `display_name` carries the server-provided label for a participant — for non-contacts this is typically the masked phone number (`"+55•••••••••79"`). It is populated only when the participant appears as a `<participant>` child of a group notification; entries that arrive via `<requested_user>` (membership requests) leave it `None`.
 
-`Subject::subject_owner` follows the group's addressing mode, so in a LID-addressed group it is a `@lid` JID; the renamer's phone-number JID arrives separately as `subject_owner_pn` (from `s_o_pn`), with `subject_owner_username` (from `s_o_username`) when username addressing is enabled — the same split `GroupUpdate::participant` / `participant_pn` uses.
+`Subject::subject_owner` follows the group's addressing mode, so in a LID-addressed group it is a `@lid` JID; the renamer's phone-number JID arrives separately as `subject_owner_pn` (from `s_o_pn`), with `subject_owner_username` (from `s_o_username`) when present — the same split `GroupUpdate::participant` / `participant_pn` uses.
 
 Membership request variants include a `request_method` field of type `MembershipRequestMethod`:
 

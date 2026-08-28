@@ -81,7 +81,7 @@ client.mark_as_read(&chat_jid, None, &message_ids).await?;
 </Note>
 
 <Note>
-  `mark_as_read` adapts the wire shape to the chat, matching WhatsApp Web. A newsletter read is sent as `read-self`. A `status@broadcast` read carries `context="status"`. When the status author is a LID, it also adds `peer_participant_pn` (the resolved LID→PN). For a direct message, the receipt also downgrades to `read-self` when the account's `readreceipts` privacy setting is `none` — the sender is not notified, matching WhatsApp Web. Groups and broadcast lists always send the notifying `read` type regardless of that setting. The same call handles all these cases — you don't pass anything extra. See [Read receipt privacy gating](#read-receipt-privacy-gating) below.
+  `mark_as_read` adapts the wire shape to the chat, matching WhatsApp Web. A newsletter read is sent as `read-self`. A `status@broadcast` read carries `class="status"`. When the status author is a LID, it also adds `peer_participant_pn` (the resolved LID→PN). For a direct message, the receipt also downgrades to `read-self` when the account's `readreceipts` privacy setting is `none` — the sender is not notified, matching WhatsApp Web. Groups and broadcast lists always send the notifying `read` type regardless of that setting. The same call handles all these cases — you don't pass anything extra. See [Read receipt privacy gating](#read-receipt-privacy-gating) below.
 </Note>
 
 ---

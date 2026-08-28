@@ -369,7 +369,7 @@ impl VideoSink for MyDisplay {
 `VideoFrame` carries the reassembled peer access unit plus `keyframe` (safe point to (re)start a decoder) and `orientation` (from `<video device_orientation>`).
 
 <Note>
-  [PR #1355](https://github.com/oxidezap/whatsapp-rust/pull/1355) added `IncomingCall::video_orientation` (see [Events](/concepts/events#incomingcall)) for the rotation a video-from-start peer announces on its offer, before any `VideoFrame` exists to carry one. Read it off the `Event::IncomingCall` that preceded this call rather than waiting for the first frame, so a call that starts with the camera already rotated doesn't render upright for a beat.
+  [PR #1355](https://github.com/oxidezap/whatsapp-rust/pull/1355) added `IncomingCall::video_orientation` (see [Events](/concepts/events#incomingcall)) for the rotation a video-from-start party announces once, on whichever call-signaling stanza it sent — the peer's `Offer` if you're the callee, or their `Accept` if you're the caller — before any `VideoFrame` exists to carry one. Read it off that `Event::IncomingCall` rather than waiting for the first frame, so a call that starts with the peer's camera already rotated doesn't render upright for a beat.
 </Note>
 
 <Tip>

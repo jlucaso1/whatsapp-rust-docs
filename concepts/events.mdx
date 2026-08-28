@@ -2754,7 +2754,7 @@ pub struct IncomingCall {
 </Note>
 
 <Note>
-  [PR #1355](https://github.com/oxidezap/whatsapp-rust/pull/1355) added `video_orientation`. A video-from-start peer announces its camera rotation exactly once, on the offer (or your own on the accept you send back) — it sends no mid-call `<video>` of its own until the camera actually turns. Before this field existed, that initial rotation was dropped, so a call starting with the phone already sideways rendered upright until the peer's next rotation change. See [Video I/O](/guides/voip-calls#video-io) in the VoIP guide for how this compares to `VideoFrame::orientation`.
+  [PR #1355](https://github.com/oxidezap/whatsapp-rust/pull/1355) added `video_orientation`. `IncomingCall` only ever fires for a stanza the peer sent, so this is always *their* rotation, never your own outgoing stanza's — the caller's, carried on the `Offer` a callee receives, or the callee's, carried on the `Accept` a caller receives back. A video-from-start party announces its camera rotation exactly once, in that stanza, and sends no mid-call `<video>` of its own until the camera actually turns. Before this field existed, that initial rotation was dropped, so a call starting with the peer's phone already sideways rendered upright until their next rotation change. See [Video I/O](/guides/voip-calls#video-io) in the VoIP guide for how this compares to `VideoFrame::orientation`.
 </Note>
 
 `GroupCallUpdate` is the same authoritative roster/relay type `CallHandle::group_state()` exposes once you've joined (via `GroupCallState::snapshot()` — see [Reading group state](/guides/voip-calls#reading-group-state)):

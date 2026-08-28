@@ -951,6 +951,8 @@ let info = client.groups().query_info(&group_jid).await?;
 let info = client.groups().query_info(&group_jid).await?;
 ```
 
+The cache is also invalidated automatically when the server sends a `groups_dirty` notification naming a group as stale — the next `query_info` call for it re-fetches rather than returning the outdated snapshot. See [Stale group metadata](/concepts/events#stale-group-metadata-groups_dirty) for details.
+
 </Steps>
 
 ## Next steps

@@ -1534,7 +1534,7 @@ The `action` field on `GroupUpdate` is a `GroupNotificationAction` enum with the
 | `Demote { participants }` | `<demote>` | Members demoted from admin |
 | `Modify { participants }` | `<modify>` | Member changed phone number |
 | `ChangeNumber { new_owner, sub_group_suggestions }` | `<change_number>` | A participant changed their phone number. `new_owner` is read from the `jid` attribute of `<change_number>` and `sub_group_suggestions` is collected from any `<sub_group_suggestion>` children. The previous JID is carried by `GroupUpdate::participant`. |
-| `Subject { subject, subject_owner, subject_time }` | `<subject>` | Group name changed |
+| `Subject { subject, subject_owner, subject_owner_pn, subject_owner_username, subject_time }` | `<subject>` | Group name changed |
 | `Description { id, description }` | `<description>` | Group description changed or deleted |
 | `Locked { threshold }` | `<locked>` | Only admins can edit group info |
 | `Unlocked` | `<unlocked>` | All members can edit group info |
@@ -1569,6 +1569,8 @@ pub struct GroupParticipantInfo {
 ```
 
 `display_name` carries the server-provided label for a participant — for non-contacts this is typically the masked phone number (`"+55•••••••••79"`). It is populated only when the participant appears as a `<participant>` child of a group notification; entries that arrive via `<requested_user>` (membership requests) leave it `None`.
+
+`Subject::subject_owner` follows the group's addressing mode, so in a LID-addressed group it is a `@lid` JID; the renamer's phone-number JID arrives separately as `subject_owner_pn` (from `s_o_pn`), with `subject_owner_username` (from `s_o_username`) when username addressing is enabled — the same split `GroupUpdate::participant` / `participant_pn` uses.
 
 Membership request variants include a `request_method` field of type `MembershipRequestMethod`:
 
@@ -1629,6 +1631,12 @@ Event::GroupUpdate(update) => {
 <Note>
 A single group notification from the server can contain multiple actions. The library dispatches a separate `GroupUpdate` event for each action, so your handler may receive multiple events from one notification.
 </Note>
+
+### Stale group metadata (`groups_dirty`)
+
+The server can also send `<notification type="w:gp2">` wrapping a `<groups_dirty>` child, naming one or more groups whose cached metadata is now stale (for example, after a bulk membership change made elsewhere). This is not an ordinary group notification — its `from` is the group server, not a group JID — so it produces no `GroupUpdate` event. Instead, the library evicts the cached snapshot for each named group and still dispatches the raw [`Event::Notification`](#raw-stanza-events).
+
+The next `query_info` (or a send) for an affected group transparently re-fetches its metadata from the server, since `query_info`'s default `Freshness::CachePreferred` behavior only serves the cache when it is populated. You do not need to call `query_info_with_freshness(&jid, Freshness::Refresh)` yourself in response to this notification — see [Cache group information](/guides/group-management#cache-group-information).
 
 ## Contact notification events
 
@@ -2858,7 +2866,7 @@ Event::IncomingCall(call) => match &call.action {
 
 ### DisappearingModeChanged
 
-**Emitted:** When a contact changes their default disappearing messages setting. Sent by the server as a `<notification type="disappearing_mode">` stanza.
+**Emitted:** When a contact changes their default disappearing messages setting, sent by the server as a `<notification type="disappearing_mode">` stanza — or when *your own* account's default changes on another linked device, carried instead as a `<disappearing_mode duration="…" t="…">` child of a `<notification type="account_sync">` stanza. In the `account_sync` case `from` is your own account.
 
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
@@ -2878,6 +2886,10 @@ pub struct DisappearingModeChanged {
 
 <Note>
 You should only apply this update if `setting_timestamp` is newer than your previously stored value for this contact. This prevents out-of-order updates from overwriting newer settings.
+</Note>
+
+<Note>
+The `account_sync` form of this notification has a second shape the library does not turn into this event: a `<disappearing_mode action="modify">` child (no `duration`/`t`) means the server wants you to re-query the current default rather than stating it inline. Resolving that requires a `disappearing_mode` *get* request, which this library does not yet implement, so that shape is logged and no event fires.
 </Note>
 
 **Example:**
@@ -2923,7 +2935,7 @@ Event::DisableLinkPreviewsUpdate(update) => {
 ```
 
 <Note>
-`DisappearingModeChanged` above is a server-push notification about *another contact's* setting. `DisableLinkPreviewsUpdate` is different: it is app-state sync about *your own account's* setting, changed from one of your own linked devices. See [Privacy — App-state settings](/api/privacy#app-state-settings-syncd) for the outbound API (`set_link_previews_disabled`) that emits this event on other devices.
+`DisappearingModeChanged` above is a server-push notification — usually about *another contact's* setting (`type="disappearing_mode"`), though its `account_sync` shape carries your own account's setting instead. `DisableLinkPreviewsUpdate` is different: it is app-state sync about *your own account's* setting, changed from one of your own linked devices. See [Privacy — App-state settings](/api/privacy#app-state-settings-syncd) for the outbound API (`set_link_previews_disabled`) that emits this event on other devices.
 </Note>
 
 ## Raw stanza events

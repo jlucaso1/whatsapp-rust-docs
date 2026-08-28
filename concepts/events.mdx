@@ -2880,12 +2880,12 @@ pub struct DisappearingModeChanged {
 ```
 
 **Fields:**
-- `from` - The contact whose disappearing messages setting changed
+- `from` - Whose disappearing messages setting changed: a contact for the `disappearing_mode` notification, or your own account for the `account_sync` form
 - `duration` - New duration in seconds (`0` = disabled, `86400` = 24 hours, `604800` = 7 days, etc.)
 - `setting_timestamp` - `DateTime<Utc>` indicating when the setting was changed (serialized as Unix timestamp in seconds)
 
 <Note>
-You should only apply this update if `setting_timestamp` is newer than your previously stored value for this contact. This prevents out-of-order updates from overwriting newer settings.
+You should only apply this update if `setting_timestamp` is newer than your previously stored value for `from`. This prevents out-of-order updates from overwriting newer settings.
 </Note>
 
 <Note>

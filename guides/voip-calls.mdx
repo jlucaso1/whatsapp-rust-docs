@@ -269,16 +269,16 @@ let call = client
 
 ### Negotiation
 
-RTP payload type 120 carries **either** codec — it's shared by MLow and native Opus, so the payload type alone never tells you which one a packet is. Codec choice is read from the peer's negotiated capability, not sniffed from the bytes.
+RTP payload type 120 carries **either** codec. It's shared by MLow and native Opus, so payload type alone never tells you which one a packet is. Codec choice is read from the peer's negotiated capability instead.
 
-MLOW capability index 31 (`use_mlow_codec_v1`) drives the decision, read through `wacore::stanza::call::capability_bit`, which returns one of three states for a peer's `<capability>` blob — and two of them are handled in **opposite** directions:
+MLOW capability index 31 (`use_mlow_codec_v1`) drives the decision, read through `wacore::stanza::call::capability_bit`. It returns one of three `CapabilityBit` states for a peer's `<capability>` blob — `Set`, `Clear`, or `Unknown` — but `Clear` covers two different peer conditions below, so the table has four rows for three states. `Set` and `Clear` are handled in **opposite** directions:
 
-| peer `<capability>` | effect |
-|---|---|
-| carries index 31 | MLow survives if we asked for it too |
-| valid, without index 31 | MLow drops, both directions |
-| absent | that participant is skipped — nothing resets |
-| present but unreadable (`ver` missing/unparseable, or below the index's version) | falls back to a capability that answers false for everything — all of it resets |
+| peer `<capability>` | `CapabilityBit` | effect |
+|---|---|---|
+| carries index 31 | `Set` | MLow survives if we asked for it too |
+| valid, without index 31 | `Clear` | MLow drops, both directions |
+| absent | `Unknown` | that participant is skipped — nothing resets |
+| present but unreadable (`ver` missing/unparseable, or below the index's version) | `Clear` | falls back to a capability that answers false for everything — all of it resets |
 
 Applying the decision needs no mutable `AudioFormat`: the **callee** learns the peer's capability from the `<offer>`, before the engine exists, so the call simply starts on the right codec; the **caller** learns it from `<preaccept>`/`<accept>`, riding the same channel that carries the answering device's LID, since both have to land before the first inbound packet. Mid-call, `MLOW_16KHZ_60MS` and `OPUS_16KHZ_60MS` agree on payload type, clock rate, timestamp step, sample rate, channels and samples per frame, so the swap changes no RTP header byte.
 
@@ -324,7 +324,7 @@ Two events on `handle.events()` turn the counters into an alarm:
 | `AudioSilent { silent_for_ms, rtp_received, frames_produced, dominant_reason }` | Audio RTP keeps arriving over a sliding window and none of it becomes sound. `dominant_reason` is an `AudioSilenceReason` — `NoDecoderForNegotiatedCodec`, `AuthenticationFailing`, `UnexpectedPayloadType`, `CodecRejectingFrames`, `CodecFlapping`, or `Unknown` — naming the counter that dominates that window. Re-emitted on a fixed cadence while it holds |
 | `AudioReceptionStalled { silent_for_ms }` | No audio RTP has arrived at all for long enough (since the relay allocated, or since the last packet) that reception itself looks stopped |
 
-They're deliberately distinct — one is a codec problem, the other transport — and conflating them is exactly how issue #1105 stayed open for months before this PR. Neither is terminal; both are diagnostic, so treat them as something to log or alert on, not to react to inside the call.
+They're deliberately distinct. `AudioSilent` is a codec problem: packets are arriving but nothing is becoming sound. `AudioReceptionStalled` is a transport problem: packets have stopped arriving at all. Conflating the two is exactly how issue #1105 stayed open for months before this PR. Neither is terminal — both are diagnostic, so treat them as something to log or alert on, not to react to inside the call.
 
 `wacore::voip::PacketTap` — a trait that observes every relay datagram in both directions — is now public, and `TappedFactory` decorates a `RelayTransportFactory` with one. The runtime doesn't yet expose a factory-injection point for a live `CallHandle`, so it's reachable today from a shell building its own transport, not from the builder API above.
 

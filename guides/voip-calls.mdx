@@ -368,6 +368,10 @@ impl VideoSink for MyDisplay {
 
 `VideoFrame` carries the reassembled peer access unit plus `keyframe` (safe point to (re)start a decoder) and `orientation` (from `<video device_orientation>`).
 
+<Note>
+  [PR #1355](https://github.com/oxidezap/whatsapp-rust/pull/1355) added `IncomingCall::video_orientation` (see [Events](/concepts/events#incomingcall)) for the rotation a video-from-start peer announces on its offer, before any `VideoFrame` exists to carry one. Read it off the `Event::IncomingCall` that preceded this call rather than waiting for the first frame, so a call that starts with the camera already rotated doesn't render upright for a beat.
+</Note>
+
 <Tip>
   Bare `async_channel` endpoints work directly here too — `Receiver<Vec<u8>>` implements `VideoSource` (15 fps default stride) and `Sender<VideoFrame>` implements `VideoSink`.
 </Tip>
@@ -705,6 +709,10 @@ Unlike MLow, whatsapp-rust does **not** implement an H.264 encoder or decoder �
 - **Reassembly**: single-NAL, STAP-A, and FU-A on receive, with sequence-aware fragment-loss handling and allocation caps.
 - **Keyframe recovery**: an authenticated peer PLI/FIR is treated as a decoder resync boundary — dependent access units are withheld until the next IDR packetizes successfully, matching what the official app expects for recovery.
 - **Backpressure**: a complete access unit is the unit of backpressure, so overload can't leave half an IDR on the wire.
+
+<Note>
+  [PR #1355](https://github.com/oxidezap/whatsapp-rust/pull/1355) added `CallEvent::VideoKeyframeNeeded`. The engine can withhold non-IDR access units — on a video-from-start ungate, a group epoch commit, a source switch, or the peer's own RTCP keyframe request — but it never touches pixels, so only your encoder can produce the IDR that lifts the gate. This event tells you when that's happened; it fires once per requirement, not once per dropped frame. Without reacting to it, video stays dark until your encoder's own keyframe interval comes round on its own, which can be most of a short call.
+</Note>
 
 WhatsApp's own encoder settings (for interop reference, not enforced by the library): H.264 Constrained Baseline, repeated SPS/PPS, adapting from a 15 fps low-bandwidth mode up to 1280×720 @ 20 fps / ~2 Mbps.
 

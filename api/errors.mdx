@@ -19,6 +19,8 @@ As of PR #1299, a DM send that reaches no device of its recipient now fails inst
 
 As of PR #1360, `ConnectError::Version` no longer follows from every version-source failure on the `wasm32` target. That target fetches the version from the Facebook JS SDK bundle at `connect.facebook.net`, which sits on common tracker blocklists. A client blocked from reaching it now connects anyway, on the version the device already holds, and reports the fallback on [`Event::Connected`](/concepts/events#connected) via `app_version_fallback` instead of failing `connect()`. The native target's source (`sw.js`) is unchanged — a client that can't reach it still fails with `ConnectError::Version`, since that host serves WhatsApp Web itself and an unreachable `sw.js` is a real break. See [Connected](/concepts/events#connected) for the fallback payload.
 
+This is also **a breaking change** for a direct caller of `whatsapp_rust::version::resolve_and_update_version` (most callers only go through `Client::connect`, which absorbs it): its return type changed from `Result<()>` to `Result<Option<wacore::types::events::AppVersionFallback>>`. A caller discarding the result (`resolve_and_update_version(...).await?;`) keeps compiling unchanged; one that named the `Ok` type as `()` needs to switch to `Option<AppVersionFallback>`.
+
 ## Error hierarchy
 
 ```

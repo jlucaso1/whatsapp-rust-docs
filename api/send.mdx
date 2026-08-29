@@ -71,7 +71,7 @@ impl SendResult {
 
 ### RecipientFanout
 
-Added in [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). A DM whose recipient half loses some but not all of its devices still builds a stanza, gets acked, and returns `Ok(SendResult)` with a real message id. (When *every* recipient device fails, the send instead returns `Err(SendError::NoRecipientDevice(..))` regardless of whether the sender's own devices encrypted successfully — see [`NoRecipientDeviceError`](/api/errors#norecipientdeviceerror).) The partial case matches WA Web, whose `<participants>` node is built from whichever per-device encryptions survived and which rejects the whole send only when every device in the fan-out — recipient and own alike — fails. `SendResult::recipient_fanout` is how a caller sees the partial case, since the wire outcome alone can't distinguish a full delivery from a partial one:
+Added in [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). A DM whose recipient half loses some but not all of its devices still builds a stanza, transmits it, and returns `Ok(SendResult)` with a real message id — `send_message` does not wait for the server's ack before returning (see [Phash validation](#phash-validation-stale-device-list-detection)). (When *every* recipient device fails, the send instead returns `Err(SendError::NoRecipientDevice(..))` regardless of whether the sender's own devices encrypted successfully — see [`NoRecipientDeviceError`](/api/errors#norecipientdeviceerror).) The partial case matches WA Web, whose `<participants>` node is built from whichever per-device encryptions survived and which rejects the whole send only when every device in the fan-out — recipient and own alike — fails. `SendResult::recipient_fanout` is how a caller sees the partial case, since the wire outcome alone can't distinguish a full delivery from a partial one:
 
 ```rust
 #[non_exhaustive]
@@ -1047,7 +1047,7 @@ When sending group, status, or DM messages, the library automatically validates 
 
 - **Group messages**: group metadata is invalidated (participants are re-queried on the next send); sender-key device tracking is **not** reset, since forcing full SKDM redistribution on every mismatch would cost a fan-out per message for as long as the divergence lasted
 - **Status messages**: sender key device cache is invalidated (forces full SKDM redistribution)
-- **DM messages**: the device registry cache is invalidated for both the recipient and your own phone number (PN), matching WA Web's `syncDeviceListJob([recipient, me])` behavior
+- **DM messages**: the device registry cache is invalidated for both the recipient and your own phone number (PN), matching WA Web's `syncDeviceListJob([recipient, me])` behavior. As of [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362), a DM mismatch also re-resolves the recipient's device list and resends the message, under the original message id, to any device that list holds and the original stanza did not cover — see [Signal Protocol — phash repair](/advanced/signal-protocol#phash-validation-for-stale-device-list-detection)
 
 For DMs, the phash is computed locally from the sent device set but is **not** sent on the wire (WA Web only sends phash for groups). The phash is returned via the `PreparedDmStanza.phash` field and compared against the server's ACK phash.
 
@@ -1404,6 +1404,8 @@ pub enum SendError {
     #[error("{0}")]
     NoRecipientDevice(#[source] wacore::send::NoRecipientDeviceError),
     #[error("{0}")]
+    PrimaryDeviceRejected(#[source] wacore::send::PrimaryDeviceRejected),
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -1413,6 +1415,7 @@ pub enum SendError {
 - `Iq` — IQ request required by the send path failed
 - `InvalidRequest` — the send request was malformed (e.g., invalid JID, bad message shape)
 - `NoRecipientDevice` — added in PR #1299. A DM had no recipient device available: every resolved recipient device failed encryption, or no recipient device resolved for a non-self destination, so nothing was sent. See [`NoRecipientDeviceError` in the Error Types reference](/api/errors#norecipientdeviceerror) for the two variants it can carry.
+- `PrimaryDeviceRejected` — added in [PR #1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). The pre-key fetch ahead of a DM send got back a `406` naming a primary device (device 0), recipient's or sender's own, so nothing was built or sent. A companion's `406` does not trigger this. See [`SendError` in the Error Types reference](/api/errors#senderror) for the WA Web parity this matches and the retry it calls for.
 - `Client` — underlying transport/connection error
 - `Internal` — catch-all for errors not yet assigned a typed variant. Includes a failure to durably persist the outbound Signal ratchet advance before the stanza was sent — see the durability note under [`send_message`](#send_message).
 
@@ -1427,6 +1430,7 @@ match client.send_message(jid.clone(), message).await {
     Err(SendError::Iq(e)) => eprintln!("IQ failed: {}", e),
     Err(SendError::InvalidRequest(msg)) => eprintln!("Bad request: {}", msg),
     Err(SendError::NoRecipientDevice(e)) => eprintln!("No recipient device reached: {}", e),
+    Err(SendError::PrimaryDeviceRejected(e)) => eprintln!("A primary device was rejected fetching pre-keys: {}", e),
     Err(e) => eprintln!("Send failed: {}", e),
 }
 ```

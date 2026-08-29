@@ -998,7 +998,8 @@ Three related changes, all in [#1362](https://github.com/oxidezap/whatsapp-rust/
 `SendResult` gains `recipient_fanout: Option<RecipientFanout>` (see [`RecipientFanout`](/api/send#recipientfanout)), populated for a DM. A caller that treated `Ok` as full delivery can now check it instead of assuming:
 
 ```rust
-// Before — Ok told you the server accepted the stanza, nothing about who got it
+// Before — Ok told you the stanza was sent, nothing about who got it
+// (send_message does not wait for the server's ack before returning)
 let result = client.send_message(to.clone(), message).await?;
 
 // After — inspect the DM fan-out when the caller's policy cares
@@ -1023,4 +1024,4 @@ match client.send_message(to.clone(), message).await {
 
 Separately, a DM phash mismatch (see [Phash validation](/advanced/signal-protocol#phash-validation-for-stale-device-list-detection)) now re-resolves the peer's device list and resends the message, under the original message id, to any device that list holds and the original stanza did not cover. Previously a mismatch only invalidated caches. This has no `SendError`/`SendResult` shape to match on — it runs after the original `send_message` call has already returned. Each newly discovered device receives the message for the first time; a device the original stanza already covered is left untouched, so this never delivers a duplicate to the same device.
 
-Both new variants are additive: `SendError` and `SendResult` are `#[non_exhaustive]`, and a caller that does not match `PrimaryDeviceRejected` or read `recipient_fanout` keeps behaving exactly as before.
+Both new variants are additive at the type level: `SendError` and `SendResult` are `#[non_exhaustive]`, so a `match` or destructuring pattern written against the old shape still compiles. `recipient_fanout` is purely additive at runtime too — ignoring it changes nothing. `PrimaryDeviceRejected` is not: a caller whose `match` ends in a catch-all `Err` arm still compiles and still runs, but a named-primary `406` now takes that arm instead of the `Ok` path it took before, so this is a real behavior change for that one case, just not a breaking one.

@@ -76,7 +76,7 @@ println!("Message sent with ID: {}", result.message_id);
 
 `send_message` returns a `SendResult` containing the `message_id` and recipient `to` JID. Use `result.message_key()` to get a `wa::MessageKey` for follow-up operations like album child linking.
 
-For a DM, `result.recipient_fanout` also tells you whether the send actually reached every one of the recipient's devices — a DM that lost some but not all devices still returns `Ok` with a real message id, matching WA Web. See [`RecipientFanout`](/api/send#recipientfanout) for the counts, and the [Error Types migration guide](/api/errors#from-pr-1362-a-dms-partial-fan-out-is-now-visible-and-a-primarys-406-now-fails-the-send) for why this doesn't change what a partial fan-out returns.
+For a DM, `result.recipient_fanout` tells you whether the send reached every one of the recipient's devices. A DM that loses some but not all devices still returns `Ok` with a real message id, matching WA Web. See [`RecipientFanout`](/api/send#recipientfanout) for the counts, and the [Error Types migration guide](/api/errors#from-pr-1362-a-dms-partial-fan-out-is-now-visible-and-a-primarys-406-now-fails-the-send) for why a partial fan-out still returns `Ok`.
 
 ### Extended text message
 

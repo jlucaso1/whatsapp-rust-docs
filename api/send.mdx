@@ -71,7 +71,7 @@ impl SendResult {
 
 ### RecipientFanout
 
-Added in [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). A DM whose recipient half loses some but not all of its devices still builds a stanza, gets acked, and returns `Ok(SendResult)` with a real message id — matching WA Web, which builds `<participants>` from whichever per-device encryptions survived and only rejects when every device fails. `SendResult::recipient_fanout` is how a caller sees that this happened, since the wire outcome alone can't distinguish a full delivery from a partial one:
+Added in [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). A DM whose recipient half loses some but not all of its devices still builds a stanza, gets acked, and returns `Ok(SendResult)` with a real message id. (When *every* recipient device fails, the send instead returns `Err(SendError::NoRecipientDevice(..))` regardless of whether the sender's own devices encrypted successfully — see [`NoRecipientDeviceError`](/api/errors#norecipientdeviceerror).) The partial case matches WA Web, whose `<participants>` node is built from whichever per-device encryptions survived and which rejects the whole send only when every device in the fan-out — recipient and own alike — fails. `SendResult::recipient_fanout` is how a caller sees the partial case, since the wire outcome alone can't distinguish a full delivery from a partial one:
 
 ```rust
 #[non_exhaustive]
@@ -97,7 +97,7 @@ impl RecipientFanout {
 
 `Some(RecipientFanout)` only for a DM send (`send_message`, `send_message_with_options`, and status reactions, which route through the DM branch addressed to the status author's device). `None` for a group, a status post, a peer-sync message, and newsletter plaintext — each of those answers a different "who was reached" question, and reusing a DM's counts there would misrepresent it.
 
-This is purely additive: a caller that ignores the field, or matches on an older `SendResult` shape without it (not possible across the `#[non_exhaustive]` boundary, but worth stating), sees no change in behavior. Nothing about the wire stanza or the DM's success on a partial fan-out changes — erroring on a partial fan-out was considered and rejected, since it would be a divergence from WA Web; it stays a policy the caller opts into by inspecting `is_partial()` and `skipped_primary`.
+This is purely additive. A caller that ignores the field, or that matches on an older `SendResult` shape without it (not actually possible across the `#[non_exhaustive]` boundary, but worth stating), sees no change in behavior. The wire stanza and the DM's success on a partial fan-out are unchanged: erroring on a partial fan-out was considered and rejected, since it would diverge from WA Web. Whether to treat a partial fan-out as a problem stays the caller's own policy, opted into by inspecting `is_partial()` and `skipped_primary`.
 
 ```rust
 let result = client.send_message(to.clone(), message).await?;

@@ -92,7 +92,7 @@ impl RecipientFanout {
 **Fields:**
 - `addressed` — how many of the recipient's devices the fan-out attempted to encrypt for.
 - `encrypted` — how many of those actually produced an `<enc>` node. Equal to `addressed` on a full delivery.
-- `skipped_primary` — `true` when the recipient's primary device (device 0, their phone) was addressed but did not encrypt. A recipient's phone holds the chat regardless of whether a linked companion is open, so this is the field that answers "did the person themselves miss it," independent of `is_partial()`.
+- `skipped_primary` — `true` when the recipient's primary device (device 0, their phone) was addressed but did not encrypt. This is encryption coverage, not a delivery or read signal: the phone may still have received the message through the phash-mismatch repair below, or hold the chat via a linked companion that did encrypt. A recipient's phone is the device most likely to be open, so this field is worth watching independent of `is_partial()`, but it is not proof the person missed anything.
 - `had_unregistered_device` — `true` when one of the addressed devices had no registered identity to encrypt against. This is the flag the DM path already computed internally; it's now exposed alongside the counts instead of being discarded.
 
 `Some(RecipientFanout)` only for a DM send (`send_message`, `send_message_with_options`, and status reactions, which route through the DM branch addressed to the status author's device). `None` for a group, a status post, a peer-sync message, and newsletter plaintext — each of those answers a different "who was reached" question, and reusing a DM's counts there would misrepresent it.
@@ -103,10 +103,10 @@ This is purely additive. A caller that ignores the field, or that matches on an 
 let result = client.send_message(to.clone(), message).await?;
 if let Some(fanout) = &result.recipient_fanout {
     if fanout.skipped_primary {
-        log::warn!("{} likely never saw message {}", to, result.message_id);
+        log::warn!("{}'s primary device did not encrypt message {}", to, result.message_id);
     } else if fanout.is_partial() {
         log::info!(
-            "message {} reached {}/{} of {}'s devices",
+            "message {} encrypted for {}/{} of {}'s devices",
             result.message_id, fanout.encrypted, fanout.addressed, to
         );
     }

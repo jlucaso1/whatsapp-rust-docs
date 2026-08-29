@@ -525,7 +525,7 @@ By default, the client automatically fetches the latest WhatsApp Web version fro
 </Note>
 
 <Note>
-As of PR #1360: on the `wasm32` target, the version source is a different one — the Facebook JS SDK bundle at `connect.facebook.net`, since `sw.js` can't be fetched cross-origin from a browser — and it sits on common tracker blocklists. A wasm client blocked from reaching it does not fail to connect; it settles for the version the device already holds and reports this on [`Event::Connected`](/concepts/events#connected) via `app_version_fallback`. `with_version` avoids the fetch (and this fallback) entirely, on either target.
+As of PR #1360: on `wasm32`, the client fetches the version from a different source instead — the Facebook JS SDK bundle at `connect.facebook.net`, since a browser can't fetch `sw.js` cross-origin. That bundle sits on common tracker blocklists. If a content blocker keeps a wasm client from reaching it, the client still connects: it settles for the version the device already holds and reports this on [`Event::Connected`](/concepts/events#connected) via `app_version_fallback`. Call `with_version` to skip the fetch (and this fallback) entirely, on either target.
 </Note>
 
 ### with_device_props

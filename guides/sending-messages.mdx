@@ -753,11 +753,11 @@ The account-level default only applies to **new** chats. Existing chats keep the
 
 ### Listening for timer changes
 
-When a contact changes their default disappearing messages setting, you receive a `DisappearingModeChanged` event:
+When a contact changes their default disappearing messages setting, you receive a `DisappearingModeChanged` event — `change.from` is your own account instead of a contact when the change came from one of your other linked devices:
 
 ```rust
 Event::DisappearingModeChanged(change) => {
-    println!("Contact {} set disappearing to {}s", change.from, change.duration);
+    println!("{} set disappearing to {}s", change.from, change.duration);
 }
 ```
 

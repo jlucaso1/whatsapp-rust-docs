@@ -40,7 +40,7 @@ pub async fn send_message(
 </ParamField>
 
 <ResponseField name="SendResult" type="SendResult">
-  Contains the `message_id` (unique ID for tracking receipts, edits, revokes) and `to` (resolved recipient JID). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
+  Contains the `message_id` (unique ID for tracking receipts, edits, revokes), `to` (resolved recipient JID), and — for a DM — `recipient_fanout` (see [`RecipientFanout`](#recipientfanout) below). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
 </ResponseField>
 
 <Note>
@@ -57,6 +57,7 @@ Result of a successfully sent message. Provides the message ID and a convenience
 pub struct SendResult {
     pub message_id: String,
     pub to: Jid,
+    pub recipient_fanout: Option<RecipientFanout>,
 }
 
 impl SendResult {
@@ -67,6 +68,50 @@ impl SendResult {
 ```
 
 `SendResult` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
+
+### RecipientFanout
+
+Added in [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). A DM whose recipient half loses some but not all of its devices still builds a stanza, gets acked, and returns `Ok(SendResult)` with a real message id — matching WA Web, which builds `<participants>` from whichever per-device encryptions survived and only rejects when every device fails. `SendResult::recipient_fanout` is how a caller sees that this happened, since the wire outcome alone can't distinguish a full delivery from a partial one:
+
+```rust
+#[non_exhaustive]
+pub struct RecipientFanout {
+    pub addressed: usize,
+    pub encrypted: usize,
+    pub skipped_primary: bool,
+    pub had_unregistered_device: bool,
+}
+
+impl RecipientFanout {
+    /// `true` when `encrypted < addressed` — fewer recipient devices
+    /// produced an `<enc>` node than were addressed.
+    pub fn is_partial(&self) -> bool;
+}
+```
+
+**Fields:**
+- `addressed` — how many of the recipient's devices the fan-out attempted to encrypt for.
+- `encrypted` — how many of those actually produced an `<enc>` node. Equal to `addressed` on a full delivery.
+- `skipped_primary` — `true` when the recipient's primary device (device 0, their phone) was addressed but did not encrypt. A recipient's phone holds the chat regardless of whether a linked companion is open, so this is the field that answers "did the person themselves miss it," independent of `is_partial()`.
+- `had_unregistered_device` — `true` when one of the addressed devices had no registered identity to encrypt against. This is the flag the DM path already computed internally; it's now exposed alongside the counts instead of being discarded.
+
+`Some(RecipientFanout)` only for a DM send (`send_message`, `send_message_with_options`, and status reactions, which route through the DM branch addressed to the status author's device). `None` for a group, a status post, a peer-sync message, and newsletter plaintext — each of those answers a different "who was reached" question, and reusing a DM's counts there would misrepresent it.
+
+This is purely additive: a caller that ignores the field, or matches on an older `SendResult` shape without it (not possible across the `#[non_exhaustive]` boundary, but worth stating), sees no change in behavior. Nothing about the wire stanza or the DM's success on a partial fan-out changes — erroring on a partial fan-out was considered and rejected, since it would be a divergence from WA Web; it stays a policy the caller opts into by inspecting `is_partial()` and `skipped_primary`.
+
+```rust
+let result = client.send_message(to.clone(), message).await?;
+if let Some(fanout) = &result.recipient_fanout {
+    if fanout.skipped_primary {
+        log::warn!("{} likely never saw message {}", to, result.message_id);
+    } else if fanout.is_partial() {
+        log::info!(
+            "message {} reached {}/{} of {}'s devices",
+            result.message_id, fanout.encrypted, fanout.addressed, to
+        );
+    }
+}
+```
 
 ### ChatMessageId
 

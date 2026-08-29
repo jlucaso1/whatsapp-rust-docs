@@ -918,6 +918,10 @@ When sending group, status, or DM messages, the library validates the participan
 
 For DM messages, the phash covers both recipient and own devices (matching WA Web's `syncDeviceListJob([recipient, me])`). On mismatch, the client invalidates the device registry cache for both the recipient's user JID and your own phone number (PN) JID, ensuring the next send re-fetches the current device list for both parties.
 
+<Note>
+**A DM phash mismatch now repairs the message itself, not just the caches ([#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362)).** After invalidating the device registry, the client re-resolves the recipient's device list with a forced refresh and compares it against the set the original stanza actually covered (`PhashWaiter::dm_devices`, an `Arc<ResolvedDmDevices>` shared with the send's own memo entry — a refcount bump, not a copy). Any device the refreshed list holds and the original send did not is retransmitted the message pairwise, under the *original* message id — the same shape as WA Web's `resendUserMsg` job with an `excludeList` of devices that already have a copy. A receiver dedupes on the message id, so getting both the original and the repair copy is harmless. This only ever adds devices: a device the refresh *dropped* already received its copy and needs nothing further. The retransmission is direct (no group-metadata lookup) and registers no phash waiter of its own, so it cannot loop.
+</Note>
+
 ```rust
 // src/send.rs — simplified phash validation flow
 

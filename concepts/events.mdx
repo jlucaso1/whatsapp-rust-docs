@@ -278,7 +278,7 @@ pub enum AppVersionFallbackReason {
 ```
 
 - `AppVersionFallback::version` — the version this session actually connected with.
-- `AppVersionFallback::compiled_default` — `true` when that version is the one compiled into the library, so its staleness is the release's age. `false` when the device had already resolved a version earlier (or was given one via `with_version`), so its staleness is only the length of this outage.
+- `AppVersionFallback::compiled_default` — `true` when that version is the one compiled into the library, so its staleness is the release's age. `false` when the device had already resolved a version on an earlier connect, so its staleness is only the length of this outage. (A `with_version` call on *this* connect never produces a fallback at all — see the [`with_version` note](/api/bot#with_version) — but a device that carried an override from a past connect and later drops it can still hit this path, and would correctly report `false` here too.)
 - `AppVersionFallback::reason` — `SourceUnreachable` is the routine case and needs no action. `SourceUnparsable` means the source answered but the bundle no longer carries the field the parser looks for — worth acting on, since it won't fix itself on the next connect.
 
 <Note>

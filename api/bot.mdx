@@ -521,7 +521,7 @@ Bot::builder()
 ```
 
 <Note>
-By default, the client automatically fetches the latest WhatsApp Web version on each connect and caches it for 24 hours — from `web.whatsapp.com/sw.js`, except on `wasm32` targets, which read the same revision from the Facebook JS SDK bundle instead (see [HTTP Client — the version fetch does not pool a connection](/api/http-client#the-version-fetch-does-not-pool-a-connection)). Use `with_version` to pin a specific version when you need deterministic behavior — for example, in integration tests or CI environments where external HTTP requests are undesirable.
+By default, the client automatically fetches the latest WhatsApp Web version on each connect and caches it for 24 hours. It reads that version from `web.whatsapp.com/sw.js`, except on `wasm32` targets, which read the same revision from the Facebook JS SDK bundle instead (see [HTTP Client — the version fetch does not pool a connection](/api/http-client#the-version-fetch-does-not-pool-a-connection)). Use `with_version` to pin a specific version when you need deterministic behavior — for example, in integration tests or CI environments where external HTTP requests are undesirable.
 </Note>
 
 ### with_device_props

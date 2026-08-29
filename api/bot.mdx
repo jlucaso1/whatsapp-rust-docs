@@ -524,6 +524,10 @@ Bot::builder()
 By default, the client automatically fetches the latest WhatsApp Web version from `web.whatsapp.com/sw.js` on each connect and caches it for 24 hours. Use `with_version` to pin a specific version when you need deterministic behavior — for example, in integration tests or CI environments where external HTTP requests are undesirable.
 </Note>
 
+<Note>
+As of PR #1360: on the `wasm32` target, the version source is a different one — the Facebook JS SDK bundle at `connect.facebook.net`, since `sw.js` can't be fetched cross-origin from a browser — and it sits on common tracker blocklists. A wasm client blocked from reaching it does not fail to connect; it settles for the version the device already holds and reports this on [`Event::Connected`](/concepts/events#connected) via `app_version_fallback`. `with_version` avoids the fetch (and this fallback) entirely, on either target.
+</Note>
+
 ### with_device_props
 
 ```rust

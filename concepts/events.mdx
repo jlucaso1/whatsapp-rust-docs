@@ -236,7 +236,7 @@ The `Event` enum is `#[non_exhaustive]`, so your `match` statements must include
 </Note>
 
 <Note>
-**Payload stability:** every event payload struct is sealed with `#[non_exhaustive]` plus a [`bon`](https://docs.rs/bon) builder for construction (`Type::builder()…build()`), so a payload can gain fields later without breaking consumers. The freeze rolled out in stages — `ServerAck` first, then the notification/presence/contact/group payloads and the app-state-sync mutation payloads, then the remaining message/newsletter/device/pairing payloads and the three unit-marker events (`Connected`, `QrScannedWithoutMultidevice`, `StreamReplaced`, each an empty sealed struct built as `Connected::builder().build()`) — and is now complete across the whole `Event` surface. (`ClientOutdated` was a fourth unit-marker event until it gained a `raw` field; see [ClientOutdated](#clientoutdated) below.) Read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring (required for a `#[non_exhaustive]` struct pattern from outside the defining crate — e.g. `InboundMessage { message, info, .. }`), rather than binding every field. A maybe-absent field is always modeled as `Option<T>` (with a `maybe_*` builder setter), never an empty-string or zero sentinel. The library itself constructs every payload via its builder — a struct literal from outside `wacore`/`whatsapp-rust` no longer compiles (`E0639`).
+**Payload stability:** every event payload struct is sealed with `#[non_exhaustive]` plus a [`bon`](https://docs.rs/bon) builder for construction (`Type::builder()…build()`), so a payload can gain fields later without breaking consumers. The freeze rolled out in stages — `ServerAck` first, then the notification/presence/contact/group payloads and the app-state-sync mutation payloads, then the remaining message/newsletter/device/pairing payloads and the three unit-marker events (`Connected`, `QrScannedWithoutMultidevice`, `StreamReplaced`, each an empty sealed struct built as `Connected::builder().build()`) — and is now complete across the whole `Event` surface. (`ClientOutdated` was a fourth unit-marker event until it gained a `raw` field, see [ClientOutdated](#clientoutdated) below; `Connected` stopped being one too once it gained `app_version_fallback` in PR #1360, see [Connected](#connected) below — `QrScannedWithoutMultidevice` and `StreamReplaced` are the two left.) Read the fields you need (e.g. `ack.class`) or keep a `..` rest when destructuring (required for a `#[non_exhaustive]` struct pattern from outside the defining crate — e.g. `InboundMessage { message, info, .. }`), rather than binding every field. A maybe-absent field is always modeled as `Option<T>` (with a `maybe_*` builder setter), never an empty-string or zero sentinel. The library itself constructs every payload via its builder — a struct literal from outside `wacore`/`whatsapp-rust` no longer compiles (`E0639`).
 </Note>
 
 ## Connection Events
@@ -248,10 +248,42 @@ The `Event` enum is `#[non_exhaustive]`, so your `match` statements must include
 ```rust
 #[derive(Debug, Clone, Serialize, bon::Builder)]
 #[non_exhaustive]
-pub struct Connected {}
+pub struct Connected {
+    pub app_version_fallback: Option<AppVersionFallback>,
+}
 
 Event::Connected(Connected::builder().build())
 ```
+
+**Fields:**
+- `app_version_fallback` — added in PR #1360; additive, so an existing `Connected::builder().build()` still compiles (`app_version_fallback` defaults to `None`). Present when this connect could not resolve the app version from its source and settled for the version the device already held instead; absent on every normal connect, so `Some` is the whole signal. In practice this only fires on the `wasm32` target. The native build's source is `web.whatsapp.com/sw.js`; a client that can't reach it treats that as a real break of WhatsApp Web itself and fails `connect()` with `ConnectError::Version` rather than falling back — see [`ConnectError`](/api/errors#connecterror). The browser build's source, the Facebook JS SDK bundle at `connect.facebook.net`, sits on common tracker blocklists (uBlock Origin, Brave shields, corporate DNS), so a client blocked from reaching it connects anyway on the version it already has, rather than refusing to connect over what is, for a large share of browser users, an ad blocker doing its job.
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct AppVersionFallback {
+    pub version: (u32, u32, u32),
+    pub compiled_default: bool,
+    pub reason: AppVersionFallbackReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub enum AppVersionFallbackReason {
+    /// The source refused the request or never answered — e.g. a blocked domain.
+    SourceUnreachable,
+    /// The source answered, but the version was no longer where it should be.
+    SourceUnparsable,
+}
+```
+
+- `AppVersionFallback::version` — the version this session actually connected with.
+- `AppVersionFallback::compiled_default` — `true` when that version is the one compiled into the library, so its staleness is the release's age. `false` when the device had already resolved a version earlier (or was given one via `with_version`), so its staleness is only the length of this outage.
+- `AppVersionFallback::reason` — `SourceUnreachable` is the routine case and needs no action. `SourceUnparsable` means the source answered but the bundle no longer carries the field the parser looks for — worth acting on, since it won't fix itself on the next connect.
+
+<Note>
+The server tolerates an app version some days behind current, which is what makes connecting on a fallback a real option rather than a guess. A consumer that can't accept a stale version, or wants its own policy, can check `app_version_fallback` on `Connected` and warn, refuse the session, or pin a version of its own with [`with_version`](/api/bot#with_version).
+</Note>
 
 <Note>
 Leaving passive mode is best effort: a failed `set_passive(false)` call is only logged, not retried, and the connection is announced anyway. Treat `Connected` as "the client believes stanzas should be flowing," not a guarantee the server agrees.
@@ -259,8 +291,14 @@ Leaving passive mode is best effort: a failed `set_passive(false)` call is only 
 
 **Usage:**
 ```rust
-Event::Connected(_) => {
+Event::Connected(connected) => {
     println!("✅ Connected to WhatsApp");
+    if let Some(fallback) = &connected.app_version_fallback {
+        eprintln!(
+            "connected on a fallback app version {:?} ({:?})",
+            fallback.version, fallback.reason
+        );
+    }
     // Safe to send messages now. The push name and blocklist may still be
     // syncing in the background — watch for AppStateSyncFailed if that gap
     // matters to your use case.

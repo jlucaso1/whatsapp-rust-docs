@@ -40,7 +40,7 @@ pub async fn send_message(
 </ParamField>
 
 <ResponseField name="SendResult" type="SendResult">
-  Contains the `message_id` (unique ID for tracking receipts, edits, revokes) and `to` (resolved recipient JID). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
+  Contains the `message_id` (unique ID for tracking receipts, edits, revokes), `to` (resolved recipient JID), and — for a DM — `recipient_fanout` (see [`RecipientFanout`](#recipientfanout) below). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
 </ResponseField>
 
 <Note>
@@ -57,6 +57,7 @@ Result of a successfully sent message. Provides the message ID and a convenience
 pub struct SendResult {
     pub message_id: String,
     pub to: Jid,
+    pub recipient_fanout: Option<RecipientFanout>,
 }
 
 impl SendResult {
@@ -67,6 +68,50 @@ impl SendResult {
 ```
 
 `SendResult` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
+
+### RecipientFanout
+
+Added in [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). A DM whose recipient half loses some but not all of its devices still builds a stanza, transmits it, and returns `Ok(SendResult)` with a real message id — `send_message` does not wait for the server's ack before returning (see [Phash validation](#phash-validation-stale-device-list-detection)). (When *every* recipient device fails, the send instead returns `Err(SendError::NoRecipientDevice(..))` regardless of whether the sender's own devices encrypted successfully — see [`NoRecipientDeviceError`](/api/errors#norecipientdeviceerror).) The partial case matches WA Web, whose `<participants>` node is built from whichever per-device encryptions survived and which rejects the whole send only when every device in the fan-out — recipient and own alike — fails. `SendResult::recipient_fanout` is how a caller sees the partial case, since the wire outcome alone can't distinguish a full delivery from a partial one:
+
+```rust
+#[non_exhaustive]
+pub struct RecipientFanout {
+    pub addressed: usize,
+    pub encrypted: usize,
+    pub skipped_primary: bool,
+    pub had_unregistered_device: bool,
+}
+
+impl RecipientFanout {
+    /// `true` when `encrypted < addressed` — fewer recipient devices
+    /// produced an `<enc>` node than were addressed.
+    pub fn is_partial(&self) -> bool;
+}
+```
+
+**Fields:**
+- `addressed` — how many of the recipient's devices the fan-out attempted to encrypt for.
+- `encrypted` — how many of those actually produced an `<enc>` node. Equal to `addressed` on a full delivery.
+- `skipped_primary` — `true` when the recipient's primary device (device 0, their phone) was addressed but did not encrypt. This is encryption coverage, not a delivery or read signal: the phone may still have received the message through the phash-mismatch repair below, or hold the chat via a linked companion that did encrypt. A recipient's phone is the device most likely to be open, so this field is worth watching independent of `is_partial()`, but it is not proof the person missed anything.
+- `had_unregistered_device` — `true` when one of the addressed devices had no registered identity to encrypt against. This is the flag the DM path already computed internally; it's now exposed alongside the counts instead of being discarded.
+
+`Some(RecipientFanout)` only for a DM send (`send_message`, `send_message_with_options`, and status reactions, which route through the DM branch addressed to the status author's device). `None` for a group, a status post, a peer-sync message, and newsletter plaintext — each of those answers a different "who was reached" question, and reusing a DM's counts there would misrepresent it.
+
+This is purely additive. A caller that ignores the field, or that matches on an older `SendResult` shape without it (not actually possible across the `#[non_exhaustive]` boundary, but worth stating), sees no change in behavior. The wire stanza and the DM's success on a partial fan-out are unchanged: erroring on a partial fan-out was considered and rejected, since it would diverge from WA Web. Whether to treat a partial fan-out as a problem stays the caller's own policy, opted into by inspecting `is_partial()` and `skipped_primary`.
+
+```rust
+let result = client.send_message(to.clone(), message).await?;
+if let Some(fanout) = &result.recipient_fanout {
+    if fanout.skipped_primary {
+        log::warn!("{}'s primary device did not encrypt message {}", to, result.message_id);
+    } else if fanout.is_partial() {
+        log::info!(
+            "message {} encrypted for {}/{} of {}'s devices",
+            result.message_id, fanout.encrypted, fanout.addressed, to
+        );
+    }
+}
+```
 
 ### ChatMessageId
 
@@ -1002,7 +1047,7 @@ When sending group, status, or DM messages, the library automatically validates 
 
 - **Group messages**: group metadata is invalidated (participants are re-queried on the next send); sender-key device tracking is **not** reset, since forcing full SKDM redistribution on every mismatch would cost a fan-out per message for as long as the divergence lasted
 - **Status messages**: sender key device cache is invalidated (forces full SKDM redistribution)
-- **DM messages**: the device registry cache is invalidated for both the recipient and your own phone number (PN), matching WA Web's `syncDeviceListJob([recipient, me])` behavior
+- **DM messages**: the device registry cache is invalidated for both the recipient and your own phone number (PN), matching WA Web's `syncDeviceListJob([recipient, me])` behavior. As of [#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362), a DM mismatch also re-resolves the recipient's device list and resends the message, under the original message id, to any device that list holds and the original stanza did not cover — see [Signal Protocol — phash repair](/advanced/signal-protocol#phash-validation-for-stale-device-list-detection)
 
 For DMs, the phash is computed locally from the sent device set but is **not** sent on the wire (WA Web only sends phash for groups). The phash is returned via the `PreparedDmStanza.phash` field and compared against the server's ACK phash.
 
@@ -1359,6 +1404,8 @@ pub enum SendError {
     #[error("{0}")]
     NoRecipientDevice(#[source] wacore::send::NoRecipientDeviceError),
     #[error("{0}")]
+    PrimaryDeviceRejected(#[source] wacore::send::PrimaryDeviceRejected),
+    #[error("{0}")]
     Internal(#[from] anyhow::Error),
 }
 ```
@@ -1368,6 +1415,7 @@ pub enum SendError {
 - `Iq` — IQ request required by the send path failed
 - `InvalidRequest` — the send request was malformed (e.g., invalid JID, bad message shape)
 - `NoRecipientDevice` — added in PR #1299. A DM had no recipient device available: every resolved recipient device failed encryption, or no recipient device resolved for a non-self destination, so nothing was sent. See [`NoRecipientDeviceError` in the Error Types reference](/api/errors#norecipientdeviceerror) for the two variants it can carry.
+- `PrimaryDeviceRejected` — added in [PR #1362](https://github.com/oxidezap/whatsapp-rust/pull/1362). The pre-key fetch ahead of a DM send got back a `406` naming a primary device (device 0), recipient's or sender's own, so nothing was built or sent. A companion's `406` does not trigger this. See [`SendError` in the Error Types reference](/api/errors#senderror) for the WA Web parity this matches and the retry it calls for.
 - `Client` — underlying transport/connection error
 - `Internal` — catch-all for errors not yet assigned a typed variant. Includes a failure to durably persist the outbound Signal ratchet advance before the stanza was sent — see the durability note under [`send_message`](#send_message).
 
@@ -1382,6 +1430,7 @@ match client.send_message(jid.clone(), message).await {
     Err(SendError::Iq(e)) => eprintln!("IQ failed: {}", e),
     Err(SendError::InvalidRequest(msg)) => eprintln!("Bad request: {}", msg),
     Err(SendError::NoRecipientDevice(e)) => eprintln!("No recipient device reached: {}", e),
+    Err(SendError::PrimaryDeviceRejected(e)) => eprintln!("A primary device was rejected fetching pre-keys: {}", e),
     Err(e) => eprintln!("Send failed: {}", e),
 }
 ```

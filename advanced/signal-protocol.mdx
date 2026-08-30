@@ -379,6 +379,8 @@ Before `prepare_dm_stanza` builds the stanza, `ensure_e2e_sessions` runs as a pr
 This corrects the premise of [#1139](https://github.com/oxidezap/whatsapp-rust/pull/1139) (closed [#1135](https://github.com/oxidezap/whatsapp-rust/issues/1135)). #1139 assumed the response "doesn't say which one" and so invalidated every distinct user in the batch on any `406`. WA Web's own parser (`FetchKeyBundlesUserError` in `WAWeb/Fetch/PrekeysJob`) already reads this per-device error. whatsapp-rust's parser fed the same node to the bundle parser instead: it failed on the missing fields, logged the failure as a malformed bundle, and discarded the code. The device was skipped, but its stale entry was never refreshed, so the next send resolved the same absent device again. #1139's whole-batch invalidation and propagated `?` error still apply to the one case a named rejection cannot cover: a `406` on the IQ itself.
 
 The asymmetry #1139 described between the DM and group paths is gone — DM handled at the preflight, group already covered by the per-device fan-out (`stale_device_users`). `SendContextResolver::fetch_prekeys_for_identity_check` now returns `wacore::prekeys::PreKeyFetchOutcome` instead of `HashMap<Jid, PreKeyBundle>`. If you implement a custom `SendContextResolver`, update this method's return type to match. The new type carries a named rejection into the group fan-out's `EncryptResult::rejected_devices`, so `stale_users_for` refreshes exactly those users instead of inferring staleness from whichever targets went unencrypted for unrelated reasons (missing bundle, malformed bundle, failed session setup). Both paths now act on the same named-device signal when the server provides it.
+
+**"The send proceeds afterward" no longer holds when the named device is a primary ([#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362)).** The description above still applies in full to a named `406` on a *companion* device. When the named device is a primary (device 0) — the recipient's or the sender's own — the preflight now fails the fetch instead of refreshing and continuing with zero established sessions for it: see [`SendError::PrimaryDeviceRejected`](/api/errors#senderror).
 </Note>
 
 <Note>
@@ -917,6 +919,10 @@ When sending group, status, or DM messages, the library validates the participan
 </Note>
 
 For DM messages, the phash covers both recipient and own devices (matching WA Web's `syncDeviceListJob([recipient, me])`). On mismatch, the client invalidates the device registry cache for both the recipient's user JID and your own phone number (PN) JID, ensuring the next send re-fetches the current device list for both parties.
+
+<Note>
+**A DM phash mismatch now repairs the message itself, not just the caches ([#1362](https://github.com/oxidezap/whatsapp-rust/pull/1362)).** After invalidating the device registry, the client re-resolves the recipient's device list with a forced refresh. It compares the refreshed list against the set the original stanza actually covered (`PhashWaiter::dm_devices`, an `Arc<ResolvedDmDevices>` shared with the send's own memo entry — a refcount bump, not a copy). Any device the refreshed list holds and the original send did not is retransmitted the message pairwise, under the *original* message id — the same shape as WA Web's `resendUserMsg` job with an `excludeList` of devices that already have a copy. Each of these devices receives the message for the first time; a device the original stanza already covered is left untouched, so this never delivers a duplicate to the same device. This only ever adds devices: a device the refresh *dropped* already received its copy and needs nothing further. The retransmission is direct (no group-metadata lookup) and registers no phash waiter of its own, so it cannot loop.
+</Note>
 
 ```rust
 // src/send.rs — simplified phash validation flow

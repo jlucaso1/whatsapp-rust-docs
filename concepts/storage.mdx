@@ -416,8 +416,10 @@ pub struct HashState {
     // Set only when a sync run reaches its terminal page — a bootstrap
     // deferred mid-run leaves this false even though version already moved.
     // `#[serde(default)]`, so rows written before this field existed decode
-    // it as `false` and re-bootstrap once rather than being mistaken for an
-    // already-synced-but-empty collection.
+    // it as `false`. That only forces a re-bootstrap for a legacy row still
+    // sitting at version 0 — the ambiguous case this field exists to settle.
+    // A legacy row with a real version already has `has_baseline()` true and
+    // asks for patches as before.
     pub bootstrapped: bool,
 }
 ```

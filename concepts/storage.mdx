@@ -422,7 +422,7 @@ pub struct HashState {
 }
 ```
 
-Call `state.has_baseline()` before you send an outgoing patch. It checks whether there's a real ltHash to build the patch on top of (`bootstrapped || version > 0`) — a different question from whether a bootstrap run specifically finished.
+Call `state.has_baseline()` to decide whether an incoming sync should ask the server for a snapshot or for patches. It checks for a real ltHash to sync against (`bootstrapped || version > 0`), which is a weaker condition than `bootstrapped` alone: a partial bootstrap that already advanced `version` has a baseline but did not complete. That's why building an *outgoing* patch checks `bootstrapped` directly instead — it needs to know the bootstrap actually finished, not just that one started.
 
 **Collections:**
 - `critical_block` - Blocked contacts, push names

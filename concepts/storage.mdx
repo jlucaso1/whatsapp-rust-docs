@@ -742,7 +742,7 @@ No manual migration is needed. The storage layer self-heals lazily on first star
 
 - A BLOB that cannot be decoded as protobuf (a legacy bincode row or genuine corruption) is treated as **absent** rather than an error.
 - App-state sync keys: the client discovers the account's other devices and requests the missing key from all of them concurrently, falling back to the primary alone if device discovery fails or returns none, bounded by the same 10-second recovery budget as an active waiter. Whichever device replies first triggers the next `set_sync_key` call, which overwrites the row in protobuf format.
-- App-state versions: the collection resets to version 0 and re-syncs from the server. The first `set_version` call overwrites the row in protobuf format.
+- App-state versions: `get_version` reads the undecodable row as `None` — never synced — rather than a persisted version 0, so the collection bootstraps from a fresh snapshot instead of requesting patches on top of an empty ltHash. The first `set_version` call overwrites the row in protobuf format.
 - Server cert chain: rebuilt on the next Noise XX handshake. The following `save_device_data` call overwrites the row in protobuf format.
 
 Net effect: settings re-sync automatically on the first connection after upgrade, with no data loss and no manual DB intervention required.

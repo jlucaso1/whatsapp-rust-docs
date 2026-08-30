@@ -688,7 +688,11 @@ use whatsapp_rust::voip::{RelayEndpointParams, RelayTransportFactory, RelayTrans
 
 struct MyProvider { /* whatever a factory needs to build one, e.g. JS handles */ }
 
-#[async_trait]
+// Mirrors the trait's own `#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]` — a
+// wasm32 provider built around JS handles is typically !Send, and plain `#[async_trait]`
+// requires Send.
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl RelayTransportProvider for MyProvider {
     // Called per relay endpoint — the server names the relay per call, so a plain factory
     // could never have been the injection point.

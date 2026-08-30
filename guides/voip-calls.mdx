@@ -1,4 +1,3 @@
----
 title: VoIP Calls
 description: Place and answer end-to-end encrypted 1:1 voice and video calls with whatsapp-rust
 ---
@@ -696,7 +695,7 @@ impl RelayTransportProvider for MyProvider {
     async fn factory(
         &self,
         relay: &RelayEndpointParams,
-    ) -> anyhow::Result<Arc<dyn RelayTransportFactory>> {
+    ) -> whatsapp_rust::anyhow::Result<Arc<dyn RelayTransportFactory>> {
         // relay.addr is where the relay is; relay.ice_ufrag / relay.ice_pwd are what a synthetic
         // SDP answer names to reach it — the same "synthetic-SDP / wrtc dance" the native
         // transport's own DataChannel setup already does by hand, with `id=0`, `ordered=false`,

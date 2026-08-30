@@ -367,7 +367,12 @@ pub trait AppSyncStore: Send + Sync {
     async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
 
     // Version Tracking
-    async fn get_version(&self, name: &str) -> Result<HashState>;
+    // `None` means the collection has never synced — distinct from a collection
+    // that synced and is legitimately empty, which sits at version 0 with a record.
+    async fn get_version(&self, name: &str) -> Result<Option<HashState>>;
+    // Forgets a collection's version, returning it to the never-synced state
+    // (used to force a rebuild from a fresh snapshot).
+    async fn delete_version(&self, name: &str) -> Result<()>;
     async fn set_version(&self, name: &str, state: HashState) -> Result<()>;
 
     // Mutation MACs
@@ -400,6 +405,26 @@ pub struct AppStateSyncKey {
     pub timestamp: i64,
 }
 ```
+
+**`HashState` structure:**
+```rust
+pub struct HashState {
+    pub version: u64,
+    pub hash: [u8; 128],
+    pub index_value_map: HashMap<String, Vec<u8>>,
+    pub mac_mismatch_fatal: bool,
+    // Set only when a sync run reaches its terminal page — a bootstrap
+    // deferred mid-run leaves this false even though version already moved.
+    // `#[serde(default)]`, so rows written before this field existed decode
+    // it as `false`. That only forces a re-bootstrap for a legacy row still
+    // sitting at version 0 — the ambiguous case this field exists to settle.
+    // A legacy row with a real version already has `has_baseline()` true and
+    // asks for patches as before.
+    pub bootstrapped: bool,
+}
+```
+
+Call `state.has_baseline()` to decide whether an incoming sync should ask the server for a snapshot or for patches. It checks for a real ltHash to sync against (`bootstrapped || version > 0`), which is a weaker condition than `bootstrapped` alone: a partial bootstrap that already advanced `version` has a baseline but did not complete. That's why building an *outgoing* patch checks `bootstrapped` directly instead — it needs to know the bootstrap actually finished, not just that one started.
 
 **Collections:**
 - `critical_block` - Blocked contacts, push names
@@ -719,7 +744,7 @@ No manual migration is needed. The storage layer self-heals lazily on first star
 
 - A BLOB that cannot be decoded as protobuf (a legacy bincode row or genuine corruption) is treated as **absent** rather than an error.
 - App-state sync keys: the client discovers the account's other devices and requests the missing key from all of them concurrently, falling back to the primary alone if device discovery fails or returns none, bounded by the same 10-second recovery budget as an active waiter. Whichever device replies first triggers the next `set_sync_key` call, which overwrites the row in protobuf format.
-- App-state versions: the collection resets to version 0 and re-syncs from the server. The first `set_version` call overwrites the row in protobuf format.
+- App-state versions: `get_version` reads the undecodable row as `None` — never synced — rather than a persisted version 0, so the collection bootstraps from a fresh snapshot instead of requesting patches on top of an empty ltHash. The first `set_version` call overwrites the row in protobuf format.
 - Server cert chain: rebuilt on the next Noise XX handshake. The following `save_device_data` call overwrites the row in protobuf format.
 
 Net effect: settings re-sync automatically on the first connection after upgrade, with no data loss and no manual DB intervention required.

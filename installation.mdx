@@ -84,11 +84,12 @@ whatsapp-rust supports several optional features:
 | `client-lifecycle` | Low-level, generation-scoped extension lifecycle seam (`ClientLifecycle`, `ConnectionScope`). Enabled automatically by `plugins`; enable it directly only if you need lifecycle hooks without the full native plugin host | ❌ No |
 | `plugins` | Build-time native plugin host: type-safe `ClientPlugin` registration through `ClientBuilder`, capability-scoped APIs, and generation-scoped task lifecycle. Enables `client-lifecycle` (see [Native plugins](/advanced/plugins)) | ❌ No |
 | `passkey` | Passkey (SHORTCAKE_PASSKEY) companion-linking flow: `whatsapp_rust::passkey`, `set_passkey_authenticator`, `send_passkey_response`, `send_passkey_confirmation`. Enable it to receive the `Event::PairPasskey*` events — if you don't, your app receives a `passkey_prologue_request` as a plain `Event::Notification` instead. See [Authentication — Passkey linking](/concepts/authentication#passkey-linking-shortcake_passkey) | ❌ No |
-| `voip` | 1:1 voice and video calls, full profile: bundled MLow + libopus codec adapters, codec-neutral H.264 video plane, E2E-SRTP encryption, relay transport. Alias for `voip-mlow` + `voip-libopus` (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
-| `voip-runtime` | Internal base feature enabled by every `voip-*` feature below (Tokio driver, relay transport, DTLS/SCTP). Not meant to be named directly — pick `voip-encoded` or a codec feature instead | ❌ No |
-| `voip-encoded` | Narrower `voip` profile: relay transport and encoded-audio boundary only, no bundled codec — supply raw Opus/MLOW packets from your own encoder/decoder | ❌ No |
-| `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW codec | ❌ No |
-| `voip-libopus` | `voip-encoded` plus the optional libopus FFI codec adapter | ❌ No |
+| `voip` | 1:1 voice and video calls, full profile: bundled MLow + libopus codec adapters, codec-neutral H.264 video plane, E2E-SRTP encryption, the native relay transport. Alias for `voip-mlow` + `voip-libopus` + `voip-relay-native` — unaffected by the split below (see [VoIP Calls](/guides/voip-calls)) | ❌ No |
+| `voip-runtime` | The portable half of VoIP: call signaling, the facade, `CallHandle`. Owns no socket, and no longer requires `tokio-runtime` — builds on `wasm32`. Enabled by every `voip-*` feature below. Not meant to be named directly — pick `voip-encoded` or a codec feature instead | ❌ No |
+| `voip-relay-native` | The native relay media transport: one UDP socket per call plus DTLS/SCTP/DataChannel. Requires `tokio-runtime` and does not build on `wasm32`/`espidf` (`compile_error!`). Included by `voip`; add it explicitly alongside a narrower `voip-*` feature below for the built-in dialer instead of installing your own `RelayTransportProvider` (see [VoIP Calls — Custom relay transport](/guides/voip-calls#custom-relay-transport)) | ❌ No |
+| `voip-encoded` | Narrower `voip` profile: `voip-runtime` plus the encoded-audio boundary, no bundled codec and, as of [PR #1364](https://github.com/oxidezap/whatsapp-rust/pull/1364), no relay transport either — supply raw Opus/MLOW packets from your own encoder/decoder, and either `voip-relay-native` or your own `RelayTransportProvider` | ❌ No |
+| `voip-mlow` | `voip-runtime` plus the bundled pure-Rust MLOW codec — no relay transport included; builds on `wasm32` | ❌ No |
+| `voip-libopus` | `voip-encoded` plus the optional libopus FFI codec adapter — no relay transport included | ❌ No |
 | `legacy-session-interop` | Typed interop with the decoded legacy libsignal `SessionRecord` v1 model, for migrating externally produced auth state. See [Signal Protocol](/advanced/signal-protocol) | ❌ No |
 | `danger-skip-tls-verify` | Skip TLS verification (unsafe) | ❌ No |
 | `danger-skip-cert-chain-verify` | Skip the Noise handshake certificate-chain check (unsafe) | ❌ No |
@@ -96,6 +97,10 @@ whatsapp-rust supports several optional features:
 
 <Warning>
   **Breaking change (unreleased):** enable `passkey` explicitly if you use passkey linking — it's now opt-in and off by default, where earlier versions compiled it into every build. Add `features = ["passkey"]` before upgrading — see the row above.
+</Warning>
+
+<Warning>
+  **Breaking change (unreleased):** [PR #1364](https://github.com/oxidezap/whatsapp-rust/pull/1364) split the former `voip-runtime` in two — the portable signaling/facade half kept the name, and the native UDP/DTLS/SCTP relay dialer moved to a new `voip-relay-native` feature. If your `Cargo.toml` names `voip-mlow`, `voip-libopus`, or `voip-encoded` directly (rather than the `voip` aggregate), add `voip-relay-native` alongside it to keep the built-in relay transport — without it those features still compile, but every call now fails at setup instead. `voip` itself already pulled in the native dialer and needs no change. See [VoIP Calls — Custom relay transport](/guides/voip-calls#custom-relay-transport) for the alternative: installing your own `RelayTransportProvider`, which is also what makes `voip-mlow`/`voip-libopus`/`voip-encoded` build on `wasm32` now.
 </Warning>
 
 <Tip>
@@ -114,6 +119,10 @@ To use whatsapp-rust in a WASM browser environment, enable the `js` feature on `
 [dependencies]
 wacore = { version = "0.7", default-features = false, features = ["js"] }
 ```
+
+<Note>
+  `wacore` is not the only crate that builds for `wasm32` — as of [PR #1364](https://github.com/oxidezap/whatsapp-rust/pull/1364), `whatsapp-rust` itself does too, with `voip-mlow`, `voip-libopus`, or `voip-encoded` (never `voip-relay-native`, which needs a UDP socket the target doesn't have). Still enable `js` on `wacore` for random number generation, and install your own [`RelayTransportProvider`](/guides/voip-calls#custom-relay-transport) — an `RTCPeerConnection` in a browser — since none of those features link a way onto the media wire on their own.
+</Note>
 
 The `waproto` crate has its own feature flags:
 

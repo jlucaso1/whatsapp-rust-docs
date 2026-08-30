@@ -1,3 +1,4 @@
+---
 title: VoIP Calls
 description: Place and answer end-to-end encrypted 1:1 voice and video calls with whatsapp-rust
 ---
@@ -676,6 +677,10 @@ The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket
 | Tokio (servers, desktop) | `whatsapp-rust` with `voip`, or a narrower `voip-*` feature — see [Enabling the feature](#enabling-the-feature) |
 | WebAssembly (browser) | `whatsapp-rust` with `voip-mlow` / `voip-libopus` / `voip-encoded` (no `voip-relay-native`) plus your own [`RelayTransportProvider`](#custom-relay-transport) — the full call signaling stack and `CallHandle`, not only the sans-IO core. `wacore` with `voip` (+ `voip-mlow`) and `js` remains available for a sans-IO-only integration that drives `CallEngine` itself |
 | Embedded (esp32) | `wacore` with `voip` (+ `voip-mlow` for the bundled codec), sans-IO only, or `whatsapp-rust` with the same feature split as WebAssembly above |
+
+<Note>
+  Building `whatsapp-rust` itself (not just `wacore`) for `wasm32` also needs `default-features = false`: the crate's defaults (`tokio-native`, `sqlite-storage`, `tokio-transport`, `ureq-client`, `signal`) assume a native multi-threaded runtime, SQLite storage, and a native HTTP client, none of which build on `wasm32-unknown-unknown`. `cargo check -p whatsapp-rust --lib --target wasm32-unknown-unknown --no-default-features --features voip-mlow` is exactly the check this PR added to CI — mirror both flags in your own `Cargo.toml`, e.g. `whatsapp-rust = { version = "0.7", default-features = false, features = ["voip-mlow"] }`, and supply your own storage/transport/HTTP implementations in their place.
+</Note>
 
 ### Custom relay transport
 

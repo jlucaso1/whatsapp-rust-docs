@@ -367,7 +367,12 @@ pub trait AppSyncStore: Send + Sync {
     async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
 
     // Version Tracking
-    async fn get_version(&self, name: &str) -> Result<HashState>;
+    // `None` means the collection has never synced — distinct from a collection
+    // that synced and is legitimately empty, which sits at version 0 with a record.
+    async fn get_version(&self, name: &str) -> Result<Option<HashState>>;
+    // Forgets a collection's version, returning it to the never-synced state
+    // (used to force a rebuild from a fresh snapshot).
+    async fn delete_version(&self, name: &str) -> Result<()>;
     async fn set_version(&self, name: &str, state: HashState) -> Result<()>;
 
     // Mutation MACs
@@ -400,6 +405,24 @@ pub struct AppStateSyncKey {
     pub timestamp: i64,
 }
 ```
+
+**HashState Structure:**
+```rust
+pub struct HashState {
+    pub version: u64,
+    pub hash: [u8; 128],
+    pub index_value_map: HashMap<String, Vec<u8>>,
+    pub mac_mismatch_fatal: bool,
+    // Set only when a sync run reaches its terminal page — a bootstrap
+    // deferred mid-run leaves this false even though version already moved.
+    // `#[serde(default)]`, so rows written before this field existed decode
+    // it as `false` and re-bootstrap once rather than being mistaken for an
+    // already-synced-but-empty collection.
+    pub bootstrapped: bool,
+}
+```
+
+Call `state.has_baseline()` to check whether there's a real ltHash to build a patch on top of (`bootstrapped || version > 0`) — that's the question that matters before sending an outgoing patch, distinct from asking whether a bootstrap run specifically finished.
 
 **Collections:**
 - `critical_block` - Blocked contacts, push names

@@ -262,22 +262,37 @@ impl AppSyncStore for MyCustomStore {
         Ok(())
     }
     
-    async fn get_version(&self, name: &str) -> Result<HashState> {
+    async fn get_version(&self, name: &str) -> Result<Option<HashState>> {
+        // `None` means "never synced" — don't collapse it to `HashState::default()`.
+        // A collection that synced and is legitimately empty also sits at version 0
+        // with an all-zero ltHash, and the two are indistinguishable once merged.
         let row = self.connection.query_optional(
-            "SELECT version, hash FROM app_state_versions WHERE name = ?",
+            "SELECT version, hash, bootstrapped FROM app_state_versions WHERE name = ?",
             &[name],
         ).await?;
         
         Ok(row.map(|r| HashState {
             version: r.get(0),
             hash: r.get(1),
-        }).unwrap_or_default())
+            bootstrapped: r.get(2),
+            ..Default::default()
+        }))
+    }
+    
+    async fn delete_version(&self, name: &str) -> Result<()> {
+        // Returns the collection to the never-synced state, so the next sync
+        // bootstraps it from a fresh snapshot instead of resuming.
+        self.connection.execute(
+            "DELETE FROM app_state_versions WHERE name = ?",
+            &[name],
+        ).await?;
+        Ok(())
     }
     
     async fn set_version(&self, name: &str, state: HashState) -> Result<()> {
         self.connection.execute(
-            "INSERT OR REPLACE INTO app_state_versions (name, version, hash) VALUES (?, ?, ?)",
-            &[name, &state.version, &state.hash[..]],
+            "INSERT OR REPLACE INTO app_state_versions (name, version, hash, bootstrapped) VALUES (?, ?, ?, ?)",
+            &[name, &state.version, &state.hash[..], &state.bootstrapped],
         ).await?;
         Ok(())
     }

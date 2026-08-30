@@ -41,17 +41,22 @@ tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
   [PR #1111](https://github.com/oxidezap/whatsapp-rust/pull/1111) fixed a codec-selection bug where a peer outside the `use_mlow_codec_v1` rollout could go completely silent with nothing logged: RTP payload type 120 carries either MLow or native Opus, and the engine used to trust the payload type alone instead of the negotiation. Codec choice is now read from the peer's negotiated capability, with a content probe corroborating only where negotiation can't tell, and a call with no viable decoder now reports `CallEvent::AudioSilent { dominant_reason: AudioSilenceReason::NoDecoderForNegotiatedCodec, .. }` instead of just going quiet. See [Negotiation](#negotiation) and [Media stats and silence detection](#media-stats-and-silence-detection) below.
 </Warning>
 
-`voip` is a backward-compatible aggregate for `voip-mlow` + `voip-libopus` — both codec adapters linked in. If you only need one codec, or you exchange codec packets with an external encoder/decoder, pick a narrower feature instead:
+`voip` is a backward-compatible aggregate for `voip-mlow` + `voip-libopus` + `voip-relay-native` — both codec adapters plus the native relay dialer, linked in. If you only need one codec, exchange codec packets with an external encoder/decoder, or supply your own way onto the media wire, pick narrower features instead:
 
 | Feature | Contents |
 |---------|----------|
-| `voip-runtime` | Tokio driver, relay transport, DTLS/SCTP — no audio codec. Internal base feature; you'll normally reach for `voip-encoded` or a codec feature below instead of naming this one directly |
-| `voip-encoded` | `voip-runtime` plus the encoded-audio boundary (`encoded_audio`, `AudioFormat`) — bring your own codec, nothing extra linked |
-| `voip-mlow` | `voip-encoded` plus the bundled pure-Rust MLOW adapter |
-| `voip-libopus` | `voip-encoded` plus the optional libopus FFI adapter |
-| `voip` | `voip-mlow` + `voip-libopus` (the full, backward-compatible profile) |
+| `voip-runtime` | The portable half: call signaling, the facade, `CallHandle`, and the orchestration around `wacore`'s sans-IO engine. Owns no socket and reads no clock, so it builds on `wasm32` too — and no longer pulls in `tokio-runtime`. No audio codec, and no way onto the media wire by itself; you'll normally reach for `voip-encoded` or a codec feature below instead of naming this one directly |
+| `voip-relay-native` | The native relay media transport: one UDP socket per call, DTLS, SCTP, and the pre-negotiated DataChannel over them. This is the half that cannot build on `wasm32`/`espidf` — a `compile_error!` now lives here rather than across the whole profile. Skip it and install your own [`RelayTransportProvider`](#custom-relay-transport) wherever you have no UDP socket, a browser above all |
+| `voip-encoded` | `voip-runtime` plus the encoded-audio boundary (`encoded_audio`, `AudioFormat`) — bring your own codec. Does **not** pull in `voip-relay-native` |
+| `voip-mlow` | `voip-runtime` plus the bundled pure-Rust MLOW adapter. Does **not** pull in `voip-relay-native` |
+| `voip-libopus` | `voip-encoded` plus the optional libopus FFI adapter. Does **not** pull in `voip-relay-native` |
+| `voip` | `voip-mlow` + `voip-libopus` + `voip-relay-native` (the full, backward-compatible profile — unchanged) |
 
 See the full table, including default/publish status, in [Installation](/installation#feature-flags). An application that already produces raw Opus packets (FFmpeg, libopus, a hardware encoder, …) needs only `voip-encoded` — no codec dependency is compiled in. See [Audio codecs](#audio-codecs) below.
+
+<Warning>
+  [PR #1364](https://github.com/oxidezap/whatsapp-rust/pull/1364) split the former `voip-runtime` in two. If you depend on `voip-mlow`, `voip-libopus`, or `voip-encoded` directly — rather than the `voip` aggregate — your build now needs `voip-relay-native` added explicitly to keep the built-in UDP/DTLS/SCTP relay dialer. Without it, those features still compile fine; every call just fails at setup with `CallEvent::MediaSetupFailed("no relay media transport...")` unless you install your own transport with [`Client::set_relay_transport_provider`](#custom-relay-transport). `voip` itself already included the native dialer and is unaffected.
+</Warning>
 
 ## Answering an Incoming Call
 
@@ -653,20 +658,71 @@ Other participants' state surfaces on `handle.events()`, alongside the 1:1 `Call
 
 The core `CallEngine` lives in `wacore` and is **sans-IO** — it owns no socket, clock, or thread. You feed it relay packets, mic frames, camera access units, and timer ticks; it emits transmit packets, playout PCM/video frames, call events, and the next deadline.
 
+<Note>
+  [PR #1364](https://github.com/oxidezap/whatsapp-rust/pull/1364) split what used to be one `voip-runtime` feature in two. Call signaling, the facade, and `CallEngine` orchestration were portable all along — only the native UDP/DTLS/SCTP relay dialer actually needed a socket, and it is `voip-relay-native` now. Everything else builds on `wasm32` directly from `whatsapp-rust`, not only from `wacore`'s sans-IO core — see [Custom relay transport](#custom-relay-transport) below for what such a build supplies in place of the native dialer.
+</Note>
+
 <Warning>
   **Platform support depends on which crate and feature you use:**
 
-  - `wacore` with `features = ["voip"]` — pure Rust (H.264 RTP media plane, SRTP crypto, encoded-audio boundary, `CallEngine`). No FFI, no bundled audio codec. Compiles to WASM and embedded targets (esp32).
+  - `wacore` with `features = ["voip"]` — pure Rust (H.264 RTP media plane, SRTP crypto, encoded-audio boundary, `CallEngine`). No FFI, no bundled audio codec, no relay transport. Compiles to WASM and embedded targets (esp32).
   - `wacore` with `features = ["voip-mlow"]` — adds the pure-Rust MLOW codec on top of `voip`. Still no FFI; still compiles to WASM/esp32.
-  - `whatsapp-rust` with `features = ["voip-encoded"]` — adds a Tokio driver task built on the sans-IO `rtc-dtls`/`rtc-sctp`/`rtc-datachannel` crates (DTLS/SCTP), no audio codec linked. **Does not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
-  - `whatsapp-rust` with `features = ["voip-mlow"]` / `["voip-libopus"]` / `["voip"]` — `voip-encoded` plus the corresponding codec adapter(s). Same platform restriction as `voip-encoded`.
+  - `whatsapp-rust` with `features = ["voip-runtime"]` / `["voip-encoded"]` / `["voip-mlow"]` / `["voip-libopus"]` — call signaling, the facade, `CallHandle`, and (for the codec features) a codec adapter, with **no relay transport linked**. Builds on `wasm32`/`espidf` as well as Tokio targets. A call needs a [`RelayTransportProvider`](#custom-relay-transport) installed to reach the network on any of these — without one it fails at setup with `CallEvent::MediaSetupFailed`, which is the expected state until you install one, not a crash.
+  - `whatsapp-rust` with `features = ["voip-relay-native"]` (pulled in by `voip`, or added explicitly alongside one of the features above) — adds the Tokio driver task built on the sans-IO `rtc-dtls`/`rtc-sctp`/`rtc-datachannel` crates (DTLS/SCTP) plus the default UDP relay dialer. **Does not compile on `wasm32` or `espidf`** — a `compile_error!` enforces this at build time.
+  - `whatsapp-rust` with `features = ["voip"]` — `voip-mlow` + `voip-libopus` + `voip-relay-native`, unchanged from before PR #1364.
 </Warning>
 
 | Target | Supported crate |
 |--------|-----------------|
 | Tokio (servers, desktop) | `whatsapp-rust` with `voip`, or a narrower `voip-*` feature — see [Enabling the feature](#enabling-the-feature) |
-| WebAssembly (browser) | `wacore` with `voip` (+ `voip-mlow` for the bundled codec) and `js` (sans-IO only; `js` enables WASM-compatible random number generation — see [Installation](/installation)) |
-| Embedded (esp32) | `wacore` with `voip` (+ `voip-mlow` for the bundled codec), sans-IO only |
+| WebAssembly (browser) | `whatsapp-rust` with `voip-mlow` / `voip-libopus` / `voip-encoded` (no `voip-relay-native`) plus your own [`RelayTransportProvider`](#custom-relay-transport) — the full call signaling stack and `CallHandle`, not only the sans-IO core. `wacore` with `voip` (+ `voip-mlow`) and `js` remains available for a sans-IO-only integration that drives `CallEngine` itself |
+| Embedded (esp32) | `wacore` with `voip` (+ `voip-mlow` for the bundled codec), sans-IO only, or `whatsapp-rust` with the same feature split as WebAssembly above |
+
+<Note>
+  Building `whatsapp-rust` itself (not just `wacore`) for `wasm32` also needs `default-features = false`: the crate's defaults (`tokio-native`, `sqlite-storage`, `tokio-transport`, `ureq-client`, `signal`) assume a native multi-threaded runtime, SQLite storage, and a native HTTP client, none of which build on `wasm32-unknown-unknown`. `cargo check -p whatsapp-rust --lib --target wasm32-unknown-unknown --no-default-features --features voip-mlow` is exactly the check this PR added to CI — mirror both flags in your own `Cargo.toml`, e.g. `whatsapp-rust = { version = "0.7", default-features = false, features = ["voip-mlow"] }`, and supply your own storage/transport/HTTP implementations in their place.
+</Note>
+
+### Custom relay transport
+
+A relay endpoint is a `SocketAddr` the server names per call — dialing it is the platform's job, not the engine's. On a `voip-relay-native` build that job is this crate's own UDP/DTLS/SCTP/DataChannel dialer, and you never need to think about it. Everywhere else — a browser above all, where there is no UDP socket to open and ICE is not optional — install a `RelayTransportProvider` with `Client::set_relay_transport_provider` before placing or answering a call:
+
+```rust
+use std::sync::Arc;
+use whatsapp_rust::async_trait;
+use whatsapp_rust::voip::{RelayEndpointParams, RelayTransportFactory, RelayTransportProvider};
+
+struct MyProvider { /* whatever a factory needs to build one, e.g. JS handles */ }
+
+// Mirrors the trait's own `#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]` — a
+// wasm32 provider built around JS handles is typically !Send, and plain `#[async_trait]`
+// requires Send.
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl RelayTransportProvider for MyProvider {
+    // Called per relay endpoint — the server names the relay per call, so a plain factory
+    // could never have been the injection point.
+    async fn factory(
+        &self,
+        relay: &RelayEndpointParams,
+    ) -> whatsapp_rust::anyhow::Result<Arc<dyn RelayTransportFactory>> {
+        // relay.addr is where the relay is; relay.ice_ufrag / relay.ice_pwd are what a synthetic
+        // SDP answer names to reach it — the same "synthetic-SDP / wrtc dance" the native
+        // transport's own DataChannel setup already does by hand, with `id=0`, `ordered=false`,
+        // `maxRetransmits=0`.
+        Ok(Arc::new(build_my_factory(relay).await?))
+    }
+}
+
+client.set_relay_transport_provider(Arc::new(MyProvider { /* ... */ }));
+```
+
+<Note>
+  `RelayEndpointParams` carries the address plus the two ICE fields a synthetic SDP answer has to name: `ice_ufrag` (the endpoint's own) and `ice_pwd` (the relay's own key, in the ASCII form it arrived in). Its `Debug` redacts `ice_pwd`. Neither is the STUN *allocation* token the engine sends on the wire as `RELAY-TOKEN` — that one is never a ufrag, and a ufrag built from it fails a browser's first connectivity check silently, surfacing as a call that won't connect rather than as a recognizable bad-credential error.
+</Note>
+
+<Note>
+  A native build with no provider installed falls back to its own dialer exactly as before — installing one always takes priority over the default. A build with neither a provider nor `voip-relay-native` fails each call at setup rather than failing to compile. Because `handle.wait_ended()` resolving means the call is *over*, not that it never started, that failure surfaces as `CallEvent::MediaSetupFailed(reason)` on `handle.events()` — distinct from `CallEvent::RelayAllocateFailed`, which carries a STUN error code from a relay that *did* answer. The provider call itself is bounded at 15 seconds, so a provider that never answers fails the call instead of leaving its setup parked forever.
+</Note>
 
 ## MLow Codec
 

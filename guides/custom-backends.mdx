@@ -233,7 +233,12 @@ See [Store API reference](/api/store#signal-store) for all SignalStore methods.
 
 ### Step 3: implement AppSyncStore
 
-Handle WhatsApp app state synchronization. This example's `app_state_versions` table needs a `bootstrapped` column alongside `name`, `version`, and `hash` — add it via a migration if you already have this table from before that field existed:
+Handle WhatsApp app state synchronization. This example's `app_state_versions` table needs a `bootstrapped` column alongside `name`, `version`, and `hash`. If you already have this table from before that field existed, add it first:
+
+```sql
+ALTER TABLE app_state_versions
+ADD COLUMN bootstrapped BOOLEAN NOT NULL DEFAULT FALSE;
+```
 
 ```rust
 use wacore::appstate::hash::HashState;

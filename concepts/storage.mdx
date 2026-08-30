@@ -406,7 +406,7 @@ pub struct AppStateSyncKey {
 }
 ```
 
-**HashState Structure:**
+**`HashState` structure:**
 ```rust
 pub struct HashState {
     pub version: u64,
@@ -422,7 +422,7 @@ pub struct HashState {
 }
 ```
 
-Call `state.has_baseline()` to check whether there's a real ltHash to build a patch on top of (`bootstrapped || version > 0`) — that's the question that matters before sending an outgoing patch, distinct from asking whether a bootstrap run specifically finished.
+Call `state.has_baseline()` before you send an outgoing patch. It checks whether there's a real ltHash to build the patch on top of (`bootstrapped || version > 0`) — a different question from whether a bootstrap run specifically finished.
 
 **Collections:**
 - `critical_block` - Blocked contacts, push names

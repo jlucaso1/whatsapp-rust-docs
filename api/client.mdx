@@ -1555,7 +1555,7 @@ If the server advertises offline messages but stops sending stanzas before the e
 
 ### Interrupted resume
 
-If the connection ends before the drain finishes — rather than the end marker arriving or the stall timer firing — the resume is never left silent. It is reported once as `OfflineSyncInterrupted { total, delivered }` instead of `OfflineSyncCompleted` (added in PR #1380). This isn't a whole-backlog redelivery, though: offline delivery receipts are flushed once per durable [commit batch](/advanced/inbound-durability#batching) as the drain progresses, not only at the very end, so batches already committed earlier in the same drain are already acked. Only the batch still open — undurable — at the instant the connection dropped is redelivered, the next time the client reconnects and gets a fresh `OfflineSyncPreview`.
+If the connection ends before the drain finishes — rather than the end marker arriving or the stall timer firing — the resume is never left silent. It is reported once as `OfflineSyncInterrupted { total, delivered }` instead of `OfflineSyncCompleted` (added in PR #1380). The event doesn't by itself say what gets redelivered — that follows the pre-existing commit-batch ack contract; see [Inbound Durability → Batching](/advanced/inbound-durability#batching) for exactly which batch a mid-drain disconnect does and doesn't redeliver the next time the client reconnects and gets a fresh `OfflineSyncPreview`.
 
 ### State reset on reconnect
 

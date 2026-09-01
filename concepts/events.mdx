@@ -191,6 +191,7 @@ pub enum Event {
     HistorySync(Box<LazyHistorySync>),
     OfflineSyncPreview(OfflineSyncPreview),
     OfflineSyncCompleted(OfflineSyncCompleted),
+    OfflineSyncInterrupted(OfflineSyncInterrupted),
     DirtyState(DirtyState),
     AppStateSyncFailed(AppStateSyncFailed),
     ClientExpirationChanged(ClientExpirationChanged),
@@ -2444,10 +2445,38 @@ Event::OfflineSyncCompleted(sync) => {
 }
 ```
 
+### OfflineSyncInterrupted
+
+**Emitted:** When an offline backlog drain ends because its connection was lost, before the `<ib><offline/>` end marker arrived (added in PR #1380)
+
+```rust
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[non_exhaustive]
+pub struct OfflineSyncInterrupted {
+    pub total: i32,
+    pub delivered: i32,
+}
+```
+
+`total` is what the preceding [`OfflineSyncPreview`](#offlinesyncpreview) announced for this drain; `delivered` is how many offline stanzas were processed before the connection ended. The server owns both numbers, so treat the pair as a progress report rather than an invariant — `delivered` is never larger than `total` in practice, but that isn't guaranteed.
+
+This is the counterpart to `OfflineSyncCompleted`, not a variant of it: the drain did not finish, the client is not caught up, and the rest of the backlog is still queued server-side. No receipt was sent for anything in this drain — offline delivery receipts are only flushed by a *completed* drain — so the server redelivers the whole backlog, including whatever batch was still in flight when the connection dropped, once a new connection sends its own `OfflineSyncPreview`. A consumer that gates "caught up" UI or startup work on `OfflineSyncCompleted` should treat this event as "not caught up yet, wait for the next preview" rather than as completion.
+
+Exactly one of `OfflineSyncCompleted` / `OfflineSyncInterrupted` is emitted per resume — never both, and never neither.
+
+**Example:**
+```rust
+Event::OfflineSyncInterrupted(e) => {
+    println!("Offline resume interrupted: {} of {} items delivered before disconnect", e.delivered, e.total);
+}
+```
+
 <Note>
 Offline sync happens automatically when the client reconnects after being disconnected. The client tracks progress internally and emits these events to notify your application of sync status.
 
-If the server does not complete offline sync within 60 seconds, the client forces completion via a timeout fallback — `OfflineSyncCompleted` is still emitted with the count of items processed so far. This prevents startup from blocking indefinitely.
+If the server stops sending offline stanzas before the end marker arrives, but the connection itself stays up, an inactivity watchdog completes the drain — mirroring WhatsApp Web's own stall timer — and `OfflineSyncCompleted` still fires, with the count of items processed so far. The watchdog re-arms on every stanza, so it fires somewhere between 60 and 120 seconds after the last one rather than at a fixed 60 seconds.
+
+If instead the connection ends before the drain finishes, the resume is never left silent: it is reported as `OfflineSyncInterrupted` rather than `OfflineSyncCompleted`, and the undelivered backlog comes back on the next connection's `OfflineSyncPreview` (added in PR #1380).
 </Note>
 
 ### DirtyState

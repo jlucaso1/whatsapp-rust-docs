@@ -1544,20 +1544,24 @@ The client automatically manages offline message sync when reconnecting. During 
 
 When offline sync completes, the concurrency semaphore is swapped from 1 permit to 64 permits. Tasks that were already waiting on the old semaphore use a **generation-checked re-acquire loop** to safely transition — they detect the swap via an atomic generation counter, drop the stale permit, and re-acquire from the new semaphore. This prevents `pkmsg` messages (which carry SKDM for group decryption) from being silently dropped during the transition. See [Concurrency gating](/concepts/architecture#offline-sync) for details.
 
-### Timeout fallback
+### Stall timeout
 
-If the server advertises offline messages but never completes delivery, a 60-second timeout ensures startup is not blocked indefinitely. On timeout:
+If the server advertises offline messages but stops sending stanzas before the end marker arrives, while the connection itself stays up, an inactivity watchdog forces completion instead of leaving the drain open indefinitely (added in PR #1380, mirroring WhatsApp Web's own stall timer). The watchdog re-arms on every offline stanza, so it fires somewhere between 60 and 120 seconds after the last one, not at a fixed 60 seconds. On expiry:
 
 1. A warning is logged with the number of processed vs. expected items
 2. Offline sync is marked complete
 3. `OfflineSyncCompleted` event is emitted
 4. Message processing switches from sequential to parallel (64 concurrent tasks)
 
+### Interrupted resume
+
+If the connection ends before the drain finishes — rather than the end marker arriving or the stall timer firing — the resume is never left silent. It is reported once as `OfflineSyncInterrupted { total, delivered }` instead of `OfflineSyncCompleted` (added in PR #1380). No receipt is sent for anything in an interrupted drain, so the server redelivers the whole undelivered backlog — including the batch still in flight at teardown — the next time the client reconnects and gets a fresh `OfflineSyncPreview`.
+
 ### State reset on reconnect
 
-All offline sync state (counters, timing, concurrency semaphore) is fully reset on reconnect so stale state does not carry over to the next connection.
+All offline sync state (counters, timing, concurrency semaphore) is fully reset on reconnect so stale state does not carry over to the next connection — reported first as an interrupted resume, above, if a drain was still active.
 
-**Related events:** [`OfflineSyncPreview`](/concepts/events#offlinesyncpreview), [`OfflineSyncCompleted`](/concepts/events#offlinesynccompleted)
+**Related events:** [`OfflineSyncPreview`](/concepts/events#offlinesyncpreview), [`OfflineSyncCompleted`](/concepts/events#offlinesynccompleted), [`OfflineSyncInterrupted`](/concepts/events#offlinesyncinterrupted)
 
 ---
 

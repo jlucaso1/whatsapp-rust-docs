@@ -1774,6 +1774,23 @@ pub async fn clean_dirty_bits(
 
 Cleans app state dirty bits. The `DirtyBit` struct contains a `dirty_type` (e.g., `AccountSync`, `Groups`, `SyncdAppState`, `NewsletterMetadata`) and an optional `timestamp`.
 
+### request_syncd_snapshot_recovery
+
+```rust
+pub async fn request_syncd_snapshot_recovery(
+    self: &Arc<Self>,
+    collection: &str,
+) -> Result<String, anyhow::Error>
+```
+
+Asks the primary device to resend an app-state collection whose snapshot failed local MAC verification here — the escalation the client also triggers automatically on a `SnapshotMACMismatch`/`SnapshotMACMissing` apply failure. See [Peer snapshot recovery](/concepts/architecture#peer-snapshot-recovery) for the full mechanism, including why this is safe against a collection whose value encryption can't be followed.
+
+Fire-and-forget: the primary's reply arrives later as an ordinary peer message and is applied then, dispatching mutations through the same events an ordinary sync uses. On success returns the request id the reply will be correlated by (or an empty string if a request for this collection was already outstanding); an `Err` means the ask itself was refused or couldn't be sent — not that the primary declined to answer.
+
+<ParamField path="collection" type="&str" required>
+  App-state collection name (e.g. `"regular"`, `"regular_low"`). Refused with an `Err` for `"critical_block"` (never recovered this way — rebuilding the block list from a possibly-behind primary risks messaging someone who was blocked) and for any name this client doesn't recognize. Also refused when the account has the `enable_peer_snapshot_recovery` ab-prop explicitly turned off.
+</ParamField>
+
 ---
 
 ## Protocol Operations
@@ -2561,6 +2578,7 @@ Entry counts plus estimated retained heap bytes for the client's internal collec
 | `presence_subscriptions` | `usize` | Active presence subscriptions |
 | `app_state_key_requests` | `usize` | Pending app state key requests |
 | `app_state_key_cache` | `usize` | Expanded app-state keys the app-state processor holds in memory. No capacity cap and no TTL — one entry per distinct key id the server's patches reference, emptied only on reconnect. Zero until the first app-state sync builds the processor ([#1273](https://github.com/oxidezap/whatsapp-rust/pull/1273)) |
+| `app_state_recovery_requests` | `usize` | Peer [snapshot recovery](/concepts/architecture#peer-snapshot-recovery) requests outstanding — collections asked of the primary device after a local snapshot MAC failed to validate here, awaiting or being applied from its reply. Normally zero; a value that stays nonzero holds until the primary answers (up to 120s unanswered, longer once a reply is being applied) or the request's own retry window lapses ([#1375](https://github.com/oxidezap/whatsapp-rust/pull/1375)) |
 | `app_state_syncing` | `usize` | Active app state sync operations |
 | `signal_sessions` | `CollectionStats` | Cached Signal sessions |
 | `signal_identities` | `CollectionStats` | Cached Signal identities |

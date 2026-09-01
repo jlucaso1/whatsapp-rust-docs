@@ -393,8 +393,12 @@ pub enum ContactError {
     Iq(#[from] IqError),
     #[error("unsupported contact JID: {0}")]
     InvalidJid(String),
+    #[error("{0}")]
+    Username(#[from] UsernameLookupError),
 }
 ```
+
+`Username` is returned by [`Contacts::find_by_username`](/api/contacts#find_by_username) when the given handle can't be turned into a valid username lookup (wrong length, or a username key usync's own validation rejects) — see [`UsernameLookupError` in the contacts reference](/api/contacts#error-handling).
 
 ### NewsletterError
 

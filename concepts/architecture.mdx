@@ -338,7 +338,7 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 1. Connection lost → `cleanup_connection_state()` (see [disconnect cleanup](#disconnect-cleanup))
 2. Check `enable_auto_reconnect` → exit if disabled (401, 409, 516 disable this)
 3. Check `expected_disconnect` → immediate reconnect if expected (e.g., 515)
-4. Stability-gated backoff reset: the counter resets to base only if the connection was authenticated (`<success>`) for at least 30s (`STABLE_CONNECTION_RESET_MS`, WA Web's `resetDelay`) **and** no explicit penalty (429, manual `reconnect()`) is pending for this cycle — a penalty survives even a stable connection (WA Web `cancelReset`)
+4. Stability-gated backoff reset: the counter resets to base only if the connection was authenticated (`<success>`) for at least 30s (`STABLE_CONNECTION_RESET`, WA Web's `resetDelay`) **and** no explicit penalty (429, manual `reconnect()`) is pending for this cycle — a penalty survives even a stable connection (WA Web `cancelReset`). The stability window is measured against a monotonic clock (`connected_at`, a `wacore::time::Instant`), so a system clock jump can no longer make a young connection look stable or a genuinely stable one look young ([whatsapp-rust#1379](https://github.com/oxidezap/whatsapp-rust/pull/1379)).
 5. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
 6. When you call `disconnect()`, `logout()`, or `signal_shutdown_sync()`, the client interrupts the backoff immediately and returns from `run()`. If the delay completes first, it attempts reconnection with a 20s connect timeout.
 
@@ -385,7 +385,7 @@ When a connection is lost or `disconnect()` is called, `cleanup_connection_state
 | `signal_cache` | **Flushed, then settled entries cleared** | Pending identity / session / sender-key writes are persisted to the backend before eviction. If the flush fails, the cache is kept (not cleared) so dirty state survives. Even after a successful flush, an entry a concurrent write touched in the gap stays resident — only fully-settled entries are evicted. |
 | `response_waiters` | Drained | Pending IQ waiters fail fast with `InternalChannelClosed` instead of hanging until the 75s timeout |
 | Offline sync state | Reset | Counters, timing, and semaphore replaced with fresh single-permit instance |
-| Dead-socket timestamps | Reset to 0 | Prevents stale values from triggering an immediate reconnect on the next connection |
+| Dead-socket timestamps | Cleared | Prevents stale values from triggering an immediate reconnect on the next connection |
 | `app_state_key_requests`, `app_state_syncing` | Replaced with empty maps | Prevents unbounded growth across reconnections |
 
 <Note>
@@ -417,13 +417,13 @@ A top-level `<status from="status@broadcast">` stanza carries the same E2EE payl
 
 Any top-level stanza the router doesn't recognize is nacked (`NackReason::UnrecognizedStanza`) when it carries both `id` and `from`, rather than left unanswered — see the **Nack on unrecognized stanzas** note in [Offline sync](#offline-sync) below.
 
-After processing a batch of multiple frames, the loop refreshes `last_data_received_ms` so the keepalive loop sees the batch completion time rather than the arrival time — preventing false-positive dead-socket triggers during large offline sync batches. The loop also cooperatively yields every `yield_frequency()` frames to avoid starving other tasks.
+After processing a batch of multiple frames, the loop refreshes `last_data_received` so the keepalive loop sees the batch completion time rather than the arrival time — preventing false-positive dead-socket triggers during large offline sync batches. The loop also cooperatively yields every `yield_frequency()` frames to avoid starving other tasks.
 
 See [WebSocket & Noise Protocol - Message loop](/advanced/websocket-handling#2-message-loop-read-loop) for implementation details.
 
 ### Keepalive loop
 
-The keepalive loop runs as a **separate spawned task**, fully decoupled from the read loop. This ensures keepalive pings are never blocked by frame processing — even during large offline sync batches that take seconds to drain. The two loops communicate solely through atomic timestamps (`last_data_received_ms` and `first_send_since_recv_ms` — the dead-socket watchdog anchor). There is no "last send" timestamp: nothing reads one, and stamping every frame written would cost a clock read on the client's hottest path.
+The keepalive loop runs as a **separate spawned task**, fully decoupled from the read loop. This ensures keepalive pings are never blocked by frame processing — even during large offline sync batches that take seconds to drain. The two loops communicate solely through atomic timestamps (`last_data_received` and `first_send_since_recv` — the dead-socket watchdog anchor). Both are monotonic `wacore::time::Instant`s, not wall-clock milliseconds, so a system clock adjustment (NTP resync, waking from suspend) can't be misread as elapsed time and trip the watchdog on a live socket ([whatsapp-rust#1379](https://github.com/oxidezap/whatsapp-rust/pull/1379)). There is no "last send" timestamp: nothing reads one, and stamping every frame written would cost a clock read on the client's hottest path.
 
 ```rust
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(15);
@@ -438,7 +438,7 @@ const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
 - Sends ping *before* dead-socket check to prevent false-positive reconnects on idle-but-healthy connections
 - Waits up to 20s for response
 - Checks dead socket on **every** tick (not just after failures) — catches scenarios where pending IQs caused the ping to be skipped, or where the ping succeeded but the connection died immediately after
-- Detects dead socket, triggering immediate reconnection, if no data has been received for 20s since the **first** send after the last receive (`first_send_since_recv_ms`) — matching WA Web's `deadSocketTimer.onOrBefore`; subsequent sends do not push this deadline back out
+- Detects dead socket, triggering immediate reconnection, if no data has been received for 20s since the **first** send after the last receive (`first_send_since_recv`) — matching WA Web's `deadSocketTimer.onOrBefore`; subsequent sends do not push this deadline back out
 - Fatal errors (`Socket`, `Disconnected`, `NotConnected`, `InternalChannelClosed`) cause the keepalive loop to exit immediately
 - Error classification is exhaustive and compile-time enforced — adding a new error variant without handling it causes a build failure
 

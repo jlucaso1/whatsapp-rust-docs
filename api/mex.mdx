@@ -18,6 +18,7 @@ Each persisted operation lives in its own module under [`wacore::iq::mex_operati
 - `NAME` — the operation name (e.g. `"WAWebJoinNewsletterMutation"`).
 - `DOC_ID` — the current persisted document ID.
 - `OPERATION_KIND` — `"query"` or `"mutation"`.
+- `VARIABLE_KEYS` — every variable name the persisted document declares, e.g. `&["fetch_viewer_metadata", "fetch_full_image", ...]`.
 - `Variables` — a typed struct matching the operation's input shape.
 - `Response` — a typed struct matching the operation's output shape.
 
@@ -30,6 +31,7 @@ use whatsapp_rust::features::mex::MexRequest;
 let request = MexRequest::new(
     fetch_newsletter::NAME,
     fetch_newsletter::DOC_ID,
+    fetch_newsletter::VARIABLE_KEYS,
     fetch_newsletter::Variables {
         input: Some(fetch_newsletter::Input {
             key: Some(jid.to_string()),
@@ -39,14 +41,21 @@ let request = MexRequest::new(
         fetch_viewer_metadata: Some(true),
         fetch_full_image: Some(true),
         fetch_creation_time: Some(true),
+        fetch_pinned_messages: Some(false),
+        fetch_status_metadata: Some(false),
+        fetch_wamo_sub: Some(false),
     },
 );
 
 let response = client.mex().query(request).await?;
 ```
 
+<Note>
+A generated `Variables` does not implement `Default`. The server binds a persisted query's variables by name and answers a bare `400 Bad Request` when it can't bind one of them, so every variable the operation declares has to be named at the call site — `..Default::default()` does not compile, and neither does `Variables::default()`. Passing `None` for an `Option` field is still how you send a variable WhatsApp Web itself omits; nested input objects (for example `Updates` on `update_newsletter`) are unaffected and keep `Default`.
+</Note>
+
 <Tip>
-For operations whose `Variables` schema is too permissive to model exactly, pass any `serde::Serialize` value (for example a `serde_json::json!({...})`) as the variables — `query` and `mutate` are generic over `V: Serialize`.
+For operations whose `Variables` schema is too permissive to model exactly, pass any `serde::Serialize` value (for example a `serde_json::json!({...})`) as the variables — `query` and `mutate` are generic over `V: Serialize`. Use [`MexRequest::missing_variables`](#missing_variables) to check such a payload against `VARIABLE_KEYS`, since the compiler can't.
 </Tip>
 
 ## Methods
@@ -82,6 +91,7 @@ use whatsapp_rust::features::mex::MexRequest;
 let request = MexRequest::new(
     join_newsletter::NAME,
     join_newsletter::DOC_ID,
+    join_newsletter::VARIABLE_KEYS,
     join_newsletter::Variables {
         newsletter_id: Some(jid.to_string()),
     },
@@ -102,6 +112,7 @@ let request = MexRequest {
         name: "WAWebUpdateGroupPropertyMutation",
         id: "8014515568645029",
     },
+    declared_variables: &["group_id", "property", "value"],
     variables: json!({
         "group_id": group_jid.to_string(),
         "property": "announcement",
@@ -164,20 +175,45 @@ A persisted-query descriptor plus its typed variables. `V` is the variables type
 ```rust
 pub struct MexRequest<V> {
     pub doc: MexDoc,
+    pub declared_variables: &'static [&'static str],
     pub variables: V,
 }
 ```
 
+- `declared_variables` — the variable names the persisted document declares (an operation module's `VARIABLE_KEYS`), carried so [`missing_variables`](#missing_variables) can check a payload against them even when `variables` is a loosely-typed `Serialize` value.
+
 #### new
 
-Pair an operation's `NAME` and `DOC_ID` with its variables.
+Pair an operation's `NAME`, `DOC_ID`, and `VARIABLE_KEYS` with its variables. Prefer this over building `MexRequest` as a struct literal.
 
 ```rust
 pub fn new(
     name: &'static str,
     id: &'static str,
+    declared_variables: &'static [&'static str],
     variables: V,
 ) -> MexRequest<V>
+```
+
+#### missing_variables
+
+Declared variables this request's payload does not carry, found by serializing `variables` and checking which of `declared_variables` are absent.
+
+```rust
+pub fn missing_variables(&self) -> Result<Vec<&'static str>, serde_json::Error>
+```
+
+A non-empty result isn't automatically wrong — WhatsApp Web itself omits an optional variable it has no value for, and this reports that the same way rather than judging it. It exists mainly for the loosely-typed `Serialize` form of a request, where the compiler can't check a `json!` payload against the operation's declared variables the way it checks a `Variables` struct literal.
+
+```rust
+let request = MexRequest::new(
+    fetch_all_newsletters_metadata::NAME,
+    fetch_all_newsletters_metadata::DOC_ID,
+    fetch_all_newsletters_metadata::VARIABLE_KEYS,
+    json!({ "fetch_wamo_sub": false }),
+);
+
+assert_eq!(request.missing_variables()?, vec!["fetch_status_metadata"]);
 ```
 
 ### MexResponse

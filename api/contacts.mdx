@@ -39,9 +39,11 @@ pub async fn is_on_whatsapp(
 - `pn_jid: Option<Jid>` - Phone number JID, present when the server returns LID as the primary JID
 - `is_business: bool` - Whether this is a WhatsApp Business account
 - `verified_name: Option<VerifiedName>` - Decoded verified business name certificate, when the account is a verified business
+- `username: Option<CompactString>` - Meta username, without the display-only `@` prefix. `None` means the server reported no username, which is also how it reports one that was deleted; it is never an empty string
 - `contact_error: Option<UsyncSubprotocolError>` - Server error for the `contact` subprotocol (e.g. privacy-blocked lookup); `is_registered` will be `false`
 - `lid_error: Option<UsyncSubprotocolError>` - Server error for the `lid` subprotocol; `lid` will be `None`
 - `business_error: Option<UsyncSubprotocolError>` - Server error for the `business` subprotocol; `is_business` will be `false`
+- `username_error: Option<UsyncSubprotocolError>` - Server error for the `username` subprotocol. Unlike the other `*_error` fields, this does not imply `username` is `None`: the server also publishes a username as a plain attribute of the `contact` result, and a failed subprotocol does not retract that value, so `username` can still be `Some` next to `username_error`
 
 **VerifiedName fields:**
 - `name: Option<String>` - Display name shown to other users (decoded from the certificate when the server omits the attribute)
@@ -51,6 +53,10 @@ pub async fn is_on_whatsapp(
 
 <Note>
 `IsOnWhatsAppResult` is marked `#[non_exhaustive]`, so new fields may be added in future versions without a breaking change.
+</Note>
+
+<Note>
+Both `is_on_whatsapp` and `get_user_info` now ask for the `username` subprotocol by default, matching WhatsApp Web's own existence check and background contact sync. This is not opt-in and adds one more child to the `<query>` node of both requests.
 </Note>
 
 **Example — phone number lookup:**
@@ -195,6 +201,8 @@ The system/announcements JID (`0@s.whatsapp.net`, and its legacy form `0@c.us`) 
 - `verified_name: Option<VerifiedName>` - Decoded verified business name certificate, for verified business accounts (see [`is_on_whatsapp`](#is_on_whatsapp) for field details)
 - `devices: Vec<u16>` - Device IDs from the `<devices version="2">` sublist the same usync query returns (device `0` is the primary). Empty when the server omits the sublist — no extra request is needed.
 - `devices_error: Option<UsyncSubprotocolError>` - Server error for the `devices` subprotocol; `devices` will be empty
+- `username: Option<CompactString>` - Meta username, without the display-only `@` prefix. See [`IsOnWhatsAppResult::username`](#is_on_whatsapp) for how it's sourced and what `None` means
+- `username_error: Option<UsyncSubprotocolError>` - Server error for the `username` subprotocol. See [`IsOnWhatsAppResult::username_error`](#is_on_whatsapp) — a value already read from the `contact` result's attribute survives next to this error
 
 <Note>
 `UserInfo` is `#[non_exhaustive]`, so new fields may be added in future versions without a breaking change.
@@ -248,6 +256,60 @@ for (jid, info) in user_info {
 }
 ```
 
+### find_by_username
+
+Resolve a Meta username to the account behind it.
+
+```rust
+pub async fn find_by_username(
+    &self,
+    username: &str,
+    username_key: Option<&str>,
+) -> Result<UsernameLookup, ContactError>
+```
+
+**Parameters:**
+- `username` - The handle to resolve. A leading `@` is display-only and is stripped automatically. The bare handle must be between `USERNAME_MIN_LENGTH` (3) and `USERNAME_MAX_LENGTH` (35) characters, or the call fails with `ContactError::Username` before any request is sent.
+- `username_key` - The account's numeric "username key" (WhatsApp Web calls it a pin). Some accounts require it before the server will disclose the identity behind their handle at all.
+
+**Returns:**
+
+`UsernameLookup`:
+- `NotFound` - No account answers to this username, or it's not reachable from here
+- `KeyRequired { username: Option<CompactString> }` - The username exists but the server withheld the identity; repeat the call with the account's username key
+- `Found(UsernameLookupUser)` - The username resolved to an account
+
+**UsernameLookupUser fields:**
+- `jid: Jid` - Identity the server returned. The query addresses contacts by LID, so this is normally a LID
+- `pn_jid: Option<Jid>` - Phone-number JID, when the server disclosed one on `<business>`
+- `username: Option<CompactString>` - Username as the server spelled it back
+- `is_business: bool`
+- `verified_name: Option<VerifiedName>`
+
+On `Found`, the discovered LID/PN pair is persisted to the local cache, the same way `is_on_whatsapp` and `get_user_info` do.
+
+<Warning>
+**Experimental.** The request is built exactly as WhatsApp Web's `WAWebQueryExistsJob.queryUsernameExists` builds it, but no capture of a live server answering it backs this implementation — only the request shape is verified against the official client. A server that rejects the query is not necessarily a bug here.
+</Warning>
+
+**Example:**
+```rust
+use whatsapp_rust::UsernameLookup;
+
+match client.contacts().find_by_username("example.handle", None).await? {
+    UsernameLookup::Found(user) => {
+        println!("Resolved to {}", user.jid);
+        if let Some(pn) = &user.pn_jid {
+            println!("  Phone number: {}", pn);
+        }
+    }
+    UsernameLookup::KeyRequired { .. } => {
+        println!("This account requires its username key to resolve");
+    }
+    UsernameLookup::NotFound => println!("No account answers to that username"),
+}
+```
+
 ## Privacy & TC tokens
 
 For user JIDs (not groups/newsletters), the library automatically includes TC tokens when fetching profile pictures. TC tokens are used for privacy-gated operations.
@@ -274,6 +336,20 @@ pub enum ContactError {
     Iq(#[from] IqError),
     #[error("unsupported contact JID: {0}")]
     InvalidJid(String),
+    #[error("{0}")]
+    Username(#[from] UsernameLookupError),
+}
+```
+
+`Username` is returned by [`find_by_username`](#find_by_username) when the handle can't be turned into a valid lookup — too short, too long, or a `username_key` that fails usync's own field-consistency validation.
+
+```rust
+#[non_exhaustive]
+pub enum UsernameLookupError {
+    #[error("username length {length} is outside the {USERNAME_MIN_LENGTH}..={USERNAME_MAX_LENGTH} the server accepts")]
+    InvalidLength { length: usize },
+    #[error("the username query is not a valid usync query: {0}")]
+    Query(#[from] UsyncValidationError),
 }
 ```
 

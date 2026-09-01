@@ -190,7 +190,7 @@ let pair_code_outstanding = client_clone
     .pair_code_state
     .lock()
     .await
-    .is_outstanding(wacore::time::now_secs());
+    .is_outstanding(wacore::time::Instant::now());
 
 client_clone.core.event_bus.dispatch(Event::PairingQrCodesExhausted(
     PairingQrCodesExhausted::builder()
@@ -466,14 +466,13 @@ pub struct PairingCode {
 
 **Generated in:** `src/pair_code.rs`
 
-The validity clock (`code_generation_ts`) is stamped *before* the stage-1 `companion_hello` request is sent, matching WA Web's `startAltLinkingFlow`. Because of this, `timeout` on the dispatched event is the *remaining* window (`code_validity() - elapsed`), not always the full ~180 seconds — otherwise a UI countdown built from the event would outlast the server's (and this crate's own `handle_primary_hello`) actual expiry check by however long stage 1 took.
+The validity clock is stamped *before* the stage-1 `companion_hello` request is sent, matching WA Web's `startAltLinkingFlow`, and held as a deadline — `code_expires_at: wacore::time::Instant`, the generation instant plus `PairCodeUtils::code_validity()` — rather than the generation instant itself ([whatsapp-rust#1379](https://github.com/oxidezap/whatsapp-rust/pull/1379)). A monotonic clock has no history before the process started, so subtracting a validity window from "now" in a young process can saturate at the clock's origin and land in the future; storing the deadline directly sidesteps that and matches what both readers (the event's `timeout` and `handle_primary_hello`'s expiry check) actually want. Because of this, `timeout` on the dispatched event is the *remaining* window, not always the full ~180 seconds — otherwise a UI countdown built from the event would outlast the server's (and this crate's own `handle_primary_hello`) actual expiry check by however long stage 1 took.
 
 ```rust
-let code_generation_ts = wacore::time::now_secs();
+let requested_at = wacore::time::Instant::now();
+let code_expires_at = requested_at + PairCodeUtils::code_validity();
 // ...stage 1 companion_hello round-trip...
-let elapsed = wacore::time::now_secs().saturating_sub(code_generation_ts).max(0) as u64;
-let remaining = PairCodeUtils::code_validity()
-    .saturating_sub(std::time::Duration::from_secs(elapsed));
+let remaining = code_expires_at.saturating_duration_since(wacore::time::Instant::now());
 
 self.core.event_bus.dispatch(Event::PairingCode(
     PairingCode::builder()
@@ -482,6 +481,10 @@ self.core.event_bus.dispatch(Event::PairingCode(
         .build(),
 ));
 ```
+
+<Note>
+Breaking change: `PairCodeState`'s `code_generation_ts: i64` (wall-clock seconds) field is replaced by `code_expires_at: wacore::time::Instant` (the deadline, not the generation instant), and `is_outstanding` / `live_flow_remaining` now take an `Instant` instead of a wall-clock reading. The boundary is unchanged — the deadline is still the last live instant, matching `handle_primary_hello` rejecting only strictly-past arrivals (WA Web `OldCodeError`) — but a caller comparing against wall-clock time no longer compiles.
+</Note>
 
 <Note>
 Breaking change: `PairingCode` and `PairingCodeRefresh` moved from inline enum-variant fields (`Event::PairingCode { code, timeout }`, `Event::PairingCodeRefresh { force_manual }`) to dedicated `#[non_exhaustive]` structs sealed with a `bon` builder — `Event::PairingCode(PairingCode)` / `Event::PairingCodeRefresh(PairingCodeRefresh)`. Destructuring patterns need a `..` rest; construction goes through `PairingCode::builder()…build()`.

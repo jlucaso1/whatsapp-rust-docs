@@ -853,7 +853,7 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
                 match event_result {
                     Ok(TransportEvent::DataReceived(data)) => {
                         // Update dead-socket timer on arrival
-                        self.last_data_received_ms.store(now_millis(), Ordering::Relaxed);
+                        self.last_data_received.store(Instant::now());
                         // Dropped before any await below: `data` is a view into the
                         // websocket's shared read buffer, so holding it while a node
                         // is processed would keep that allocation alive alongside
@@ -884,7 +884,7 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
                         // Refresh timestamp after batch so keepalive sees
                         // batch completion time, not just arrival time
                         if frames_in_batch > 1 {
-                            self.last_data_received_ms.store(now_millis(), Ordering::Relaxed);
+                            self.last_data_received.store(Instant::now());
                         }
                     },
                     Ok(TransportEvent::Disconnected) | Err(_) => { /* handle disconnect */ }
@@ -899,7 +899,7 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
 **Key design decisions:**
 
 - **`select_biased!`** — the shutdown listener has priority over transport events, ensuring the loop exits promptly when `shutdown_notifier` fires (e.g., on stream error or disconnect)
-- **Batch timestamp refresh** — after processing multiple frames, `last_data_received_ms` is updated again so the keepalive loop sees the batch completion time rather than the arrival time. This prevents false-positive dead-socket triggers during large offline sync batches that take seconds to drain
+- **Batch timestamp refresh** — after processing multiple frames, `last_data_received` is updated again so the keepalive loop sees the batch completion time rather than the arrival time. This prevents false-positive dead-socket triggers during large offline sync batches that take seconds to drain
 - **Cooperative yielding** — the loop yields to the runtime every `yield_frequency()` frames, preventing a large burst of frames from monopolizing the executor
 
 #### Inline vs concurrent node processing
@@ -1121,9 +1121,9 @@ Jitter:   ±10%
 
 For rate-limited errors (429), the client increments the backoff counter by 5 before the normal increment, causing the delay to jump significantly on the next reconnection attempt. Since [#1263](https://github.com/oxidezap/whatsapp-rust/pull/1263), the client also dispatches `Event::StreamError` for 429 — WA Web gives its UI no signal here at all (429 is outside the `500..600` range its handler special-cases), but an embedder has no UI to fall back on, so the rate limit is reported like every other coded stream error.
 
-**Stability-gated reset.** The backoff counter does not reset to its base immediately on a successful `<success>` authentication. Instead, `connected_at_ms` records the auth time, and the counter only resets when the *next* disconnect finds the connection was stable for at least `STABLE_CONNECTION_RESET_MS` (30s) — matching WA Web's `resetDelay`. A connection that authenticates and then immediately drops keeps escalating the backoff instead of resetting to 1s and retrying in a tight loop.
+**Stability-gated reset.** The backoff counter does not reset to its base immediately on a successful `<success>` authentication. Instead, `connected_at` (a monotonic `wacore::time::Instant`, immune to system clock jumps — [whatsapp-rust#1379](https://github.com/oxidezap/whatsapp-rust/pull/1379)) records the auth time, and the counter only resets when the *next* disconnect finds the connection was stable for at least `STABLE_CONNECTION_RESET` (30s) — matching WA Web's `resetDelay`. A connection that authenticates and then immediately drops keeps escalating the backoff instead of resetting to 1s and retrying in a tight loop.
 
-An explicit penalty applied during the connection — a 429 rate-limit or a manual `Client::reconnect()` — sets `backoff_reset_suppressed`, which survives even a stable (≥30s) connection and prevents the next disconnect from erasing that deliberate backoff step (matching WA Web's `cancelReset()`). The suppression flag is cleared on the next successful `<success>`, so it does not carry over indefinitely. An expected disconnect (e.g., 515) resets `connected_at_ms` to 0 so a later failed connect cannot read the prior cycle's stale timestamp as "stable."
+An explicit penalty applied during the connection — a 429 rate-limit or a manual `Client::reconnect()` — sets `backoff_reset_suppressed`, which survives even a stable (≥30s) connection and prevents the next disconnect from erasing that deliberate backoff step (matching WA Web's `cancelReset()`). The suppression flag is cleared on the next successful `<success>`, so it does not carry over indefinitely. An expected disconnect (e.g., 515) clears `connected_at` so a later failed connect cannot read the prior cycle's stale timestamp as "stable."
 
 ### Retry strategy
 
@@ -1190,14 +1190,16 @@ The keepalive loop monitors connection health, matching WhatsApp Web's behavior 
 
 ### Timestamp safety
 
-All timestamp conversions from `now_millis()` (which returns `i64`) to `u64` are guarded with `.max(0)` before casting. This prevents silent wrap-around on negative clock values (e.g., from NTP corrections or virtualized environments) that would otherwise produce incorrect timestamps.
+The dead-socket anchors (`SessionStats::first_send_since_recv`, `last_data_received`) and the reconnect-backoff stability anchor (`connected_at`) are `wacore::time::Instant`, the monotonic clock `wacore` ships for exactly this — they never touch `now_millis()`, so a system clock adjustment (NTP resync, waking from suspend) can't be misread as elapsed time and can't trip the watchdog or the backoff reset on a live connection ([whatsapp-rust#1379](https://github.com/oxidezap/whatsapp-rust/pull/1379); before this fix, all three were wall-clock milliseconds and a clock jump alone could read as 20+ seconds of silence).
+
+Two values are still deliberately wall-clock, because their callers need an absolute instant rather than an elapsed duration: the public `StatsSnapshot::last_data_received_ms` (derived from the monotonic anchor at snapshot time, so it stays correct even across a clock jump) and keepalive's `wall_rtt_ms`, which feeds WA Web's `onClockSkewUpdate`. Both still read `now_millis()` (which returns `i64`) and guard the cast to `u64` with `.max(0)`, preventing silent wrap-around on negative clock values (e.g., from NTP corrections or virtualized environments).
 
 ### Keepalive loop behavior
 
 The loop runs every 15-30 seconds (randomized, matching WA Web's `15 * (1 + random())` formula) and performs these checks in order:
 
 1. **Skip if recently active** — if data was received within `KEEP_ALIVE_INTERVAL_MIN` (15s), the connection is proven alive; skip the ping and reset the error counter
-2. **Send keepalive ping** — sends the ping *before* the dead-socket check so that a successful pong updates `last_data_received_ms` and prevents false-positive dead-socket detection on idle-but-healthy connections
+2. **Send keepalive ping** — sends the ping *before* the dead-socket check so that a successful pong updates `last_data_received` and prevents false-positive dead-socket detection on idle-but-healthy connections
 3. **RTT-adjusted clock skew** — on pong, calculates server time offset using the midpoint formula: `(startTime + rtt/2) / 1000 - serverTime`, matching WA Web's `onClockSkewUpdate`
 4. **Skip ping when IQ pending** — if there are already pending IQ responses, the connection is implicitly being tested; skip the explicit ping
 
@@ -1205,11 +1207,11 @@ The loop runs every 15-30 seconds (randomized, matching WA Web's `15 * (1 + rand
 
 Dead socket detection mirrors WA Web's `deadSocketTimer.onOrBefore` pattern, which keeps the **earliest** armed deadline rather than the most recent one:
 
-- **Not armed** if nothing has been sent since the last receive (the anchor is zero)
+- **Not armed** if nothing has been sent since the last receive (the anchor is `None`)
 - **Cancelled** if data was received after the anchor was armed
 - **Fires** if `DEAD_SOCKET_TIME` (20s) has elapsed since the anchor with no receive since
 
-The watchdog is anchored to `SessionStats::first_send_since_recv_ms` — the **first** send since the last receive, not the most recent send. `record_frame_sent` only stores a new anchor when the current one is unset or stale (`<=` the last-received timestamp); once armed, further sends leave it in place. Every receive resets the anchor to zero, and the next send re-arms it. Anchoring on the most recent send instead (the pre-fix behavior) let continued outgoing traffic — messages, receipts, presence — keep pushing the deadline forward, hiding a half-open socket (a peer that silently disappeared while writes still buffer and reads hang) for as long as the app kept emitting frames.
+The watchdog is anchored to `SessionStats::first_send_since_recv` — the **first** send since the last receive, not the most recent send. `record_frame_sent` only stores a new anchor when the current one is unset or stale (`<=` the last-received timestamp); once armed, further sends leave it in place. Every receive clears the anchor (`None`), and the next send re-arms it. Anchoring on the most recent send instead (the pre-fix behavior) let continued outgoing traffic — messages, receipts, presence — keep pushing the deadline forward, hiding a half-open socket (a peer that silently disappeared while writes still buffer and reads hang) for as long as the app kept emitting frames.
 
 The dead-socket check runs on **every** keepalive tick — not just after a failed ping. This catches scenarios where pending IQs caused the ping to be skipped, or where the ping "succeeded" but the connection died immediately after. When a dead socket is detected, the client calls `reconnect_immediately()` and exits the keepalive loop.
 

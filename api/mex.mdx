@@ -166,7 +166,7 @@ pub async fn get_username(&self) -> Result<Option<OwnUsername>, MexError>
 - `Some(OwnUsername)` — the account's username info.
 
 <Note>
-Only reads are exposed. `set_username` and `set_username_key` are not wrapped: they change the account's identity in a way the server does not undo, a wrong call can burn a handle that someone else could otherwise take, and there is no way to test either safely.
+Only reads are exposed. `set_username` and `set_username_key` are not wrapped. They change the account's identity in a way the server does not undo. A wrong call can burn a handle that someone else could otherwise take, and there is no way to test either safely.
 </Note>
 
 **Example:**
@@ -290,7 +290,7 @@ pub struct MexErrorExtensions {
 
 ### MexFatalError
 
-The typed cause behind a fatal GraphQL error, from `wacore::iq::mex`. WhatsApp Web treats a GraphQL error carrying an extension code as fatal to the whole request; this struct is what lets that code survive the trip through `IqError::ParseError`'s `source()` chain instead of being flattened into a plain message.
+The typed cause behind a fatal GraphQL error, from `wacore::iq::mex`. WhatsApp Web treats a GraphQL error carrying an extension code as fatal to the whole request. This struct is what lets that code survive the trip through `IqError::ParseError`'s `source()` chain instead of being flattened into a plain message.
 
 ```rust
 #[non_exhaustive]
@@ -301,7 +301,7 @@ pub struct MexFatalError {
 }
 ```
 
-You won't normally construct or match this directly — `query`/`mutate` already downcast it for you and hand back [`MexError::ExtensionError`](#error-handling). It's public for callers working with `wacore::iq::mex::MexQuerySpec` directly, below the `whatsapp_rust::features::mex::Mex` wrapper.
+You won't normally construct or match this directly. `query`/`mutate` already downcast it for you and hand back [`MexError::ExtensionError`](#error-handling). It's public for callers working with `wacore::iq::mex::MexQuerySpec` directly, below the `whatsapp_rust::features::mex::Mex` wrapper.
 
 ### OwnUsername
 
@@ -406,7 +406,7 @@ pub enum MexError {
 }
 ```
 
-`query` and `mutate` automatically convert any fatal GraphQL error (any error with an `error_code`) into `MexError::ExtensionError` so you can match on it without inspecting `response.errors` yourself. This now happens for every MEX operation via a typed [`MexFatalError`](#mexfatalerror) carried inside `IqError::ParseError`'s source chain — previously the code could be lost, surfacing only as a message inside `MexError::Request(IqError::ParseError(_))`.
+`query` and `mutate` automatically convert any fatal GraphQL error (any error with an `error_code`) into `MexError::ExtensionError`. This lets you match on it without inspecting `response.errors` yourself. This now happens for every MEX operation via a typed [`MexFatalError`](#mexfatalerror) carried inside `IqError::ParseError`'s source chain. Previously the code could be lost, surfacing only as a message inside `MexError::Request(IqError::ParseError(_))`.
 
 ```rust
 use whatsapp_rust::features::mex::MexError;
@@ -424,7 +424,7 @@ match client.mex().query(request).await {
 }
 ```
 
-`get_username` uses this to tell "no username set" (a fatal 404, either as `MexError::ExtensionError { code: 404, .. }` or as `MexError::Request(IqError::ServerError { code: 404, .. })`, matching the two shapes WhatsApp Web's own MEX client raises a 404 from) apart from every other failure, and returns `Ok(None)` for it instead of an error.
+`get_username` treats a fatal 404 as "no username set" rather than a failure. It arrives as either `MexError::ExtensionError { code: 404, .. }` or `MexError::Request(IqError::ServerError { code: 404, .. })` — the two shapes WhatsApp Web's own MEX client raises a 404 from. Either shape returns `Ok(None)` instead of an error.
 
 ## Response handling
 

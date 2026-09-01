@@ -43,7 +43,7 @@ pub async fn is_on_whatsapp(
 - `contact_error: Option<UsyncSubprotocolError>` - Server error for the `contact` subprotocol (e.g. privacy-blocked lookup); `is_registered` will be `false`
 - `lid_error: Option<UsyncSubprotocolError>` - Server error for the `lid` subprotocol; `lid` will be `None`
 - `business_error: Option<UsyncSubprotocolError>` - Server error for the `business` subprotocol; `is_business` will be `false`
-- `username_error: Option<UsyncSubprotocolError>` - Server error for the `username` subprotocol. Unlike the other `*_error` fields, this does not imply `username` is `None`: the server also publishes a username as a plain attribute of the `contact` result, and a failed subprotocol does not retract that value, so `username` can still be `Some` next to `username_error`
+- `username_error: Option<UsyncSubprotocolError>` - Server error for the `username` subprotocol. Unlike the other `*_error` fields, this does not imply `username` is `None`. The server also publishes a username as a plain attribute of the `contact` result, and a failed subprotocol does not retract that value. So `username` can still be `Some` next to `username_error`.
 
 **VerifiedName fields:**
 - `name: Option<String>` - Display name shown to other users (decoded from the certificate when the server omits the attribute)
@@ -289,7 +289,7 @@ pub async fn find_by_username(
 On `Found`, the discovered LID/PN pair is persisted to the local cache, the same way `is_on_whatsapp` and `get_user_info` do.
 
 <Warning>
-**Experimental.** The request is built exactly as WhatsApp Web's `WAWebQueryExistsJob.queryUsernameExists` builds it, but no capture of a live server answering it backs this implementation — only the request shape is verified against the official client. A server that rejects the query is not necessarily a bug here.
+**Experimental.** The request is built exactly as WhatsApp Web's `WAWebQueryExistsJob.queryUsernameExists` builds it. No capture of a live server answering it backs this implementation — only the request shape is verified against the official client. A server that rejects the query is not necessarily a bug here.
 </Warning>
 
 **Example:**

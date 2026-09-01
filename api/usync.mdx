@@ -168,7 +168,7 @@ Payload structs, all `#[non_exhaustive]`:
 - **`UsyncStatusResult`** — `status: Option<CompactString>`, `timestamp: Option<i64>` (WhatsApp Web itself only consumes `status`; the wire timestamp is kept for callers that need it)
 - **`UsyncTextStatusResult`** — `text`, `emoji`, `ephemeral_duration_seconds`, `last_update_time` (all `Option`)
 - **`UsyncDisappearingModeResult`** — `duration_seconds: u32`, `setting_timestamp: i64`, `ephemerality_disabled: bool`
-- **`UsyncBusinessResult`** — `verified_name: Option<VerifiedName>` (see [`is_on_whatsapp`](/api/contacts#is_on_whatsapp) for `VerifiedName` fields), `pn_jid: Option<Jid>` — phone-number JID the server attaches to `<business>` when the queried user was addressed by LID; it's the only place a username lookup can learn the PN, since that query never carries one
+- **`UsyncBusinessResult`** — `verified_name: Option<VerifiedName>` (see [`is_on_whatsapp`](/api/contacts#is_on_whatsapp) for `VerifiedName` fields); `pn_jid: Option<Jid>`, the phone-number JID the server attaches to `<business>` when the queried user was addressed by LID. It's the only place a username lookup can learn the PN, since that query never carries one.
 - **`UsyncFeatureResult`** — `feature: UsyncFeature`, `value: CompactString`
 - **`UsyncBotProfileResult`** — `name`, `attributes`, `description`, `category`, `is_default`, `prompts: Vec<UsyncBotPrompt>`, `persona_id`, `commands: Vec<UsyncBotCommand>`, `commands_description`, `is_meta_created: Option<bool>`, `creator_name: Option<CompactString>`, `creator_profile_url: Option<CompactString>`, `posing_as_professional: Option<UsyncBotProfessionalType>`
   - `UsyncBotPrompt` — `emoji: CompactString`, `text: CompactString`

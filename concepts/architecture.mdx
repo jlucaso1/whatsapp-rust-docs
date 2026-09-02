@@ -615,16 +615,22 @@ For bots that don't need chat history, `skip_history_sync()` sends a receipt so 
 
 ### Per-Chat Lanes
 
-Prevents race conditions where a later message is processed before the PreKey message. Each chat gets a lane combining an enqueue lock and an **unbounded** channel into a single cached entry. Backpressure comes from capping the number of cached lanes rather than messages within a lane: the `chat_lanes` cache itself has a capacity (`chat_lanes_capacity`, default **5,000**) and evicts idle lanes once full. This is a soft cap — a lane with an in-flight message is protected from eviction (see the note below), so if every cached lane happens to be active at once, the map can briefly exceed capacity rather than evicting a live lane and letting a second worker start on the same chat:
+Prevents race conditions where a later message is processed before the PreKey message. Each chat gets a lane combining an enqueue lock, a worker-liveness lock, and an **unbounded** channel into a single cached entry. Backpressure comes from capping the number of cached lanes rather than messages within a lane: the `chat_lanes` cache itself has a capacity (`chat_lanes_capacity`, default **5,000**) and evicts idle lanes once full. This is a soft cap — a lane with an in-flight message is protected from eviction (see the note below), so if every cached lane happens to be active at once, the map can briefly exceed capacity rather than evicting a live lane and letting a second worker start on the same chat:
 
 ```rust
 pub(crate) chat_lanes: Cache<Jid, ChatLane>,
-// ChatLane { enqueue_lock, queue_tx }
+// ChatLane { enqueue_lock, queue_tx, worker_running }
 // Each queue: async_channel::unbounded::<QueuedChatMessage>()
 ```
 
 <Note>
 **Active lanes survive capacity eviction (v0.6).** Every queued item is a `QueuedChatMessage { node, lane_liveness }`, where `lane_liveness` is a clone of the lane's `enqueue_lock`. The cache's `evict_guard` refuses to evict a lane while any in-flight message still holds that clone (`Arc::strong_count(&lane.enqueue_lock) > 1`); the worker drops its copy only after it finishes processing that message. Previously, a lane could be capacity-evicted right after its worker dequeued a message, and a later stanza for the same chat would then miss the cache and spawn a second worker — letting two workers process the same chat concurrently and out of order. Idle lanes (no in-flight message) remain evictable exactly as before.
+</Note>
+
+<Note>
+**Idle lane workers self-exit after 60 seconds (v0.7).** A lane's worker awaits the inbound-message handler inline instead of boxing it per message, so the spawned task holds that future's whole state machine (~9 KiB) for as long as the worker runs — message or no message. Left running for the connection's lifetime, that is one such future per chat that ever spoke, bounded only by `chat_lanes_capacity`; an account active in a few thousand groups could park tens of MiB in idle workers, and the capacity-eviction guard above only ever protected *active* lanes from that cost, not idle ones. A worker now closes its queue and exits after `LANE_IDLE_TIMEOUT` (60s) of silence — the idle timer is armed only once the queue is empty, so a busy lane never pays for it. This is independent of the capacity eviction above: an idle worker exits on its own schedule regardless of how much headroom `chat_lanes_capacity` has left.
+
+A message that arrives for a closed lane replaces it. `enqueue_lock` and `worker_running` carry over from the predecessor rather than being re-minted — the chat's enqueue order stays a single total order across the swap (whichever lane generation a handler happened to fetch), and the successor worker takes `worker_running` before processing its first message, so it can never run concurrently with the predecessor still draining whatever raced its idle close.
 </Note>
 
 ### Per-device session locks
@@ -662,7 +668,7 @@ let decrypt_result = group_decrypt(ciphertext, &mut adapter.sender_key_store, &s
 Without this lock, two decrypt workers for the same `(group, sender)` — reachable when a [chat lane](#per-chat-lanes) is capacity-evicted while its worker is still draining, and a later stanza for that chat misses the cache and spawns a second worker at the same connection generation — could both load the sender-key chain, advance it, and store their result, with the last store silently winning and dropping a chain step. This mirrors the per-device session lock the 1:1 send/receive paths already hold around their Signal ratchet mutations.
 
 <Note>
-**Chat-lane eviction trigger closed (v0.6).** The specific double-worker path described above — a chat lane evicted while its worker was still draining — is now closed by the [active-lane eviction guard](#per-chat-lanes): a lane with an in-flight message can no longer be capacity-evicted, so a later stanza for that chat can no longer spawn a second worker. This chain lock remains in place as defense-in-depth against any other path that could produce two concurrent decrypt workers for the same `(group, sender)`.
+**Chat-lane eviction trigger closed (v0.6).** The specific double-worker path described above — a chat lane evicted while its worker was still draining — is now closed by the [active-lane eviction guard](#per-chat-lanes): a lane with an in-flight message can no longer be capacity-evicted, so a later stanza for that chat can no longer spawn a second worker. The [idle-exit lane replacement](#per-chat-lanes) added since (v0.7) is synchronized the same way, via `worker_running`, so it likewise cannot start a second worker for a chat whose predecessor is still draining. This chain lock remains in place as defense-in-depth against any other path that could produce two concurrent decrypt workers for the same `(group, sender)`.
 </Note>
 
 ### Background Saver

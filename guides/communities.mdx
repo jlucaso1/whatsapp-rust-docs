@@ -359,12 +359,12 @@ Each comment carries a fresh `messageSecret` of its own so it can receive encryp
 
 ### Receiving comments
 
-Incoming encrypted comments are decrypted transparently on the receive path. The decrypted body is dispatched as part of a normal `Event::Messages` batch. Because the inner `Message` proto has no slot for the parent post key, the threading link surfaces on `MessageInfo::comment_target`:
+Incoming encrypted comments are decrypted transparently on the receive path. The decrypted body is dispatched as part of a normal `Event::Messages` batch. Because the inner `Message` proto has no slot for the parent post key, the threading link surfaces on `InboundMessage::comment_target`:
 
 ```rust
 Event::Messages(batch) => {
-    for InboundMessage { message: msg, info, .. } in batch.iter() {
-        if let Some(parent_key) = &info.comment_target {
+    for InboundMessage { message: msg, comment_target, .. } in batch.iter() {
+        if let Some(parent_key) = comment_target {
             // This is a channel comment.
             println!("Comment on post: {:?}", parent_key.id);
 

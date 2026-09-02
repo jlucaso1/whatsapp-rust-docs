@@ -121,21 +121,29 @@ if info.source.chat.is_group() {
     println!("Group message from participant: {}", info.source.sender);
 }
 
-// Check ephemeral (disappearing) message duration
-if let Some(expiration) = info.ephemeral_expiration {
-    println!("Disappearing message timer: {}s", expiration);
-}
-
 // Check if this message was recovered via PDO
 if let Some(request_id) = &info.unavailable_request_id {
     println!("Recovered via PDO request: {}", request_id);
 }
+```
 
-// Check if this is a decrypted channel comment (CAG threaded reply)
-if let Some(parent_key) = &info.comment_target {
-    println!("Comment on post: {:?}", parent_key.id);
+Two fields that read like message metadata are not on `MessageInfo` — they're on the `InboundMessage` event that carries `info`, because they're known before decryption and keeping them off the shared `info` avoids a struct copy on every message:
+
+```rust
+for InboundMessage { ephemeral_expiration, comment_target, .. } in batch.iter() {
+    // Check ephemeral (disappearing) message duration
+    if let Some(expiration) = ephemeral_expiration {
+        println!("Disappearing message timer: {}s", expiration);
+    }
+
+    // Check if this is a decrypted channel comment (CAG threaded reply)
+    if let Some(parent_key) = comment_target {
+        println!("Comment on post: {:?}", parent_key.id);
+    }
 }
 ```
+
+Inside a `MessageContext` (via `on_message` or `MessageContext::from_inbound`), the same two fields are available as `ctx.ephemeral_expiration` / `ctx.comment_target` — see [`MessageContext`](/api/bot#messagecontext).
 
 <Warning>
 Breaking change: `MessageInfo::r#type` changed from `String` to `Option<StanzaMessageType>`, and `MessageInfo::media_type` changed from `String` to `Option<EncMediaType>`. Both are `WireEnum`s carrying an `Unknown(String)` fallback for a value this build doesn't model, so no wire value is dropped.
@@ -145,11 +153,11 @@ Migrate a string comparison like `info.r#type == "text"` to `info.r#type == Some
 `media_type` is populated by aggregating the `mediatype` attribute across the stanza's `<enc>` nodes: the first `<enc>` that declares one wins, in enumeration order (direct children first, then this device's own `<enc>` under `<participants>`). A later disagreeing value on the same stanza is dropped.
 </Warning>
 
-The `ephemeral_expiration` field contains the disappearing messages timer in seconds, extracted from the message's `contextInfo.expiration`. This tells you how long the message will be visible before it auto-deletes. Use this value when sending replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
+`InboundMessage::ephemeral_expiration` contains the disappearing messages timer in seconds, extracted from the message's `contextInfo.expiration`. This tells you how long the message will be visible before it auto-deletes. Use this value when sending replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
 
 The `unavailable_request_id` field is set when a message was recovered via PDO rather than normal decryption. It contains the PDO request message ID, which you can use to correlate recovered messages with the original `UndecryptableMessage` event.
 
-The `comment_target` field is set when the dispatched message is a decrypted CAG channel comment. It contains the `MessageKey` of the parent post. The inner `Message` proto has no slot for the threading link, so it surfaces here instead. See [Channel comments](#channel-comments) below.
+`InboundMessage::comment_target` is set when the dispatched message is a decrypted CAG channel comment. It contains the `MessageKey` of the parent post. The inner `Message` proto has no slot for the threading link, so it surfaces here instead. See [Channel comments](#channel-comments) below.
 
 ### Message content extraction
 
@@ -286,12 +294,12 @@ if let Some(reaction) = &message.reaction_message {
 
 ### Channel Comments
 
-Encrypted channel comments from Community Announcement Groups are decrypted transparently and dispatched as `Event::Messages` carrying the comment body. The parent post key surfaces on `MessageInfo::comment_target` (the inner `Message` proto has no slot for the threading link):
+Encrypted channel comments from Community Announcement Groups are decrypted transparently and dispatched as `Event::Messages` carrying the comment body. The parent post key surfaces on `InboundMessage::comment_target` (the inner `Message` proto has no slot for the threading link):
 
 ```rust
 Event::Messages(batch) => {
-    for InboundMessage { message: msg, info, .. } in batch.iter() {
-        if let Some(parent_key) = &info.comment_target {
+    for InboundMessage { message: msg, comment_target, .. } in batch.iter() {
+        if let Some(parent_key) = comment_target {
             // This item is a decrypted CAG channel comment.
             println!("Comment on post: {:?}", parent_key.id);
             println!("Post author:     {:?}", parent_key.participant);

@@ -995,11 +995,22 @@ pub struct MessageContext {
     pub message: Arc<wa::Message>,
     pub info: MessageInfo,
     pub client: Arc<Client>,
+    /// Disappearing-message timer of the chat this message arrived in, in
+    /// seconds, when the stanza carried one. Mirrors
+    /// `InboundMessage::ephemeral_expiration`.
+    pub ephemeral_expiration: Option<u32>,
+    /// For a decrypted newsletter comment, the key of the post it replies to.
+    /// Mirrors `InboundMessage::comment_target`.
+    pub comment_target: Option<Box<wa::MessageKey>>,
 }
 ```
 
 <Note>
 Since v0.6 `message` is `Arc<wa::Message>` (was `Box<wa::Message>`). This matches the `InboundMessage` payload and lets `from_inbound` / `from_arc` reuse the bus-dispatched `Arc` with zero deep clones.
+</Note>
+
+<Note>
+`ephemeral_expiration` and `comment_target` were added to `MessageContext` after moving off the shared `MessageInfo` and onto `InboundMessage` (they used to live on `MessageInfo`, copied into a fresh `Arc` via `Arc::make_mut` on every message in an ephemeral chat — that deep copy is gone now that the info stays shared and these two ride the event instead). Only [`from_inbound`](#from_inbound) can populate them, since it's the only constructor that sees the stanza-derived event; `from_arc` and `from_parts` build from `message`/`info` alone and always leave both `None`. A bot handler reached through `Bot::on_message` (which is built via `from_inbound` internally) sees them populated whenever the underlying event carried them.
 </Note>
 
 ### from_parts
@@ -1016,7 +1027,7 @@ Constructs a `MessageContext` from individual message components. Internally clo
 pub fn from_arc(message: Arc<wa::Message>, info: &MessageInfo, client: Arc<Client>) -> Self
 ```
 
-Constructs a `MessageContext` from an existing `Arc<wa::Message>` without copying the body — pair this with the `Arc` you receive from an `InboundMessage` to keep dispatch zero-clone.
+Constructs a `MessageContext` from an existing `Arc<wa::Message>` without copying the body — pair this with the `Arc` you receive from an `InboundMessage` to keep dispatch zero-clone. `ephemeral_expiration` and `comment_target` are left `None`, since this constructor never sees the stanza they're read from.
 
 ### from_inbound
 
@@ -1024,7 +1035,7 @@ Constructs a `MessageContext` from an existing `Arc<wa::Message>` without copyin
 pub fn from_inbound(inbound: &InboundMessage, client: Arc<Client>) -> Self
 ```
 
-Extracts a `MessageContext` from a single `InboundMessage` (one item of a `MessageBatch`). Unlike the removed `from_event`, this is infallible — there's no "wrong event kind" case once you're iterating `Event::Messages`' batch. Reuses the existing `Arc<wa::Message>` rather than cloning the body. This is what `Bot::on_message` uses internally to fan a batch out to your per-message handler, invoked once per item in arrival order.
+Extracts a `MessageContext` from a single `InboundMessage` (one item of a `MessageBatch`). Unlike the removed `from_event`, this is infallible — there's no "wrong event kind" case once you're iterating `Event::Messages`' batch. Reuses the existing `Arc<wa::Message>` rather than cloning the body, and carries `ephemeral_expiration` and `comment_target` straight from the event. This is what `Bot::on_message` uses internally to fan a batch out to your per-message handler, invoked once per item in arrival order.
 
 ### send_message
 

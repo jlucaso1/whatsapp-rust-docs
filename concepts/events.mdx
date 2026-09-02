@@ -901,6 +901,12 @@ Event::Messages(MessageBatch)
 pub struct InboundMessage {
     pub message: Arc<wa::Message>,
     pub info: Arc<MessageInfo>,
+    /// Disappearing-message timer of the chat this message arrived in, in
+    /// seconds, when the stanza carried one.
+    pub ephemeral_expiration: Option<u32>,
+    /// For a decrypted newsletter comment, the key of the post it replies to.
+    /// `None` for every other message.
+    pub comment_target: Option<Box<wa::MessageKey>>,
 }
 
 pub enum BatchOrigin {
@@ -928,6 +934,10 @@ Live traffic dispatches a batch of one, so per-message latency is unchanged from
 
 <Note>
 Breaking change: `InboundMessage` and `MessageBatch` are now `#[non_exhaustive]`, sealed with a `bon` builder. A `for InboundMessage { message, info } in batch.iter()` destructuring pattern needs a `..` rest: `for InboundMessage { message, info, .. } in batch.iter()`.
+</Note>
+
+<Note>
+Breaking change: `ephemeral_expiration` and `comment_target` moved onto `InboundMessage` from `MessageInfo`, where earlier docs (and some examples below) still show them as `info.ephemeral_expiration` / `info.comment_target`. They used to be written into the shared `MessageInfo` via `Arc::make_mut` — which deep-copied the whole struct on every message in a disappearing chat — so moving them to the event, where they're already known, lets `info` stay a cheap shared `Arc` for every message. Read them by destructuring the field directly off `InboundMessage` (`for InboundMessage { comment_target, .. } in batch.iter()`) rather than off `info`. [`MessageContext`](/api/bot#messagecontext) carries both fields too — `MessageContext::from_inbound` (what `Bot::on_message` uses internally) copies them from the event, so a bot handler can read `ctx.ephemeral_expiration` / `ctx.comment_target` directly.
 </Note>
 
 <Note>
@@ -959,7 +969,6 @@ pub struct MessageInfo {
     pub verified_level: Option<String>,
     pub verified_name_serial: Option<String>,
     pub device_sent_meta: Option<DeviceSentMeta>,
-    pub ephemeral_expiration: Option<u32>,
     pub is_offline: bool,
     pub peer_recipient_pn: Option<Jid>,
     pub unavailable_request_id: Option<String>,

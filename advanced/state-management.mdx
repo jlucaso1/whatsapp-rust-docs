@@ -418,9 +418,23 @@ pub struct Client {
 
 Both use `PortableCache` with capacity-based eviction (configurable via `CacheConfig`), so stale entries are automatically cleaned up.
 
+`ChatLane` itself (`src/client.rs`) carries a third field, `worker_running: Arc<async_lock::Mutex<()>>`, alongside `enqueue_lock` and `queue_tx`:
+
+```rust
+pub(crate) struct ChatLane {
+    pub enqueue_lock: Arc<Mutex<()>>,
+    pub queue_tx: async_channel::Sender<QueuedChatMessage>,
+    /// Held by the lane's worker for as long as it runs; a replacement
+    /// worker takes it before its first message.
+    pub worker_running: Arc<Mutex<()>>,
+}
+```
+
+A lane's worker awaits the inbound-message future inline rather than boxing it per message, so the task holds that future's whole state machine (~9 KiB) for as long as the worker lives — message or no message. Left running for the connection's lifetime, that adds up to one such future per chat that ever spoke, bounded only by `chat_lanes_capacity` (5,000 by default): if your client stays active in a few thousand groups, idle workers alone could park tens of MiB. To bound this, a worker now exits after 60 seconds without a new message (`LANE_IDLE_TIMEOUT` in `src/handlers/message.rs`), closing its queue on the way out. The next message for that chat sees the closed queue, and the handler transparently replaces the lane with a fresh one — `enqueue_lock` and `worker_running` carry over from the predecessor rather than being re-minted, so enqueue order for the chat stays a single total order across the swap, and the new worker waits on `worker_running` for the old one to finish draining before it starts processing. A chat that keeps receiving never pays this cost: the worker arms the idle timer only once its queue is empty.
+
 On disconnect, `chat_lanes` is cleared via the async `clear()` to drop per-chat queue senders. This causes worker tasks from the old connection to exit via channel close, preventing them from surviving reconnects with outdated Signal session state that would cause decryption failures. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list of resources reset on disconnect.
 
-Location: `src/client.rs`
+Location: `src/client.rs`, `src/handlers/message.rs`
 
 ### Blocking Operations
 

@@ -42,7 +42,7 @@ tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 </Warning>
 
 <Note>
-  [PR #1385](https://github.com/oxidezap/whatsapp-rust/pull/1385) added `CallHandle::request_peer_keyframe(urgency)`, so a dropped inbound access unit no longer stays dark for the rest of a call — see [H.264 video plane](#h264-video-plane) below.
+  [PR #1385](https://github.com/oxidezap/whatsapp-rust/pull/1385) added `CallHandle::request_peer_keyframe(urgency)`, so a 1:1 call can ask the peer to recover a dropped inbound access unit instead of waiting on its next scheduled keyframe — see [H.264 video plane](#h264-video-plane) below.
 </Note>
 
 `voip` is a backward-compatible aggregate for `voip-mlow` + `voip-libopus` + `voip-relay-native` — both codec adapters plus the native relay dialer, linked in. If you only need one codec, exchange codec packets with an external encoder/decoder, or supply your own way onto the media wire, pick narrower features instead:
@@ -457,7 +457,7 @@ handle.stop_video().await?; // Idempotent.
 | `handle.stop_video().await` | Stop our own outbound video; idempotent. The peer's video plane is unaffected if they keep sending — see Video I/O above |
 | `handle.request_peer_keyframe(urgency)` | Ask the peer to send a video keyframe, by RTCP PLI — call it when your decoder loses or discards an access unit. Fire-and-forget, throttled in the engine, does nothing in a group call — see [H.264 video plane](#h264-video-plane) below |
 | `handle.events()` | Subscribe to engine events (relay allocate, audio/video state changes, RTCP, failures) |
-| `handle.media_stats()` | Snapshot of per-call audio-path counters (`CallMediaStats`) — see [Media stats and silence detection](#media-stats-and-silence-detection) |
+| `handle.media_stats()` | Snapshot of per-call audio- and video-path counters (`CallMediaStats`) — see [Media stats and silence detection](#media-stats-and-silence-detection) |
 | `handle.group_state()` | Roster/relay/waiting-room snapshot for a group or call-link call, `None` on a plain 1:1 call — see [Group calls](#group-calls) |
 | `handle.invite_participant(&jid).await` | Add a participant who isn't in the call yet, including promoting a 1:1 call to a group call — see [Promoting a 1:1 call to a group call](#promoting-a-11-call-to-a-group-call) |
 | `handle.ring_participant(&jid).await` | Re-ring a participant already in the roster but not currently connected — see [Promoting a 1:1 call to a group call](#promoting-a-11-call-to-a-group-call) |

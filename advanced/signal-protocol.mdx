@@ -650,7 +650,7 @@ pub async fn group_decrypt_shared(
 ) -> Result<Vec<u8>>
 ```
 
-A caller that already holds the skmsg as `Bytes` — the receive path slices it straight out of the frame buffer — calls `group_decrypt_shared` directly and skips that copy: `SenderKeyMessage` parses in place and keeps a reference-counted slice of the caller's buffer as its `serialized` storage (via `SenderKeyMessage: TryFrom<Bytes>`) instead of allocating its own copy, the same technique `SignalMessage` already used.
+If you already hold the skmsg as `Bytes` — as the receive path does, slicing it straight out of the frame buffer — call `group_decrypt_shared` directly and skip that copy: `SenderKeyMessage` parses in place and keeps a reference-counted slice of your buffer as its `serialized` storage (via `SenderKeyMessage: TryFrom<Bytes>`) instead of allocating its own copy, the same technique `SignalMessage` already uses.
 
 **Process:**
 

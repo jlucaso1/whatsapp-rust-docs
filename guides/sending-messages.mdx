@@ -307,7 +307,7 @@ let result = client.comments()
 
 The `parent_key.participant` field must identify the post author so receivers can derive the HKDF decryption key from the envelope. When `from_me` is `true` and `participant` is absent the library resolves the author to your own identity.
 
-Incoming encrypted comments are decrypted transparently. The comment body is dispatched as part of an `Event::Messages` batch and the parent post key is available on `InboundMessage::comment_target`:
+The client decrypts incoming encrypted comments transparently. You receive the comment body as part of an `Event::Messages` batch. You read the parent post key off `InboundMessage::comment_target`:
 
 ```rust
 Event::Messages(batch) => {
@@ -715,7 +715,7 @@ let metadata = client.groups().get_metadata(&group_jid).await?;
 let expiration = metadata.ephemeral.as_ref().and_then(|e| e.expiration).unwrap_or(0);
 ```
 
-For incoming messages, read it from `InboundMessage` (not `MessageInfo` — the shared info stays cheap to clone since this field is known before decryption and rides the event instead):
+For incoming messages, read it from `InboundMessage`, not `MessageInfo`. Writing it onto the shared `MessageInfo` would need an `Arc::make_mut` copy of the whole struct on every message; the event carries it instead, so `info` stays cheap to share:
 
 ```rust
 Event::Messages(batch) => {

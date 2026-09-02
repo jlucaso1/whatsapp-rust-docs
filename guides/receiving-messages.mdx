@@ -127,7 +127,7 @@ if let Some(request_id) = &info.unavailable_request_id {
 }
 ```
 
-Two fields that read like message metadata are not on `MessageInfo` — they're on the `InboundMessage` event that carries `info`, because they're known before decryption and keeping them off the shared `info` avoids a struct copy on every message:
+Two fields that read like message metadata are not on `MessageInfo`. They're on the `InboundMessage` event that carries `info` instead. Writing them onto the shared `info` would need an `Arc::make_mut` copy of the whole struct on every message; putting them on the event, which is already built fresh per dispatch, avoids that copy:
 
 ```rust
 for InboundMessage { ephemeral_expiration, comment_target, .. } in batch.iter() {
@@ -153,11 +153,11 @@ Migrate a string comparison like `info.r#type == "text"` to `info.r#type == Some
 `media_type` is populated by aggregating the `mediatype` attribute across the stanza's `<enc>` nodes: the first `<enc>` that declares one wins, in enumeration order (direct children first, then this device's own `<enc>` under `<participants>`). A later disagreeing value on the same stanza is dropped.
 </Warning>
 
-`InboundMessage::ephemeral_expiration` contains the disappearing messages timer in seconds, extracted from the message's `contextInfo.expiration`. This tells you how long the message will be visible before it auto-deletes. Use this value when sending replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
+`InboundMessage::ephemeral_expiration` contains the disappearing messages timer in seconds. The client extracts it from the decrypted message's `contextInfo.expiration`. It tells you how long the message will be visible before it auto-deletes. Use this value when you send replies to the same chat via [`SendOptions.ephemeral_expiration`](/api/send#sendoptions).
 
-The `unavailable_request_id` field is set when a message was recovered via PDO rather than normal decryption. It contains the PDO request message ID, which you can use to correlate recovered messages with the original `UndecryptableMessage` event.
+You get `unavailable_request_id` when a message was recovered via PDO rather than normal decryption. It contains the PDO request message ID. Use it to correlate recovered messages with the original `UndecryptableMessage` event.
 
-`InboundMessage::comment_target` is set when the dispatched message is a decrypted CAG channel comment. It contains the `MessageKey` of the parent post. The inner `Message` proto has no slot for the threading link, so it surfaces here instead. See [Channel comments](#channel-comments) below.
+You get `InboundMessage::comment_target` when the dispatched message is a decrypted CAG channel comment. It contains the `MessageKey` of the parent post. The inner `Message` proto has no slot for the threading link, so it surfaces here instead. See [Channel comments](#channel-comments) below.
 
 ### Message content extraction
 
@@ -294,7 +294,7 @@ if let Some(reaction) = &message.reaction_message {
 
 ### Channel Comments
 
-Encrypted channel comments from Community Announcement Groups are decrypted transparently and dispatched as `Event::Messages` carrying the comment body. The parent post key surfaces on `InboundMessage::comment_target` (the inner `Message` proto has no slot for the threading link):
+The client decrypts encrypted channel comments from Community Announcement Groups transparently and dispatches them as `Event::Messages` carrying the comment body. You read the parent post key off `InboundMessage::comment_target` — the inner `Message` proto has no slot for the threading link, so it surfaces there instead:
 
 ```rust
 Event::Messages(batch) => {

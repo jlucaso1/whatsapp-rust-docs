@@ -937,7 +937,13 @@ Breaking change: `InboundMessage` and `MessageBatch` are now `#[non_exhaustive]`
 </Note>
 
 <Note>
-Breaking change: `ephemeral_expiration` and `comment_target` moved onto `InboundMessage` from `MessageInfo`, where earlier docs (and some examples below) still show them as `info.ephemeral_expiration` / `info.comment_target`. They used to be written into the shared `MessageInfo` via `Arc::make_mut` — which deep-copied the whole struct on every message in a disappearing chat — so moving them to the event, where they're already known, lets `info` stay a cheap shared `Arc` for every message. Read them by destructuring the field directly off `InboundMessage` (`for InboundMessage { comment_target, .. } in batch.iter()`) rather than off `info`. [`MessageContext`](/api/bot#messagecontext) carries both fields too — `MessageContext::from_inbound` (what `Bot::on_message` uses internally) copies them from the event, so a bot handler can read `ctx.ephemeral_expiration` / `ctx.comment_target` directly.
+Breaking change: `ephemeral_expiration` and `comment_target` moved from `MessageInfo` onto `InboundMessage`. Some code samples below may still show `info.ephemeral_expiration` / `info.comment_target` from before this change.
+
+Writing these fields into the shared `MessageInfo` needed an `Arc::make_mut` copy of the whole struct on every message in a disappearing chat. Moving them onto the event, which is already built fresh per dispatch, avoids that copy and lets `info` stay a cheap shared `Arc`.
+
+Read them by destructuring the field directly off `InboundMessage` instead of off `info`: `for InboundMessage { comment_target, .. } in batch.iter()`.
+
+[`MessageContext`](/api/bot#messagecontext) carries both fields too. `MessageContext::from_inbound` — what `Bot::on_message` uses internally — copies them from the event, so a bot handler can read `ctx.ephemeral_expiration` / `ctx.comment_target` directly.
 </Note>
 
 <Note>

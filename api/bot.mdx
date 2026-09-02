@@ -1010,7 +1010,9 @@ Since v0.6 `message` is `Arc<wa::Message>` (was `Box<wa::Message>`). This matche
 </Note>
 
 <Note>
-`ephemeral_expiration` and `comment_target` were added to `MessageContext` after moving off the shared `MessageInfo` and onto `InboundMessage` (they used to live on `MessageInfo`, copied into a fresh `Arc` via `Arc::make_mut` on every message in an ephemeral chat — that deep copy is gone now that the info stays shared and these two ride the event instead). Only [`from_inbound`](#from_inbound) can populate them, since it's the only constructor that sees the stanza-derived event; `from_arc` and `from_parts` build from `message`/`info` alone and always leave both `None`. A bot handler reached through `Bot::on_message` (which is built via `from_inbound` internally) sees them populated whenever the underlying event carried them.
+`ephemeral_expiration` and `comment_target` used to live on the shared `MessageInfo`. Writing them there needed an `Arc::make_mut` copy of the whole struct on every message in an ephemeral chat. They moved to `InboundMessage` to avoid that copy, and `MessageContext` now carries them too.
+
+Use [`from_inbound`](#from_inbound) when you need these fields — it's the only constructor that sees the stanza-derived event. `from_arc` and `from_parts` build from `message`/`info` alone, so they always leave both fields `None`. A bot handler reached through `Bot::on_message` (which uses `from_inbound` internally) sees them populated whenever the underlying event carried them.
 </Note>
 
 ### from_parts

@@ -1568,7 +1568,7 @@ pub struct GroupUpdate {
 - `participant` - The admin/user who triggered the change
 - `participant_pn` - Phone number JID of the participant (for LID-addressed groups)
 - `is_lid_addressing_mode` - Whether the group uses LID addressing mode
-- `action` - The specific group notification action (subject change, participant add/remove/promote/demote, description change, etc.), boxed like the `action` field of every other sync-action event payload (`ContactUpdate`, `PinUpdate`, `MuteUpdate`, …) — it was the largest variant of `Event` and every dispatched event pays for the size of the largest one
+- `action` - The specific group notification action (subject change, participant add/remove/promote/demote, description change, etc.). It is boxed, like the `action` field of every other sync-action event payload (`ContactUpdate`, `PinUpdate`, `MuteUpdate`, …). It was the largest variant of `Event`, and every dispatched event pays for the size of the largest one.
 
 **Example:**
 ```rust
@@ -1685,7 +1685,7 @@ Event::GroupUpdate(update) => {
 ```
 
 <Note>
-[PR #1402](https://github.com/oxidezap/whatsapp-rust/pull/1402) changed `GroupUpdate::action` to `Box<GroupNotificationAction>` — at 288 bytes it made `GroupUpdate` the largest variant of `Event`, and `Event`'s size is what every dispatched event's `Arc` allocation pays for, group update or not. Field access (`update.action.foo`) is unchanged, but a `match` on `update.action` that names a `GroupNotificationAction` variant now needs `match &*update.action { ... }`, as in the example below.
+[PR #1402](https://github.com/oxidezap/whatsapp-rust/pull/1402) changed `GroupUpdate::action` to `Box<GroupNotificationAction>`. At 288 bytes it made `GroupUpdate` the largest variant of `Event`, and `Event`'s size is what every dispatched event's `Arc` allocation pays for, group update or not. Field access (`update.action.foo`) is unchanged. A `match` on `update.action` that names a `GroupNotificationAction` variant now needs `match &*update.action { ... }`, as in the example below.
 </Note>
 
 <Note>
@@ -2850,7 +2850,7 @@ pub struct IncomingCall {
 </Note>
 
 <Note>
-[PR #1402](https://github.com/oxidezap/whatsapp-rust/pull/1402) changed the `Event::IncomingCall` variant to hold `Box<IncomingCall>` instead of `IncomingCall` by value — at 432 bytes it was one of the two variants sizing every dispatched `Event`, and the per-dispatch `Arc<Event>` allocation is now 200 bytes smaller (`size_of::<Event>()` dropped from 528 to 328). Field reads and `&call` coercions (as in the examples on this page) are unchanged; a pattern that destructures `IncomingCall { .. }` directly inside the variant must bind the box first or deref it with `&*`.
+[PR #1402](https://github.com/oxidezap/whatsapp-rust/pull/1402) changed the `Event::IncomingCall` variant to hold `Box<IncomingCall>` instead of `IncomingCall` by value. At 432 bytes it was one of the two variants sizing every dispatched `Event`, and the per-dispatch `Arc<Event>` allocation is now 200 bytes smaller (`size_of::<Event>()` dropped from 528 to 328). Field reads and `&call` coercions, as in the examples on this page, are unchanged. A pattern that destructures `IncomingCall { .. }` directly inside the variant must bind the box first or deref it with `&*`.
 </Note>
 
 <Note>

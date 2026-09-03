@@ -544,7 +544,7 @@ Reach for this when you need a deterministic key or want to override sidecar gen
 
 ### Relationship to `encrypt_media`
 
-The in-memory `encrypt_media` function forwards through `encrypt_media_with_key` to `encrypt_media_with_key_and_sidecar`, which drives `MediaEncryptor` directly and sizes the output `Vec` exactly up front via `encrypted_len`:
+When you call `encrypt_media`, it forwards through `encrypt_media_with_key` to `encrypt_media_with_key_and_sidecar`, which drives `MediaEncryptor` directly and sizes the output `Vec` exactly up front via `encrypted_len`:
 
 ```rust
 pub fn encrypt_media_with_key_and_sidecar(
@@ -572,7 +572,7 @@ pub fn encrypt_media_with_key_and_sidecar(
 ```
 
 <Note>
-  `data_to_upload` used to start from `Vec::new()` and grow by doubling, so a 16 MiB video reallocated close to a dozen times on its way to 32 MiB of capacity — copying everything encrypted so far on each grow, and peaking at plaintext + old buffer + new buffer, close to 2x the final ciphertext size. `encrypted_len` (below) gives the exact output size up front, so this path now allocates once.
+  `data_to_upload` used to start from `Vec::new()` and grow by doubling, so a 16 MiB video reallocated close to a dozen times on its way to 32 MiB of capacity — copying everything encrypted so far on each grow, and peaking (plaintext + old buffer + new buffer) near 64 MiB, about 4x the ~16 MiB ciphertext. `encrypted_len` (below) gives the exact output size up front, so this path now allocates once, peaking at plaintext + ciphertext ≈ 32 MiB instead.
 </Note>
 
 ### When to use each API

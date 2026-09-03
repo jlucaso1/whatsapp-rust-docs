@@ -278,7 +278,19 @@ async fn has_same_base_key(
 
 /// Delete a base key entry
 async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()>;
+
+/// Delete base keys recorded before `cutoff_timestamp` (unix seconds).
+/// Returns the count deleted. Defaulted to `Ok(0)` — the keepalive sweep
+/// calls it unconditionally for every backend, so a backend that never
+/// implements it just never prunes.
+async fn delete_expired_base_keys(&self, cutoff_timestamp: i64) -> Result<u32> {
+    // default: Ok(0)
+}
 ```
+
+<Note>
+`delete_expired_base_keys` was added in [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411). A base key is written when a peer's retry #2 arrives and previously had no deletion path for the common case where no retry #3 ever follows — the row stayed for the life of the database. The client now sweeps rows older than one hour on a keepalive tick (see [Retention and periodic maintenance](#retention-and-periodic-maintenance)); the built-in `SqliteStore` and `InMemoryBackend` both implement the sweep, so only a fully custom backend needs to override the default no-op.
+</Note>
 
 ### Device Registry
 
@@ -525,6 +537,30 @@ Best-effort process-local memory this backend attributes to the session. Default
 
 As of [whatsapp-rust#1235](https://github.com/oxidezap/whatsapp-rust/pull/1235), `InMemoryBackend` overrides this default rather than inheriting it. Every byte it holds *is* this process's heap, so unlike a file- or network-backed store it reports an exact figure rather than a cap: `memory_bytes` sums each internal map's table allocation plus the heap its keys and values own (deduplicating the `chat`/`sender` strings shared across a conversation's `messageSecret` rows), and `pages` carries the total row count across all of it. Measured against a counting global allocator, the reported total tracks live heap to within about 1%. If you implement a custom in-process backend (not store- or network-backed), overriding `resource_report()` the same way is worth it for the same reason `SqliteStore` does — otherwise `Client::resource_report()` silently under-counts that session.
 
+As of [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411), `StorageResourceReport` also carries `free_pages: Option<u64>` (pages on the store's free list — SQLite: `freelist_count`) and `wal_bytes: Option<u64>` (the write-ahead log's on-disk size). See [`Client::resource_report()`](/api/client#resource_report) for the full field list.
+
+#### maintenance
+
+```rust
+async fn maintenance(&self) -> Result<()> {
+    Ok(())
+}
+```
+
+Periodic engine upkeep the client calls on a coarse timer (roughly hourly) while connected — statistics refresh, log truncation, whatever a backend needs to stay in shape across a session measured in weeks rather than minutes. Defaulted to a no-op, for the same reason as `resource_report`: most custom backends don't need it. It must be cheap enough to run on a live connection and safe to call when nothing has changed; anything that takes an exclusive lock on the whole database (SQLite's `VACUUM`) belongs in an explicit embedder call instead, not here.
+
+Added in [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411). `SqliteStore`'s implementation runs `PRAGMA analysis_limit = 400` followed by `PRAGMA optimize` (a no-op unless a table changed materially since the last `ANALYZE`), then an opportunistic `PRAGMA wal_checkpoint(TRUNCATE)` — the only checkpoint mode that returns the `-wal` file's blocks to the filesystem. A `TRUNCATE` checkpoint declines rather than blocks when a reader still holds a snapshot, so a skipped truncate is a normal outcome, not a failure.
+
+#### Retention and periodic maintenance
+
+As of [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411), the client drives three cadences off the keepalive tick while a connection stays up, rather than relying on reconnects to reach them:
+
+- **Retention sweeps** (`delete_expired_sent_messages`, `delete_expired_pending_inbound`, `delete_expired_base_keys`, `delete_expired_msg_secrets`) run in one task, sequentially, on every keepalive tick that already drives the cache sweep.
+- **Session maintenance** (~6 hours) — signed pre-key rotation (see [Signed pre-key rotation (RotateKeyJob)](/advanced/signal-protocol#signed-pre-key-rotation-rotatekeyjob)) and tcToken pruning (see [Startup pruning](/api/tctoken#startup-pruning)) — previously ran only from the connect-time background init, so a session held open past their own cadences without a reconnect never reached them.
+- **Engine maintenance** (~1 hour) calls `DeviceStore::maintenance()` above.
+
+All three are best-effort: a failing sweep or pass logs a warning and is retried on the next tick rather than affecting the connection.
+
 ## SqliteStore implementation
 
 The default storage implementation using SQLite with Diesel ORM. SQLite is bundled by default — you don't need it installed on your system.
@@ -630,7 +666,12 @@ PRAGMA synchronous = NORMAL;
 PRAGMA cache_size = 512;
 PRAGMA temp_store = memory;
 PRAGMA foreign_keys = ON;
+PRAGMA journal_size_limit = 33554432; -- 32 MiB, as of whatsapp-rust#1411
 ```
+
+<Note>
+A WAL grows to the largest single transaction ever committed and, with no limit set, stays that size for the life of the file — an auto-checkpoint only resets the WAL, it never shortens it. The history-sync `msg_secrets` seed is exactly that kind of transaction, so a month-long process would otherwise pay its peak size forever. `journal_size_limit` caps it at 32 MiB, well above any ordinary commit here, so it only ever trims the outlier; combined with the opportunistic `wal_checkpoint(TRUNCATE)` in [`DeviceStore::maintenance()`](/api/store#maintenance), the WAL is brought back under the cap on the ~1-hour engine maintenance cadence. Added in [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411).
+</Note>
 
 `SqliteStoreConfig` also exposes an opt-in `mmap_size: Option<u64>` field (default `None`, current behavior — no `PRAGMA mmap_size` emitted). Set it with the builder-style `with_mmap_size(bytes)`:
 

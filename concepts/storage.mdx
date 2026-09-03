@@ -871,6 +871,7 @@ CREATE TABLE sender_key_devices (
     updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     PRIMARY KEY (group_jid, device_jid, device_id)
 );
+CREATE INDEX idx_sender_key_devices_device_jid ON sender_key_devices (device_id, device_jid);
 
 CREATE TABLE lid_pn_mapping (
     lid TEXT NOT NULL,
@@ -890,6 +891,7 @@ CREATE TABLE base_keys (
     created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     PRIMARY KEY (address, message_id, device_id)
 );
+CREATE INDEX idx_base_keys_created ON base_keys (device_id, created_at);
 
 CREATE TABLE device_registry (
     user_id TEXT NOT NULL,
@@ -925,6 +927,8 @@ CREATE INDEX idx_sent_messages_created ON sent_messages (created_at, device_id);
 ```
 
 `identities`, `sessions`, `prekeys`, and `sender_keys` have no standalone index on `device_id` alone. A prior migration added one to each table when multi-account support landed, but every hot query already filters on the full primary key (`address`/`id` plus `device_id`), so that index only ever added a third b-tree write per inserted or deleted row without serving any selective read — `device_id` alone has one distinct value per account. [whatsapp-rust#1395](https://github.com/oxidezap/whatsapp-rust/pull/1395) drops all four (`idx_identities_device_id`, `idx_sessions_device_id`, `idx_prekeys_device_id`, `idx_sender_keys_device_id`); the only `device_id`-alone reads are account teardown, where a table scan is fine.
+
+[whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411) applies the same reasoning to the last five standalone `device_id` indexes (`idx_signed_prekeys_device_id`, `idx_app_state_keys_device_id`, `idx_app_state_versions_device_id`, `idx_app_state_mutation_macs_device_id`, `idx_base_keys_device`) and drops them too — each table is `PRIMARY KEY (..., device_id)` and every query already filters on that key. In their place, two indexes that back real queries: `idx_base_keys_created` (`device_id, created_at`), read by the new [`delete_expired_base_keys`](/api/store#base-key-collision-detection) sweep, and `idx_sender_key_devices_device_jid` (`device_id, device_jid`), which turned a full-table-scan delete on every peer device-removal notification (measured linear in row count — 770 µs at 10k rows, 5.39 ms at 70k) into a sub-25 µs index lookup regardless of table size.
 
 ### Multi-Account Support
 
@@ -1052,6 +1056,24 @@ As of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222),
 | peak heap, 25 stores | 11.47 MiB | 9.69 MiB |
 
 At ~100 sessions the r2d2 thread count drops from ~300 to 2.
+
+**The other profile: one long-lived session, one large database.** Everything above tunes for a host running many sessions, where the defaults are deliberately low-memory. A process that pairs once and stays connected for weeks — a bot — is the opposite shape ([whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411)): there is one store, not fifty, and its database reaches a few hundred MB (`msg_secrets` dominates it; its [`msg_secret_retention`](/api/bot#messagesecret-retention) horizon is what sets the size). Against a file that large, the default 512 KiB page cache is a fraction of a percent, so nearly every b-tree descent is an OS read, and one reader connection means the decrypt path queues behind whatever write is in flight. The default isn't raised for everyone because the many-small-databases case is real and pays for both in memory; name the profile instead:
+
+```rust
+use whatsapp_rust_sqlite_storage::{SqliteStore, SqliteStoreConfig};
+
+let config = SqliteStoreConfig {
+    // A warm cache for a database far larger than the default assumes.
+    cache_size_kib: 16 * 1024,
+    // Two readers, so a session lookup never waits out a write-behind flush.
+    read_pool_size: 2,
+    ..Default::default()
+}
+// Optional: moves reads onto reclaimable file-backed pages.
+.with_mmap_size(256 * 1024 * 1024);
+
+let backend = Arc::new(SqliteStore::with_config("whatsapp.db", config).await?);
+```
 
 ### Sharing one pool across sibling devices
 

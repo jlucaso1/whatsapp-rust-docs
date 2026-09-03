@@ -303,6 +303,13 @@ Trusted contact privacy tokens:
 /// Get a trusted contact token for a JID (stored under LID)
 async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>>;
 
+/// Get the trusted contact tokens for several JIDs at once, in the order
+/// asked, `None` where the backend holds no row. The default loops over
+/// `get_tc_token`; override with a single `WHERE jid IN (...)` query.
+async fn get_tc_tokens(&self, jids: &[String]) -> Result<Vec<Option<TcTokenEntry>>> {
+    // default: one get_tc_token call per JID
+}
+
 /// Store or update a trusted contact token for a JID
 async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()>;
 
@@ -350,6 +357,10 @@ async fn store_received_tc_token(&self, jid: &str, token: &[u8], token_timestamp
     // default: read-modify-write via get_tc_token + put_tc_token, newer-wins
 }
 ```
+
+<Note>
+`get_tc_tokens` was added in [whatsapp-rust#1405](https://github.com/oxidezap/whatsapp-rust/pull/1405) so the reconnect presence re-subscribe (see [Automatic re-subscription on reconnect](/api/presence#automatic-re-subscription-on-reconnect)) can look up a whole batch of tracked contacts' tokens in one backend call instead of one query per contact. It has a defaulted implementation, so existing custom backends compile and behave the same without changes — override it with a `WHERE jid IN (...)` query for the performance win, the same way `SqliteStore` chunks it at 500 entries.
+</Note>
 
 <Note>
 `delete_expired_tc_tokens` gained a second `sender_cutoff` parameter — **this is a breaking change** for any custom backend that overrides it; update the signature to `(&self, token_cutoff: i64, sender_cutoff: i64) -> Result<u32>` and prune on both windows independently (see the built-in `SqliteStore`/`InMemoryBackend` implementations for the two-filter pattern).

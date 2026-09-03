@@ -636,6 +636,31 @@ Bot::builder()
 The push name is included in the `ClientPayload` during registration. This is useful for testing scenarios where the server assigns phone numbers based on push name.
 </Note>
 
+### with_ab_props_fetch
+
+```rust
+pub fn with_ab_props_fetch(self, enabled: bool) -> Self
+```
+
+Whether to fetch the server's A/B props catalog on connect, as WA Web does. On by default.
+
+<ParamField path="enabled" type="bool" required>
+  Whether `fetch_props()` runs on connect. Default: `true`.
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_ab_props_fetch(false) // skip the abt fetch entirely
+    // ...
+```
+
+<Note>
+The catalog is the largest frame of an ordinary login — a few thousand props, ~30 KB compressed — and the client keeps a couple of dozen of them. It's consumed as a stream (see [`Client::execute_streaming`](/api/client#execute_streaming)), so on most hosts it costs nothing worth turning off. Turn it off only if your target's heap can't afford even the compressed frame plus the inflate state (~80 KB together) at the moment it arrives.
+
+Turned off, every flag reads as its registry default — the value WA Web itself uses before its first fetch. The server sees no `abt` request (whatsmeow never sends one) and accepts your client either way. The cost: an account the server has 1:1-LID-migrated is not recognized as such from the props (`lid_one_on_one_migration_enabled` defaults to off), and the privacy-token and trusted-contact-token gates run on their defaults.
+</Note>
+
 ---
 
 ## Authentication

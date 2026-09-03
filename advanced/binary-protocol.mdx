@@ -861,6 +861,44 @@ Unpacking a run of packed values dispatches through a 256-entry byte-pair table 
 
 Location: `wacore/binary/src/decoder.rs:400-450`
 
+### Streaming decode (NodeStream)
+
+The tree decoder above needs every decompressed byte of a node in memory at once, plus one heap object per node and per attribute list. For a response of a few thousand small children — the A/B props catalog `fetch_props` requests is the case that motivated this — that costs an order of magnitude more than the wire bytes. A fixture with 2,660 codes (29,707 B compressed, 61,120 B decompressed) peaked at **~770 KB** decoded as a tree (largest single block 191,520 B), on top of the 47.5 KB inflate state and a second 28 KB copy of the frame that `FrameDecoder::feed` made before `feed_owned` existed. On a target with a few hundred KB of heap total, that node cannot be decoded that way at all.
+
+`NodeStream` (`wacore/binary/src/stream.rs`) decodes the same wire format from a source that produces bytes on demand, so a caller that wants a handful of children out of thousands keeps one child, and one inflate window, alive at a time. On the same fixture, streamed decode peaked at **4,984 B** (largest block 4,096 B) with the thread's inflate state already parked, or **52,536 B** (largest block 47,552 B, the zlib-rs state plus its 32 KB window) when the state had to be built on demand.
+
+The cursor moves through a node the way its bytes are laid out — four operations:
+
+```rust
+impl<'a> NodeStream<'a> {
+    /// Decode the head of the next node (tag, attrs, child count) and descend
+    /// into it. At depth 0 that's the root; inside an open node it's that
+    /// node's next child, which then becomes the open node.
+    pub fn open(&mut self) -> Result<Option<OpenNode<'_>>>;
+
+    /// Decode the open node's next child whole, subtree and all.
+    pub fn next_child(&mut self) -> Result<Option<NodeRef<'_>>>;
+
+    /// Leave the open node, decoding and discarding any children not yet
+    /// read, so the cursor stands at the parent's next child.
+    pub fn close(&mut self) -> Result<()>;
+
+    /// Consume everything after the cursor and check that the bytes end
+    /// where the node does — nothing left over behind the root, and for a
+    /// compressed payload, a properly terminated zlib stream (the trailer's
+    /// checksum is what says every inflated byte was the one the peer sent).
+    pub fn finish(&mut self) -> Result<()>;
+}
+```
+
+`open` returns an `OpenNode<'b>` borrowing the stream's buffer — `tag`, `attrs`, and `content` (an `OpenContent` telling you whether what follows is children, bytes, or a string) — valid until the stream's next call. `next_child` returns a full `NodeRef<'_>`, the same borrowed type the tree decoder produces for one node, so a spec that wants a child intact doesn't need a second parsing path for it.
+
+The inflate window behind a compressed stream is 4 KB (`FRAME_INFLATE_CHUNK`) — sized for the sub-100-byte children a props response is made of — and only grows to fit a child larger than that.
+
+A spec opts into this by implementing `IqStreamSpec` (`wacore::iq::spec`) alongside `IqSpec` and calling it through [`Client::execute_streaming`](/api/client#execute_streaming) instead of `execute`. `PropsSpec::retaining(codes)` (`wacore/src/iq/props.rs`) is the reference implementation: it opens the `<props>` child, walks `next_child` filtering by config code, and closes — the response never exists in memory as more than one `<prop>` at a time plus what it keeps. `IqSpec::parse_response` keeps working for the same spec and agrees with the streamed reading; it's still the path taken for an error response or a session with a raw-node observer attached, both of which need the tree held whole anyway.
+
+Location: `wacore/binary/src/stream.rs`
+
 ## Performance Optimizations
 
 ### Token interning with Cow

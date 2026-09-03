@@ -651,10 +651,10 @@ Location: `wacore/src/framing/mod.rs:10-30`
 
 ### Frame Decoder
 
-`FrameDecoder` (in `wacore/noise/src/framing.rs`) keeps one long-lived accumulation `BytesMut` and splits complete frames out of it — the shape `tokio_util::codec::Decoder` uses. Every inbound read goes through a single `feed(&[u8])`; there is no owned/borrowed split.
+`FrameDecoder` (in `wacore/noise/src/framing.rs`) keeps one long-lived accumulation `BytesMut` and splits complete frames out of it — the shape `tokio_util::codec::Decoder` uses. Most inbound reads go through the copying `feed(&[u8])`; `feed_owned(Bytes)` is the owned counterpart a caller reaches for when the read is its own uniquely-owned buffer — see below for when each fires.
 
 ```rust
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 
 const CHUNK_SIZE: usize = 1024;
 const MAX_IDLE_CAPACITY: usize = 64 * 1024;
@@ -677,6 +677,24 @@ impl FrameDecoder {
     pub fn feed(&mut self, data: &[u8]) {
         self.reserve_for(data.len());
         self.buffer.extend_from_slice(data);
+    }
+
+    /// Adopts a uniquely-owned transport read instead of copying it, when the
+    /// accumulation buffer is empty and the read is at least a chunk long.
+    /// Falls back to `feed` (copy) for a shared read, a read under a chunk,
+    /// or one that lands mid-frame.
+    pub fn feed_owned(&mut self, data: Bytes) {
+        if self.buffer.is_empty() && data.len() >= CHUNK_SIZE {
+            match data.try_into_mut() {
+                Ok(owned) => {
+                    self.grew_oversized |= owned.capacity() > MAX_IDLE_CAPACITY;
+                    self.buffer = owned;
+                }
+                Err(shared) => self.feed(&shared),
+            }
+        } else {
+            self.feed(&data);
+        }
     }
 
     fn reserve_for(&mut self, incoming: usize) {
@@ -726,7 +744,9 @@ Location: `wacore/noise/src/framing.rs`
 
 **Why an accumulation buffer instead of adopting each payload.** An earlier version had `feed_bytes(Bytes)`, an owned path meant to adopt the transport's payload allocation zero-copy. It used `Bytes::try_into_mut` to check whether the decoder's buffer was empty and the payload had no other references. In practice that fast path never fired. `tokio-websockets` builds every payload via `BytesMut::split_to` on its own read buffer, which leaves the payload sharing storage with that read buffer. A shared payload always fails the `try_into_mut` uniqueness check, so it fell back to copying anyway. The steady-state branch made this worse: it also donated the decoder's whole buffer downstream via `mem::take`, forcing a fresh allocation on the very next read.
 
-`feed_bytes` was removed rather than fixed. The accumulation-buffer design amortizes the buffer's allocation over every frame that fits in a `CHUNK_SIZE` (1 KiB) chunk, instead of allocating per read. A buffer produced by `split_to` already uses shared, reference-counted storage, so `BytesMut::freeze()` further down the receive path (in-place AEAD decryption) becomes a pointer move rather than a fresh allocation. `MAX_IDLE_CAPACITY` (64 KiB) bounds how much capacity a drained buffer is allowed to keep. `MAX_EAGER_RESERVE` (64 KiB) caps how far the decoder will grow ahead of an announced-but-not-yet-received frame. This cap matters because the 3-byte length prefix is only the peer's claim, not evidence of data actually sent — without it, a hostile peer could pin an arbitrary allocation by announcing a large frame and sending almost none of it.
+`feed_bytes` was removed rather than fixed at the time. `feed_owned` (above) is its replacement: it checks `try_into_mut` per read rather than assuming the fast path fires, and it only takes it when the read is both uniquely owned *and* at least `CHUNK_SIZE` long — a short or shared read still copies through `feed`. The distinction that makes this worth having again is the source of the `Bytes`, not the check itself: the transports this library ships (Tokio's `tokio-websockets`, and the ESP32 transport) each deliver one WebSocket message as its own standalone `Bytes` — `Bytes::from(msg.into_payload())`, not a view split off a shared read buffer — so a message at least a chunk long adopts cleanly. Copying it first would have meant two copies of the largest frame of a connection alive at once, which on a 400 KB microcontroller is the difference between decoding a 28 KB props response and aborting on it.
+
+The accumulation buffer itself, and `feed`'s copy into it, still exist and are still the common path: `feed_owned` only replaces the copy for a read that both qualifies and arrives while the buffer is empty (not mid-frame). The accumulation-buffer design amortizes the buffer's allocation over every frame that fits in a `CHUNK_SIZE` (1 KiB) chunk, instead of allocating per read. A buffer produced by `split_to`, or adopted by `feed_owned`, already uses reference-counted storage, so `BytesMut::freeze()` further down the receive path (in-place AEAD decryption) becomes a pointer move rather than a fresh allocation. `MAX_IDLE_CAPACITY` (64 KiB) bounds how much capacity a drained buffer is allowed to keep. `MAX_EAGER_RESERVE` (64 KiB) caps how far the decoder will grow ahead of an announced-but-not-yet-received frame. This cap matters because the 3-byte length prefix is only the peer's claim, not evidence of data actually sent — without it, a hostile peer could pin an arbitrary allocation by announcing a large frame and sending almost none of it.
 
 ## Transport Abstraction
 
@@ -854,12 +874,12 @@ async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
                     Ok(TransportEvent::DataReceived(data)) => {
                         // Update dead-socket timer on arrival
                         self.last_data_received.store(Instant::now());
-                        // Dropped before any await below: `data` is a view into the
-                        // websocket's shared read buffer, so holding it while a node
-                        // is processed would keep that allocation alive alongside
-                        // the decoder's own copy of the same bytes.
-                        frame_decoder.feed(&data);
-                        drop(data);
+                        // Consumed here, before any await below: a read the
+                        // transport still shares is copied and released, so the
+                        // node processed further down never keeps a second copy
+                        // of its bytes alive; a read the transport handed over
+                        // outright is adopted without either.
+                        frame_decoder.feed_owned(data);
 
                         let mut frames_in_batch: u32 = 0;
                         while let Some(encrypted_frame) = frame_decoder.decode_frame() {
@@ -1273,18 +1293,17 @@ marshal_to_vec(&node, &mut buf)?;
 socket.send(buf).await?;
 ```
 
-**Receive path** — every inbound payload is copied once into `FrameDecoder`'s accumulation buffer, but that buffer's allocation is amortized over every frame that fits in a chunk rather than paid per read:
+**Receive path** — a read the transport still shares with its own buffer is copied once into `FrameDecoder`'s accumulation buffer, amortized over every frame that fits in a chunk; a uniquely-owned `Bytes` read of at least `CHUNK_SIZE` is adopted instead, when the accumulation buffer is empty:
 
 ```rust
-frame_decoder.feed(&data);
-drop(data); // release the transport's view before any await below
+frame_decoder.feed_owned(data); // copies shared, short, or mid-frame reads
 
-// Each frame is split out of the shared accumulation buffer, so the
+// Each frame is split out of the accumulation (or adopted) buffer, so the
 // downstream freeze() is a pointer move rather than a fresh allocation.
 while let Some(frame) = frame_decoder.decode_frame() { /* ... */ }
 ```
 
-See [Frame Decoder](#frame-decoder) for why this amortized-allocation design replaced an earlier per-payload zero-copy adoption path (`feed_bytes`) that never actually avoided a copy in practice.
+See [Frame Decoder](#frame-decoder) for `feed` vs. `feed_owned`, and for why an earlier per-payload zero-copy attempt (`feed_bytes`) never actually avoided a copy until this one.
 
 ## Testing
 

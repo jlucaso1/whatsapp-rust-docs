@@ -861,9 +861,9 @@ Unpacking a run of packed values dispatches through a 256-entry byte-pair table 
 
 Location: `wacore/binary/src/decoder.rs:400-450`
 
-### Streaming Decode (NodeStream)
+### Streaming decode (NodeStream)
 
-The tree decoder above needs every decompressed byte of a node in memory at once, plus one heap object per node and per attribute list. For a response of a few thousand small children — the A/B props catalog `fetch_props` requests is the case that motivated this — that costs an order of magnitude more than the wire bytes: a fixture with 2,660 codes (29,707 B compressed, 61,120 B decompressed) peaked at **~770 KB** decoded as a tree (largest single block 191,520 B), on top of the 47.5 KB inflate state and a second 28 KB copy of the frame `FrameDecoder::feed` made before `feed_owned` existed. On a target with a few hundred KB of heap total, that node cannot be decoded that way at all.
+The tree decoder above needs every decompressed byte of a node in memory at once, plus one heap object per node and per attribute list. For a response of a few thousand small children — the A/B props catalog `fetch_props` requests is the case that motivated this — that costs an order of magnitude more than the wire bytes. A fixture with 2,660 codes (29,707 B compressed, 61,120 B decompressed) peaked at **~770 KB** decoded as a tree (largest single block 191,520 B), on top of the 47.5 KB inflate state and a second 28 KB copy of the frame that `FrameDecoder::feed` made before `feed_owned` existed. On a target with a few hundred KB of heap total, that node cannot be decoded that way at all.
 
 `NodeStream` (`wacore/binary/src/stream.rs`) decodes the same wire format from a source that produces bytes on demand, so a caller that wants a handful of children out of thousands keeps one child, and one inflate window, alive at a time. On the same fixture, streamed decode peaked at **4,984 B** (largest block 4,096 B) with the thread's inflate state already parked, or **52,536 B** (largest block 47,552 B, the zlib-rs state plus its 32 KB window) when the state had to be built on demand.
 

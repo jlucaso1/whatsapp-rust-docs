@@ -1293,10 +1293,10 @@ marshal_to_vec(&node, &mut buf)?;
 socket.send(buf).await?;
 ```
 
-**Receive path** — a read the transport still shares with its own buffer is copied once into `FrameDecoder`'s accumulation buffer, amortized over every frame that fits in a chunk; a read the transport hands over as its own uniquely-owned `Bytes` is adopted instead:
+**Receive path** — a read the transport still shares with its own buffer is copied once into `FrameDecoder`'s accumulation buffer, amortized over every frame that fits in a chunk; a uniquely-owned `Bytes` read of at least `CHUNK_SIZE` is adopted instead, when the accumulation buffer is empty:
 
 ```rust
-frame_decoder.feed_owned(data); // copies only if data isn't uniquely owned
+frame_decoder.feed_owned(data); // copies shared, short, or mid-frame reads
 
 // Each frame is split out of the accumulation (or adopted) buffer, so the
 // downstream freeze() is a pointer move rather than a fresh allocation.

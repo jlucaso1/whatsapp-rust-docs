@@ -183,9 +183,10 @@ async fn get_mutation_macs(
 async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
 
 /// Persist one applied patch — its new version, the index MACs it removed,
-/// and the MACs it added — as a unit. The default runs `set_version`, then
-/// `delete_mutation_macs`, then `put_mutation_macs`, so a backend without
-/// transactions keeps its current behavior unchanged.
+/// and the MACs it added — as a unit. Use the default if your backend has no
+/// transactions: it runs `set_version`, then `delete_mutation_macs`, then
+/// `put_mutation_macs`, so your current behavior stays unchanged. Override it
+/// with a single transaction otherwise.
 async fn commit_patch(
     &self,
     name: &str,
@@ -202,7 +203,7 @@ An index MAC is always a full HMAC-SHA256 output, so this method's signature use
 </Note>
 
 <Note>
-`commit_patch` was added in [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401) so the app-state sync loop can persist a patch's version and MAC changes in one backend call instead of three; it replaces the sync loop's previous sequence of a `set_version` call followed by conditional `delete_mutation_macs`/`put_mutation_macs` calls. It has a default implementation equivalent to that sequence, so existing custom backends compile and behave the same without changes. Override it with a single transaction if your backend supports them (the SQLite store does) — a paged incremental sync commits hundreds of small patches, and each of the three separate writes previously paid its own connection permit and commit. A transactional override is also strictly safer: the new version can no longer land without the MACs it pairs with.
+`commit_patch` was added in [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401) so the app-state sync loop can persist a patch's version and MAC changes in one backend call instead of three, replacing the sync loop's previous sequence of a `set_version` call followed by conditional `delete_mutation_macs`/`put_mutation_macs` calls. Its default implementation matches that sequence, so your existing custom backend compiles and behaves the same without changes. Override it with a single transaction if your backend supports them (the SQLite store does): a paged incremental sync commits hundreds of small patches, and each of the three separate writes previously paid its own connection permit and commit. A transactional override is also strictly safer for you: the new version can no longer land without the MACs it pairs with.
 </Note>
 
 ## ProtocolStore Trait

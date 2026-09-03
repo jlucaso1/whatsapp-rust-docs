@@ -939,7 +939,7 @@ Each session owns its own `SqliteStore`, so the store's fixed costs (thread-pool
 | Setting | Default | Notes |
 |---------|---------|-------|
 | `pool_size` | `1` | Connections available to the write path (`run`); the store serializes them via its internal semaphore. Not the store's total concurrency once `read_pool_size` is nonzero — see below |
-| `read_pool_size` | `1` | Extra connections reserved for reads only, on top of `pool_size`; set to `0` to queue reads on the write path's permit instead (the default before [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401)) |
+| `read_pool_size` | `1` | Extra connections reserved for reads only, on top of `pool_size`; set to `0` to queue reads on the write path's permit instead (the default before [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401)). Only takes effect on a WAL connection — on a non-WAL connection your reads always queue on `pool_size` regardless of this setting |
 | `cache_size_kib` | `512` | Per-connection page cache (~512 KiB) |
 | `busy_timeout` | `30 s` | SQLite busy-timeout |
 | `synchronous` | `NORMAL` | WAL-safe durability |
@@ -961,15 +961,17 @@ pub struct SqliteStoreConfig {
     /// safe because WAL readers never contend for the write lock.
     pub pool_size: u32,
     /// Extra connections reserved for read-only work, each free to run while a
-    /// write holds the write permit. The default is `1`: without a dedicated
-    /// reader, a read queues behind whatever the write permit is doing —
-    /// measured at p50 7.2 ms / p99 22.8 ms during a write-behind flush,
-    /// against 0.17 ms / 4.0 ms with one reader. `0` puts every operation
-    /// back on the single queue, exactly as before this knob existed.
+    /// write holds the write permit. Defaults to `1`. Without a dedicated
+    /// reader, your reads queue behind whatever the write permit is doing —
+    /// we measured p50 7.2 ms / p99 22.8 ms during a write-behind flush at
+    /// `0`, against 0.17 ms / 4.0 ms with one reader. Set it to `0` to put
+    /// every operation back on the single queue, exactly as before this knob
+    /// existed. This only helps on a WAL connection; on a non-WAL connection
+    /// your reads queue on `pool_size` regardless of this setting.
     ///
-    /// Costs one connection's page cache (`cache_size_kib`) each, which is
-    /// the reason to set it to `0` in a process holding many per-session
-    /// stores that read rarely.
+    /// Each reader costs one connection's page cache (`cache_size_kib`), so
+    /// set this to `0` if you're holding many per-session stores that read
+    /// rarely.
     pub read_pool_size: u32,
     /// Per-connection SQLite page cache in KiB.
     pub cache_size_kib: u32,
@@ -1017,7 +1019,7 @@ let backend = Arc::new(
 ```
 
 <Note>
-`SqliteStore::new` and `SqliteStore::new_for_device` are unchanged — they delegate to `SqliteStoreConfig::default()` internally. Raising `pool_size` above `1` makes *writes* concurrent, which SQLite does not want — two deferred transactions that both read and then write deadlock on the upgrade, and `busy_timeout` cannot break it. `read_pool_size` (set via the `with_read_pool_size` builder, or the struct field directly) is the knob for concurrency instead: it reserves connections purely for reads, which WAL lets run alongside a pending write without contending for the write lock. The default is `1` reader as of [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401) — a `get_session` read during a write-behind flush measured p50 7.2 ms / p99 22.8 ms at `read_pool_size: 0` against 0.17 ms / 4.0 ms with one reader. Set it to `0` to fall back to the pre-#1401 behavior, queuing reads on the same permit as writes; a process holding many per-session stores that read rarely can still choose that to save the reader's page cache.
+`SqliteStore::new` and `SqliteStore::new_for_device` are unchanged — they delegate to `SqliteStoreConfig::default()` internally. Keep `pool_size` at `1`: raising it above `1` makes *writes* concurrent, which SQLite does not want — two deferred transactions that both read and then write deadlock on the upgrade, and `busy_timeout` cannot break it. Reach for `read_pool_size` (set via the `with_read_pool_size` builder, or the struct field directly) instead — that's your knob for concurrency: it reserves connections purely for reads, which WAL lets run alongside a pending write without contending for the write lock (on a non-WAL connection your reads queue on `pool_size` regardless of this setting). The default became `1` reader as of [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401) — a `get_session` read during a write-behind flush measured p50 7.2 ms / p99 22.8 ms at `read_pool_size: 0` against 0.17 ms / 4.0 ms with one reader. Set it to `0` to fall back to the pre-#1401 behavior, queuing your reads on the same permit as writes; do this if you're holding many per-session stores that read rarely, to save the reader's page cache.
 </Note>
 
 <Note>

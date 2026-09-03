@@ -1236,7 +1236,7 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 </Note>
 
 <Note>
-`device_registry_cache`'s default rose from 5,000 to 20,000 in [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400). At 5,000, an account active in a few dozen mid-sized groups could hold more distinct contacts than the cache, so every group-devices memo recompute paid a backend read per evicted member. The cache only ever holds what has been resolved, so a small account pays nothing for the higher ceiling.
+`device_registry_cache`'s default rose from 5,000 to 20,000 in [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400). At 5,000, if your account was active in a few dozen mid-sized groups, it could hold more distinct contacts than the cache, so every group-devices memo recompute paid a backend read per evicted member. The cache only ever holds what has been resolved, so you pay nothing for the higher ceiling if your account stays small.
 </Note>
 
 #### Coordination caches (capacity-only, no TTL)
@@ -1246,7 +1246,7 @@ The `recent_messages` cache is disabled by default (capacity 0), meaning sent me
 | `session_locks_capacity` | 10,000 | Per-device Signal session lock capacity. Soft cap: a lock a task is actively holding is never evicted, so the map can briefly exceed this under heavy concurrent fan-out (bounded by the number of concurrently-held locks) rather than evicting a live lock and letting two writers race the same session |
 | `chat_lanes_capacity` | 5,000 | Per-chat lane capacity: number of cached lanes, each an enqueue lock paired with an **unbounded** message queue (there is no per-lane message cap). Soft cap: a lane with an in-flight message is never evicted, so the map can briefly exceed this under a backlog spread across many active chats, rather than evicting a live lane and letting a second worker start on the same chat. Independently of this capacity, a lane's worker exits on its own after 60s without a new message, so an idle chat doesn't hold its worker's memory for the life of the connection — see [Concurrency Patterns — Per-Chat Lanes](/concepts/architecture#per-chat-lanes) |
 | `group_distribution_locks_capacity` | 512 | Per-group sender-key distribution lane capacity. Soft cap: a live lane (held by an in-flight SKDM fan-out, rotation, or tracker reset) is never evicted, so the map can briefly exceed this under concurrent fan-out rather than breaking tracker ordering |
-| `group_devices_memo_capacity` | 512 | Per-group resolved-device memo capacity: the device list a group send fans out to plus its member index. Also bounds the SKDM warm-target memo, which is keyed the same way. Eviction is least-recently-used, so an account active in more groups than this re-resolves only its least active ones; below it, a warm send never re-resolves. See [`Client::device_memo_stats()`](/api/client#device_memo_stats) |
+| `group_devices_memo_capacity` | 512 | Per-group resolved-device memo capacity: the device list a group send fans out to plus its member index. Also bounds the SKDM warm-target memo, which is keyed the same way. Eviction is least-recently-used: if your account is active in more groups than this, it re-resolves only its least active ones. Below the limit, a warm send avoids re-resolution as long as its memo entry stays valid — see `miss_group_info` / `miss_topology` in [`GroupDevicesMemoStats`](/api/client#device_memo_stats) for the cases where it doesn't |
 | `dm_devices_memo_capacity` | 512 | Per-1:1-chat resolved-device memo capacity, same least-recently-used eviction policy |
 
 <Note>
@@ -1254,7 +1254,7 @@ The lane's live entry count plus cumulative capacity evictions and blocked evict
 </Note>
 
 <Note>
-`group_devices_memo_capacity` and `dm_devices_memo_capacity` replaced two private, fixed constants in [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400) and gained least-recently-used eviction in the same change (previously oldest-first). The prior fixed bound was 64 groups: an account active in more than 64 groups had a memo hit rate of exactly zero, since every group's entry was evicted before it could be reused. At the new default of 512, an account rotating across 256 groups of 64 members each goes from a 33ms cold-resolve pass to a 33µs warm one.
+`group_devices_memo_capacity` and `dm_devices_memo_capacity` replaced two private, fixed constants in [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400) and gained least-recently-used eviction in the same change (previously oldest-first). The prior fixed bound was 64 groups: if you rotate sends across more than 64 groups, oldest-first eviction guaranteed the entry for the group you were about to resolve had already been evicted by the intervening sends, for a hit rate of exactly zero. At the new default of 512, the `client_group_scale` bench's warm-resolve pass over 256 groups of 64 members each (one send per group, cycling through all of them) goes from a 33.4 ms median — every group missing and re-resolving from scratch, at the old 64-group bound — to 33.0 µs — every group hitting, at the new 512 bound.
 </Note>
 
 #### Sent message DB cleanup

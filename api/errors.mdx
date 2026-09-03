@@ -1029,3 +1029,29 @@ match client.send_message(to.clone(), message).await {
 Separately, a DM phash mismatch (see [Phash validation](/advanced/signal-protocol#phash-validation-for-stale-device-list-detection)) now re-resolves the peer's device list and resends the message, under the original message id, to any device that list holds and the original stanza did not cover. Previously a mismatch only invalidated caches. This has no `SendError`/`SendResult` shape to match on — it runs after the original `send_message` call has already returned. Each newly discovered device receives the message for the first time; a device the original stanza already covered is left untouched, so this never delivers a duplicate to the same device.
 
 Both new variants are additive at the type level: `SendError` and `SendResult` are `#[non_exhaustive]`, so a `match` or destructuring pattern written against the old shape still compiles. `recipient_fanout` is purely additive at runtime too — ignoring it changes nothing. `PrimaryDeviceRejected` is not: a caller whose `match` ends in a catch-all `Err` arm still compiles and still runs, but a named-primary `406` now takes that arm instead of the `Ok` path it took before, so this is a real behavior change for that one case, just not a breaking one.
+
+### From PR #1406: edit, revoke, and pin now return the `SendResult` they built
+
+[#1406](https://github.com/oxidezap/whatsapp-rust/pull/1406) is a real breaking change, not an additive one — it changes the `Ok` type of six methods so a caller that shares one `Client` between several consumers can see what a self-built send (an edit, a revoke, a pin, a poll) actually put in the chat. WhatsApp echoes a send to every device on the account except the one that sent it, so without this a consumer other than the sender had nothing to show for those sends but an id.
+
+`SendResult` gains `message: Arc<wa::Message>` (see [`SendResult`](/api/send#sendresult)) — the message exactly as the send pipeline encoded it. `edit_message`, `edit_message_with_options`, and `edit_message_encrypted` now return `SendResult` instead of `String`; `revoke_message`, `pin_message`, and `unpin_message` now return `SendResult` instead of `()`. `MessageContext::edit_message` and `MessageContext::revoke_message` follow the same change.
+
+```rust
+// Before
+let edit_id: String = client.edit_message(&chat_jid, &original_id, new_content).await?;
+client.revoke_message(&chat_jid, &message_id, RevokeType::Sender).await?;
+client.pin_message(chat_jid.clone(), key.clone(), PinDuration::Days7).await?;
+
+// After — the id moves onto `message_id`, and `message` is what this crate built
+let edit = client.edit_message(&chat_jid, &original_id, new_content).await?;
+let edit_id: &str = &edit.message_id;
+
+let revoke = client.revoke_message(&chat_jid, &message_id, RevokeType::Sender).await?;
+let pin = client.pin_message(chat_jid.clone(), key.clone(), PinDuration::Days7).await?;
+```
+
+A call site that used `?` without binding the `Ok` value (`client.revoke_message(...).await?;`) compiles unchanged — only code that named the previous `String` or `()` result needs to change. `SendResult` losing its `Eq` derive (`wa::Message` carries floats; `PartialEq` and `Clone` are unaffected) only matters to code that put a `SendResult` in a `HashSet`/`BTreeSet` key position or otherwise required `Eq`.
+
+Separately, `wacore::proto_helpers::MessageExt::prepare_for_forward` now returns `wa::Message` by value instead of `Box<wa::Message>` — see the [forwarding-preparation note](/guides/sending-messages#preparing-messages-for-forwarding). `prepare_for_quote` is unchanged.
+
+Newsletter `edit_message`/`revoke_message` (`client.newsletter().edit_message(...)`) are untouched and still return `()`: the plaintext channel path sends a node under the target's own id with the caller's body, so there is neither a fresh id nor a built message to report.

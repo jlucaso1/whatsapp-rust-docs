@@ -40,7 +40,7 @@ pub async fn send_message(
 </ParamField>
 
 <ResponseField name="SendResult" type="SendResult">
-  Contains the `message_id` (unique ID for tracking receipts, edits, revokes), `to` (resolved recipient JID), and — for a DM — `recipient_fanout` (see [`RecipientFanout`](#recipientfanout) below). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
+  Contains the `message_id` (unique ID for tracking receipts, edits, revokes), `to` (resolved recipient JID), `message` (the `wa::Message` this send encoded — see below), and — for a DM — `recipient_fanout` (see [`RecipientFanout`](#recipientfanout) below). Use `send_result.message_key()` to get a `wa::MessageKey` for album child linking, pinning, or other operations that reference this message.
 </ResponseField>
 
 <Note>
@@ -49,14 +49,15 @@ The outbound Signal ratchet advance is persisted through a batched counter lease
 
 ### SendResult
 
-Result of a successfully sent message. Provides the message ID and a convenience method to construct a `MessageKey` for follow-up operations like album child linking.
+Result of a successfully sent message. Provides the message ID, the encoded message itself, and a convenience method to construct a `MessageKey` for follow-up operations like album child linking.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SendResult {
     pub message_id: String,
     pub to: Jid,
+    pub message: std::sync::Arc<wa::Message>,
     pub recipient_fanout: Option<RecipientFanout>,
 }
 
@@ -68,6 +69,14 @@ impl SendResult {
 ```
 
 `SendResult` is `#[non_exhaustive]`: struct-literal construction and exhaustive struct destructuring from outside the crate are both disallowed. Field reads are unaffected; add `..` to any exhaustive destructuring patterns.
+
+<Note>
+Added in [#1406](https://github.com/oxidezap/whatsapp-rust/pull/1406): `message` is the `wa::Message` exactly as the send pipeline handed it to the encoder — the caller's content plus whatever the send applied on its behalf (`SendOptions::ephemeral_expiration`, forward preparation), and, for an edit, a revoke, a pin, a poll, or a status, the whole protocol message this crate built. A host sharing one `Client` between several consumers needs this: WhatsApp echoes a send to every other device on the account, so the sending consumer is the one place that echo never reaches, and this field is that consumer's own copy of what went out.
+
+It is **not** a copy of the wire plaintext. When the message carries no `message_context_info` of its own, the plaintext the recipient decrypts additionally carries the reporting-token context (a `message_secret` and its version) the send pipeline splices on, and the own-device copy is wrapped in a `DeviceSentMessage` — both are delivery metadata, not content, and reconstructing them here would cost decoding the plaintext just encoded. A caller that needs the exact wire form reads it from the echo the account's other devices receive.
+
+`message` is an `Arc` rather than an owned value, so cloning a `SendResult` — including for a multi-consumer host — is a refcount bump, not a copy of the message. This also dropped `SendResult`'s `Eq` derive (`wa::Message` carries floating-point fields); `PartialEq` and `Clone` are unaffected.
+</Note>
 
 ### RecipientFanout
 
@@ -445,7 +454,7 @@ pub async fn edit_message(
     to: impl Into<Jid>,
     original_id: impl Into<String>,
     new_content: wa::Message,
-) -> Result<String, SendError>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -460,8 +469,8 @@ pub async fn edit_message(
   New message content to replace the original
 </ParamField>
 
-<ResponseField name="message_id" type="String">
-  Message ID of the edit message
+<ResponseField name="SendResult" type="SendResult">
+  `message_id` is the edit stanza's own fresh id — never `original_id`, which the server would deduplicate against the original message and drop. `message` is the `protocolMessage` this crate built around `new_content`, keyed by `original_id`. See [`SendResult`](#sendresult).
 </ResponseField>
 
 ### Example: Edit a message
@@ -479,7 +488,7 @@ let result = client.send_message(
 ).await?;
 
 // Edit it
-let edit_id = client.edit_message(
+let edit = client.edit_message(
     &chat_jid,
     &result.message_id,
     wa::Message {
@@ -506,7 +515,7 @@ pub async fn edit_message_with_options(
     original_id: impl Into<String>,
     new_content: wa::Message,
     options: EditOptions,
-) -> Result<String, SendError>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -525,8 +534,8 @@ pub async fn edit_message_with_options(
   Edit options (see below)
 </ParamField>
 
-<ResponseField name="message_id" type="String">
-  Message ID of the edit message
+<ResponseField name="SendResult" type="SendResult">
+  Same shape as [`edit_message`](#edit_message), except `message_id` is the borrowed `stanza_id` when one was set, instead of a fresh id. See [`SendResult`](#sendresult).
 </ResponseField>
 
 ### EditOptions
@@ -561,7 +570,7 @@ pub struct EditOptions {
 use waproto::whatsapp as wa;
 use whatsapp_rust::send::EditOptions;
 
-let edit_id = client.edit_message_with_options(
+let edit = client.edit_message_with_options(
     &chat_jid,
     &original_id,
     wa::Message {
@@ -571,7 +580,7 @@ let edit_id = client.edit_message_with_options(
     EditOptions::default().with_stanza_id(existing_message_id.clone()),
 ).await?;
 
-assert_eq!(edit_id, existing_message_id);
+assert_eq!(edit.message_id, existing_message_id);
 ```
 
 <Note>
@@ -591,7 +600,7 @@ pub async fn edit_message_encrypted(
     original_id: impl Into<String>,
     message_secret: &[u8],
     new_content: wa::Message,
-) -> Result<String, SendError>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -610,8 +619,8 @@ pub async fn edit_message_encrypted(
   Replacement message content.
 </ParamField>
 
-<ResponseField name="message_id" type="String">
-  Message ID of the edit message.
+<ResponseField name="SendResult" type="SendResult">
+  `message_id` is the edit stanza's own fresh id. `message` is the `secretEncryptedMessage` envelope — `new_content` is not readable from it, since it is encrypted under `message_secret`. See [`SendResult`](#sendresult).
 </ResponseField>
 
 ### Example: encrypted edit
@@ -619,7 +628,7 @@ pub async fn edit_message_encrypted(
 ```rust
 use waproto::whatsapp as wa;
 
-let edit_id = client.edit_message_encrypted(
+let edit = client.edit_message_encrypted(
     &chat_jid,
     &original_id,
     &message_secret,
@@ -648,7 +657,7 @@ pub async fn revoke_message(
     to: impl Into<Jid>,
     message_id: impl Into<String>,
     revoke_type: RevokeType,
-) -> Result<(), SendError>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="to" type="impl Into<Jid>" required>
@@ -664,6 +673,10 @@ pub async fn revoke_message(
   - `RevokeType::Sender` - Delete your own message
   - `RevokeType::Admin { original_sender }` - Admin deleting another user's message in a group
 </ParamField>
+
+<ResponseField name="SendResult" type="SendResult">
+  `message_id` is the revoke stanza's own fresh id. `message` is the `protocolMessage` it carried, keyed by `message_id` (the message being deleted). See [`SendResult`](#sendresult).
+</ResponseField>
 
 ### RevokeType
 
@@ -746,7 +759,7 @@ pub async fn pin_message(
     chat: impl Into<Jid>,
     key: wa::MessageKey,
     duration: PinDuration,
-) -> Result<(), SendError>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="chat" type="impl Into<Jid>" required>
@@ -760,6 +773,10 @@ pub async fn pin_message(
 <ParamField path="duration" type="PinDuration" required>
   How long the message should remain pinned (see below)
 </ParamField>
+
+<ResponseField name="SendResult" type="SendResult">
+  `message_id` is the pin stanza's own fresh id. `message` is the `pinInChatMessage` that was sent. See [`SendResult`](#sendresult).
+</ResponseField>
 
 ### PinDuration
 
@@ -831,7 +848,7 @@ pub async fn unpin_message(
     &self,
     chat: impl Into<Jid>,
     key: wa::MessageKey,
-) -> Result<(), SendError>
+) -> Result<SendResult, SendError>
 ```
 
 <ParamField path="chat" type="impl Into<Jid>" required>
@@ -841,6 +858,10 @@ pub async fn unpin_message(
 <ParamField path="key" type="wa::MessageKey" required>
   The message key identifying which message to unpin
 </ParamField>
+
+<ResponseField name="SendResult" type="SendResult">
+  Same shape as [`pin_message`](#pin_message): the unpin's own fresh `message_id` and the `pinInChatMessage` it sent. See [`SendResult`](#sendresult).
+</ResponseField>
 
 ### Example: Unpin a message
 

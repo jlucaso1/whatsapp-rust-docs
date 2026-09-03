@@ -723,10 +723,10 @@ pub async fn edit_message(
     to: Jid,
     original_id: impl Into<String>,
     new_content: wa::Message
-) -> Result<String, SendError>
+) -> Result<SendResult, SendError>
 ```
 
-Edits a previously sent message.
+Edits a previously sent message. `SendResult::message_id` is the edit's own fresh id, and `message` the `protocolMessage` this crate built. See [Send API reference](/api/send#edit_message).
 
 <ParamField path="original_id" type="String" required>
   ID of the message to edit
@@ -745,7 +745,7 @@ pub async fn edit_message_with_options(
     original_id: impl Into<String>,
     new_content: wa::Message,
     options: EditOptions
-) -> Result<String, SendError>
+) -> Result<SendResult, SendError>
 ```
 
 Edit-path counterpart of `send_message_with_options`. Accepts an [`EditOptions`](/api/send#editoptions) (built via `EditOptions::default().with_stanza_id(id)`) to pin the outer stanza id to an existing message's id (best-effort — server/client dependent) instead of the fresh id `edit_message` generates.
@@ -760,10 +760,10 @@ pub async fn revoke_message(
     to: Jid,
     message_id: impl Into<String>,
     revoke_type: RevokeType
-) -> Result<(), SendError>
+) -> Result<SendResult, SendError>
 ```
 
-Deletes a message. Use `Sender` to revoke your own message, or `Admin` to revoke another user's message as group admin.
+Deletes a message. Use `Sender` to revoke your own message, or `Admin` to revoke another user's message as group admin. `SendResult::message_id` is the revoke's own fresh id, and `message` the `protocolMessage` it carried. See [Send API reference](/api/send#revoke_message).
 
 <ParamField path="revoke_type" type="RevokeType" required>
   `RevokeType::Sender` (delete your own message) or `RevokeType::Admin { original_sender: Jid }` (admin revoke in groups)

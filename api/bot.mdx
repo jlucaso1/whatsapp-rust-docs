@@ -94,6 +94,10 @@ let bot = Bot::builder()
 For multi-account scenarios, use `SqliteStore::new_for_device(path, device_id)` to create isolated storage per account.
 </Tip>
 
+<Tip>
+A bot that pairs once and stays connected for weeks is the single-long-lived-session profile, and `SqliteStore`'s defaults are tuned for the opposite one (many small per-session stores in a process). See [Memory and Thread Tuning](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig) for the cache size, reader count, and mmap setting that profile wants, and pass them with `SqliteStore::with_config` ([whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411)).
+</Tip>
+
 ### with_transport_factory
 
 ```rust
@@ -1307,6 +1311,10 @@ It is consulted only after the in-core [`MsgSecretStore`](/api/store#msgsecretst
 
 <Note>
 `MsgSecretPolicy`, `MsgSecretRetention`, and `OriginalMessageResolver` are re-exported from the crate root (`whatsapp_rust::{MsgSecretPolicy, MsgSecretRetention, OriginalMessageResolver}`). The default `Managed` policy is bounded and needs no tuning for most apps.
+</Note>
+
+<Note>
+**Steady-state sizing.** `msg_secret_retention` sizes what is, by row count, the largest table the store holds: one row per inbound message that carries a `messageSecret`, plus one per outbound message that mints one, each kept until its horizon passes. The steady state is therefore the horizon's worth of traffic, and nothing else bounds it. For a busy bot — roughly 15k inbound and 1.5k outbound messages a day — the default 30-day `text` horizon settles at ~500k rows, or ~130 MB at roughly 270 bytes a row once the primary key and the expiry index are counted, and materially more where poll traffic (a 90-day horizon) is heavy. Shortening `text` trades add-on decryption of older messages for disk, and is the one lever that moves the figure. See [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411).
 </Note>
 
 <Note>

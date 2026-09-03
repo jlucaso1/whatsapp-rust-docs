@@ -70,7 +70,7 @@ println!("Pruned {} expired tokens", deleted);
 ```
 
 <Note>
-By default, tokens expire after 28 days (4 buckets × 7 days). The server may override this via AB props. Expired tokens are also automatically pruned on connect. Call this method if you need to trigger pruning manually.
+By default, tokens expire after 28 days (4 buckets × 7 days). The server may override this via AB props. Expired tokens are also automatically pruned on connect and, as of [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411), on a ~6-hour keepalive tick for the rest of the connection's lifetime. Call this method if you need to trigger pruning manually.
 
 The received token and the sender-side issuance bucket expire on independent cutoffs — a row is only pruned once **both** are stale, so recent sender-side rate-limit state survives an expired received token (and vice versa).
 </Note>
@@ -310,7 +310,7 @@ The sender-side issuance timestamp isn't carried over in the migration. Normally
 
 ### Startup pruning
 
-Expired tokens are automatically pruned when the client connects, matching WhatsApp Web's `PrivacyTokenJob`.
+Expired tokens are automatically pruned when the client connects, matching WhatsApp Web's `PrivacyTokenJob`. As of [whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411), pruning also runs on a ~6-hour keepalive maintenance tick for the rest of a connection's lifetime — before this, the connect-time call was the only trigger, so a session that paired once and stayed connected for weeks without reconnecting only ever pruned once, at hour zero.
 
 ### Skipped recipients
 
@@ -450,7 +450,7 @@ let deleted = client.tc_token().prune_expired().await?;
 1. **Pre-issue tokens** for contacts you frequently interact with
 2. **Don't over-issue** — tokens are automatically issued after each message send when the bucket rolls over
 3. **Use LID JIDs** when issuing tokens manually
-4. **Let startup pruning handle cleanup** — expired tokens are pruned automatically on connect
+4. **Let automatic pruning handle cleanup** — expired tokens are pruned on connect and on a periodic keepalive tick while connected, so manual pruning is rarely necessary
 
 ```rust
 // Pre-issue tokens for frequent contacts

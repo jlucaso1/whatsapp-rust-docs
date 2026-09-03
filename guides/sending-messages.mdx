@@ -883,11 +883,15 @@ This ensures:
 ```rust
 use wacore::proto_helpers::MessageExt;
 
-let mut forward = *received_message.prepare_for_forward();
+let mut forward = received_message.prepare_for_forward();
 // Tweak the prepared message here if needed, for example overriding a caption.
 
 client.send_message(destination_jid, forward).await?;
 ```
+
+<Note>
+As of [#1406](https://github.com/oxidezap/whatsapp-rust/pull/1406), `prepare_for_forward` returns `wa::Message` by value instead of `Box<wa::Message>` — drop a leading `*` if you dereferenced the old `Box` return. `prepare_for_quote` above is unchanged and still returns `Box<wa::Message>`.
+</Note>
 
 For the common case, prefer `client.forward_message(to, &message)` — it unwraps wrapper bodies (ephemeral, view-once) and sends in one call.
 

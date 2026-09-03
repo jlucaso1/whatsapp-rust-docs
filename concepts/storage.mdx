@@ -1060,7 +1060,7 @@ At ~100 sessions the r2d2 thread count drops from ~300 to 2.
 **The other profile: one long-lived session, one large database.** Everything above tunes for a host running many sessions, where the defaults are deliberately low-memory. A process that pairs once and stays connected for weeks — a bot — is the opposite shape ([whatsapp-rust#1411](https://github.com/oxidezap/whatsapp-rust/pull/1411)): there is one store, not fifty, and its database reaches a few hundred MB (`msg_secrets` dominates it; its [`msg_secret_retention`](/api/bot#messagesecret-retention) horizon is what sets the size). Against a file that large, the default 512 KiB page cache is a fraction of a percent, so nearly every b-tree descent is an OS read, and one reader connection means the decrypt path queues behind whatever write is in flight. The default isn't raised for everyone because the many-small-databases case is real and pays for both in memory; name the profile instead:
 
 ```rust
-use whatsapp_rust_sqlite_storage::SqliteStoreConfig;
+use whatsapp_rust_sqlite_storage::{SqliteStore, SqliteStoreConfig};
 
 let config = SqliteStoreConfig {
     // A warm cache for a database far larger than the default assumes.
@@ -1071,6 +1071,8 @@ let config = SqliteStoreConfig {
 }
 // Optional: moves reads onto reclaimable file-backed pages.
 .with_mmap_size(256 * 1024 * 1024);
+
+let backend = Arc::new(SqliteStore::with_config("whatsapp.db", config).await?);
 ```
 
 ### Sharing one pool across sibling devices

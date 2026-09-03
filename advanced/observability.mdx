@@ -88,7 +88,7 @@ Spans are grouped under a stable `wa.<area>.<op>` naming scheme so you can filte
 
 | Area | Covers |
 |------|--------|
-| `wa.conn.*` | Connect, disconnect, reconnect, handshake, frame decrypt, stream errors, plus debug-level entry/exit events for the read loop and keepalive loop — neither loop is itself wrapped in a span (see [Levels](#levels) below) |
+| `wa.conn.*` | Connect, disconnect, reconnect, handshake, frame decrypt, stream errors, plus debug-level entry/exit events for the read loop — the loop is not itself wrapped in a span (see [Levels](#levels) below); the keepalive loop is likewise uninstrumented as a whole, but logs its own per-condition debug/warn messages rather than a matching entry/exit pair |
 | `wa.recv.*` | Incoming message parsing and decrypt path |
 | `wa.send.*` | Outgoing send path (DM, group, peer, encryption) |
 | `wa.iq` | IQ request/response round-trips |

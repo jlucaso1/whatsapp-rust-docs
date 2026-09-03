@@ -794,8 +794,8 @@ See [Custom backends — cache store](/guides/custom-backends#custom-cache-store
 | `invalidate_all` | `fn invalidate_all(&self)` | Remove all entries (sync). Best-effort for in-process backend; requires `tokio-runtime` for custom backends |
 | `clear` | `async fn clear(&self)` | Remove all entries (async). Awaits the write lock for in-process backend; awaits completion for custom backends |
 | `run_pending_tasks` | `async fn run_pending_tasks(&self)` | Evict expired entries (in-process backend only; no-op for custom backends) |
-| `entry_count` | `fn entry_count(&self) -> u64` | Approximate entry count (sync). Returns `0` for custom backends |
-| `entry_count_async` | `async fn entry_count_async(&self) -> u64` | Approximate entry count, delegating to custom backend if available |
+| `entry_count` | `fn entry_count(&self) -> u64` | Approximate entry count (sync). For the in-process backend this is a `try_read` that answers `0` while a writer holds the lock — fine for a hint on a hot path. Returns `0` for custom backends |
+| `entry_count_async` | `async fn entry_count_async(&self) -> u64` | Entry count under an awaited read guard, delegating to the custom backend if available. The in-process path is always awaited, so it never under-reads a cache that's being written to — prefer it over `entry_count` for a report. Before [#1408](https://github.com/oxidezap/whatsapp-rust/pull/1408), the in-process path called through to the same `try_read` as `entry_count`, so even this method could read `0` under write load |
 
 <Warning>
 `invalidate_all()` on custom `CacheStore` backends requires the `tokio-runtime` feature. Without it, the clear is silently skipped. Use the async `clear()` method as an alternative.

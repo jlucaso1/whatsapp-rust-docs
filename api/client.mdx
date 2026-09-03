@@ -2712,7 +2712,7 @@ The two memos are chained: `resolve_skdm_targets_memoized` compares the `Arc` th
 |-------|------|-------------|
 | `hits` | `u64` | Entry present, `GroupInfo` identity matched, generation unchanged |
 | `restamps` | `u64` | Generation moved but every change since provably missed this group; served the same devices a hit would, at the cost of the `unchanged_for` scan |
-| `miss_absent` | `u64` | No entry for the group — first send, or a capacity/TTL eviction (the memo holds 64 groups) |
+| `miss_absent` | `u64` | No entry for the group — first send, or a capacity eviction. The memo holds `CacheConfig::group_devices_memo_capacity` groups (default 512, was a fixed 64 before [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400)), least-recently-used evicted first — see [Cache Configuration Reference](/api/bot#cache-configuration-reference) |
 | `miss_group_info` | `u64` | An entry existed but was built from a different `Arc<GroupInfo>` |
 | `miss_topology` | `u64` | The device topology changed in a way that could have touched this group |
 | `bypassed` | `u64` | Call didn't consult the memo at all (store-backed registry/mapping caches make its freshness contract unenforceable) |

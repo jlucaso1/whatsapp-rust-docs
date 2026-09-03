@@ -293,7 +293,17 @@ async fn update_device_lists(&self, records: Vec<DeviceListRecord>) -> Result<()
 
 /// Get all known devices for a user
 async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
+
+/// Batched variant of `get_devices`: the records stored under any of
+/// `users`, in no particular order, with absent users left out. Backends
+/// should override with one query — the default loops over `get_devices`
+/// for correctness.
+async fn get_devices_batch(&self, users: &[&str]) -> Result<Vec<DeviceListRecord>>;
 ```
+
+<Note>
+`get_devices_batch` was added in [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400) so resolving a cold large group's devices (`get_user_devices_owned`) and the usync response path read every member in one round trip instead of one `get_devices` call per member. It has a default implementation that loops, so existing custom backends compile and behave the same without changes. Override it with a single chunked `IN (...)` query if your backend supports one — the built-in `SqliteStore` does, and the exploration behind this PR measured the per-member form at 22.1 ms against 0.68 ms for one query at 256 members on a file-backed store.
+</Note>
 
 ### TcToken Storage
 

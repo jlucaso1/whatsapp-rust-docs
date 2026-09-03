@@ -1228,7 +1228,12 @@ Keepalive errors are classified exhaustively (compile-time enforced for new erro
 
 ### Periodic maintenance
 
-Approximately every 12 keepalive ticks (~5 minutes), the keepalive loop runs background cleanup of expired sent messages from the database, based on `CacheConfig::sent_message_ttl_secs`.
+Approximately every 12 keepalive ticks (~5 minutes), the keepalive loop runs two background sweeps:
+
+- **Database retention cleanup** — expired sent messages, based on `CacheConfig::sent_message_ttl_secs`.
+- **In-process cache maintenance** ([`Client::run_cache_maintenance()`](/api/client#run_cache_maintenance), added in [#1408](https://github.com/oxidezap/whatsapp-rust/pull/1408)) — sweeps expired entries out of the TTL/TTI caches (`recent_messages`, `message_retry_counts`, `session_recreate_history`, `undecryptable_dispatched`, `dispatched_messages`, `pdo_*`, `device_registry_cache`, `sender_key_device_cache`, `lid_pn_cache`, `group_cache`). These caches expire lazily — an entry leaves only on the access that finds it stale, or under capacity pressure from a new insert — so without this tick a quiet connection would retain every expired entry, up to the 20,000-entry `device_registry_cache`, for as long as it stayed connected. [`memory_report()`](/api/client#memory_report) counts include entries expired but not yet swept, so a report taken right after this tick is the exact count.
+
+Both sweeps are spawned as separate tasks off the keepalive loop, so neither blocks ping delivery or dead-socket detection.
 
 ## Performance Considerations
 

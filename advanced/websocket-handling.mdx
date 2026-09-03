@@ -957,6 +957,14 @@ impl Client {
 
 Key cleanup actions include invalidating chat lanes (so stale message processing workers don't survive with outdated crypto state), clearing the signal cache, draining IQ response waiters, and resetting offline sync state. See [disconnect cleanup](/concepts/architecture#disconnect-cleanup) for the full list.
 
+<Note>
+**Bounded teardown ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410)).** Every `transport.disconnect().await` on a teardown path — `disconnect()`, `reconnect()`, `reconnect_immediately()`, `pause()`, and `cleanup_connection_state_inner` — now runs through `Client::close_transport_bounded`, which wraps the close in a `TRANSPORT_CLOSE_TIMEOUT` (2s) and abandons the socket with a `warn!` log if it doesn't finish in time. A close is a network write that shares the transport's sink with every send; on a peer that vanished without a FIN, that write is retried by the kernel until `tcp_retries2` gives up (~15 minutes on Linux). Untimed, one such socket parked the whole teardown — and the run loop behind it — for that long.
+
+Before the bounded close, `cleanup_connection_state_inner` also calls `NoiseSocket::abort_sender()` on the socket it is clearing: it closes the sender task's job channel and aborts the task outright, rather than waiting for the last `Arc<NoiseSocket>` clone to drop it. A send parked inside `transport.send()` on a black-holed connection (e.g. via `send_raw_bytes`, which holds a socket clone across its await) would otherwise keep that task — and the transport's sink — alive for as long as the kernel keeps retrying, which is exactly what the close below would then queue behind. Every send `abort_sender()` cuts short — queued or in flight — fails its caller with `EncryptSendError::channel_closed()` instead of hanging; a send racing a teardown was going to fail once the socket closed anyway.
+
+Because `disconnect()` closes the transport itself and `cleanup_connection_state()` closes it again, a dead socket now costs at most 2 × `TRANSPORT_CLOSE_TIMEOUT` (4s) rather than an unbounded wait — the second close is a no-op on an already-closed transport.
+</Note>
+
 ### Connection state tracking
 
 The client tracks whether the noise socket is established using a dedicated `AtomicBool` (`is_connected`) rather than probing the noise socket mutex. This design prevents a TOCTOU race where `try_lock()` on the mutex fails due to contention (e.g., during frame encryption), not because the socket is absent — which previously caused `is_connected()` to return `false` on live connections, silently dropping receipt acks.
@@ -1125,6 +1133,10 @@ For rate-limited errors (429), the client increments the backoff counter by 5 be
 
 An explicit penalty applied during the connection — a 429 rate-limit or a manual `Client::reconnect()` — sets `backoff_reset_suppressed`, which survives even a stable (≥30s) connection and prevents the next disconnect from erasing that deliberate backoff step (matching WA Web's `cancelReset()`). The suppression flag is cleared on the next successful `<success>`, so it does not carry over indefinitely. An expected disconnect (e.g., 515) clears `connected_at` so a later failed connect cannot read the prior cycle's stale timestamp as "stable."
 
+<Note>
+**The attempt counter saturates at 64 ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410)).** `auto_reconnect_errors` — the same counter exposed as [`stats().reconnect_errors`](/api/client#diagnostics) — is only reset by a connection that stays up the stability window above, so a link that flaps for weeks (or a run of 429s, which adds 5 per hit) used to climb it without bound. The delay itself is already pinned at the 900s cap from attempt 17 on, so nothing about the schedule changes; only the raw counter is now clamped to `MAX_BACKOFF_ATTEMPTS` (64), far past the point the cap takes effect, so it stays a number a consumer can read instead of growing indefinitely.
+</Note>
+
 ### Retry strategy
 
 The `run()` method handles reconnection automatically:
@@ -1187,6 +1199,7 @@ The keepalive loop monitors connection health, matching WhatsApp Web's behavior 
 | `KEEP_ALIVE_INTERVAL_MAX` | 30s | Maximum interval between pings |
 | `KEEP_ALIVE_RESPONSE_DEADLINE` | 20s | Timeout waiting for pong response |
 | `DEAD_SOCKET_TIME` | 20s | Max silence after the watchdog arms before declaring socket dead |
+| `KEEPALIVE_MAX_CONSECUTIVE_FAILURES` | 3 | Consecutive unanswered pings after which the loop forces a reconnect instead of pinging again |
 
 ### Timestamp safety
 
@@ -1224,7 +1237,17 @@ Keepalive errors are classified exhaustively (compile-time enforced for new erro
 | Error type | Classification | Behavior |
 |------------|---------------|----------|
 | `Socket`, `Disconnected`, `NotConnected`, `InternalChannelClosed` | Fatal | Exit keepalive loop immediately |
-| `Timeout`, `ServerError`, `ParseError` | Transient | Increment error count, check dead socket |
+| `Timeout`, `ServerError`, `ParseError` | Transient | Increment error count, check dead socket, force a reconnect on the 3rd consecutive occurrence |
+
+<Note>
+**Three consecutive unanswered pings force a reconnect ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410)).** `error_count` used to be computed and logged but never read, so it did nothing on its own. A ping is only sent when the link has been idle for at least `KEEP_ALIVE_INTERVAL_MIN` (a recently-active connection skips it and resets the counter), so three transient failures in a row is roughly a minute where nothing arrived *and* nothing sent was answered. On the third, the loop calls `reconnect_immediately()` and exits.
+
+This closes a gap the dead-socket watchdog is blind to by design: `is_dead_socket_at` is cancelled by any receive, so a half-open socket that still delivers inbound frames while outbound writes go nowhere looked alive to it forever, silently losing every send, ack, and receipt for the rest of the session. Reconnect-looping against a merely slow (rather than broken) server is bounded by the existing resets — a successful pong, or renewed activity — and by `should_reset_backoff`, which keeps escalating the Fibonacci delay until a connection stays up 30s.
+</Note>
+
+<Note>
+**Pinned to its own connection generation ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410)).** `keepalive_loop` now takes its shutdown signal and `connection_generation` snapshot from the caller at spawn time (`drive_connection`) rather than reading them on its own first poll, and exits as soon as the live generation no longer matches. A spawned task's first poll can land arbitrarily late — after a reconnect has already completed — so reading `connection_generation` or re-subscribing to `connection_shutdown_signal()` from inside the loop could silently hand it the *next* connection's identity: `is_connected()` reads `true` again, and the stale loop never exits, leaving two keepalive pingers on one socket (one more with every reconnect that races a slow-starting loop).
+</Note>
 
 ### Periodic maintenance
 

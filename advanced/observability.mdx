@@ -105,7 +105,11 @@ Spans are grouped under a stable `wa.<area>.<op>` naming scheme so you can filte
 
 ### Levels
 
-Most spans are emitted at `debug` or `trace`. The connection-lifecycle spans (`wa.conn.connect`, `wa.conn.disconnect`, `wa.conn.reconnect`, `wa.conn.logout`) are at `info` so connection state is visible at the default level. Failures surface at `ERROR` via `err(Debug)` on the instrumented function, and the existing `warn!`/`error!` log calls surface through the bridge — with two exceptions: `wa.conn.connect` surfaces failures at `WARN` instead (its caller already classifies the real failures as `error!`, so the default `ERROR` was double-reporting transient handshake retries), and `wa.conn.read_loop` returns `Ok` (not `Err`) for a routine server-initiated stream recycle, so its `ERROR` capture fires only for genuine failures — never for WhatsApp's normal periodic reconnects.
+Most spans are emitted at `debug` or `trace`. The connection-lifecycle spans (`wa.conn.connect`, `wa.conn.disconnect`, `wa.conn.reconnect`, `wa.conn.logout`) are at `info` so connection state is visible at the default level. Failures surface at `ERROR` via `err(Debug)` on the instrumented function, and the existing `warn!`/`error!` log calls surface through the bridge — with one exception: `wa.conn.connect` surfaces failures at `WARN` instead (its caller already classifies the real failures as `error!`, so the default `ERROR` was double-reporting transient handshake retries).
+
+<Note>
+**`wa.conn.read_loop` is no longer a span ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410)).** The read loop runs for the whole connection — days, on a long-lived session — so a span wrapping it never exported until the disconnect, every per-frame span (`wa.conn.node`, `wa.conn.decrypt_frame`) hung off a parent that never closed, and a duration histogram over it measured uptime rather than work; `keepalive_loop` and `run` already went uninstrumented for the same reason (see the note below). `Client::read_messages_loop` now just logs `debug!` events at entry and at exit — the exit event names how the loop ended (expected disconnect, server-initiated stream recycle, or an error) — and the per-frame spans it drives keep their own timing untouched.
+</Note>
 
 <Note>
 There is no span wrapping the client's outer auto-reconnect loop (`Client::run`). A span there would live for the entire client lifetime and only report at shutdown, distorting duration/throughput dashboards the same way a whole-connection keepalive span would — so it is deliberately left uninstrumented. Connection-lifecycle visibility comes from the per-attempt spans above; account identity comes from the per-operation spans below.
@@ -115,7 +119,7 @@ A downstream binary can statically strip lower levels at compile time with `trac
 
 ### Account identity in spans
 
-The `wa.conn.connect`, `wa.conn.read_loop`, `wa.iq`, and `wa.send.message` spans carry `lid` and `pn` fields for your own account, so traces are filterable and groupable per account in multi-account deployments. `pn` is redacted via `Jid::observe()` like any other phone-number field (see [PII handling](#pii-handling) below); `lid` is rendered in full since it is pseudonymous.
+The `wa.conn.connect`, `wa.iq`, and `wa.send.message` spans carry `lid` and `pn` fields for your own account, so traces are filterable and groupable per account in multi-account deployments. `pn` is redacted via `Jid::observe()` like any other phone-number field (see [PII handling](#pii-handling) below); `lid` is rendered in full since it is pseudonymous. `wa.conn.read_loop` no longer exists as a span (see the note above) and its replacement debug events carry no identity fields — `wa.conn.connect`, entered once per connection, is where per-account filtering for the connection lifecycle now has to happen.
 
 To tag your own spans or error context with the same account identity, call `Client::identity_tags()` (available whenever the `tracing` feature is enabled on the `whatsapp-rust` dependency — no local feature of your own is required):
 

@@ -1630,6 +1630,10 @@ Flags retain their `code`, `value_type`, and `default` straight from the WA Web 
 The AB props cache is internal to the client. You don't need to interact with it directly — the library automatically checks relevant flags when performing group operations like `create_group` and `add_participants`.
 </Note>
 
+#### Disabling the fetch
+
+[`ClientBuilder::with_ab_props_fetch(bool)`](/api/bot#with_ab_props_fetch) (default `true`) controls whether `fetch_props()` runs at all on connect. The catalog fetch is now streamed (see [`execute_streaming`](#execute_streaming)), so on a host it costs nothing worth turning off — the switch exists for a target whose whole heap can't afford even the compressed frame plus the inflate state at the moment it arrives. Turned off, no `abt` request is sent (whatsmeow never sends one either, and the server accepts both), and every flag reads as its registry default: an account the server has 1:1-LID-migrated is not recognized as such, and privacy-token and trusted-contact-token gates run on their defaults instead of the server's values.
+
 ### fetch_privacy_settings
 
 ```rust
@@ -1941,6 +1945,27 @@ Executes a typed IQ specification. This is the preferred way to send IQ stanzas 
 ```rust
 // Fetch group metadata using a typed spec
 let metadata = client.execute(GroupQueryIq::new(&group_jid)).await?;
+```
+
+### execute_streaming
+
+```rust
+pub async fn execute_streaming<S>(&self, spec: S) -> Result<S::Response, IqError>
+where
+    S: IqStreamSpec + Send + 'static,
+    S::Response: Send + 'static,
+```
+
+The streaming counterpart to [`execute`](#execute), for a spec whose response is consumed as it is decoded rather than handed over as a tree — the A/B props catalog (`fetch_props`), a response of a few thousand small children, is what this exists for. The response is walked on the read loop, inside the frame's decode, so it never exists as more than the [inflate window and one child](/advanced/binary-protocol#streaming-decode-nodestream) at a time. An error response, or one that arrives while a raw-node observer is attached, is decoded whole and goes through the spec's `IqSpec::parse_response` instead, which is why `IqStreamSpec` requires both.
+
+<ParamField path="spec" type="S: IqStreamSpec + Send + 'static" required>
+  A typed IQ specification whose response is consumed from a `NodeStream` as it decodes, rather than parsed from an already-materialized tree
+</ParamField>
+
+**Example:**
+```rust
+// Fetch the A/B props catalog, keeping only the codes the cache watches
+let response = client.execute_streaming(PropsSpec::new().retaining(watched_codes)).await?;
 ```
 
 ### wait_for_node

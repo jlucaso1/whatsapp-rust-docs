@@ -544,20 +544,32 @@ Reach for this when you need a deterministic key or want to override sidecar gen
 
 ### Relationship to `encrypt_media`
 
-The in-memory `encrypt_media` function is a convenience wrapper around `encrypt_media_streaming`:
+The in-memory `encrypt_media` function forwards through `encrypt_media_with_key` to `encrypt_media_with_key_and_sidecar`, which drives `MediaEncryptor` directly and sizes the output `Vec` exactly up front via `encrypted_len`:
 
 ```rust
-pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<EncryptedMedia> {
-    let mut data_to_upload = Vec::new();
-    let info = encrypt_media_streaming(Cursor::new(plaintext), &mut data_to_upload, media_type)?;
+pub fn encrypt_media_with_key_and_sidecar(
+    plaintext: &[u8],
+    media_type: MediaType,
+    media_key: Option<&[u8; 32]>,
+    sidecar: Option<bool>,
+) -> Result<EncryptedMedia> {
+    let mut enc = /* MediaEncryptor, keyed or fresh; sidecar per media_type unless overridden */;
+    let mut data_to_upload = Vec::with_capacity(encrypted_len(plaintext.len()));
+    enc.update(plaintext, &mut data_to_upload);
+    let info = enc.finalize(&mut data_to_upload)?;
     Ok(EncryptedMedia {
         data_to_upload,
         media_key: info.media_key,
         file_sha256: info.file_sha256,
         file_enc_sha256: info.file_enc_sha256,
+        streaming_sidecar: info.streaming_sidecar,
     })
 }
 ```
+
+<Note>
+  `data_to_upload` used to start from `Vec::new()` and grow by doubling, so a 16 MiB video reallocated close to a dozen times on its way to 32 MiB of capacity — copying everything encrypted so far on each grow, and peaking at plaintext + old buffer + new buffer, close to 2x the final ciphertext size. `encrypted_len` (below) gives the exact output size up front, so this path now allocates once.
+</Note>
 
 ### When to use each API
 

@@ -347,10 +347,10 @@ pub struct DmStanzaRequest<'a> {
 }
 ```
 
-`ResolvedDmDevices` (`wacore::send::ResolvedDmDevices`) wraps the partitioned device set from `partition_dm_devices` together with a lazily memoized phash — the type that `dm_devices_memo` caches per recipient:
+`ResolvedDmDevices` (`wacore::send::ResolvedDmDevices`) wraps the partitioned device set from `partition_dm_devices` together with a lazily memoized phash and, since [#1396](https://github.com/oxidezap/whatsapp-rust/pull/1396), a lazily memoized Signal addressing — both cached per entry in `dm_devices_memo`:
 
 ```rust
-pub struct ResolvedDmDevices { /* partitioned devices + OnceLock<CompactString> phash */ }
+pub struct ResolvedDmDevices { /* partitioned devices + OnceLock<CompactString> phash + OnceLock<DmSignalAddressing> */ }
 
 impl ResolvedDmDevices {
     /// Partitions `all_devices` into recipient devices and own companions,
@@ -362,8 +362,23 @@ impl ResolvedDmDevices {
 
     /// The DM phash over the sent device set: a memo hit is an inline copy.
     pub fn phash(&self) -> Option<CompactString>;
+
+    /// The memoized Signal addressing, if a send has resolved it yet.
+    pub fn signal_addressing(&self) -> Option<&DmSignalAddressing>;
+
+    /// Memoizes `addressing`, or hands back what an earlier send already
+    /// memoized. Refused (and handed back to the caller) when `addressing`
+    /// doesn't carry exactly one address per `devices()` entry.
+    pub fn signal_addressing_or_init(
+        &self,
+        addressing: DmSignalAddressing,
+    ) -> Result<&DmSignalAddressing, DmSignalAddressing>;
 }
 ```
+
+<Note>
+**Memoized Signal addressing ([#1396](https://github.com/oxidezap/whatsapp-rust/pull/1396)).** A warm DM used to resolve each device's PN→LID mapping three separate times on its way out — once in the session preflight, once building the lock keys, once in the encrypt fan-out — each a cache lookup plus a `Jid` clone, with the lock keys re-sorted every send. `DmSignalAddressing` (`wacore::send::DmSignalAddressing`) now holds both results — `encryption()`, the per-device Signal address parallel to `devices()`, and `lock_keys()`, that same list already sorted and deduplicated in lock order — filled on the first send of a `dm_devices_memo` entry and served to every later one via `signal_addressing()`. Invalidation comes for free from the entry's own contract: a mapping learned for any member of the fan-out bumps the topology generation the entry is stamped with, so the entry — and this memo with it — is rebuilt rather than served stale. See "DM per-device locking" under [Single-allocation session lock keys](#single-allocation-session-lock-keys) below for where the resolution and the lock-key sort now happen only once.
+</Note>
 
 <Warning>
   **Breaking change ([#1118](https://github.com/oxidezap/whatsapp-rust/pull/1118)):** `DmStanzaRequest::own_lid` was removed — the sending identity's LID is now baked into the `ResolvedDmDevices` passed via `devices` at construction time (`ResolvedDmDevices::new`) — and `DmStanzaRequest::devices` changed from `Vec<Jid>` to `&ResolvedDmDevices`. An out-of-tree caller constructing `DmStanzaRequest` directly needs to build a `ResolvedDmDevices` first (via `ResolvedDmDevices::new(all_devices, own_jid, own_lid)`) and pass it by reference.
@@ -372,6 +387,10 @@ impl ResolvedDmDevices {
 ### Session preflight and the 406 case
 
 Before `prepare_dm_stanza` builds the stanza, `ensure_e2e_sessions` runs as a preflight that fetches prekeys for any resolved device without an established Signal session — one IQ covering up to `SESSION_CHECK_BATCH_SIZE` (50) devices. The server can reject devices two ways: **by name**, returning a `<user>` node whose bundle is replaced with an `<error code="406">` for that one device, or **batch-wide**, failing the IQ itself with a `406` that names nobody.
+
+<Note>
+**Skips the PN→LID lookup when the caller already resolved it ([#1396](https://github.com/oxidezap/whatsapp-rust/pull/1396)).** `ensure_sessions_for_devices` (`wacore::send::encrypt`) is now a thin wrapper over `ensure_sessions_for_devices_resolved(..., signal_addresses: Option<&[Jid]>)`. Passing `None` reproduces the old per-device `SendContextResolver::get_lid_for_phone` lookup; the DM path instead passes `Some(addressing.encryption())` from the memoized `DmSignalAddressing` (see [`DmStanzaRequest` and `ResolvedDmDevices`](#dmstanzarequest-and-resolveddmdevices) above), so the preflight indexes straight into the pre-resolved address instead of hitting the mapping cache again. A `signal_addresses` list whose length doesn't match `devices` is treated as not supplied — the fallback is per-device resolution in every build, not a debug-only assertion. The group path, which has no such memo, still calls `ensure_sessions_for_devices` with `None` and is unaffected.
+</Note>
 
 <Note>
 **A named `406` rejection now refreshes only that device's user, not the whole batch ([#1153](https://github.com/oxidezap/whatsapp-rust/pull/1153), closes [#1143](https://github.com/oxidezap/whatsapp-rust/issues/1143)).** `PreKeyUtils::parse_prekeys_response` returns a `PreKeyFetchOutcome { bundles, rejected }` instead of a bare bundle map. `rejected` carries the devices the server named directly in the response body, each with the `<error>` code it was rejected with. When one of those codes is `406`, the preflight calls `invalidate_device_caches_for` with the named device JIDs. That call dedupes the JIDs to their distinct users and refreshes each user's whole device-list cache entry, since the cache is keyed per user rather than per individual device. The send proceeds afterward, and every device that did return a bundle is unaffected — so one rejected device no longer costs the rest of the batch.
@@ -1992,9 +2011,10 @@ let _session_guard = session_mutex.lock().await;
 // In peer message encryption (src/send.rs) — single lock
 let signal_addr_str = encryption_jid.to_protocol_address_string();
 
-// In DM message encryption (src/send.rs) — per-device locks for all devices
-let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
-let session_guards = self.session_guards_for(&lock_jids).await;
+// In DM message encryption (src/send.rs) — per-device locks for all devices,
+// resolved once per dm_devices_memo entry and served to every later send
+// (see "DM per-device locking" below for the resolve-and-memoize step)
+let session_guards = self.session_guards_for(addressing.lock_keys()).await;
 // Each lock taken as its mutex is resolved, in sorted order, to prevent deadlocks
 ```
 
@@ -2022,21 +2042,44 @@ WA Web has a bare-`<enc>` fast path for single primary device (`WAWebSendMsgCrea
 
 **DM per-device locking:**
 
-To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires session locks for all devices involved — the bare recipient plus own companion devices. The `build_session_lock_keys()` helper resolves encryption JIDs and sorts them for deadlock-free lock acquisition:
+To prevent ratchet desync when concurrent sends and receives operate on the same Signal session, the DM path acquires session locks for all devices involved — the bare recipient plus own companion devices. `Client::build_session_lock_keys()` resolves encryption JIDs and sorts them for deadlock-free lock acquisition:
 
 1. Resolves the recipient to its bare encryption JID via `resolve_encryption_jid().to_non_ad()` (stripping device component)
 2. Resolves own companion device JIDs
 3. Sorts by `(server, user, device)` using `cmp_for_lock_order()` and deduplicates
 4. Returns sorted `Vec<Jid>` — no intermediate `String` allocations needed for sorting
 
-The `session_guards_for()` helper (PR [#1131](https://github.com/oxidezap/whatsapp-rust/pull/1131)) then takes each device's lock as its mutex is resolved from the sorted JIDs, reusing a single `ProtocolAddress` via `reset_protocol_address()` to name each lock key without a formatting buffer:
+Since [#1396](https://github.com/oxidezap/whatsapp-rust/pull/1396), `build_session_lock_keys()` is a thin composition of two pieces the DM path also calls directly: `Client::resolve_encryption_jids()` (step 1+2 above, `resolve_encryption_jid()` over the device list, in order) and a private `sort_session_lock_keys()` (step 3). The group path still calls `build_session_lock_keys()` as one unit through `SendContextResolver::lock_device_sessions()`; the DM path calls the two pieces separately so it can memoize the result on the `dm_devices_memo` entry instead of resolving fresh on every send:
 
 ```rust
-// In DM message encryption (src/send.rs)
-let lock_jids = self.build_session_lock_keys(&all_dm_devices).await;
-let session_guards = self.session_guards_for(&lock_jids).await;
+// In DM message encryption (src/send.rs) — resolved once per dm_devices_memo
+// entry, on the first send that needs it
+let resolved_here;
+let addressing = match dm_devices.signal_addressing() {
+    Some(addressing) => addressing,
+    None => {
+        let encryption = self.resolve_encryption_jids(dm_devices.devices()).await;
+        let mut lock_keys = encryption.clone();
+        sort_session_lock_keys(&mut lock_keys);
+        let built = DmSignalAddressing::new(encryption, lock_keys);
+        // A concurrent send may have raced this one to the memo; either way
+        // `addressing` ends up valid for this send.
+        match dm_devices.signal_addressing_or_init(built) {
+            Ok(memoized) => memoized,
+            Err(refused) => {
+                resolved_here = refused;
+                &resolved_here
+            }
+        }
+    }
+};
+self.ensure_e2e_sessions_resolved(addressing.encryption()).await?;
+// ... stanza building, tctoken scheduling ...
+let session_guards = self.session_guards_for(addressing.lock_keys()).await;
 // Each lock taken as its mutex is resolved, in sorted order, to prevent deadlocks
 ```
+
+A repeat DM to the same chat therefore resolves the recipient's Signal addresses and sorts the lock keys once, not on every send; a mapping change for any device in the fan-out invalidates the whole `dm_devices_memo` entry (see the [memoized Signal addressing](#dmstanzarequest-and-resolveddmdevices) note above), so the next send re-resolves rather than serving a stale address.
 
 <Note>
   Resolving every mutex first and then locking each in a second pass (the previous implementation) is still available as `session_mutexes_for()`, but only under `#[cfg(test)]` — production code no longer builds the intermediate `Vec` of mutex handles.

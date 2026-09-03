@@ -181,12 +181,28 @@ async fn get_mutation_macs(
 
 /// Delete mutation MACs by their index MACs
 async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
+
+/// Persist one applied patch — its new version, the index MACs it removed,
+/// and the MACs it added — as a unit. The default runs `set_version`, then
+/// `delete_mutation_macs`, then `put_mutation_macs`, so a backend without
+/// transactions keeps its current behavior unchanged.
+async fn commit_patch(
+    &self,
+    name: &str,
+    state: HashState,
+    removed_index_macs: &[Vec<u8>],
+    added: &[AppStateMutationMAC],
+) -> Result<()>;
 ```
 
 <Note>
 `get_mutation_macs` was added in v0.6 to collapse the app-state sync's per-mutation previous-MAC lookups (which were N+1) into a single batched query. It has a default implementation, so custom backends that do **not** override it keep working without changes — override it with a `WHERE index_mac IN (…)` query for the performance win. The SQLite store chunks the `IN` list at 500 entries.
 
 An index MAC is always a full HMAC-SHA256 output, so this method's signature uses inline `[u8; 32]` arrays (`wacore::appstate_sync::IndexMac`) instead of `Vec<u8>` — zero per-MAC heap allocations on either side of the batch lookup. This is a breaking change for custom backends that override `get_mutation_macs`: update the parameter and return-map key types to `[u8; 32]`. `get_mutation_mac`, `put_mutation_macs`, and `delete_mutation_macs` are unaffected.
+</Note>
+
+<Note>
+`commit_patch` was added in [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401) so the app-state sync loop can persist a patch's version and MAC changes in one backend call instead of three; it replaces the sync loop's previous sequence of a `set_version` call followed by conditional `delete_mutation_macs`/`put_mutation_macs` calls. It has a default implementation equivalent to that sequence, so existing custom backends compile and behave the same without changes. Override it with a single transaction if your backend supports them (the SQLite store does) — a paged incremental sync commits hundreds of small patches, and each of the three separate writes previously paid its own connection permit and commit. A transactional override is also strictly safer: the new version can no longer land without the MACs it pairs with.
 </Note>
 
 ## ProtocolStore Trait
@@ -527,7 +543,7 @@ impl SharedSqlite {
 ```
 
 <Note>
-`read` takes a permit from a separate reader pool, sized by [`SqliteStoreConfig::read_pool_size`](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig). A burst of reads can then run alongside a pending write instead of queueing behind `run`'s write-path permits. If `read_pool_size` is `0` (the default) or the underlying connection isn't WAL, `read` falls back to queueing on the same permits as `run` — it's always safe to call. Wrapping the closure in a deferred transaction also means a `read` that issues more than one statement (e.g. resolve a chat's identity keys, then query by them) sees one consistent snapshot across all of them, rather than possibly straddling a write that commits in between. Prefer `read` over `run` for anything that only queries. Most of `SqliteStore`'s own `SignalStore`/`AppSyncStore`/`ProtocolStore`/`DeviceStore` surface does, as of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222) — session, identity, sender-key, and pre-key lookups among them. A handful of reads are deliberately kept on `run` instead: a stale answer for these would go out on the wire, fail an operation outright, or overwrite a cache unconditionally (app-state sync key lookups, `messageSecret` reads, `get_devices`).
+`read` takes a permit from a separate reader pool, sized by [`SqliteStoreConfig::read_pool_size`](/concepts/storage#memory-and-thread-tuning-sqlitestoreconfig), which defaults to `1` connection as of [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401) (it was `0` before). A burst of reads can then run alongside a pending write instead of queueing behind `run`'s write-path permits. If `read_pool_size` is `0` or the underlying connection isn't WAL, `read` falls back to queueing on the same permits as `run` — it's always safe to call. Wrapping the closure in a deferred transaction also means a `read` that issues more than one statement (e.g. resolve a chat's identity keys, then query by them) sees one consistent snapshot across all of them, rather than possibly straddling a write that commits in between. Prefer `read` over `run` for anything that only queries. Most of `SqliteStore`'s own `SignalStore`/`AppSyncStore`/`ProtocolStore`/`DeviceStore` surface does, as of [whatsapp-rust#1222](https://github.com/oxidezap/whatsapp-rust/pull/1222) — session, identity, sender-key, and pre-key lookups among them. A handful of reads are deliberately kept on `run` instead: a stale answer for these would go out on the wire, fail an operation outright, or overwrite a cache unconditionally (app-state sync key lookups, `messageSecret` reads, `get_devices`).
 </Note>
 
 ### Sharing the pool with sibling devices
@@ -536,7 +552,7 @@ impl SharedSqlite {
 pub fn share_for_device(&self, device_id: i32) -> Self;
 ```
 
-Call `SqliteStore::share_for_device()` to get a new `SqliteStore` for a *sibling device* in the same database file. It clones this store's pool, write-serialization semaphore, and reader pool instead of opening its own. Without it, every constructor builds its own r2d2 pool, so a process holding N sessions against one database file opens N pools. At the default `pool_size` of `1` and `read_pool_size` of `0`, that means N connections; a store configured with a larger `pool_size` or `read_pool_size` opens more per session, and sharing removes that entire pool, not just one connection. A connection costs memory before it reads a single row. On the bundled SQLite build, that includes a fixed ~46.9 KiB lookaside slab (`SQLITE_DEFAULT_LOOKASIDE`) — a compile-time setting, so a system-linked or SQLCipher-enabled SQLite (see [Connection init hook](#connection-init-hook)) can size it differently, or not allocate it at all. It also includes a page cache that grows to [`cache_size_kib`](#database-configuration). You can't shrink the lookaside slab with a pragma — `SQLITE_DBCONFIG_LOOKASIDE` is C-API only and diesel doesn't expose it. Since every query already carries a `device_id`, sibling sessions on one database only ever needed that field to differ.
+Call `SqliteStore::share_for_device()` to get a new `SqliteStore` for a *sibling device* in the same database file. It clones this store's pool, write-serialization semaphore, and reader pool instead of opening its own. Without it, every constructor builds its own r2d2 pool, so a process holding N sessions against one database file opens N pools. At the default `pool_size` of `1` and `read_pool_size` of `1` (as of [whatsapp-rust#1401](https://github.com/oxidezap/whatsapp-rust/pull/1401); `read_pool_size` defaulted to `0` before), that means 2N connections; a store configured with a larger `pool_size` or `read_pool_size` opens more per session, and sharing removes that entire pool, not just one connection. A connection costs memory before it reads a single row. On the bundled SQLite build, that includes a fixed ~46.9 KiB lookaside slab (`SQLITE_DEFAULT_LOOKASIDE`) — a compile-time setting, so a system-linked or SQLCipher-enabled SQLite (see [Connection init hook](#connection-init-hook)) can size it differently, or not allocate it at all. It also includes a page cache that grows to [`cache_size_kib`](#database-configuration). You can't shrink the lookaside slab with a pragma — `SQLITE_DBCONFIG_LOOKASIDE` is C-API only and diesel doesn't expose it. Since every query already carries a `device_id`, sibling sessions on one database only ever needed that field to differ.
 
 ```rust
 use whatsapp_rust_sqlite_storage::SqliteStore;

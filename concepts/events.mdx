@@ -205,7 +205,7 @@ pub enum Event {
     NewsletterLiveUpdate(NewsletterLiveUpdate),
 
     // Calls
-    IncomingCall(IncomingCall),
+    IncomingCall(Box<IncomingCall>),
 
     // Notification Updates
     DisappearingModeChanged(DisappearingModeChanged),
@@ -1559,7 +1559,7 @@ pub struct GroupUpdate {
     pub participant_pn: Option<Jid>,
     pub timestamp: DateTime<Utc>,
     pub is_lid_addressing_mode: bool,
-    pub action: GroupNotificationAction,
+    pub action: Box<GroupNotificationAction>,
 }
 ```
 
@@ -1568,7 +1568,7 @@ pub struct GroupUpdate {
 - `participant` - The admin/user who triggered the change
 - `participant_pn` - Phone number JID of the participant (for LID-addressed groups)
 - `is_lid_addressing_mode` - Whether the group uses LID addressing mode
-- `action` - The specific group notification action (subject change, participant add/remove/promote/demote, description change, etc.)
+- `action` - The specific group notification action (subject change, participant add/remove/promote/demote, description change, etc.), boxed like the `action` field of every other sync-action event payload (`ContactUpdate`, `PinUpdate`, `MuteUpdate`, …) — it was the largest variant of `Event` and every dispatched event pays for the size of the largest one
 
 **Example:**
 ```rust
@@ -1649,7 +1649,7 @@ Both `MembershipApprovalRequest` and `CreatedMembershipRequests` include an opti
 use wacore::stanza::groups::GroupNotificationAction;
 
 Event::GroupUpdate(update) => {
-    match &update.action {
+    match &*update.action {
         GroupNotificationAction::Add { participants, .. } => {
             for p in participants {
                 println!("{} was added to {}", p.jid, update.group_jid);
@@ -1683,6 +1683,10 @@ Event::GroupUpdate(update) => {
     }
 }
 ```
+
+<Note>
+[PR #1402](https://github.com/oxidezap/whatsapp-rust/pull/1402) changed `GroupUpdate::action` to `Box<GroupNotificationAction>` — at 288 bytes it made `GroupUpdate` the largest variant of `Event`, and `Event`'s size is what every dispatched event's `Arc` allocation pays for, group update or not. Field access (`update.action.foo`) is unchanged, but a `match` on `update.action` that names a `GroupNotificationAction` variant now needs `match &*update.action { ... }`, as in the example below.
+</Note>
 
 <Note>
 A single group notification from the server can contain multiple actions. The library dispatches a separate `GroupUpdate` event for each action, so your handler may receive multiple events from one notification.
@@ -2843,6 +2847,10 @@ pub struct IncomingCall {
 
 <Note>
 `group_jid: Some(...)` on `CallAction::Offer` (below) is what distinguishes a group call offer from a 1:1 one; `group` on `IncomingCall` carries its roster snapshot. See [Group calls](/guides/voip-calls#group-calls) and [Call links](/guides/voip-calls#call-links) in the VoIP guide for accepting one and attaching media.
+</Note>
+
+<Note>
+[PR #1402](https://github.com/oxidezap/whatsapp-rust/pull/1402) changed the `Event::IncomingCall` variant to hold `Box<IncomingCall>` instead of `IncomingCall` by value — at 432 bytes it was one of the two variants sizing every dispatched `Event`, and the per-dispatch `Arc<Event>` allocation is now 200 bytes smaller (`size_of::<Event>()` dropped from 528 to 328). Field reads and `&call` coercions (as in the examples on this page) are unchanged; a pattern that destructures `IncomingCall { .. }` directly inside the variant must bind the box first or deref it with `&*`.
 </Note>
 
 <Note>

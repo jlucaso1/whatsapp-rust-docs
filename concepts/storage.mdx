@@ -217,6 +217,7 @@ pub trait Backend: SignalStore + AppSyncStore + ProtocolStore + DeviceStore + Se
 
 ```rust
 use bytes::Bytes; // from the `bytes` crate
+use std::sync::Arc;
 
 #[async_trait]
 pub trait SignalStore: Send + Sync {

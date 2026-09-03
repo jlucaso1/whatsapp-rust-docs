@@ -558,7 +558,7 @@ Call `SqliteStore::share_for_device()` to get a new `SqliteStore` for a *sibling
 use whatsapp_rust_sqlite_storage::SqliteStore;
 
 let device_1 = SqliteStore::new_for_device("whatsapp.db", 1).await?;
-// One pool, one connection, two sessions.
+// One pool, two connections (write + read at the defaults), two sessions.
 let device_2 = device_1.share_for_device(2);
 ```
 

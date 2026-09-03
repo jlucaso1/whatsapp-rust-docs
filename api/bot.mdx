@@ -26,4 +26,1392 @@ The Bot is the **recommended way** to use whatsapp-rust. It provides sensible de
 
 ## Basic Usage
 
-PLACEHOLDER_REST_OF_FILE
+```rust
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
+use wacore::types::events::{Event, InboundMessage};
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
+    .on_event(|event, client| async move {
+        match &*event {
+            Event::Messages(batch) => {
+                for InboundMessage { message: msg, info, .. } in batch.iter() {
+                    println!("Message from {}: {:?}", info.source.sender, msg);
+                }
+            }
+            Event::Connected(_) => {
+                println!("Connected to WhatsApp!");
+            }
+            _ => {}
+        }
+    })
+    .build()
+    .await?;
+
+let bot_handle = bot.run().await?;
+bot_handle.await?;
+```
+
+---
+
+## Builder Methods
+
+### builder
+
+```rust
+pub fn builder() -> BotBuilder
+```
+
+Creates a new bot builder.
+
+### with_backend
+
+```rust
+pub fn with_backend(self, backend: Arc<dyn Backend>) -> Self
+```
+
+Sets the storage backend (required).
+
+<ParamField path="backend" type="Arc<dyn Backend>" required>
+  Backend implementation providing storage operations
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::store::SqliteStore;
+
+let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+let bot = Bot::builder()
+    .with_backend(backend)
+    // ...
+```
+
+<Tip>
+For multi-account scenarios, use `SqliteStore::new_for_device(path, device_id)` to create isolated storage per account.
+</Tip>
+
+### with_transport_factory
+
+```rust
+pub fn with_transport_factory<F>(self, factory: F) -> Self
+where
+    F: TransportFactory + 'static
+```
+
+Sets the transport factory for creating WebSocket connections (required).
+
+<ParamField path="factory" type="F: TransportFactory" required>
+  Transport factory implementation
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+
+let bot = Bot::builder()
+    .with_transport_factory(TokioWebSocketTransportFactory::new())
+    // ...
+```
+
+### with_http_client
+
+```rust
+pub fn with_http_client<C>(self, client: C) -> Self
+where
+    C: HttpClient + 'static
+```
+
+Sets the HTTP client for media operations and version fetching (required). The client is wrapped in its own `Arc` on each call, so that `Arc` isn't shared with any other builder — though the client value itself still can be: cloning a `Clone` client like `UreqHttpClient` shares its underlying `ureq::Agent` and connection pool, so `with_http_client(shared.clone())` already shares state today. Use [`with_http_client_arc`](#with_http_client_arc) to hand several bots the identical `Arc<dyn HttpClient>` instead of a clone apiece.
+
+<ParamField path="client" type="C: HttpClient" required>
+  HTTP client implementation
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+
+let bot = Bot::builder()
+    .with_http_client(UreqHttpClient::new())
+    // ...
+```
+
+### with_http_client_arc
+
+```rust
+pub fn with_http_client_arc(self, client: Arc<dyn HttpClient>) -> Self
+```
+
+Like [`with_http_client`](#with_http_client), but for a client that's already behind an `Arc<dyn HttpClient>`. Reach for this when a process runs several bots and you want them all pointing at one client — and one connection pool — instead of a clone apiece per builder.
+
+A single non-`Clone` client passed by value to one builder already works with `with_http_client`, since it carries no `Clone` bound. What `with_http_client` can't do is hand that same non-`Clone` client to a *second* builder — passed by value, it moves into the first one and no further. This setter covers that case, and it's also the only way in for a client that's already type-erased to `Arc<dyn HttpClient>` because the host chooses it at runtime.
+
+<ParamField path="client" type="Arc<dyn HttpClient>" required>
+  Already-shared HTTP client implementation
+</ParamField>
+
+**Example:**
+```rust
+use std::sync::Arc;
+use whatsapp_rust::http::{HttpClient, UreqHttpClient};
+
+let http_client: Arc<dyn HttpClient> = Arc::new(UreqHttpClient::new());
+
+for backend in session_backends {
+    let bot = Bot::builder()
+        .with_backend(backend)
+        .with_http_client_arc(http_client.clone())
+        // ...
+        .build()
+        .await?;
+}
+```
+
+See [sharing one client across many sessions](/api/http-client#sharing-one-client-across-many-sessions) for what a shared client costs and what it doesn't.
+
+### with_runtime
+
+```rust
+pub fn with_runtime<Rt>(self, runtime: Rt) -> Self
+where
+    Rt: Runtime + 'static
+```
+
+Sets the async runtime for spawning tasks, sleeping, and blocking operations (required).
+
+<ParamField path="runtime" type="Rt: Runtime" required>
+  Runtime implementation providing spawn, sleep, and spawn_blocking
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::TokioRuntime;
+
+let bot = Bot::builder()
+    .with_runtime(TokioRuntime)
+    // ...
+```
+
+<Note>
+`TokioRuntime` is only available when the `tokio-runtime` feature is enabled (it is by default). To use a different async runtime, implement the `Runtime` trait from `wacore::runtime`. See [custom backends](/guides/custom-backends#custom-runtime) for details.
+</Note>
+
+### with_task_instrument
+
+```rust
+pub fn with_task_instrument(
+    mut self,
+    instrument: Arc<dyn wacore::stats::TaskInstrument>,
+) -> Self
+```
+
+Instruments the client's internal tasks with a `TaskInstrument` hook, called around every poll of a spawned task (and around blocking work). Runtime-agnostic — it wraps whichever `Runtime` the client uses (via [`with_runtime`](#with_runtime) or the default), so every task spawned through the `Runtime` trait is covered. [`Bot::run`](#run) also meters the main run loop itself (the read loop, including frame decryption), so that work is covered whether you launch via `bot.run().await` or `Bot::spawn()` — the two paths never double-wrap. Default: no hook, the runtime is used untouched and nothing is metered.
+
+<Warning>
+  When the `voip` feature is enabled, 1:1 call media tasks spawn directly on Tokio instead of through the `Runtime` trait, so they are **not** covered by this hook. A `CpuMeter` attached here will undercount CPU for sessions with active calls.
+</Warning>
+
+Pass the built-in `wacore::stats::CpuMeter` for per-session CPU accounting (busy time + poll count), keeping a clone to read `.snapshot()` later. Or implement `TaskInstrument` yourself to scope allocator attribution, an ESP-IDF `heap_caps` sampler, or any other per-session platform hook — the library only calls `on_poll_start`/`on_poll_end` and never inspects what the hook does.
+
+<ParamField path="instrument" type="Arc<dyn wacore::stats::TaskInstrument>" required>
+  Hook invoked around every poll of the client's internal tasks
+</ParamField>
+
+**Example:**
+```rust
+use std::sync::Arc;
+use wacore::stats::CpuMeter;
+
+let cpu = Arc::new(CpuMeter::new());
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_task_instrument(cpu.clone())
+    .build()
+    .await?;
+
+// Later, read accumulated busy time and poll count:
+let snapshot = cpu.snapshot();
+println!("busy: {:?}, polls: {}", snapshot.busy, snapshot.polls);
+```
+
+<Note>
+  Opt-in and off by default — instrumenting every poll has measurable overhead, so treat this as a diagnostics tool rather than an always-on meter. See [`Client::stats()`](/api/client#stats) for always-on wire I/O counters (atomics incremented on every frame) and [`Client::memory_report()`](/api/client#memory_report) for the on-demand, zero-cost-when-unused memory breakdown.
+</Note>
+
+### with_alloc_meter
+
+```rust
+pub fn with_alloc_meter(mut self, meter: Arc<wacore::stats::AllocMeter>) -> Self
+```
+
+Installs a `wacore::stats::AllocMeter` as this client's task instrument and keeps a typed handle so [`Client::resource_report()`](/api/client#resource_report) can fold in its allocation-churn snapshot. `AllocMeter` is a first-class `TaskInstrument` — the churn counterpart to `CpuMeter`'s busy-time tracking — that attributes heap bytes allocated and freed to this client.
+
+This is sugar over [`with_task_instrument`](#with_task_instrument): it occupies the same single instrument slot, so it's mutually exclusive with `CpuMeter` or any other hook — **last setter wins**. Calling `with_task_instrument` after `with_alloc_meter` drops the typed alloc-meter handle, so `resource_report()`'s `alloc` field reverts to `None` even though the instrument itself is replaced.
+
+The library never touches an allocator directly. The host must install a `#[global_allocator]` that calls `AllocMeter::on_alloc` / `AllocMeter::on_dealloc` on every (de)allocation — `examples/alloc_tracking.rs` in the source repo is the ~20-line reference implementation.
+
+<Warning>
+  Only allocations made *inside* an instrumented poll or blocking closure are counted — every task spawned through the `Runtime` trait, plus the main run loop (see the `with_task_instrument` `voip` caveat above, which applies here too). Deallocations are charged to whichever meter is active when the free happens, not the one that allocated the block, so `freed_bytes` (and `net_bytes()`) drift for buffers that outlive the poll that made them — `allocated_bytes` is the reliable cumulative signal.
+</Warning>
+
+<ParamField path="meter" type="Arc<wacore::stats::AllocMeter>" required>
+  The allocation meter to install and drive via the poll hooks
+</ParamField>
+
+**Example:**
+```rust
+use std::sync::Arc;
+use wacore::stats::AllocMeter;
+
+let meter = Arc::new(AllocMeter::new());
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_alloc_meter(meter.clone())
+    .build()
+    .await?;
+
+// Later, fold the snapshot into the unified resource report:
+let report = bot.client().resource_report().await;
+if let Some(alloc) = report.alloc {
+    println!("allocated: {} B, freed: {} B, net: {} B", alloc.allocated_bytes, alloc.freed_bytes, alloc.net_bytes());
+}
+```
+
+---
+
+## Event Handling
+
+### on_event
+
+```rust
+pub fn on_event<F, Fut>(self, handler: F) -> Self
+where
+    F: Fn(Arc<Event>, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Registers an async event handler. The handler receives an `Arc<Event>` — use `&*event` to pattern-match on the inner event type.
+
+<ParamField path="handler" type="F" required>
+  Async function that receives `Arc<Event>` and `Arc<Client>`
+</ParamField>
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+
+Bot::builder()
+    .on_event(|event, client| async move {
+        match &*event {
+            Event::Messages(batch) => {
+                // Reply to messages
+                for InboundMessage { info, .. } in batch.iter() {
+                    let reply = wa::Message {
+                        conversation: Some("Hello back!".to_string()),
+                        ..Default::default()
+                    };
+                    let _ = client.send_message(info.source.chat.clone(), reply).await;
+                }
+            }
+            Event::Connected(_) => {
+                println!("Bot online!");
+            }
+            _ => {}
+        }
+    })
+    // ...
+```
+
+See [Events Reference](/concepts/events) for all event types.
+
+### on_event_for
+
+```rust
+pub fn on_event_for<F, Fut>(self, kinds: &[EventKind], handler: F) -> Self
+where
+    F: Fn(Arc<Event>, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Like `on_event`, but registers the handler with a narrowed [`EventInterest`](/concepts/events#typed-event-interest-skip-boxing-unwanted-events) so the event bus skips materializing kinds you don't subscribe to. Useful when you only handle a couple of event types and want to avoid paying the `Arc` allocation for high-frequency events like presence or receipts.
+
+```rust
+use wacore::types::events::EventKind;
+
+Bot::builder()
+    .on_event_for(&[EventKind::Messages, EventKind::Connected], |event, client| async move {
+        match &*event {
+            Event::Messages(batch) => { /* … */ }
+            Event::Connected(_) => println!("online"),
+            _ => {}
+        }
+    })
+    // ...
+```
+
+### with_event_delivery
+
+```rust
+pub fn with_event_delivery(mut self, delivery: EventDelivery) -> Self
+```
+
+Chooses how `on_event`/`on_event_for` (and the other closure-based registrars) receive events off the bus.
+
+```rust
+#[non_exhaustive]
+pub enum EventDelivery {
+    /// Each event is delivered to each interested callback on its own spawned
+    /// task (default). A slow callback stalls neither the bus nor its
+    /// siblings, but ordering across events is not guaranteed and a
+    /// persistently slow consumer can accumulate unbounded in-flight tasks.
+    Concurrent,
+    /// Events are delivered to the callbacks strictly in arrival order
+    /// through a single bounded mailbox drained by one task — the ordered
+    /// `messages.upsert` contract of WA Web (`preserveOrder`), whatsmeow and
+    /// Baileys. When the mailbox is full the event is dropped and counted in
+    /// `StatsSnapshot::events_dropped` instead of blocking the receive
+    /// pipeline or growing without limit.
+    Ordered { capacity: usize },
+}
+```
+
+<ParamField path="delivery" type="EventDelivery" required>
+  Delivery strategy. Defaults to `EventDelivery::Concurrent` — existing consumers are unaffected unless they opt in.
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::prelude::*;
+
+Bot::builder()
+    .with_backend(backend)
+    // Deliver callbacks in arrival order through a 256-slot mailbox.
+    .with_event_delivery(EventDelivery::Ordered { capacity: 256 })
+    .on_message(|ctx| async move {
+        // Guaranteed to run in the order messages arrived.
+        println!("{}", ctx.info.id);
+    })
+    .build()
+    .await?;
+```
+
+<Note>
+`capacity` is clamped to at least 1. Only affects the closure-based callbacks (`on_event`, `on_event_for`, `on_message`, and the other typed registrars) — a raw handler registered via [`with_event_handler`](#with_event_handler) always runs inline on the dispatch path and is unaffected by this setting.
+</Note>
+
+<Tip>
+Under `Ordered`, a callback that panics is caught and logged; it does not kill the single drainer or drop later events. If you need at-least-once delivery instead of best-effort drops under load, pair `Ordered` with an [inbound durability hook](/advanced/inbound-durability) — the hook buffers and redelivers independently of the delivery mailbox. See [`Client::stats()`](/api/client#stats) for the `events_dropped` counter.
+</Tip>
+
+### with_event_handler
+
+```rust
+pub fn with_event_handler(mut self, handler: impl EventHandler + 'static) -> Self
+```
+
+Registers a struct-based [`EventHandler`](/concepts/events#eventhandler-trait) directly on the bus. Unlike the closure registrars, the handler holds its state as struct fields (no per-field clone dance); because `handle_event` takes `&self`, mutable state requires interior mutability (`Mutex`, `RwLock`, or atomics). `handle_event` runs inline on the dispatch path — spawn your own task for slow work. Not affected by [`with_event_delivery`](#with_event_delivery).
+
+**Example:**
+```rust
+use std::sync::Arc;
+use wacore::types::events::{Event, EventHandler};
+
+struct MyStatefulHandler { /* ... */ }
+
+impl EventHandler for MyStatefulHandler {
+    fn handle_event(&self, event: Arc<Event>) {
+        // Runs inline — spawn if this does non-trivial work.
+    }
+}
+
+Bot::builder()
+    .with_backend(backend)
+    .with_event_handler(MyStatefulHandler { /* ... */ })
+    // ...
+```
+
+### Using ChannelEventHandler
+
+For scenarios where you need to process events outside of a closure (e.g., testing, custom event loops, or runtime-agnostic code), use `ChannelEventHandler` with `register_handler` instead of `on_event`:
+
+```rust
+use wacore::types::events::{ChannelEventHandler, Event, InboundMessage};
+
+let mut bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
+    .build()
+    .await?;
+
+let client = bot.client();
+let (event_handler, event_rx) = ChannelEventHandler::new();
+client.register_handler(event_handler);
+
+let handle = bot.run().await?;
+
+// Process events in your own async loop
+while let Ok(event) = event_rx.recv().await {
+    match &*event {
+        Event::Connected(_) => println!("Connected!"),
+        Event::Messages(batch) => {
+            for InboundMessage { info, .. } in batch.iter() {
+                println!("Message from {}", info.source.sender);
+            }
+        }
+        _ => {}
+    }
+}
+```
+
+<Note>
+`ChannelEventHandler` uses `async-channel` (runtime-agnostic) with an unbounded buffer, so events fired before the receiver starts listening are not lost. You can combine it with `on_event` — both handlers will receive all events.
+</Note>
+
+### with_enc_handler
+
+```rust
+pub fn with_enc_handler<H>(self, enc_type: impl Into<String>, handler: H) -> Self
+where
+    H: EncHandler + 'static
+```
+
+Registers a custom handler for specific encrypted message types.
+
+<ParamField path="enc_type" type="String" required>
+  Encrypted message type (e.g., "frskmsg", "skmsg")
+</ParamField>
+
+<ParamField path="handler" type="H: EncHandler" required>
+  Handler implementation
+</ParamField>
+
+<Note>
+On `wasm32` targets, `EncHandler` drops the `Send + Sync` supertrait — your handler can capture `!Send` JS handles. On native, `Send + Sync` is retained via `MaybeSendSync` so `Arc<dyn EncHandler>` remains thread-safe. This mirrors the convention used by `EventHandler` and `SendContextResolver`.
+</Note>
+
+---
+
+## Configuration
+
+### with_version
+
+```rust
+pub fn with_version(self, version: (u32, u32, u32)) -> Self
+```
+
+Overrides the WhatsApp version used by the client.
+
+<ParamField path="version" type="(u32, u32, u32)" required>
+  Tuple of (primary, secondary, tertiary) version numbers
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_version((2, 3000, 1027868167))
+    // ...
+```
+
+<Note>
+By default, the client checks the cached WhatsApp Web version on each connect and only fetches a new one if that cache is missing or over 24 hours old. It reads that version from `web.whatsapp.com/sw.js`, except on `wasm32` targets, which read the same revision from the Facebook JS SDK bundle instead (see [HTTP Client — the version fetch does not pool a connection](/api/http-client#the-version-fetch-does-not-pool-a-connection)). Use `with_version` to pin a specific version when you need deterministic behavior — for example, in integration tests or CI environments where external HTTP requests are undesirable.
+</Note>
+
+<Note>
+As of PR #1360: that `wasm32` source, the Facebook JS SDK bundle, sits on common tracker blocklists. If a content blocker keeps a wasm client from reaching it, the client still connects: it settles for the version the device already holds and reports this on [`Event::Connected`](/concepts/events#connected) via `app_version_fallback`. Call `with_version` to skip the fetch (and this fallback) entirely, on either target.
+</Note>
+
+### with_device_props
+
+```rust
+pub fn with_device_props(self, override_: DevicePropsOverride) -> Self
+```
+
+Overrides `DeviceProps` fields sent to WhatsApp servers during pairing. Takes a [`DevicePropsOverride`](#devicepropsoverride) built via its chained setters — a field left unset keeps the library's default for that field, it does not clear it.
+
+<ParamField path="override_" type="DevicePropsOverride" required>
+  Builder describing which `DeviceProps` fields to override
+</ParamField>
+
+**Example:**
+```rust
+use waproto::whatsapp::device_props::PlatformType;
+use wacore::store::DevicePropsOverride;
+
+Bot::builder()
+    .with_backend(backend)
+    .with_device_props(
+        DevicePropsOverride::new()
+            .with_os("macOS")
+            .with_platform_type(PlatformType::CHROME),
+    )
+    // ...
+```
+
+<Tip>
+`platform_type` determines the device name shown on the phone's **Linked Devices** list. Common values: `CHROME`, `FIREFOX`, `SAFARI`, `DESKTOP`. Only applied on the initial pairing — `DeviceProps` is not sent again after registration.
+</Tip>
+
+#### DevicePropsOverride
+
+```rust
+pub struct DevicePropsOverride {
+    pub os: Option<String>,
+    pub version: Option<wa::device_props::AppVersion>,
+    pub platform_type: Option<wa::device_props::PlatformType>,
+    pub require_full_sync: Option<bool>,
+    pub history_sync_config: Option<wa::device_props::HistorySyncConfig>,
+}
+```
+
+| Setter | Overrides | Library default |
+|---|---|---|
+| `.with_os(impl Into<String>)` | `os` | `"rust"` |
+| `.with_version(AppVersion)` | `version` | `0.1.0` |
+| `.with_platform_type(PlatformType)` | `platform_type` | `UNKNOWN` |
+| `.with_require_full_sync(bool)` | `require_full_sync` | `false` — requests a recent-only sync |
+| `.with_history_sync_config(HistorySyncConfig)` | `history_sync_config` | see below |
+
+<Note>
+WA Web itself only ever sends one of two coherent `DeviceProps` shapes, chosen by whether the companion is a browser or the Windows-native ("win_hybrid") client:
+
+| | `platform_type` | `require_full_sync` | `full_sync_days_limit` |
+|---|---|---|---|
+| browser (this library's default) | `CHROME`/`FIREFOX`/… | `false` | unset |
+| win_hybrid | `UWP` | `true` | `365` |
+
+The library's sync fields (`require_full_sync`, `history_sync_config`) default to the browser row's sync behavior. Pairing requests a recent history sync, not a full backfill.
+
+The identity fields (`os`, `platform_type`) deliberately follow neither row. They stay at `"rust"` / `UNKNOWN` by default, so the library doesn't impersonate a specific client unless you configure one.
+
+To opt into a full backfill, set `require_full_sync` together with the matching `history_sync_config` fields. Setting `require_full_sync` alone produces a combination no real WhatsApp client sends:
+
+```rust
+use waproto::whatsapp::device_props::{HistorySyncConfig, PlatformType};
+use wacore::store::{DevicePropsOverride, device::default_history_sync_config};
+
+DevicePropsOverride::new()
+    .with_platform_type(PlatformType::UWP)
+    .with_require_full_sync(true)
+    .with_history_sync_config(HistorySyncConfig {
+        full_sync_days_limit: Some(365),
+        on_demand_ready: Some(true),
+        complete_on_demand_ready: Some(true),
+        ..default_history_sync_config()
+    })
+```
+</Note>
+
+<Warning>
+Earlier versions requested a full history sync (`require_full_sync: true`) on every pairing by default, and advertised `support_call_log_history: false`. Both now match WA Web's own browser default: `require_full_sync` is `false` (a recent-only sync) and `support_call_log_history` is `true`. If you relied on receiving a full backfill at pairing time, set `.with_require_full_sync(true)` plus a matching `history_sync_config`, as shown above ([PR #1164](https://github.com/oxidezap/whatsapp-rust/pull/1164)).
+</Warning>
+
+### with_push_name
+
+```rust
+pub fn with_push_name(self, name: impl Into<String>) -> Self
+```
+
+Sets an initial push name on the device before connecting.
+
+<ParamField path="name" type="String" required>
+  Display name to set on the device
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_push_name("My Bot")
+    // ...
+```
+
+<Note>
+The push name is included in the `ClientPayload` during registration. This is useful for testing scenarios where the server assigns phone numbers based on push name.
+</Note>
+
+---
+
+## Authentication
+
+### with_pair_code
+
+```rust
+pub fn with_pair_code(self, options: PairCodeOptions) -> Self
+```
+
+Configures pair code authentication to run automatically after connecting.
+
+<ParamField path="options" type="PairCodeOptions" required>
+  Configuration for pair code authentication
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::pair_code::PairCodeOptions;
+use wacore::companion_reg::CompanionWebClientType;
+use wacore::types::events::{Event, PairingCode};
+
+Bot::builder()
+    .with_pair_code(PairCodeOptions {
+        phone_number: "15551234567".to_string(),
+        show_push_notification: true,
+        custom_code: None,
+        // `None` derives the wire id from the device's `PlatformType`.
+        // Override only when you need a specific `<companion_platform_id>`.
+        platform_id: Some(CompanionWebClientType::Chrome),
+        // `..Default::default()` covers `display_os` (`None` = safe OS
+        // canonicalization; see the Tip below).
+        ..Default::default()
+    })
+    .on_event(|event, _client| async move {
+        match &*event {
+            Event::PairingCode(PairingCode { code, timeout, .. }) => {
+                println!("Enter this code on your phone: {}", code);
+                println!("Expires in: {} seconds", timeout.as_secs());
+            }
+            _ => {}
+        }
+    })
+    // ...
+```
+
+<Note>
+Pair code runs concurrently with QR code pairing — whichever completes first wins.
+</Note>
+
+<Note>
+`with_pair_code` runs [`Client::pair_with_code`](/api/client#pair_with_code) in a detached task, so a failure never reaches a caller as an `Err` — it only reaches [`Event::PairingCodeError`](/concepts/events#pairingcodeerror). Register [`on_pair_code_error`](#on_pair_code_error) if the consumer must distinguish "still waiting for the user" from "no code is coming" (a rate-limited request otherwise looks identical to the former).
+</Note>
+
+<Tip>
+The `companion_platform_display` shown on the phone is derived automatically from the resolved `platform_id` and a **canonicalized** OS derived from the device's `os` string: web variants emit `<Browser> (<OS>)` (Android `PlatformType`s map to `Chrome`, so they show as `Chrome (Android)` by default); explicit `AndroidPhone`/`AndroidTablet`/`AndroidAmbiguous` overrides emit `Android (<OS>)`. The OS is coerced into a small server-safe set (`Windows`/`Mac OS`/`Linux`/`Android`/`iOS`) because the pair-code server rejects a non-OS display with `bad-request` — an arbitrary branding `os` string falls back to `Linux`. Set `PairCodeOptions::display_os` to send a real, non-canonical OS name verbatim instead. See [Authentication — companion_platform_display](/concepts/authentication#companion-platform-display) for the full classification table.
+</Tip>
+
+### on_pair_code_refresh
+
+```rust
+pub fn on_pair_code_refresh<F, Fut>(self, handler: F) -> Self
+where
+    F: Fn(bool, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Registers a handler for [`Event::PairingCodeRefresh`](/concepts/events#pairingcoderefresh), fired when the in-progress phone-number pairing code should be replaced. The `bool` argument is `force_manual`.
+
+<ParamField path="handler" type="F" required>
+  Async function that receives `force_manual: bool` and `Arc<Client>`
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::pair_code::PairCodeOptions;
+
+Bot::builder()
+    .with_pair_code(PairCodeOptions {
+        phone_number: "15551234567".to_string(),
+        ..Default::default()
+    })
+    .on_pair_code_refresh(|force_manual, client| async move {
+        println!("Pair code needs a refresh (force_manual={force_manual})");
+        // The previous code is no longer valid, and the flow is already
+        // clear — request a fresh one with the same phone number.
+        let _ = client.pair_with_code(PairCodeOptions {
+            phone_number: "15551234567".to_string(),
+            ..Default::default()
+        }).await;
+    })
+    // ...
+```
+
+<Note>
+This callback fires for **two** triggers, not just a server request: the server asking for a refresh (only while a pair-code flow is outstanding and the notification's ref matches it — a `refresh_code` notification for a stale or unrelated flow is ignored), and a non-refused `companion_finish` — accepted, or its own 30s wait going unanswered — whose `pair-success` then went unanswered for a minute (`force_manual` is always `false` for this second trigger). A `companion_finish` the server actively *refuses* is reported through [`on_pair_code_error`](#on_pair_code_error) instead, immediately rather than after this timeout — register that handler too if you need to react to a refusal, since it no longer reaches this one. See [Pair code refresh events](/concepts/authentication#pair-code-refresh-events) for the full breakdown.
+</Note>
+
+### on_pair_code_error
+
+```rust
+pub fn on_pair_code_error<F, Fut>(self, handler: F) -> Self
+where
+    F: Fn(PairingCodeError, Arc<Client>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static
+```
+
+Registers a handler for [`Event::PairingCodeError`](/concepts/events#pairingcodeerror), fired when a pair-code flow fails — either a stage-1 request that never gets a code issued, or a stage-2 `companion_finish` the server refuses after a code was already entered on the phone. The counterpart to [`on_pair_code_refresh`](#on_pair_code_refresh) on the failure path, and a dedicated convenience over matching the event yourself in `on_event` — either works to observe it. A [`with_pair_code`](#with_pair_code) request runs in a detached task, so the `Err` it would otherwise return reaches no caller directly; this event is the only surface that reports its failure at all.
+
+<ParamField path="handler" type="F" required>
+  Async function that receives the `PairingCodeError` event and `Arc<Client>`
+</ParamField>
+
+**Example:**
+```rust
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use whatsapp_rust::pair_code::{PairCodeOptions, PairCodeRejection};
+
+const MAX_THROTTLE_RETRIES: u32 = 3;
+let retries = Arc::new(AtomicU32::new(0));
+
+Bot::builder()
+    .with_pair_code(PairCodeOptions {
+        phone_number: "15551234567".to_string(),
+        ..Default::default()
+    })
+    .on_pair_code_error(move |err, client| {
+        let retries = retries.clone();
+        async move {
+            eprintln!("Pair code request failed: {}", err.error);
+            match err.rejection {
+                // Cap attempts — a persistently throttled number should stop
+                // retrying rather than loop forever on repeated PairingCodeError.
+                Some(r) if r.is_throttled() && retries.fetch_add(1, Ordering::Relaxed) < MAX_THROTTLE_RETRIES => {
+                    // Back off using the server's own hint when it gave one.
+                    let delay = err.backoff.unwrap_or(std::time::Duration::from_secs(30));
+                    tokio::time::sleep(delay).await;
+                    let _ = client.pair_with_code(PairCodeOptions {
+                        phone_number: "15551234567".to_string(),
+                        ..Default::default()
+                    }).await;
+                }
+                Some(PairCodeRejection::FeatureNotAvailable) => {
+                    // Retrying will not help — fall back to QR pairing instead.
+                }
+                _ => {}
+            }
+        }
+    })
+    // ...
+```
+
+<Note>
+Branch on `err.rejection` rather than the message, which is not a stable surface — see [Pair code failure events](/concepts/authentication#pair-code-failure-events) for the full field breakdown and the two failures ([`PairCodeError::CodeAlreadyOutstanding`](/concepts/authentication#one-code-at-a-time) and `Cancelled`) that deliberately never reach this handler.
+</Note>
+
+---
+
+## Cache Configuration
+
+### with_cache_config
+
+```rust
+pub fn with_cache_config(self, config: CacheConfig) -> Self
+```
+
+Configures cache TTL and capacity settings for internal caches.
+
+<ParamField path="config" type="CacheConfig" required>
+  Custom cache configuration
+</ParamField>
+
+**Example:**
+```rust
+use whatsapp_rust::{CacheConfig, CacheEntryConfig};
+use std::time::Duration;
+
+Bot::builder()
+    .with_cache_config(CacheConfig {
+        group_cache: CacheEntryConfig::new(None, 500), // No TTL, 500 entries
+        device_registry_cache: CacheEntryConfig::new(Some(Duration::from_secs(1800)), 2000),
+        ..Default::default()
+    })
+    // ...
+```
+
+See [Cache Configuration](#cache-configuration-reference) for available cache types.
+
+---
+
+## History Sync
+
+History sync transfers chat history from the phone to the linked device. The processing pipeline is optimized for minimal RAM usage through zero-copy streaming and lazy parsing.
+
+### How it works
+
+When your bot receives history sync data, the pipeline:
+
+1. **Stream-decrypts** external blobs in 8KB chunks (or moves inline payloads without copying)
+2. **Decompresses** zlib data on a blocking thread with pre-allocated buffers capped at 8 MiB
+3. **Walks protobuf fields manually** instead of decoding the entire message tree — only internal data (pushname, NCT salt, TC tokens) is extracted at this stage
+4. **Wraps the compressed payload** in a [`LazyHistorySync`](/concepts/events#lazyhistorysync) with cheap metadata (sync type, chunk order, progress) available without decoding
+5. **Dispatches** `Event::HistorySync(Box<LazyHistorySync>)` — full protobuf decoding is deferred until you call `.get()`. Use `.stream()` for incremental memory-bounded access, `.decompress()` for one-shot inflation, or `.compressed_bytes()` for the raw compressed payload
+
+If no event handlers are registered, the blob is not retained in memory.
+
+### skip_history_sync
+
+```rust
+pub fn skip_history_sync(self) -> Self
+```
+
+Skips processing of history sync notifications from the phone.
+
+When enabled:
+- Sends a receipt so the phone stops retrying uploads
+- Does not download or process historical data
+- Emits debug log for each skipped notification
+- Useful for bot use cases where message history is not needed
+
+**Example:**
+```rust
+Bot::builder()
+    .skip_history_sync()
+    // ...
+```
+
+<Tip>
+For bots that only need to respond to new messages, enabling this can significantly reduce startup time and bandwidth usage.
+</Tip>
+
+---
+
+### with_wanted_pre_key_count
+
+```rust
+pub fn with_wanted_pre_key_count(self, count: usize) -> Self
+```
+
+Sets the number of one-time pre-keys generated and uploaded per batch. Mirrors WhatsApp Web's `UPLOAD_KEYS_COUNT`. Default: `812`.
+
+The value is clamped at upload time to `5..=65_535`. Values outside that range log a `warn!` and are clamped to the nearest bound.
+
+<ParamField path="count" type="usize" required>
+  Pre-keys per upload batch. Clamped to `5..=65_535`.
+</ParamField>
+
+**Example:**
+```rust
+Bot::builder()
+    .with_wanted_pre_key_count(256) // smaller batch for embedded hosts
+    // ...
+```
+
+<Tip>
+Leave this at the default unless you have a specific reason to change it. Embedded or memory-constrained consumers may prefer a smaller batch to shrink the working set during each upload; smaller batches also mean more frequent uploads as peers consume keys.
+</Tip>
+
+<Warning>
+The floor of 5 prevents an empty-but-flagged pool and a re-upload loop (the count guard never clears below the trigger threshold). The ceiling of 65,535 is the wire-format limit — the upload IQ encodes the pre-key list length as a `u16`, so a larger batch would generate and store keys locally and then fail to encode.
+</Warning>
+
+---
+
+## Building and Running
+
+### build
+
+```rust
+pub async fn build(self) -> Result<Bot, BotBuilderError>
+```
+
+Builds the bot with the configured options.
+
+**Errors:**
+
+```rust
+pub enum BotBuilderError {
+    Other(anyhow::Error),
+}
+```
+
+| Variant | Cause |
+|---------|-------|
+| `Other` | Backend initialization or other runtime failure |
+
+<Note>
+Missing required components (backend, transport, HTTP client, runtime) are caught at **compile time** via the typestate pattern — `build()` is only available when all four type parameters are `Provided`. You won't see runtime errors for missing components.
+</Note>
+
+<Note>
+`BotBuilder` is `#[must_use]` — building it does nothing until you call `.build()`, so a builder chain left unbound (or dropped before `.build()`) now triggers a compiler warning.
+</Note>
+
+### client
+
+```rust
+pub fn client(&self) -> Arc<Client>
+```
+
+Returns the underlying Client Arc.
+
+**Example:**
+```rust
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport)
+    .with_http_client(http_client)
+    .with_runtime(TokioRuntime)
+    .build()
+    .await?;
+
+let client = bot.client();
+let jid = client.pn();
+```
+
+### run
+
+```rust
+pub async fn run(&mut self) -> Result<BotHandle>
+```
+
+Starts the bot's connection loop and background workers.
+
+Returns a `BotHandle` that implements `Future`. You can also call `.abort()` on it to cancel the bot.
+
+**Example:**
+```rust
+let mut bot = Bot::builder()
+    // ... configuration
+    .build()
+    .await?;
+
+let handle = bot.run().await?;
+
+// Wait for bot to finish (runs until disconnect)
+handle.await?;
+```
+
+<Warning>
+`BotHandle` is `#[must_use]`: dropping it aborts the bot task instead of leaving it running in the background. Bind it and either `.await` it or call `.shutdown()`/`.abort()` explicitly — do not let it fall out of scope while you expect the bot to keep running.
+</Warning>
+
+<Note>
+If a [`with_task_instrument`](#with_task_instrument) hook is configured, `run()` meters the client's main run loop (the read loop, including frame decryption) itself, in addition to the tasks the instrumented runtime already covers. This closes the gap where `bot.run().await` polls that future on the caller's task rather than through `Runtime::spawn`.
+</Note>
+
+---
+
+## MessageContext
+
+A convenience helper for message handling. You can construct it from an `InboundMessage` — the item type carried by `Event::Messages`' `MessageBatch`:
+
+```rust
+pub struct MessageContext {
+    pub message: Arc<wa::Message>,
+    pub info: MessageInfo,
+    pub client: Arc<Client>,
+    /// Disappearing-message timer of the chat this message arrived in, in
+    /// seconds, when the stanza carried one. Mirrors
+    /// `InboundMessage::ephemeral_expiration`.
+    pub ephemeral_expiration: Option<u32>,
+    /// For a decrypted newsletter comment, the key of the post it replies to.
+    /// Mirrors `InboundMessage::comment_target`.
+    pub comment_target: Option<Box<wa::MessageKey>>,
+}
+```
+
+<Note>
+Since v0.6 `message` is `Arc<wa::Message>` (was `Box<wa::Message>`). This matches the `InboundMessage` payload and lets `from_inbound` / `from_arc` reuse the bus-dispatched `Arc` with zero deep clones.
+</Note>
+
+<Note>
+`ephemeral_expiration` and `comment_target` used to live on the shared `MessageInfo`. Writing them there needed an `Arc::make_mut` copy of the whole struct on every message in an ephemeral chat. They moved to `InboundMessage` to avoid that copy, and `MessageContext` now carries them too.
+
+Use [`from_inbound`](#from_inbound) when you need these fields — it's the only constructor that sees the stanza-derived event. `from_arc` and `from_parts` build from `message`/`info` alone, so they always leave both fields `None`. A bot handler reached through `Bot::on_message` (which uses `from_inbound` internally) sees them populated whenever the underlying event carried them.
+</Note>
+
+### from_parts
+
+```rust
+pub fn from_parts(message: &wa::Message, info: &MessageInfo, client: Arc<Client>) -> Self
+```
+
+Constructs a `MessageContext` from individual message components. Internally clones the `wa::Message` into a new `Arc`.
+
+### from_arc
+
+```rust
+pub fn from_arc(message: Arc<wa::Message>, info: &MessageInfo, client: Arc<Client>) -> Self
+```
+
+Constructs a `MessageContext` from an existing `Arc<wa::Message>` without copying the body — pair this with the `Arc` you receive from an `InboundMessage` to keep dispatch zero-clone. `ephemeral_expiration` and `comment_target` are left `None`, since this constructor never sees the stanza they're read from.
+
+### from_inbound
+
+```rust
+pub fn from_inbound(inbound: &InboundMessage, client: Arc<Client>) -> Self
+```
+
+Extracts a `MessageContext` from a single `InboundMessage` (one item of a `MessageBatch`). Unlike the removed `from_event`, this is infallible — there's no "wrong event kind" case once you're iterating `Event::Messages`' batch. Reuses the existing `Arc<wa::Message>` rather than cloning the body, and carries `ephemeral_expiration` and `comment_target` straight from the event. This is what `Bot::on_message` uses internally to fan a batch out to your per-message handler, invoked once per item in arrival order.
+
+### send_message
+
+```rust
+pub async fn send_message(&self, message: wa::Message) -> Result<SendResult, SendError>
+```
+
+Sends a message to the same chat. Returns a [`SendResult`](/api/send#sendresult) containing the `message_id` and `to` JID.
+
+### build_quote_context
+
+```rust
+pub fn build_quote_context(&self) -> wa::ContextInfo
+```
+
+Builds a quote context for replying to this message.
+
+Handles:
+- Correct stanza_id/participant for groups and newsletters
+- Stripping nested mentions
+- Preserving bot quote chains
+
+**Example:**
+```rust
+use waproto::whatsapp as wa;
+use whatsapp_rust::bot::MessageContext;
+
+.on_event(|event, client| async move {
+    for inbound in event.messages() {
+        let ctx = MessageContext::from_inbound(inbound, client.clone());
+        let reply = wa::Message {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
+                text: Some("Quoted reply!".to_string()),
+                context_info: buffa::MessageField::some(ctx.build_quote_context()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let _ = ctx.send_message(reply).await;
+    }
+})
+```
+
+### edit_message
+
+```rust
+pub async fn edit_message(
+    &self,
+    original_message_id: impl Into<String>,
+    new_message: wa::Message
+) -> Result<String, SendError>
+```
+
+Edits a message in the same chat.
+
+### revoke_message
+
+```rust
+pub async fn revoke_message(
+    &self,
+    message_id: String,
+    revoke_type: RevokeType
+) -> Result<(), SendError>
+```
+
+Deletes a message in the same chat.
+
+### react
+
+```rust
+pub async fn react(&self, emoji: &str) -> Result<SendResult, SendError>
+```
+
+Sends an emoji reaction to the incoming message. The chat JID, target message ID, and group/status `participant` are taken from the context — you only supply the emoji. Pass an empty string (`""`) to remove a previously sent reaction.
+
+Internally this calls [`Client::send_reaction`](/api/send#send_reaction) with `self.message_key()` as the target.
+
+**Example:**
+```rust
+use whatsapp_rust::bot::MessageContext;
+
+.on_event(|event, client| async move {
+    for inbound in event.messages() {
+        // React with a thumbs-up to every incoming message.
+        let ctx = MessageContext::from_inbound(inbound, client.clone());
+        let _ = ctx.react("👍").await;
+    }
+})
+```
+
+<Note>
+Newsletter (channel) messages don't flow through `MessageContext::react`. Use [`client.newsletter().send_reaction()`](/api/newsletter#send_reaction) for newsletter reactions.
+</Note>
+
+---
+
+## Complete Example
+
+```rust
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::TokioRuntime;
+use whatsapp_rust::store::SqliteStore;
+use wacore::types::events::{Event, InboundMessage, PairingQrCode};
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use waproto::whatsapp as wa;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Set up storage
+    let backend = Arc::new(SqliteStore::new("bot.db").await?);
+
+    // Build bot
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .with_runtime(TokioRuntime)
+        .skip_history_sync() // Bot only needs new messages
+        .on_event(|event, client| async move {
+            match &*event {
+                Event::Messages(batch) => {
+                    // Echo messages back
+                    for InboundMessage { message: msg, info, .. } in batch.iter() {
+                        if let Some(text) = &msg.conversation {
+                            let reply = wa::Message {
+                                conversation: Some(format!("You said: {}", text)),
+                                ..Default::default()
+                            };
+                            let _ = client.send_message(info.source.chat.clone(), reply).await;
+                        }
+                    }
+                }
+                Event::Connected(_) => {
+                    println!("Bot is now online!");
+                    // Set status
+                    let _ = client.presence().set_available().await;
+                }
+                Event::PairingQrCode(PairingQrCode { code, .. }) => {
+                    println!("Scan this QR code:");
+                    println!("{}", code);
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .await?;
+
+    // Run bot
+    let handle = bot.run().await?;
+    handle.await?;
+
+    Ok(())
+}
+```
+
+---
+
+## Cache configuration reference
+
+The `CacheConfig` struct controls TTL and capacity for all internal caches. All fields have sensible defaults matching WhatsApp Web behavior.
+
+### CacheEntryConfig
+
+```rust
+pub struct CacheEntryConfig {
+    pub timeout: Option<Duration>,  // None = no time-based expiry
+    pub capacity: u64,              // Maximum entries
+}
+```
+
+### Available Caches
+
+#### Timed caches
+
+| Cache | Default TTL | Default Capacity | Description |
+|-------|-------------|------------------|-------------|
+| `group_cache` | 1 hour | 250 | Group metadata |
+| `device_registry_cache` | 1 hour | 20,000 | Device registry — one entry per contact whose device list is known; a ceiling, not a preallocation |
+| `lid_pn_cache` | 1 hour (TTI) | 10,000 | LID-to-phone mapping |
+| `retried_group_messages` | 5 minutes | 2,000 | Retry tracking |
+| `recent_messages` | 5 minutes | 0 (disabled) | Optional L1 in-memory cache for sent messages (retry support) |
+| `message_retry_counts` | 5 minutes | 1,000 | Retry count tracking |
+| `pdo_pending_requests` | 30 seconds | 500 | PDO pending requests |
+| `pdo_requested` | 24 hours | 512 | PDO placeholder-resend memo — at-most-once per message |
+| `dispatched_messages` | 5 minutes | 1,000 | Dispatch-once gate for a decrypted message, keyed by chat/id/sender — collapses a sender's outbox retry (same id, re-encrypted) into a single `Event::Messages`. Capacity 0 disables it. See [`Event::Messages`](/concepts/events#messages) |
+| `sender_key_devices_cache` | 1 hour (TTI) | 500 | Per-group SKDM distribution state |
+
+<Note>
+The `lid_pn_cache` and `sender_key_devices_cache` use time-to-idle (TTI) semantics — entries expire after being idle for the timeout period. All other caches use time-to-live (TTL) semantics.
+</Note>
+
+<Note>
+The `recent_messages` cache is disabled by default (capacity 0), meaning sent messages are stored only in the database for retry handling — matching WhatsApp Web's behavior. Set capacity greater than 0 to enable a fast in-memory L1 cache in front of the database. See [DB-backed sent message retry](#db-backed-sent-message-retry) for details.
+</Note>
+
+<Note>
+`device_registry_cache`'s default rose from 5,000 to 20,000 in [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400). At 5,000, an account active in a few dozen mid-sized groups could hold more distinct contacts than the cache, so every group-devices memo recompute paid a backend read per evicted member. The cache only ever holds what has been resolved, so a small account pays nothing for the higher ceiling.
+</Note>
+
+#### Coordination caches (capacity-only, no TTL)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `session_locks_capacity` | 10,000 | Per-device Signal session lock capacity. Soft cap: a lock a task is actively holding is never evicted, so the map can briefly exceed this under heavy concurrent fan-out (bounded by the number of concurrently-held locks) rather than evicting a live lock and letting two writers race the same session |
+| `chat_lanes_capacity` | 5,000 | Per-chat lane capacity: number of cached lanes, each an enqueue lock paired with an **unbounded** message queue (there is no per-lane message cap). Soft cap: a lane with an in-flight message is never evicted, so the map can briefly exceed this under a backlog spread across many active chats, rather than evicting a live lane and letting a second worker start on the same chat. Independently of this capacity, a lane's worker exits on its own after 60s without a new message, so an idle chat doesn't hold its worker's memory for the life of the connection — see [Concurrency Patterns — Per-Chat Lanes](/concepts/architecture#per-chat-lanes) |
+| `group_distribution_locks_capacity` | 512 | Per-group sender-key distribution lane capacity. Soft cap: a live lane (held by an in-flight SKDM fan-out, rotation, or tracker reset) is never evicted, so the map can briefly exceed this under concurrent fan-out rather than breaking tracker ordering |
+| `group_devices_memo_capacity` | 512 | Per-group resolved-device memo capacity: the device list a group send fans out to plus its member index. Also bounds the SKDM warm-target memo, which is keyed the same way. Eviction is least-recently-used, so an account active in more groups than this re-resolves only its least active ones; below it, a warm send never re-resolves. See [`Client::device_memo_stats()`](/api/client#device_memo_stats) |
+| `dm_devices_memo_capacity` | 512 | Per-1:1-chat resolved-device memo capacity, same least-recently-used eviction policy |
+
+<Note>
+The lane's live entry count plus cumulative capacity evictions and blocked evictions are exposed via [`Client::memory_report()`](/api/client#memory_report) (`group_distribution_locks`, `group_distribution_lock_evictions`, `group_distribution_lock_eviction_blocks`), so operators can derive eviction rates and tune this capacity without guessing.
+</Note>
+
+<Note>
+`group_devices_memo_capacity` and `dm_devices_memo_capacity` replaced two private, fixed constants in [whatsapp-rust#1400](https://github.com/oxidezap/whatsapp-rust/pull/1400) and gained least-recently-used eviction in the same change (previously oldest-first). The prior fixed bound was 64 groups: an account active in more than 64 groups had a memo hit rate of exactly zero, since every group's entry was evicted before it could be reused. At the new default of 512, an account rotating across 256 groups of 64 members each goes from a 33ms cold-resolve pass to a 33µs warm one.
+</Note>
+
+#### Sent message DB cleanup
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `sent_message_ttl_secs` | 7200 (2 hours) | TTL in seconds for sent messages in DB before periodic cleanup. Set to 0 to disable automatic cleanup. |
+
+<Note>
+The `sent_message_ttl_secs` default was raised from 300s to 7200s. Retry receipts can arrive well after a message is sent (e.g. after the recipient comes back online); a 5-minute TTL could expire the stored payload before its retry, silently dropping the retry. Two hours covers realistic offline gaps.
+</Note>
+
+#### messageSecret retention
+
+The client stores `messageSecret` values so it can later decrypt add-ons that reference an original message — poll votes, poll/event edits, message edits, and Meta AI / fbid bot replies. Retention is bounded by policy and a per-class **event-time horizon** (`expires_at = parent_message_ts + horizon`, not insertion time), so secrets survive offline gaps without growing unbounded.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `msg_secret_policy` | `MsgSecretPolicy` | `Managed` | Which retention tier to use (see below) |
+| `msg_secret_retention` | `MsgSecretRetention` | 30d / 90d / 30d | Per-class horizons (`text` / `poll_event` / `bot`) |
+| `seed_msg_secrets_from_history` | `bool` | `true` | Seed secrets from pairing history-sync blobs |
+| `original_message_resolver` | `Option<Arc<dyn OriginalMessageResolver>>` | `None` | App-supplied fallback when the store misses |
+| `msg_secret_resolver_timeout` | `Duration` | 5s | Timeout for a single resolver call |
+
+```rust
+pub enum MsgSecretPolicy {
+    /// Bounded (default): capture live secrets, seed only the still-relevant
+    /// history slice, prune by per-add-on event-time horizon.
+    Managed,
+    /// Pre-v0.6 behavior: capture/seed only in bot (msmsg) contexts.
+    BotOnly,
+    /// Unbounded: capture/seed everything, never prune.
+    Full,
+    /// Persist nothing in core; rely entirely on `original_message_resolver`.
+    Disabled,
+}
+
+pub struct MsgSecretRetention {
+    pub text: Duration,        // default 30 days — message-edit parents
+    pub poll_event: Duration,  // default 90 days — poll votes / PollAddOption / EventEdit / PollEdit
+    pub bot: Duration,         // default 30 days — outbound msmsg bot context
+}
+```
+
+The `OriginalMessageResolver` trait lets you supply secrets from your own store (required when the policy is `Disabled`):
+
+```rust
+#[async_trait]
+pub trait OriginalMessageResolver: Send + Sync {
+    async fn resolve_msg_secret(
+        &self,
+        chat: &str,
+        sender: &str,
+        msg_id: &str,
+    ) -> Option<[u8; 32]>;
+}
+```
+
+It is consulted only after the in-core [`MsgSecretStore`](/api/store#msgsecretstore) and the LID/PN alternate lookups miss.
+
+<Note>
+`MsgSecretPolicy`, `MsgSecretRetention`, and `OriginalMessageResolver` are re-exported from the crate root (`whatsapp_rust::{MsgSecretPolicy, MsgSecretRetention, OriginalMessageResolver}`). The default `Managed` policy is bounded and needs no tuning for most apps.
+</Note>
+
+<Note>
+**`InMemoryBackend` only:** on top of the horizons above, the built-in `InMemoryBackend` caps the number of *expiring* secret rows it retains at 8,192, backend-wide across all chats — so wasm32 linear memory (whose allocator never returns freed pages) can't grow without bound from that traffic. Permanent rows (`expires_at = 0`, written by `Full` policy or a direct `put_msg_secret` call) are never evicted and don't count toward the cap, so they can still accumulate past it. Once the cap is hit, eviction drops the soonest-to-expire rows first, always by whole message — a message's sender-alias rows are kept or dropped together. That's not necessarily the oldest messages: horizons differ by class, so a fresh text secret (30-day horizon) can expire, and be evicted, before an older poll secret (90-day horizon). `SqliteStore`, the production backend, has no such cap and honors the full `msg_secret_retention` horizons unmodified. See [whatsapp-rust#1297](https://github.com/oxidezap/whatsapp-rust/pull/1297).
+</Note>
+
+#### Custom cache store overrides
+
+You can replace any of the pluggable caches with a custom `CacheStore` backend (e.g., Redis):
+
+| Field | Cache | Description |
+|-------|-------|-------------|
+| `cache_stores.group_cache` | Group metadata | Group info lookups |
+| `cache_stores.device_registry_cache` | Device registry | Device registry entries |
+| `cache_stores.lid_pn_cache` | LID-PN mapping | LID-to-phone bidirectional lookups |
+
+```rust
+use whatsapp_rust::{CacheConfig, CacheStores};
+use std::sync::Arc;
+
+let redis = Arc::new(MyRedisCacheStore::new("redis://localhost:6379"));
+
+// Route specific caches to Redis
+let config = CacheConfig {
+    cache_stores: CacheStores {
+        group_cache: Some(redis.clone()),
+        device_registry_cache: Some(redis.clone()),
+        ..Default::default()
+    },
+    ..Default::default()
+};
+
+// Or route all pluggable caches at once
+let config = CacheConfig {
+    cache_stores: CacheStores::all(redis.clone()),
+    ..Default::default()
+};
+```
+
+Fields left as `None` keep the default in-process `PortableCache` behaviour. See [Custom backends — cache store](/guides/custom-backends#custom-cache-store) for a full implementation guide.
+
+<Note>
+Coordination caches (`session_locks`, `chat_lanes`, `group_distribution_locks`), the signal write-behind cache, and `pdo_pending_requests` always stay in-process — they hold live Rust objects that cannot be serialized to an external store.
+</Note>
+
+### Custom configuration example
+
+```rust
+use whatsapp_rust::{CacheConfig, CacheEntryConfig};
+use std::time::Duration;
+
+let config = CacheConfig {
+    // Disable TTL for group cache (entries only evicted by capacity)
+    group_cache: CacheEntryConfig::new(None, 500),
+    // Shorter TTL for device cache
+    device_registry_cache: CacheEntryConfig::new(Some(Duration::from_secs(1800)), 3_000),
+    // Enable L1 in-memory cache for sent messages (faster retry lookups)
+    recent_messages: CacheEntryConfig::new(Some(Duration::from_secs(300)), 1_000),
+    // Use defaults for everything else
+    ..Default::default()
+};
+
+let bot = Bot::builder()
+    .with_runtime(TokioRuntime)
+    .with_cache_config(config)
+    // ...
+```
+
+### DB-backed sent message retry
+
+Sent messages are persisted to the database for retry handling, matching WhatsApp Web's `getMessageTable` pattern. When a retry receipt arrives, the client looks up the original message payload from the database, re-encrypts it, and resends.
+
+**How it works:**
+1. Every `send_message()` call stores the serialized message payload in the `sent_messages` table
+2. On retry receipt, the client retrieves and consumes the payload (atomic take)
+3. Expired entries are periodically cleaned up based on `sent_message_ttl_secs`
+
+**Optional L1 cache:** By default, the `recent_messages` cache capacity is 0 (DB-only mode). If you set capacity greater than 0, sent messages are also cached in memory for faster retrieval. In L1 mode, the DB write is backgrounded since the cache serves reads immediately. In DB-only mode, the write is awaited to guarantee persistence.
+
+```rust
+let config = CacheConfig {
+    // Enable L1 in-memory cache for faster retry lookups
+    recent_messages: CacheEntryConfig::new(Some(Duration::from_secs(300)), 1_000),
+    // Keep sent messages in DB for 10 minutes before cleanup
+    sent_message_ttl_secs: 600,
+    ..Default::default()
+};
+```
+
+---
+
+## See Also
+
+- [Client](/api/client) - Lower-level client API
+- [Bots](/api/bots) - Server-side directory of first-party AI bots
+- [Events](/concepts/events) - All event types
+- [Sending Messages](/guides/sending-messages) - Sending messages
+- [Storage](/concepts/storage) - Storage and multi-account patterns

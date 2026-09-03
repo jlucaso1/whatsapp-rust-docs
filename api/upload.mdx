@@ -553,7 +553,11 @@ pub fn encrypt_media_with_key_and_sidecar(
     media_key: Option<&[u8; 32]>,
     sidecar: Option<bool>,
 ) -> Result<EncryptedMedia> {
-    let mut enc = /* MediaEncryptor, keyed or fresh; sidecar per media_type unless overridden */;
+    let want_sidecar = sidecar.unwrap_or_else(|| media_type_uses_sidecar(media_type));
+    let mut enc = match media_key {
+        Some(key) => MediaEncryptor::with_key_and_sidecar(*key, media_type, want_sidecar)?,
+        None => MediaEncryptor::new_with_sidecar(media_type, want_sidecar)?,
+    };
     let mut data_to_upload = Vec::with_capacity(encrypted_len(plaintext.len()));
     enc.update(plaintext, &mut data_to_upload);
     let info = enc.finalize(&mut data_to_upload)?;

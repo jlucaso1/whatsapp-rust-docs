@@ -224,11 +224,13 @@ pub trait SignalStore: Send + Sync {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()>;
     async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>>;
     async fn delete_identity(&self, address: &str) -> Result<()>;
+    async fn delete_identities_batch(&self, addresses: &[Arc<str>]) -> Result<()>; // has default impl looping over delete_identity
 
     // Session Operations
     async fn get_session(&self, address: &str) -> Result<Option<Bytes>>;
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()>;
     async fn delete_session(&self, address: &str) -> Result<()>;
+    async fn delete_sessions_batch(&self, addresses: &[Arc<str>]) -> Result<()>; // has default impl looping over delete_session
     async fn has_session(&self, address: &str) -> Result<bool>; // has default impl using get_session
 
     // PreKey Operations
@@ -238,6 +240,7 @@ pub trait SignalStore: Send + Sync {
     async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>>; // has default impl looping over load_prekey
 
     async fn remove_prekey(&self, id: u32) -> Result<()>;
+    async fn remove_prekeys_batch(&self, ids: &[u32]) -> Result<()>; // has default impl looping over remove_prekey
     /// Mark already-stored prekeys as uploaded. UPDATE semantics — a key
     /// consumed (deleted) between the upload snapshot and this call must stay
     /// deleted, never resurrected by an upsert.
@@ -254,6 +257,7 @@ pub trait SignalStore: Send + Sync {
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()>;
     async fn get_sender_key(&self, address: &str) -> Result<Option<Vec<u8>>>;
     async fn delete_sender_key(&self, address: &str) -> Result<()>;
+    async fn delete_sender_keys_batch(&self, addresses: &[Arc<str>]) -> Result<()>; // has default impl looping over delete_sender_key
 }
 ```
 
@@ -346,6 +350,16 @@ cache.clear().await;
 - Sessions are serialized to bytes only during flush (not on every `put_session`)
 - Only clears dirty tracking after ALL writes succeed
 - On failure, dirty state is preserved for retry on next flush
+- Deleted sessions, identities, pre-keys, and sender keys go through the batch methods (`delete_sessions_batch`, `delete_identities_batch`, `remove_prekeys_batch`, `delete_sender_keys_batch`) rather than one backend call per row
+
+**Batched deletes:** Before [whatsapp-rust#1395](https://github.com/oxidezap/whatsapp-rust/pull/1395), every delete in `flush` was its own backend call — a `spawn_blocking`, a pool checkout, and a WAL commit each, roughly 60 µs on disk. That's the shape an offline drain or an identity reset produces: many sessions, identities, or consumed pre-keys dropped in one flush. `SqliteStore` now overrides the four batch methods above with a single transaction and chunked `IN` lists; a backend that doesn't override them keeps the old per-row loop as the default. A single deleted row costs the same either way — the warm steady state, which rarely deletes, is unaffected.
+
+| bench (median), file-backed SQLite | per row | batched |
+| --- | --- | --- |
+| `delete_sessions` × 8 | 515 µs | 89 µs |
+| `delete_sessions` × 64 | 4.40 ms | 221 µs |
+| `remove_prekeys` × 8 | 502 µs | 85 µs |
+| `remove_prekeys` × 64 | 4.14 ms | 154 µs |
 
 **Undecodable session rows:** Deserialization is a pure function of the stored bytes. A session row that fails to decode once — from genuine corruption, or from a row written in a shape this build can no longer read, including a counter lease stranded by a since-fixed bug (see [DH ratchet resets rebase the lease](/advanced/signal-protocol#dh-ratchet-resets-rebase-the-lease)) — fails identically forever.
 
@@ -908,6 +922,8 @@ CREATE TABLE sent_messages (
 
 CREATE INDEX idx_sent_messages_created ON sent_messages (created_at, device_id);
 ```
+
+`identities`, `sessions`, `prekeys`, and `sender_keys` have no standalone index on `device_id` alone. A prior migration added one to each table when multi-account support landed, but every hot query already filters on the full primary key (`address`/`id` plus `device_id`), so that index only ever added a third b-tree write per inserted or deleted row without serving any selective read — `device_id` alone has one distinct value per account. [whatsapp-rust#1395](https://github.com/oxidezap/whatsapp-rust/pull/1395) drops all four (`idx_identities_device_id`, `idx_sessions_device_id`, `idx_prekeys_device_id`, `idx_sender_keys_device_id`); the only `device_id`-alone reads are account teardown, where a table scan is fine.
 
 ### Multi-Account Support
 

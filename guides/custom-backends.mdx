@@ -231,6 +231,10 @@ impl SignalStore for MyCustomStore {
 
 See [Store API reference](/api/store#signal-store) for all SignalStore methods.
 
+<Note>
+`delete_identity`, `delete_session`, `remove_prekey`, and `delete_sender_key` each have a batch counterpart (`delete_identities_batch`, `delete_sessions_batch`, `remove_prekeys_batch`, `delete_sender_keys_batch`) that the signal-cache flush uses to drop many rows — an offline drain's consumed pre-keys, or an identity reset's sessions — in one call instead of one call per row. Like `load_prekeys_batch` above, each defaults to looping the single-row method, so this example compiles and works as shown; override them with a single transaction and an `IN (...)` list (the same shape as the `load_prekeys_batch` override) if your backend supports transactions. See [SignalStoreCache: batched deletes](/concepts/storage#signalstorecache) for measured numbers.
+</Note>
+
 ### Step 3: implement AppSyncStore
 
 Handle WhatsApp app state synchronization. This example's `app_state_versions` table needs a `bootstrapped` column alongside `name`, `version`, and `hash`. If you already have this table from before that field existed, add it first:

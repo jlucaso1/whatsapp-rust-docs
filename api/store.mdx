@@ -48,6 +48,9 @@ async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
 
 /// Delete an identity key
 async fn delete_identity(&self, address: &str) -> Result<()>;
+
+/// Delete several identity keys in one backend operation (default loops over delete_identity)
+async fn delete_identities_batch(&self, addresses: &[Arc<str>]) -> Result<()>;
 ```
 
 ### Session Operations
@@ -61,6 +64,9 @@ async fn put_session(&self, address: &str, session: &[u8]) -> Result<()>;
 
 /// Delete a session
 async fn delete_session(&self, address: &str) -> Result<()>;
+
+/// Delete several sessions in one backend operation (default loops over delete_session)
+async fn delete_sessions_batch(&self, addresses: &[Arc<str>]) -> Result<()>;
 
 /// Check if a session exists (default implementation uses get_session)
 async fn has_session(&self, address: &str) -> Result<bool>;
@@ -83,6 +89,9 @@ async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>>;
 
 /// Remove a pre-key
 async fn remove_prekey(&self, id: u32) -> Result<()>;
+
+/// Remove several pre-keys in one backend operation (default loops over remove_prekey)
+async fn remove_prekeys_batch(&self, ids: &[u32]) -> Result<()>;
 
 /// Get the highest pre-key ID currently stored
 async fn get_max_prekey_id(&self) -> Result<u32>;
@@ -117,7 +126,14 @@ async fn get_sender_key(&self, address: &str) -> Result<Option<Vec<u8>>>;
 
 /// Delete a sender key
 async fn delete_sender_key(&self, address: &str) -> Result<()>;
+
+/// Delete several sender keys in one backend operation (default loops over delete_sender_key)
+async fn delete_sender_keys_batch(&self, addresses: &[Arc<str>]) -> Result<()>;
 ```
+
+<Note>
+`delete_identities_batch`, `delete_sessions_batch`, `remove_prekeys_batch`, and `delete_sender_keys_batch` were added so [`SignalStoreCache::flush`](/concepts/storage#signalstorecache) can drop many rows in one backend call instead of one call per row — the shape an offline drain or an identity reset produces, where the flush deletes dozens of sessions, pre-keys, or sender keys at once. Each has a default that loops over the single-item method, so existing custom backends keep working unchanged; the bundled `SqliteStore` overrides all four with one transaction and a chunked SQL `IN` list. Override them the same way if your backend supports transactions — see [Batched deletes](/concepts/storage#signalstorecache) for measured numbers.
+</Note>
 
 ## AppSyncStore Trait
 

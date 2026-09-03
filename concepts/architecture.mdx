@@ -342,7 +342,7 @@ The `is_connected` field uses an `AtomicBool` to track whether the noise socket 
 5. Calculate Fibonacci backoff delay (1s, 1s, 2s, 3s, 5s, 8s... max 900s with +/-10% jitter)
 6. When you call `disconnect()`, `logout()`, or `signal_shutdown_sync()`, the client interrupts the backoff immediately and returns from `run()`. If the delay completes first, it attempts reconnection with a 20s connect timeout.
 
-See [WebSocket & Noise Protocol - Fibonacci backoff](/advanced/websocket-handling#fibonacci-backoff) for the stability-reset and penalty-survival mechanics.
+See [WebSocket & Noise Protocol - Fibonacci backoff](/advanced/websocket-handling#fibonacci-backoff) for the stability-reset and penalty-survival mechanics, and for the counter's saturation at 64 consecutive failures ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410)).
 
 ### Pause / resume
 
@@ -387,6 +387,12 @@ When a connection is lost or `disconnect()` is called, `cleanup_connection_state
 | Offline sync state | Reset | Counters, timing, and semaphore replaced with fresh single-permit instance |
 | Dead-socket timestamps | Cleared | Prevents stale values from triggering an immediate reconnect on the next connection |
 | `app_state_key_requests`, `app_state_syncing` | Replaced with empty maps | Prevents unbounded growth across reconnections |
+| Noise sender task | Stopped via `NoiseSocket::abort_sender()` | Cuts a send parked on a dead transport short instead of leaving it to the last `Arc` clone, so the bounded close below can't queue behind it |
+| Transport | Closed via `Client::close_transport_bounded` (bounded by `TRANSPORT_CLOSE_TIMEOUT`, 2s) | An untimed close shares the transport's sink with every send and can be retried by the kernel for as long as `tcp_retries2` allows (~15 min on Linux); this runs on the caller's thread of control (the run loop, or `disconnect()`'s caller), so an unbounded close parks the whole client |
+
+<Note>
+**Bounded teardown ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410)).** Every teardown path's transport close — `disconnect()`, `reconnect()`, `reconnect_immediately()`, `pause()`, and this cleanup routine — is now bounded by `TRANSPORT_CLOSE_TIMEOUT`. `abort_sender()` runs first, closing the sender task's job channel and aborting it outright; any send it cuts off (queued or already in flight) fails with `EncryptSendError::channel_closed()` rather than hanging — a send racing a teardown was going to fail once the socket closed anyway. See [WebSocket & Noise Protocol — Disconnect](/advanced/websocket-handling#4-disconnect) for the full mechanics.
+</Note>
 
 <Note>
 Chat lane invalidation is critical for correctness. Without it, stale message processing workers from the previous connection survive reconnects, holding outdated Signal session state that causes decryption failures on the new connection.
@@ -440,6 +446,8 @@ const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
 - Checks dead socket on **every** tick (not just after failures) — catches scenarios where pending IQs caused the ping to be skipped, or where the ping succeeded but the connection died immediately after
 - Detects dead socket, triggering immediate reconnection, if no data has been received for 20s since the **first** send after the last receive (`first_send_since_recv`) — matching WA Web's `deadSocketTimer.onOrBefore`; subsequent sends do not push this deadline back out
 - Fatal errors (`Socket`, `Disconnected`, `NotConnected`, `InternalChannelClosed`) cause the keepalive loop to exit immediately
+- Three consecutive transient (`Timeout`/`ServerError`/`ParseError`) failures force `reconnect_immediately()` and exit the loop, rather than pinging forever against a socket that still receives but never answers ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410))
+- The loop exits as soon as `connection_generation` no longer matches the value it was spawned with — the shutdown signal and generation are captured once, at spawn, rather than read from inside the task, since the task's first poll can land after a reconnect has already completed ([whatsapp-rust#1410](https://github.com/oxidezap/whatsapp-rust/pull/1410))
 - Error classification is exhaustive and compile-time enforced — adding a new error variant without handling it causes a build failure
 
 See [WebSocket & Noise Protocol - Keepalive](/advanced/websocket-handling#keepalive-and-dead-socket-detection) for detailed keepalive internals.
